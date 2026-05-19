@@ -85,9 +85,9 @@ export function TaskCaptureBar({
   return (
     <form
       onSubmit={onSubmit}
-      className="fixed bottom-0 inset-x-0 bg-[#0d0d0d] border-t border-[#1f1f1f] px-4 pt-3 pb-[max(env(safe-area-inset-bottom),0.75rem)]"
+      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] bg-[#0d0d0d]/95 border border-[#1f1f1f] p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:right-auto lg:w-[calc(50vw-3rem)] lg:max-w-2xl xl:left-[calc((100vw-80rem)/2+2rem)]"
     >
-      <div className="max-w-2xl mx-auto">
+      <div>
         <div className="flex items-center gap-2 mb-2">
           <button
             type="button"

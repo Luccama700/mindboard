@@ -1,0 +1,156 @@
+import "server-only";
+import { createClient } from "@/utils/supabase/server";
+
+const TOKEN_REFRESH_MARGIN_MS = 60_000;
+const CALENDAR_SCOPE =
+  "https://www.googleapis.com/auth/calendar.events.readonly";
+
+export type CalendarEvent = {
+  id: string;
+  summary: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+};
+
+type TokenRow = {
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+  scopes: string;
+};
+
+type GoogleEvent = {
+  id: string;
+  summary?: string;
+  status?: string;
+  start?: {
+    date?: string;
+    dateTime?: string;
+  };
+  end?: {
+    date?: string;
+    dateTime?: string;
+  };
+};
+
+export class GoogleCalendarConnectionError extends Error {}
+
+export async function getValidAccessToken(userId: string): Promise<string> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("google_tokens")
+    .select("access_token, refresh_token, expires_at, scopes")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) throw new GoogleCalendarConnectionError();
+
+  const row = data as TokenRow;
+  const expiresAt = new Date(row.expires_at).getTime();
+  if (expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) {
+    return row.access_token;
+  }
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) throw new GoogleCalendarConnectionError();
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: row.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+
+  if (!response.ok) throw new GoogleCalendarConnectionError();
+
+  const refreshed = (await response.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    scope?: string;
+  };
+
+  if (!refreshed.access_token || !refreshed.expires_in) {
+    throw new GoogleCalendarConnectionError();
+  }
+
+  const nextExpiresAt = new Date(
+    Date.now() + refreshed.expires_in * 1000,
+  ).toISOString();
+  const nextRefreshToken = refreshed.refresh_token ?? row.refresh_token;
+  const nextScopes = refreshed.scope ?? row.scopes;
+
+  const { error: updateError } = await supabase
+    .from("google_tokens")
+    .update({
+      access_token: refreshed.access_token,
+      refresh_token: nextRefreshToken,
+      expires_at: nextExpiresAt,
+      scopes: nextScopes,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+
+  if (updateError) throw new GoogleCalendarConnectionError();
+
+  return refreshed.access_token;
+}
+
+export async function listEvents(
+  userId: string,
+  {
+    timeMin,
+    timeMax,
+  }: {
+    timeMin: string;
+    timeMax: string;
+  },
+): Promise<CalendarEvent[]> {
+  const token = await getValidAccessToken(userId);
+  const url = new URL(
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+  );
+  url.searchParams.set("timeMin", timeMin);
+  url.searchParams.set("timeMax", timeMax);
+  url.searchParams.set("singleEvents", "true");
+  url.searchParams.set("orderBy", "startTime");
+  url.searchParams.set("maxResults", "100");
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new GoogleCalendarConnectionError();
+  }
+  if (!response.ok) throw new Error("calendar request failed");
+
+  const payload = (await response.json()) as { items?: GoogleEvent[] };
+
+  return (payload.items ?? [])
+    .filter((event) => event.status !== "cancelled")
+    .map((event) => {
+      const start = event.start?.dateTime ?? event.start?.date ?? "";
+      const end = event.end?.dateTime ?? event.end?.date ?? start;
+      return {
+        id: event.id,
+        summary: event.summary ?? "untitled event",
+        start,
+        end,
+        allDay: Boolean(event.start?.date),
+      };
+    })
+    .filter((event) => event.start);
+}
+
+export { CALENDAR_SCOPE };
