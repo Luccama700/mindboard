@@ -28,6 +28,15 @@ export default async function Home() {
               <p className="text-[#f5f0e8] text-sm break-all">{user.email}</p>
             </div>
 
+            <div className="pt-4">
+              <a
+                href="/groups"
+                className="inline-block bg-[#b5ff3c] text-[#0d0d0d] text-sm font-bold px-6 py-3 hover:bg-[#f5f0e8] transition-colors"
+              >
+                groups →
+              </a>
+            </div>
+
             <form action={signOut}>
               <button
                 type="submit"
