@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useOptimistic, useRef, useState, useTransition } from "react";
 import { archiveGroup, createGroup } from "@/app/actions/groups";
 import type { Group } from "./page";
@@ -64,6 +65,26 @@ export function GroupsClient({ initial }: { initial: Group[] }) {
 
   return (
     <div className="space-y-6">
+      {/* Inbox card (virtual group) */}
+      <Link
+        href="/inbox"
+        className="block border border-[#1f1f1f] bg-[#141414] hover:bg-[#1a1a1a] transition-colors"
+      >
+        <div className="flex items-center gap-3 px-4 py-4">
+          <span
+            className="w-2 h-10 flex-shrink-0 border-2 border-dashed border-[#3a3a3a]"
+            aria-hidden
+          />
+          <div className="flex-1 min-w-0">
+            <p className="text-[#f5f0e8] text-base font-bold">inbox</p>
+            <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mt-0.5">
+              unsorted
+            </p>
+          </div>
+          <span className="text-[#6b6b6b] text-xs">›</span>
+        </div>
+      </Link>
+
       {/* New group button / inline form */}
       {!formOpen ? (
         <button
@@ -156,13 +177,6 @@ export function GroupsClient({ initial }: { initial: Group[] }) {
         </form>
       )}
 
-      {/* Empty state */}
-      {groups.length === 0 && !formOpen && (
-        <p className="text-[#6b6b6b] text-sm text-center pt-12">
-          no groups yet — make one above.
-        </p>
-      )}
-
       {/* List */}
       <ul className="space-y-2">
         {groups.map((g) => (
@@ -180,40 +194,47 @@ function GroupRow({
   group: Group;
   onArchive: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   return (
     <li className="border border-[#1f1f1f] bg-[#141414]">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-[#1a1a1a] transition-colors"
-      >
-        <span
-          className="w-2 h-10 flex-shrink-0"
-          style={{ backgroundColor: group.color }}
-          aria-hidden
-        />
-        <div className="flex-1 min-w-0">
-          <p className="text-[#f5f0e8] text-base font-bold truncate">
-            {group.name}
-          </p>
-          <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mt-0.5">
-            {group.type}
-          </p>
-        </div>
-        <span
-          className={`text-[#6b6b6b] text-xs transition-transform ${
-            open ? "rotate-90" : ""
-          }`}
+      <div className="flex items-stretch">
+        <Link
+          href={`/groups/${group.id}`}
+          className="flex-1 flex items-center gap-3 px-4 py-4 hover:bg-[#1a1a1a] transition-colors min-w-0"
         >
-          ›
-        </span>
-      </button>
+          <span
+            className="w-2 h-10 flex-shrink-0"
+            style={{ backgroundColor: group.color }}
+            aria-hidden
+          />
+          <div className="flex-1 min-w-0">
+            <p className="text-[#f5f0e8] text-base font-bold truncate">
+              {group.name}
+            </p>
+            <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mt-0.5">
+              {group.type}
+            </p>
+          </div>
+          <span className="text-[#6b6b6b] text-xs">›</span>
+        </Link>
 
-      {open && (
+        <button
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-label="group actions"
+          className="px-4 border-l border-[#1f1f1f] text-[#6b6b6b] hover:text-[#f5f0e8] hover:bg-[#1a1a1a] transition-colors text-lg"
+        >
+          ···
+        </button>
+      </div>
+
+      {menuOpen && (
         <div className="border-t border-[#1f1f1f] px-4 py-3 flex justify-end">
           <button
-            onClick={() => onArchive(group.id)}
+            onClick={() => {
+              setMenuOpen(false);
+              onArchive(group.id);
+            }}
             className="text-[#ff6b6b] text-xs tracking-widest uppercase hover:text-[#ff8b8b] transition-colors py-2 px-3"
           >
             archive
