@@ -1,5 +1,8 @@
+import Link from "next/link";
 import { createClient } from "@/utils/supabase/server";
 import { signOut } from "./actions/auth";
+import { TodayClient } from "./_components/today-client";
+import type { TaskWithGroup } from "./_components/types";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -7,61 +10,106 @@ export default async function Home() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-6">
-      <div className="max-w-sm w-full space-y-8">
-        <div>
-          <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mb-3">
-            personal dashboard
+  if (!user) {
+    return (
+      <main className="min-h-screen flex flex-col items-center justify-center px-6">
+        <div className="max-w-sm w-full space-y-8">
+          <div>
+            <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mb-3">
+              personal dashboard
+            </p>
+            <h1 className="text-4xl font-bold tracking-tight text-[#f5f0e8]">
+              mindboard
+            </h1>
+          </div>
+
+          <p className="text-[#6b6b6b] text-sm leading-relaxed">
+            Track what matters. Ship what ships.
           </p>
-          <h1 className="text-4xl font-bold tracking-tight text-[#f5f0e8]">
-            mindboard
+
+          <div className="pt-4">
+            <a
+              href="/login"
+              className="inline-block bg-[#b5ff3c] text-[#0d0d0d] text-sm font-bold px-6 py-3 hover:bg-[#f5f0e8] transition-colors"
+            >
+              get started →
+            </a>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const { data: rawTasks } = await supabase
+    .from("tasks")
+    .select(
+      "id, title, due_date, status, priority, group_id, created_at, completed_at, groups(color)",
+    )
+    .neq("status", "done")
+    .not("due_date", "is", null);
+
+  const tasks: TaskWithGroup[] = (rawTasks ?? []).map(
+    (row: {
+      id: string;
+      title: string;
+      due_date: string | null;
+      status: "todo" | "doing" | "done";
+      priority: "low" | "med" | "high";
+      group_id: string | null;
+      created_at: string;
+      completed_at: string | null;
+      groups: { color: string } | { color: string }[] | null;
+    }) => ({
+      id: row.id,
+      title: row.title,
+      due_date: row.due_date,
+      status: row.status,
+      priority: row.priority,
+      group_id: row.group_id,
+      created_at: row.created_at,
+      completed_at: row.completed_at,
+      group_color: Array.isArray(row.groups)
+        ? (row.groups[0]?.color ?? null)
+        : (row.groups?.color ?? null),
+    }),
+  );
+
+  const todayLabel = new Date().toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+
+  return (
+    <main className="min-h-screen px-5 pt-8 pb-40 max-w-2xl mx-auto">
+      <header className="flex items-end justify-between mb-8">
+        <div>
+          <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b]">
+            {todayLabel}
+          </p>
+          <h1 className="text-3xl font-bold tracking-tight text-[#f5f0e8] mt-1">
+            today
           </h1>
         </div>
+        <div className="flex flex-col items-end gap-2">
+          <Link
+            href="/groups"
+            className="text-[#6b6b6b] text-xs tracking-widest uppercase hover:text-[#f5f0e8] transition-colors"
+          >
+            groups →
+          </Link>
+          <form action={signOut}>
+            <button
+              type="submit"
+              className="text-[#6b6b6b] text-xs tracking-widest uppercase hover:text-[#f5f0e8] transition-colors"
+            >
+              sign out
+            </button>
+          </form>
+        </div>
+      </header>
 
-        {user ? (
-          <>
-            <div className="space-y-2 border-l-2 border-[#b5ff3c] pl-3">
-              <p className="text-[#6b6b6b] text-xs tracking-widest uppercase">
-                signed in
-              </p>
-              <p className="text-[#f5f0e8] text-sm break-all">{user.email}</p>
-            </div>
-
-            <div className="pt-4">
-              <a
-                href="/groups"
-                className="inline-block bg-[#b5ff3c] text-[#0d0d0d] text-sm font-bold px-6 py-3 hover:bg-[#f5f0e8] transition-colors"
-              >
-                groups →
-              </a>
-            </div>
-
-            <form action={signOut}>
-              <button
-                type="submit"
-                className="text-[#6b6b6b] text-xs hover:text-[#f5f0e8] transition-colors"
-              >
-                sign out →
-              </button>
-            </form>
-          </>
-        ) : (
-          <>
-            <p className="text-[#6b6b6b] text-sm leading-relaxed">
-              Track what matters. Ship what ships.
-            </p>
-            <div className="pt-4">
-              <a
-                href="/login"
-                className="inline-block bg-[#b5ff3c] text-[#0d0d0d] text-sm font-bold px-6 py-3 hover:bg-[#f5f0e8] transition-colors"
-              >
-                get started →
-              </a>
-            </div>
-          </>
-        )}
-      </div>
+      <TodayClient initial={tasks} />
     </main>
   );
 }

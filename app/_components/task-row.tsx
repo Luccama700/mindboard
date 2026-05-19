@@ -1,0 +1,108 @@
+"use client";
+
+import { useState } from "react";
+import { formatDue } from "./date-utils";
+import type { Task, TaskWithGroup } from "./types";
+
+export function TaskRow({
+  task,
+  onToggle,
+  onDelete,
+  variant = "default",
+  hideDate = false,
+  showGroupColor = false,
+}: {
+  task: Task | TaskWithGroup;
+  onToggle: (t: Task) => void;
+  onDelete: (id: string) => void;
+  variant?: "default" | "overdue";
+  hideDate?: boolean;
+  showGroupColor?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const isDone = task.status === "done";
+  const isOverdue = variant === "overdue";
+
+  const groupColor =
+    "group_color" in task ? task.group_color : null;
+
+  return (
+    <div className="border-b border-[#1f1f1f]">
+      <div className="flex items-center gap-3 py-3">
+        <button
+          onClick={() => onToggle(task)}
+          aria-label={isDone ? "mark as todo" : "mark as done"}
+          className={`flex-shrink-0 w-7 h-7 border-2 transition-all flex items-center justify-center ${
+            isDone
+              ? "bg-[#b5ff3c] border-[#b5ff3c]"
+              : isOverdue
+                ? "border-[#ff6b6b] hover:border-[#ff8b8b]"
+                : "border-[#3a3a3a] hover:border-[#f5f0e8]"
+          }`}
+        >
+          {isDone && (
+            <svg
+              viewBox="0 0 16 16"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="#0d0d0d"
+              strokeWidth="3"
+            >
+              <path d="M3 8l3.5 3.5L13 5" />
+            </svg>
+          )}
+        </button>
+
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex-1 min-w-0 text-left py-1"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            {showGroupColor && (
+              <span
+                className="w-1.5 h-1.5 flex-shrink-0 rounded-full"
+                style={{
+                  backgroundColor: groupColor ?? "transparent",
+                  border: groupColor ? "none" : "1px dashed #3a3a3a",
+                }}
+                aria-hidden
+              />
+            )}
+            <p
+              className={`text-base truncate transition-colors ${
+                isDone
+                  ? "text-[#6b6b6b] line-through"
+                  : isOverdue
+                    ? "text-[#f5f0e8] font-bold"
+                    : "text-[#f5f0e8]"
+              }`}
+            >
+              {task.title}
+            </p>
+          </div>
+          {task.due_date && !isDone && !hideDate && (
+            <p
+              className={`text-[10px] tracking-widest uppercase mt-0.5 ${
+                isOverdue ? "text-[#ff6b6b]" : "text-[#6b6b6b]"
+              }`}
+            >
+              due {formatDue(task.due_date)}
+            </p>
+          )}
+        </button>
+      </div>
+
+      {open && (
+        <div className="pb-3 flex justify-end">
+          <button
+            onClick={() => onDelete(task.id)}
+            className="text-[#ff6b6b] text-xs tracking-widest uppercase hover:text-[#ff8b8b] transition-colors py-1.5 px-3"
+          >
+            delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
