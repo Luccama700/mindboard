@@ -74,8 +74,11 @@ export function TasksClient({
     },
   );
 
-  const [dueToday, setDueToday] = useState(false);
+  const [dueDate, setDueDate] = useState<string | null>(null);
   const [title, setTitle] = useState("");
+  const today = todayISO();
+  const isToday = dueDate === today;
+  const isCustomDate = dueDate !== null && !isToday;
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
@@ -96,7 +99,7 @@ export function TasksClient({
     const optimisticTask: Task = {
       id: tempId,
       title: t,
-      due_date: dueToday ? todayISO() : null,
+      due_date: dueDate,
       status: "todo",
       priority: "med",
       group_id: groupId,
@@ -109,7 +112,7 @@ export function TasksClient({
       const result = await createTask({
         title: t,
         groupId,
-        dueDate: dueToday ? todayISO() : null,
+        dueDate,
       });
       if (!result.error && result.task) {
         dispatch({ kind: "replace", tempId, task: result.task as Task });
@@ -182,15 +185,45 @@ export function TasksClient({
           <div className="flex items-center gap-2 mb-2">
             <button
               type="button"
-              onClick={() => setDueToday((v) => !v)}
+              onClick={() => setDueDate(isToday ? null : today)}
               className={`text-[10px] tracking-widest uppercase px-2.5 py-1.5 border transition-colors ${
-                dueToday
+                isToday
                   ? "bg-[#b5ff3c] text-[#0d0d0d] border-[#b5ff3c]"
                   : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
               }`}
             >
-              {dueToday ? "✓ today" : "today"}
+              {isToday ? "✓ today" : "today"}
             </button>
+
+            <label className="relative inline-flex">
+              <span
+                className={`text-[10px] tracking-widest uppercase px-2.5 py-1.5 border cursor-pointer transition-colors ${
+                  isCustomDate
+                    ? "bg-[#b5ff3c] text-[#0d0d0d] border-[#b5ff3c]"
+                    : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+                }`}
+              >
+                {isCustomDate ? `✓ ${formatDue(dueDate!)}` : "+ date"}
+              </span>
+              <input
+                type="date"
+                value={dueDate ?? ""}
+                onChange={(e) => setDueDate(e.target.value || null)}
+                className="absolute inset-0 opacity-0 cursor-pointer"
+                aria-label="due date"
+              />
+            </label>
+
+            {isCustomDate && (
+              <button
+                type="button"
+                onClick={() => setDueDate(null)}
+                aria-label="clear date"
+                className="text-[#6b6b6b] text-lg leading-none hover:text-[#f5f0e8] transition-colors px-1.5 py-1"
+              >
+                ×
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <input
