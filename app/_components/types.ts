@@ -10,5 +10,6 @@ export type Task = {
 };
 
 export type TaskWithGroup = Task & {
+  group_name: string | null;
   group_color: string | null;
 };

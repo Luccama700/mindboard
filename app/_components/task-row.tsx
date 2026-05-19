@@ -10,21 +10,23 @@ export function TaskRow({
   onDelete,
   variant = "default",
   hideDate = false,
-  showGroupColor = false,
 }: {
   task: Task | TaskWithGroup;
   onToggle: (t: Task) => void;
   onDelete: (id: string) => void;
   variant?: "default" | "overdue";
   hideDate?: boolean;
-  showGroupColor?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const isDone = task.status === "done";
   const isOverdue = variant === "overdue";
 
-  const groupColor =
-    "group_color" in task ? task.group_color : null;
+  const hasGroupInfo = "group_name" in task;
+  const groupName = hasGroupInfo ? task.group_name : null;
+  const groupColor = hasGroupInfo ? task.group_color : null;
+
+  const showDate = task.due_date && !isDone && !hideDate;
+  const showSubtitle = hasGroupInfo || showDate;
 
   return (
     <div className="border-b border-[#1f1f1f]">
@@ -58,36 +60,35 @@ export function TaskRow({
           onClick={() => setOpen((v) => !v)}
           className="flex-1 min-w-0 text-left py-1"
         >
-          <div className="flex items-center gap-2 min-w-0">
-            {showGroupColor && (
-              <span
-                className="w-1.5 h-1.5 flex-shrink-0 rounded-full"
-                style={{
-                  backgroundColor: groupColor ?? "transparent",
-                  border: groupColor ? "none" : "1px dashed #3a3a3a",
-                }}
-                aria-hidden
-              />
-            )}
-            <p
-              className={`text-base truncate transition-colors ${
-                isDone
-                  ? "text-[#6b6b6b] line-through"
-                  : isOverdue
-                    ? "text-[#f5f0e8] font-bold"
-                    : "text-[#f5f0e8]"
-              }`}
-            >
-              {task.title}
-            </p>
-          </div>
-          {task.due_date && !isDone && !hideDate && (
-            <p
-              className={`text-[10px] tracking-widest uppercase mt-0.5 ${
-                isOverdue ? "text-[#ff6b6b]" : "text-[#6b6b6b]"
-              }`}
-            >
-              due {formatDue(task.due_date)}
+          <p
+            className={`text-base truncate transition-colors ${
+              isDone
+                ? "text-[#6b6b6b] line-through"
+                : isOverdue
+                  ? "text-[#f5f0e8] font-bold"
+                  : "text-[#f5f0e8]"
+            }`}
+          >
+            {task.title}
+          </p>
+          {showSubtitle && !isDone && (
+            <p className="text-[10px] tracking-widest uppercase mt-0.5 flex items-center gap-1.5">
+              {hasGroupInfo && (
+                <span
+                  style={{ color: groupColor ?? "#6b6b6b" }}
+                  className={!groupName ? "italic" : ""}
+                >
+                  {groupName ?? "inbox"}
+                </span>
+              )}
+              {hasGroupInfo && showDate && (
+                <span className="text-[#3a3a3a]">·</span>
+              )}
+              {showDate && (
+                <span className={isOverdue ? "text-[#ff6b6b]" : "text-[#6b6b6b]"}>
+                  due {formatDue(task.due_date!)}
+                </span>
+              )}
             </p>
           )}
         </button>

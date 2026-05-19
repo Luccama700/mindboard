@@ -23,7 +23,11 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
         case "replace":
           return state.map((t) =>
             t.id === action.tempId
-              ? { ...action.task, group_color: t.group_color }
+              ? {
+                  ...action.task,
+                  group_name: t.group_name,
+                  group_color: t.group_color,
+                }
               : t,
           );
         case "toggle":
@@ -110,7 +114,6 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
                   onToggle={onToggle}
                   onDelete={onDelete}
                   variant="overdue"
-                  showGroupColor
                 />
               ))}
             </div>
@@ -139,7 +142,6 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
                   onToggle={onToggle}
                   onDelete={onDelete}
                   hideDate
-                  showGroupColor
                 />
               ))}
             </div>
@@ -158,7 +160,6 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
                   task={t}
                   onToggle={onToggle}
                   onDelete={onDelete}
-                  showGroupColor
                 />
               ))}
             </div>
@@ -173,7 +174,7 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
           startTransition(() =>
             dispatch({
               kind: "add",
-              task: { ...task, group_color: null },
+              task: { ...task, group_name: null, group_color: null },
             }),
           )
         }

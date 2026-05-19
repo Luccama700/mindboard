@@ -43,23 +43,28 @@ export default async function Home() {
   const { data: rawTasks } = await supabase
     .from("tasks")
     .select(
-      "id, title, due_date, status, priority, group_id, created_at, completed_at, groups(color)",
+      "id, title, due_date, status, priority, group_id, created_at, completed_at, groups(name, color)",
     )
     .neq("status", "done")
     .not("due_date", "is", null);
 
-  const tasks: TaskWithGroup[] = (rawTasks ?? []).map(
-    (row: {
-      id: string;
-      title: string;
-      due_date: string | null;
-      status: "todo" | "doing" | "done";
-      priority: "low" | "med" | "high";
-      group_id: string | null;
-      created_at: string;
-      completed_at: string | null;
-      groups: { color: string } | { color: string }[] | null;
-    }) => ({
+  type RawTask = {
+    id: string;
+    title: string;
+    due_date: string | null;
+    status: "todo" | "doing" | "done";
+    priority: "low" | "med" | "high";
+    group_id: string | null;
+    created_at: string;
+    completed_at: string | null;
+    groups: { name: string; color: string } | { name: string; color: string }[] | null;
+  };
+
+  const tasks: TaskWithGroup[] = ((rawTasks ?? []) as RawTask[]).map((row) => {
+    const groupRecord = Array.isArray(row.groups)
+      ? (row.groups[0] ?? null)
+      : (row.groups ?? null);
+    return {
       id: row.id,
       title: row.title,
       due_date: row.due_date,
@@ -68,11 +73,10 @@ export default async function Home() {
       group_id: row.group_id,
       created_at: row.created_at,
       completed_at: row.completed_at,
-      group_color: Array.isArray(row.groups)
-        ? (row.groups[0]?.color ?? null)
-        : (row.groups?.color ?? null),
-    }),
-  );
+      group_name: groupRecord?.name ?? null,
+      group_color: groupRecord?.color ?? null,
+    };
+  });
 
   const todayLabel = new Date().toLocaleDateString(undefined, {
     weekday: "long",
@@ -82,7 +86,7 @@ export default async function Home() {
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-40 max-w-2xl mx-auto">
-      <header className="flex items-end justify-between mb-8">
+      <header className="flex items-start justify-between mb-8">
         <div>
           <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b]">
             {todayLabel}
@@ -91,17 +95,17 @@ export default async function Home() {
             today
           </h1>
         </div>
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex flex-col items-end gap-3 pt-1">
           <Link
             href="/groups"
-            className="text-[#6b6b6b] text-xs tracking-widest uppercase hover:text-[#f5f0e8] transition-colors"
+            className="text-xs tracking-widest uppercase px-3 py-2 border border-[#f5f0e8] text-[#f5f0e8] hover:bg-[#f5f0e8] hover:text-[#0d0d0d] transition-colors"
           >
             groups →
           </Link>
           <form action={signOut}>
             <button
               type="submit"
-              className="text-[#6b6b6b] text-xs tracking-widest uppercase hover:text-[#f5f0e8] transition-colors"
+              className="text-[10px] tracking-widest uppercase text-[#6b6b6b] hover:text-[#f5f0e8] transition-colors"
             >
               sign out
             </button>
