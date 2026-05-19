@@ -1,6 +1,7 @@
 "use client";
 
 import { createClient } from "@/utils/supabase/client";
+import Link from "next/link";
 import { useState } from "react";
 
 export default function LoginPage() {
@@ -41,12 +42,12 @@ export default function LoginPage() {
           {loading ? "redirecting..." : "continue with google →"}
         </button>
 
-        <a
+        <Link
           href="/"
           className="block text-[#6b6b6b] text-xs hover:text-[#f5f0e8] transition-colors"
         >
           ← back
-        </a>
+        </Link>
       </div>
     </main>
   );
