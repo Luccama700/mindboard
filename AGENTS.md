@@ -21,11 +21,11 @@ Mindboard is a personal life dashboard for one primary user. It tracks tasks acr
 
 Shipped routes:
 
-- `/` dashboard: today task sections on the left and embedded calendar on the right for desktop; tasks first and calendar below on mobile.
+- `/` dashboard: today task sections on the left and embedded calendar on the right on desktop, full viewport width with a ~50/50 split; tasks first and calendar below on mobile.
 - `/login`: Google OAuth sign-in.
 - `/auth/callback`: exchanges Supabase OAuth code and persists Google provider tokens.
-- `/groups`: group list, create form, inbox card.
-- `/groups/[id]`: tasks for one group.
+- `/groups`: group list with inline create form, inbox card, and per-group edit panels for renaming, type, color, and Google Calendar link.
+- `/groups/[id]`: tasks for one group, plus upcoming events from the linked Google Calendar (if any).
 - `/inbox`: tasks with no group.
 
 PWA support is shipped:
@@ -65,6 +65,10 @@ Migrations live in `supabase/migrations`.
 
 - `google_tokens`: `id`, `user_id`, `access_token`, `refresh_token`, `expires_at`, `scopes`, `updated_at`
 
+`0003_group_calendars.sql` adds:
+
+- `groups.google_calendar_id` (TEXT, nullable): the Google Calendar id linked to this group, used to surface that calendar's events as virtual task rows.
+
 Every table has RLS enabled and user-scoped policies. Never disable RLS as a debugging shortcut.
 
 Do not add tables for subtasks, recurring tasks, tags, attachments, reminders, dependencies, or two-way sync unless the user explicitly changes the product scope.
@@ -76,11 +80,12 @@ The calendar is embedded in the dashboard, not a separate `/calendar` page.
 Key files:
 
 - `utils/google/scopes.ts`: OAuth scopes requested during Google sign-in.
-- `utils/google/calendar.ts`: server-only token refresh, calendar list fetch, and event fetch.
+- `utils/google/calendar.ts`: server-only token refresh, calendar list fetch, all-calendar event fetch (`listEvents`), single-calendar event fetch (`listEventsForCalendar`), and `listCalendars` for the group linker UI.
 - `app/auth/callback/route.ts`: stores `session.provider_token` and `session.provider_refresh_token` into `google_tokens`.
 - `app/login/page.tsx`: requests Google OAuth scopes with `access_type=offline` and `prompt=consent`.
 - `app/_components/dashboard-calendar.tsx`: month/week UI.
-- `app/page.tsx`: dashboard server component that fetches tasks and calendar events.
+- `app/_components/event-row.tsx`: read-only virtual row for events from a linked calendar, rendered in the today list and on group pages.
+- `app/page.tsx`: dashboard server component that fetches tasks, groups, calendar events, and builds the calendar-id → group link map.
 
 Current Google scopes:
 
@@ -91,6 +96,8 @@ https://www.googleapis.com/auth/calendar.calendarlist.readonly
 ```
 
 The app reads all Google calendars the user can access, skips free/busy-only calendars, fetches events from each readable calendar, and falls back to the primary calendar if the calendar-list request is not authorized yet.
+
+Groups can be linked to a specific Google Calendar via `groups.google_calendar_id`. Events from a linked calendar render as read-only virtual rows in the today list (mixed into "today" and "due soon" by start time) and on the linked group's page (an "upcoming events" section). Past events (started before today, or timed and already ended) are filtered out client-side. The linking is one-way: Mindboard reads from Google and does not write back.
 
 Required Vercel env vars:
 
@@ -129,16 +136,31 @@ The task capture bar is the highest-priority interaction.
 - The input should stay focused after submit.
 - Due-date chips stick across submits for quick batch entry.
 
+Tapping the title of any task row expands an inline edit panel with three fields, all auto-saving:
+
+- Rename (saves on Enter or blur).
+- Due date via the same today/+date/clear chips as the capture bar.
+- Group selector (a dropdown of every active group plus "inbox"), used to sort inbox tasks into the right group from any list. When the task's new group no longer matches the current page (inbox or a single group), the row drops off the list optimistically.
+- Delete is in the same panel.
+
+Group edit lives in `app/groups/groups-client.tsx`. Tapping the `···` on a group row opens an inline panel with rename, type, color, Google Calendar link, and archive. The shared `ColorPicker` and `TypePicker` components are reused by the create form and the edit panel. `CalendarLinkPicker` lists every readable Google Calendar from `listCalendars`.
+
+Color picker:
+
+- 12 preset swatches.
+- A custom swatch with a rainbow conic gradient and a `+` glyph that opens the native `<input type="color">` for any RGB value.
+- When the picked color is not in the preset palette, the custom swatch displays the chosen color and the hex is shown below.
+
 Task optimistic UI patterns are in:
 
-- `app/_components/today-client.tsx`
-- `app/_components/tasks-client.tsx`
+- `app/_components/today-client.tsx`: dashboard list, merges tasks with virtual events from linked calendars.
+- `app/_components/tasks-client.tsx`: inbox and single-group list, removes a task from the visible list when its group is changed off the current page.
 
 Mutations live in:
 
-- `app/actions/tasks.ts`
-- `app/actions/groups.ts`
-- `app/actions/auth.ts`
+- `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group), `deleteTask`.
+- `app/actions/groups.ts`: `createGroup`, `updateGroup` (name, type, color, Google Calendar link), `archiveGroup`.
+- `app/actions/auth.ts`.
 
 ## Important Files
 
@@ -146,12 +168,17 @@ Mutations live in:
 - `utils/supabase/server.ts`: server component/action Supabase client.
 - `utils/supabase/client.ts`: browser Supabase client.
 - `utils/supabase/middleware.ts`: proxy helper.
+- `utils/google/calendar.ts`: server-only Google Calendar client (token refresh, `listEvents`, `listEventsForCalendar`, `listCalendars`).
 - `app/layout.tsx`: metadata, viewport, root layout.
 - `app/page.tsx`: dashboard server component.
 - `app/_components/dashboard-calendar.tsx`: embedded calendar UI.
-- `app/_components/task-row.tsx`: shared task row.
+- `app/_components/task-row.tsx`: shared task row with inline edit panel (title, date, group, delete).
+- `app/_components/event-row.tsx`: read-only virtual row for events from a linked Google Calendar.
+- `app/_components/today-client.tsx`: dashboard task list, mixes tasks with virtual events from linked calendars.
+- `app/_components/tasks-client.tsx`: inbox and single-group task list.
 - `app/_components/types.ts`: shared task types.
 - `app/_components/date-utils.ts`: date helpers.
+- `app/groups/groups-client.tsx`: group list, create form, per-group edit panel, color picker, calendar linker.
 
 ## Engineering Rules
 
