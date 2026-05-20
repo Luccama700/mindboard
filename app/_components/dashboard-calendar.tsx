@@ -27,7 +27,7 @@ type CalendarItem =
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const START_HOUR = 6;
 const END_HOUR = 22;
-const HOUR_HEIGHT = 64;
+const HOUR_HEIGHT = 42;
 type CalendarView = "month" | "week";
 
 function toDateKey(date: Date) {
@@ -223,8 +223,8 @@ export function DashboardCalendar({
   );
 
   return (
-    <section className="border border-[#1f1f1f] bg-[#101010] p-4 lg:min-h-[calc(100vh-4rem)]">
-      <header className="flex items-center justify-between gap-3 mb-4">
+    <section className="border border-[#1f1f1f] bg-[#101010] p-3 lg:min-h-[calc(100vh-4rem)]">
+      <header className="flex items-center justify-between gap-3 mb-3">
         <div>
           <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b]">
             calendar
@@ -236,14 +236,14 @@ export function DashboardCalendar({
         <div className="flex items-center gap-2">
           <Link
             href={`/?m=${addMonths(month, -1)}`}
-            className="min-w-11 h-11 border border-[#2a2a2a] text-[#6b6b6b] hover:text-[#f5f0e8] hover:border-[#f5f0e8] transition-colors flex items-center justify-center"
+            className="flex h-9 min-w-9 items-center justify-center border border-[#2a2a2a] text-[#6b6b6b] transition-colors hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
             aria-label="previous month"
           >
             ←
           </Link>
           <Link
             href={`/?m=${addMonths(month, 1)}`}
-            className="min-w-11 h-11 border border-[#2a2a2a] text-[#6b6b6b] hover:text-[#f5f0e8] hover:border-[#f5f0e8] transition-colors flex items-center justify-center"
+            className="flex h-9 min-w-9 items-center justify-center border border-[#2a2a2a] text-[#6b6b6b] transition-colors hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
             aria-label="next month"
           >
             →
@@ -251,13 +251,13 @@ export function DashboardCalendar({
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-px bg-[#1f1f1f] border border-[#1f1f1f] mb-4">
+      <div className="mb-3 ml-auto grid w-56 grid-cols-2 gap-px border border-[#1f1f1f] bg-[#1f1f1f]">
         {(["month", "week"] as CalendarView[]).map((option) => (
           <button
             key={option}
             type="button"
             onClick={() => setView(option)}
-            className={`min-h-11 text-[10px] tracking-widest uppercase transition-colors ${
+            className={`min-h-8 text-[9px] tracking-widest uppercase transition-colors ${
               view === option
                 ? "bg-[#b5ff3c] text-[#0d0d0d]"
                 : "bg-[#0d0d0d] text-[#6b6b6b] hover:text-[#f5f0e8]"
@@ -345,7 +345,7 @@ export function DashboardCalendar({
         </div>
       ) : (
         <div className="overflow-x-auto border border-[#1f1f1f]">
-          <div className="min-w-[52rem] bg-[#0d0d0d]">
+          <div className="min-w-[43rem] bg-[#0d0d0d]">
             <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-[#1f1f1f]">
               <div className="border-r border-[#1f1f1f]" />
               {week.map((date) => {
@@ -358,7 +358,7 @@ export function DashboardCalendar({
                     key={key}
                     type="button"
                     onClick={() => setSelected(key)}
-                    className={`min-h-20 border-r border-[#1f1f1f] px-2 py-3 text-center transition-colors last:border-r-0 ${
+                    className={`min-h-16 border-r border-[#1f1f1f] px-2 py-2 text-center transition-colors last:border-r-0 ${
                       isSelected ? "bg-[#141414]" : "bg-[#0d0d0d]"
                     }`}
                   >
@@ -366,7 +366,7 @@ export function DashboardCalendar({
                       {WEEKDAYS[date.getDay()]}
                     </p>
                     <p
-                      className={`mx-auto mt-1 flex h-11 w-11 items-center justify-center text-2xl ${
+                      className={`mx-auto mt-1 flex h-9 w-9 items-center justify-center text-xl ${
                         isToday
                           ? "rounded-full bg-[#b5ff3c] text-[#0d0d0d]"
                           : "text-[#f5f0e8]"
@@ -394,25 +394,25 @@ export function DashboardCalendar({
                     key={key}
                     type="button"
                     onClick={() => setSelected(key)}
-                    className="min-h-16 border-r border-[#1f1f1f] p-1.5 text-left last:border-r-0"
+                    className="min-h-24 border-r border-[#1f1f1f] p-1.5 text-left last:border-r-0"
                   >
                     <div className="space-y-1">
-                      {allDayItems.slice(0, 3).map((item) => (
+                      {allDayItems.slice(0, 2).map((item) => (
                         <div
                           key={`${item.kind}-${item.id}`}
-                          className={`truncate px-1.5 py-1 text-[10px] ${
-                            item.kind === "task"
-                              ? "bg-[#b5ff3c] text-[#0d0d0d]"
-                              : "bg-[#1a1a1a] text-[#f5f0e8] border border-[#2a2a2a]"
-                          }`}
+                          className="truncate px-1.5 py-1 text-[10px] font-bold text-[#0d0d0d]"
+                          style={{
+                            backgroundColor:
+                              item.kind === "task" ? item.color : "#6d8fe8",
+                          }}
                         >
                           {item.title}
                         </div>
                       ))}
-                      {allDayItems.length > 3 && (
-                        <p className="text-[10px] text-[#6b6b6b]">
-                          +{allDayItems.length - 3}
-                        </p>
+                      {allDayItems.length > 2 && (
+                        <span className="inline-flex h-5 items-center border border-[#3a3a3a] px-2 text-[10px] text-[#6b6b6b]">
+                          +{allDayItems.length - 2} more
+                        </span>
                       )}
                     </div>
                   </button>
@@ -463,10 +463,10 @@ export function DashboardCalendar({
                     {timedItems.map((item) => (
                       <div
                         key={item.id}
-                        className="absolute left-1 right-1 overflow-hidden bg-[#6d8fe8] px-2 py-1 text-[#0d0d0d]"
+                        className="absolute left-1 right-1 overflow-hidden bg-[#6d8fe8] px-1.5 py-1 text-[#0d0d0d]"
                         style={timedStyle(item)}
                       >
-                        <p className="truncate text-xs font-bold">
+                        <p className="truncate text-[11px] font-bold">
                           {item.title}
                         </p>
                         <p className="truncate text-[10px]">
@@ -497,11 +497,21 @@ export function DashboardCalendar({
                 key={`${item.kind}-${item.id}`}
                 className="border border-[#1f1f1f] px-3 py-2"
               >
-                <p className="text-sm text-[#f5f0e8] truncate">
-                  {item.title}
-                </p>
+                <div className="flex items-center gap-2">
+                  <span
+                    className="h-3 w-3 flex-shrink-0"
+                    style={{
+                      backgroundColor:
+                        item.kind === "task" ? item.color : "#6d8fe8",
+                    }}
+                    aria-hidden
+                  />
+                  <p className="truncate text-sm text-[#f5f0e8]">
+                    {item.title}
+                  </p>
+                </div>
                 <p
-                  className="text-[10px] tracking-widest uppercase mt-1"
+                  className="mt-1 text-[10px] uppercase tracking-widest"
                   style={{
                     color:
                       item.kind === "task" ? item.color : "#6b6b6b",
