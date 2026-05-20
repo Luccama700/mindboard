@@ -1,5 +1,7 @@
 # Codex handoff prompt
 
+> Current note: this file is historical from the original checkpoint handoff. For the up-to-date project context, shipped state, Google Calendar integration details, and agent rules, read `AGENTS.md` first. Do not treat the CP9 plan below as current ground truth; the calendar now lives on the dashboard (`/`) with month/week views.
+
 Copy everything below the `===PROMPT START===` line and paste it into Codex as the first message of a new session. The repo is already checked out locally — Codex should read the actual files for ground truth, not trust this prompt for code-level detail.
 
 ---
