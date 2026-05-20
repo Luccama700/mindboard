@@ -16,6 +16,7 @@ type UpdatePatch = {
   title?: string;
   dueDate?: string | null;
   groupId?: string | null;
+  notes?: string | null;
 };
 
 type OptimisticAction =
@@ -30,6 +31,7 @@ function applyPatch(task: Task, patch: UpdatePatch): Task {
   if (patch.title !== undefined) next = { ...next, title: patch.title };
   if (patch.dueDate !== undefined) next = { ...next, due_date: patch.dueDate };
   if (patch.groupId !== undefined) next = { ...next, group_id: patch.groupId };
+  if (patch.notes !== undefined) next = { ...next, notes: patch.notes };
   return next;
 }
 
@@ -47,6 +49,7 @@ export function TasksClient({
     (state, action) => {
       switch (action.kind) {
         case "add":
+          if (action.task.group_id !== groupId) return state;
           return [action.task, ...state];
         case "replace":
           return state.map((t) =>
@@ -148,6 +151,7 @@ export function TasksClient({
 
       <TaskCaptureBar
         groupId={groupId}
+        groups={groups}
         onOptimisticAdd={(task) =>
           startTransition(() => dispatch({ kind: "add", task }))
         }

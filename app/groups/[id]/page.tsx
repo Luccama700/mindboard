@@ -8,6 +8,7 @@ import {
 } from "@/utils/google/calendar";
 import { EventRow, type VirtualEvent } from "@/app/_components/event-row";
 import { TasksClient, type Task } from "@/app/_components/tasks-client";
+import { formatClockTime } from "@/app/_components/date-utils";
 
 function toLocalDateKey(iso: string): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
@@ -19,10 +20,7 @@ function toLocalDateKey(iso: string): string {
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return formatClockTime(iso);
 }
 
 function toVirtualEvents(
@@ -79,7 +77,7 @@ export default async function GroupTasksPage({
     supabase
       .from("tasks")
       .select(
-        "id, title, due_date, status, priority, group_id, created_at, completed_at",
+        "id, title, due_date, status, priority, notes, group_id, created_at, completed_at",
       )
       .eq("group_id", id)
       .order("created_at", { ascending: false }),

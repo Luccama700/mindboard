@@ -4,6 +4,7 @@ export type Task = {
   due_date: string | null;
   status: "todo" | "doing" | "done";
   priority: "low" | "med" | "high";
+  notes: string | null;
   group_id: string | null;
   created_at: string;
   completed_at: string | null;

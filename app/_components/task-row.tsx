@@ -14,6 +14,7 @@ type UpdatePatch = {
   title?: string;
   dueDate?: string | null;
   groupId?: string | null;
+  notes?: string | null;
 };
 
 export function TaskRow({
@@ -43,7 +44,8 @@ export function TaskRow({
   const groupColor = hasGroupInfo ? task.group_color : null;
 
   const showDate = task.due_date && !isDone && !hideDate;
-  const showSubtitle = hasGroupInfo || showDate;
+  const hasNotes = Boolean(task.notes?.trim());
+  const showSubtitle = hasGroupInfo || showDate || hasNotes;
 
   return (
     <div className="border-b border-[#1f1f1f]">
@@ -106,6 +108,10 @@ export function TaskRow({
                   due {formatDue(task.due_date!)}
                 </span>
               )}
+              {(hasGroupInfo || showDate) && hasNotes && (
+                <span className="text-[#3a3a3a]">·</span>
+              )}
+              {hasNotes && <span className="text-[#6b6b6b]">notes</span>}
             </p>
           )}
         </button>
@@ -135,6 +141,7 @@ function EditPanel({
   onUpdate: (id: string, patch: UpdatePatch) => void;
 }) {
   const [titleDraft, setTitleDraft] = useState(task.title);
+  const [notesDraft, setNotesDraft] = useState(task.notes ?? "");
   const dateInputRef = useRef<HTMLInputElement>(null);
 
   const today = todayISO();
@@ -163,6 +170,13 @@ function EditPanel({
       return;
     }
     onUpdate(task.id, { title: next });
+  }
+
+  function commitNotes() {
+    const next = notesDraft.trim();
+    const current = task.notes ?? "";
+    if (next === current) return;
+    onUpdate(task.id, { notes: next || null });
   }
 
   return (
@@ -255,6 +269,25 @@ function EditPanel({
             </option>
           ))}
         </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <label
+          htmlFor={`task-notes-${task.id}`}
+          className="text-[10px] tracking-widest uppercase text-[#6b6b6b]"
+        >
+          markdown notes
+        </label>
+        <textarea
+          id={`task-notes-${task.id}`}
+          value={notesDraft}
+          onChange={(e) => setNotesDraft(e.target.value)}
+          onBlur={commitNotes}
+          placeholder="add details..."
+          maxLength={5000}
+          rows={4}
+          className="w-full resize-y bg-[#141414] border border-[#2a2a2a] focus:border-[#b5ff3c] text-[#f5f0e8] placeholder-[#6b6b6b] text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
+        />
       </div>
 
       <div className="flex justify-end">

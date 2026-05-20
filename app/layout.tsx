@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist_Mono } from "next/font/google";
+import { ThemeInitializer } from "./_components/theme-initializer";
 import "./globals.css";
 
 const geistMono = Geist_Mono({
@@ -31,8 +32,6 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-const themeInitScript = `(function(){try{var t=localStorage.getItem('theme');if(t==='cream'){document.documentElement.classList.add('theme-cream')}var a=localStorage.getItem(t==='cream'?'accent-cream':'accent-dark');if(a&&/^#[0-9a-fA-F]{6}$/.test(a)){document.documentElement.style.setProperty('--accent',a)}}catch(e){}})();`;
-
 export default function RootLayout({
   children,
 }: {
@@ -40,10 +39,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${geistMono.variable} h-full`}>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-      </head>
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full">
+        <ThemeInitializer />
+        {children}
+      </body>
     </html>
   );
 }

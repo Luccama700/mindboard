@@ -13,6 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { useRef, useState } from "react";
 import type { CalendarItem } from "./calendar-types";
+import { formatClockTime, formatHourLabel } from "./date-utils";
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const START_HOUR = 6;
@@ -38,16 +39,7 @@ function startOfWeek(date: Date) {
 }
 
 function timeLabel(hour: number) {
-  return new Date(2000, 0, 1, hour).toLocaleTimeString(undefined, {
-    hour: "numeric",
-  });
-}
-
-function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return formatHourLabel(hour);
 }
 
 function minutesIntoDay(value: string) {
@@ -75,7 +67,7 @@ function timedStyle(item: Extract<CalendarItem, { kind: "event" }>) {
 
 function formatRange(item: Extract<CalendarItem, { kind: "event" }>) {
   if (item.allDay) return "all day";
-  return `${formatTime(item.start)} – ${formatTime(item.end)}`;
+  return `${formatClockTime(item.start)} – ${formatClockTime(item.end)}`;
 }
 
 function buildWeek(selected: string) {

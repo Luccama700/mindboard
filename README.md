@@ -9,10 +9,10 @@ The primary use case is an installed iOS PWA: open it, jot a task in a few secon
 - Google OAuth sign-in through Supabase Auth.
 - Today dashboard with overdue, today, and due-soon task sections, laid out full-width with the task list on the left and the calendar on the right on desktop.
 - Groups for courses, work, projects, and personal areas, with inline edit panels for rename, type, color, archive, and Google Calendar linking.
-- Inline task editing on every row: rename, change due date, and move between groups or the inbox without leaving the list.
+- Inline task editing on every row: rename, change due date, edit Markdown notes, and move between groups or the inbox without leaving the list.
 - Twelve preset color swatches plus a custom swatch backed by the native color picker for any RGB value.
 - Inbox for tasks without a group.
-- Fast fixed-bottom task capture bar with sticky due-date chips.
+- Fast fixed-bottom task capture bar with sticky due-date chips, sticky group selection, and a quick Markdown notes drawer.
 - Embedded dashboard calendar with month and week views.
 - Google Calendar events from every readable calendar on the signed-in Google account, with drag-to-reschedule and inline date/time editing for events on calendars you can write to.
 - Per-group Google Calendar linking: events from a linked calendar appear as read-only rows in the today list and the group page, tagged with the group's color and name.
@@ -69,7 +69,7 @@ npm run start
 
 Apply the migrations in `supabase/migrations`:
 
-- `0001_init.sql`: creates `groups` and `tasks`.
+- `0001_init.sql`: creates `groups` and `tasks`, including `tasks.notes` for Markdown task details.
 - `0002_google_tokens.sql`: creates `google_tokens` for Google provider tokens.
 - `0003_group_calendars.sql`: adds `groups.google_calendar_id` for per-group Google Calendar linking.
 
@@ -135,7 +135,7 @@ danger        #ff6b6b
 font          Geist Mono
 ```
 
-Keep the app mobile-first, dense, and quiet. The fixed task capture island is the most important interaction and should remain usable while scrolling.
+Keep the app mobile-first, dense, and quiet. The fixed task capture island is the most important interaction and should remain usable while scrolling. Quick capture supports task title, group, due date, and Markdown notes without leaving the bar.
 
 ## Agent Context
 

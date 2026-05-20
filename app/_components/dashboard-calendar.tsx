@@ -6,6 +6,12 @@ import type { CalendarEvent } from "@/utils/google/calendar";
 import { rescheduleEvent } from "@/app/actions/calendar";
 import { updateTask } from "@/app/actions/tasks";
 import type { CalendarItem } from "./calendar-types";
+import {
+  formatClockTime,
+  formatMonthDay,
+  formatMonthYear,
+  formatWeekdayMonthDay,
+} from "./date-utils";
 import { EventEditPanel } from "./event-edit-panel";
 import { WeekView, type RescheduleEvent, type RescheduleTask } from "./week-view";
 import type { TaskWithGroup } from "./types";
@@ -48,10 +54,7 @@ function monthKey(date: Date) {
 
 function monthLabel(month: string) {
   const date = parseMonth(month);
-  return date.toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-  });
+  return formatMonthYear(date);
 }
 
 function weekLabel(dateKey: string) {
@@ -62,14 +65,8 @@ function weekLabel(dateKey: string) {
   end.setDate(start.getDate() + 6);
   const sameMonth = start.getMonth() === end.getMonth();
 
-  const startLabel = start.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-  const endLabel = end.toLocaleDateString(undefined, {
-    month: sameMonth ? undefined : "short",
-    day: "numeric",
-  });
+  const startLabel = formatMonthDay(start);
+  const endLabel = formatMonthDay(end, !sameMonth);
 
   return `${startLabel} – ${endLabel}`;
 }
@@ -85,16 +82,9 @@ function eventDateKey(start: string, allDay: boolean) {
   return toDateKey(new Date(start));
 }
 
-function formatTime(value: string) {
-  return new Date(value).toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function formatEventRange(item: Extract<CalendarItem, { kind: "event" }>) {
   if (item.allDay) return "all day";
-  return `${formatTime(item.start)} – ${formatTime(item.end)}`;
+  return `${formatClockTime(item.start)} – ${formatClockTime(item.end)}`;
 }
 
 function combineDateAndMinutes(dateKey: string, minutes: number): Date {
@@ -290,13 +280,8 @@ export function DashboardCalendar({
   }
 
   const selectedItems = itemsByDate.get(selected) ?? [];
-  const selectedLabel = new Date(`${selected}T00:00:00`).toLocaleDateString(
-    undefined,
-    {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-    },
+  const selectedLabel = formatWeekdayMonthDay(
+    new Date(`${selected}T00:00:00`),
   );
 
   return (

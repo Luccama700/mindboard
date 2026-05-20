@@ -15,7 +15,7 @@ export default async function InboxPage() {
     supabase
       .from("tasks")
       .select(
-        "id, title, due_date, status, priority, group_id, created_at, completed_at",
+        "id, title, due_date, status, priority, notes, group_id, created_at, completed_at",
       )
       .is("group_id", null)
       .order("created_at", { ascending: false }),

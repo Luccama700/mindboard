@@ -66,7 +66,7 @@ The cream theme is implemented as CSS overrides in `app/globals.css`, keyed by a
 
 The accent color is driven by the CSS variable `--accent`, set per theme in `:root` and `html.theme-cream`. Every Tailwind utility keyed on the lime hex (`bg-[#b5ff3c]`, `text-[#b5ff3c]`, etc.) is rerouted to that variable in `globals.css`, so the user can override the accent at runtime.
 
-`app/_components/theme-toggle.tsx` is the simple toggle used on the get-started screen. `app/_components/settings-panel.tsx` is the dashboard popover that combines a theme switcher with the shared `ColorPicker` for per-theme accent customization. Accent overrides persist in `localStorage` under `accent-dark` and `accent-cream`. `app/layout.tsx` runs an inline pre-hydration script to set the class and the `--accent` variable from `localStorage` before first paint to avoid a flash.
+`app/_components/theme-toggle.tsx` is the simple toggle used on the get-started screen. `app/_components/settings-panel.tsx` is the dashboard popover that combines a theme switcher with the shared `ColorPicker` for per-theme accent customization. Accent overrides persist in `localStorage` under `accent-dark` and `accent-cream`. `app/_components/theme-initializer.tsx` applies the saved theme class and `--accent` variable after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
 
 `app/_components/color-picker.tsx` is the shared 12-swatch palette + custom RGB picker, used by both the group edit panel and the settings panel.
 
@@ -80,6 +80,8 @@ Migrations live in `supabase/migrations`.
 
 - `groups`: `id`, `user_id`, `name`, `type`, `color`, `archived`, `created_at`
 - `tasks`: `id`, `user_id`, `group_id`, `title`, `due_date`, `status`, `priority`, `notes`, `created_at`, `completed_at`
+
+`tasks.notes` stores plain Markdown text for task details. It is intentionally kept on the task row, not split into a separate notes table, so future AI-assisted expansion can work from the task's captured context without widening the product scope.
 
 `0002_google_tokens.sql` creates:
 
@@ -163,12 +165,15 @@ The task capture bar is the highest-priority interaction.
 - It should stay usable while scrolling.
 - The input should stay focused after submit.
 - Due-date chips stick across submits for quick batch entry.
+- The group selector chip also sticks across submits. It opens a compact bottom-adjacent picker with "inbox" plus every active group, and new tasks should be inserted into the selected group.
+- The `+ notes` chip opens a compact textarea for Markdown notes. Notes are trimmed, stored in `tasks.notes`, and cleared after submit. Keep the stored value as raw Markdown text; do not render HTML from it unless a future feature adds a sanitizer.
 
-Tapping the title of any task row expands an inline edit panel with three fields, all auto-saving:
+Tapping the title of any task row expands an inline edit panel with four fields, all auto-saving where applicable:
 
 - Rename (saves on Enter or blur).
 - Due date via the same today/+date/clear chips as the capture bar.
 - Group selector (a dropdown of every active group plus "inbox"), used to sort inbox tasks into the right group from any list. When the task's new group no longer matches the current page (inbox or a single group), the row drops off the list optimistically.
+- Markdown notes textarea (saves on blur into `tasks.notes`).
 - Delete is in the same panel.
 
 Group edit lives in `app/groups/groups-client.tsx`. Tapping the `···` on a group row opens an inline panel with rename, type, color, Google Calendar link, and archive. The shared `ColorPicker` and `TypePicker` components are reused by the create form and the edit panel. `CalendarLinkPicker` lists every readable Google Calendar from `listCalendars`.
@@ -181,12 +186,12 @@ Color picker:
 
 Task optimistic UI patterns are in:
 
-- `app/_components/today-client.tsx`: dashboard list, merges tasks with virtual events from linked calendars.
-- `app/_components/tasks-client.tsx`: inbox and single-group list, removes a task from the visible list when its group is changed off the current page.
+- `app/_components/today-client.tsx`: dashboard list, merges tasks with virtual events from linked calendars. Optimistic capture should map the selected group id to `group_name`/`group_color` immediately.
+- `app/_components/tasks-client.tsx`: inbox and single-group list, removes a task from the visible list when its group is changed off the current page. Optimistic capture should only show a new task if its selected group belongs on the current page.
 
 Mutations live in:
 
-- `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group), `deleteTask`.
+- `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group, notes), `deleteTask`.
 - `app/actions/groups.ts`: `createGroup`, `updateGroup` (name, type, color, Google Calendar link), `archiveGroup`.
 - `app/actions/calendar.ts`: `rescheduleEvent` (Google Calendar PATCH on `start`/`end`).
 - `app/actions/auth.ts`.
@@ -200,11 +205,12 @@ Mutations live in:
 - `utils/google/calendar.ts`: server-only Google Calendar client (token refresh, `listEvents`, `listEventsForCalendar`, `listCalendars`, `updateEvent`).
 - `app/layout.tsx`: metadata, viewport, root layout.
 - `app/page.tsx`: dashboard server component.
+- `app/_components/theme-initializer.tsx`: client-side theme/accent restoration from `localStorage` after hydration.
 - `app/_components/dashboard-calendar.tsx`: embedded calendar shell + month grid + selected-day list with inline event edit.
 - `app/_components/week-view.tsx`: week grid with `@dnd-kit/core` drag-to-reschedule for tasks, all-day events, and timed events.
 - `app/_components/event-edit-panel.tsx`: inline form for editing an event's start/end date/time.
 - `app/_components/calendar-types.ts`: shared `CalendarItem` discriminated union for tasks vs. events in the calendar widget.
-- `app/_components/task-row.tsx`: shared task row with inline edit panel (title, date, group, delete).
+- `app/_components/task-row.tsx`: shared task row with inline edit panel (title, date, group, Markdown notes, delete).
 - `app/_components/event-row.tsx`: read-only virtual row for events from a linked Google Calendar.
 - `app/_components/today-client.tsx`: dashboard task list, mixes tasks with virtual events from linked calendars.
 - `app/_components/tasks-client.tsx`: inbox and single-group task list.

@@ -7,7 +7,12 @@ import {
   updateTask,
 } from "@/app/actions/tasks";
 import type { CalendarEvent } from "@/utils/google/calendar";
-import { daysFromToday, priorityRank, todayISO } from "./date-utils";
+import {
+  daysFromToday,
+  formatClockTime,
+  priorityRank,
+  todayISO,
+} from "./date-utils";
 import { EventRow, type VirtualEvent } from "./event-row";
 import { TaskCaptureBar } from "./task-capture-bar";
 import { TaskRow, type GroupOption } from "./task-row";
@@ -23,6 +28,7 @@ type UpdatePatch = {
   title?: string;
   dueDate?: string | null;
   groupId?: string | null;
+  notes?: string | null;
 };
 
 type OptimisticAction =
@@ -49,6 +55,7 @@ function applyPatch(
   let next = task;
   if (patch.title !== undefined) next = { ...next, title: patch.title };
   if (patch.dueDate !== undefined) next = { ...next, due_date: patch.dueDate };
+  if (patch.notes !== undefined) next = { ...next, notes: patch.notes };
   if (patch.groupId !== undefined) {
     const group = patch.groupId
       ? (groups.find((g) => g.id === patch.groupId) ?? null)
@@ -70,14 +77,6 @@ function toLocalDateKey(iso: string): string {
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }
 
 function buildVirtualEvents(
@@ -103,8 +102,8 @@ function buildVirtualEvents(
         id: event.id,
         title: event.summary,
         startDateKey,
-        startTime: event.allDay ? null : formatTime(event.start),
-        endTime: event.allDay ? null : formatTime(event.end),
+        startTime: event.allDay ? null : formatClockTime(event.start),
+        endTime: event.allDay ? null : formatClockTime(event.end),
         allDay: event.allDay,
         groupName: link.groupName,
         groupColor: link.groupColor,
@@ -355,12 +354,17 @@ export function TodayClient({
 
       <TaskCaptureBar
         groupId={null}
+        groups={groups}
         defaultDueDate={today}
         onOptimisticAdd={(task) =>
           startTransition(() =>
             dispatch({
               kind: "add",
-              task: { ...task, group_name: null, group_color: null },
+              task: applyPatch(
+                { ...task, group_name: null, group_color: null },
+                { groupId: task.group_id },
+                groups,
+              ),
             }),
           )
         }

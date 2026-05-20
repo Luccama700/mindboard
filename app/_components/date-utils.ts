@@ -9,7 +9,52 @@ export function todayISO() {
 export function formatDue(iso: string) {
   if (iso === todayISO()) return "today";
   const d = new Date(iso + "T00:00:00");
-  return d.toLocaleDateString(undefined, {
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export function formatClockTime(value: string) {
+  return new Date(value).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+}
+
+export function formatHourLabel(hour: number) {
+  return new Date(2000, 0, 1, hour).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    hourCycle: "h23",
+  });
+}
+
+export function formatMonthYear(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+export function formatMonthDay(date: Date, includeMonth = true) {
+  return date.toLocaleDateString("en-US", {
+    month: includeMonth ? "short" : undefined,
+    day: "numeric",
+  });
+}
+
+export function formatWeekdayMonthDay(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export function formatLongWeekdayMonthDay(date: Date) {
+  return date.toLocaleDateString("en-US", {
+    weekday: "long",
     month: "short",
     day: "numeric",
   });

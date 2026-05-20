@@ -7,9 +7,11 @@ export async function createTask(input: {
   title: string;
   groupId: string | null;
   dueDate: string | null;
+  notes?: string | null;
 }) {
   const title = input.title?.trim();
   if (!title) return { error: "title required" };
+  const notes = input.notes?.trim() || null;
 
   const supabase = await createClient();
   const {
@@ -24,8 +26,9 @@ export async function createTask(input: {
       group_id: input.groupId,
       title,
       due_date: input.dueDate,
+      notes,
     })
-    .select("id, title, due_date, status, priority, group_id, created_at, completed_at")
+    .select("id, title, due_date, status, priority, notes, group_id, created_at, completed_at")
     .single();
 
   if (error) return { error: error.message };
@@ -60,6 +63,7 @@ export async function updateTask(input: {
   title?: string;
   dueDate?: string | null;
   groupId?: string | null;
+  notes?: string | null;
 }) {
   const supabase = await createClient();
   const {
@@ -76,6 +80,7 @@ export async function updateTask(input: {
   }
   if (input.dueDate !== undefined) updates.due_date = input.dueDate;
   if (input.groupId !== undefined) updates.group_id = input.groupId;
+  if (input.notes !== undefined) updates.notes = input.notes?.trim() || null;
 
   if (Object.keys(updates).length === 0) return { error: null };
 

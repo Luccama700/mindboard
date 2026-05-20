@@ -10,6 +10,7 @@ import { SettingsPanel } from "./_components/settings-panel";
 import { ThemeToggle } from "./_components/theme-toggle";
 import { signOut } from "./actions/auth";
 import { TodayClient } from "./_components/today-client";
+import { formatLongWeekdayMonthDay } from "./_components/date-utils";
 import type { TaskWithGroup } from "./_components/types";
 
 type RawTask = {
@@ -18,6 +19,7 @@ type RawTask = {
   due_date: string | null;
   status: "todo" | "doing" | "done";
   priority: "low" | "med" | "high";
+  notes: string | null;
   group_id: string | null;
   created_at: string;
   completed_at: string | null;
@@ -76,6 +78,7 @@ function mapTasks(rawTasks: RawTask[]): TaskWithGroup[] {
       due_date: row.due_date,
       status: row.status,
       priority: row.priority,
+      notes: row.notes,
       group_id: row.group_id,
       created_at: row.created_at,
       completed_at: row.completed_at,
@@ -137,7 +140,7 @@ export default async function Home({
     supabase
       .from("tasks")
       .select(
-        "id, title, due_date, status, priority, group_id, created_at, completed_at, groups(name, color)",
+        "id, title, due_date, status, priority, notes, group_id, created_at, completed_at, groups(name, color)",
       )
       .neq("status", "done")
       .not("due_date", "is", null),
@@ -190,11 +193,7 @@ export default async function Home({
       error instanceof GoogleCalendarConnectionError ? "connect" : "error";
   }
 
-  const todayLabel = new Date().toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
+  const todayLabel = formatLongWeekdayMonthDay(new Date());
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-56 lg:px-12">
