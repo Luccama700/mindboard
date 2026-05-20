@@ -195,6 +195,7 @@ export default async function Home({
 
         <aside className="min-w-0 lg:sticky lg:top-8">
           <DashboardCalendar
+            key={calendarMonth}
             month={calendarMonth}
             tasks={calendarTasks}
             events={calendarEvents}
