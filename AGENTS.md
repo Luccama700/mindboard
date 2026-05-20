@@ -122,7 +122,7 @@ Dashboard calendar supports month and week views.
 - Week view shows a larger week grid with a due/all-day row plus timed Google events in an hourly grid.
 - Mindboard tasks currently only have `due_date`, not due times, so they render in the due/all-day row.
 - Google Calendar events can render as timed blocks or all-day items.
-- Calendar events show their Google calendar name/color where available.
+- Calendar events show their Google calendar name/color where available. Events from a calendar linked to a Mindboard group instead show the group's name and color, so a linked group's tasks and events render in the same color across the dashboard calendar widget and the task list.
 
 Do not build Google event editing, event creation, or two-way sync unless the user explicitly starts a new checkpoint for it.
 

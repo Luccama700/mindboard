@@ -237,6 +237,7 @@ export default async function Home({
             tasks={calendarTasks}
             events={calendarEvents}
             status={calendarStatus}
+            calendarLinks={calendarLinks}
           />
         </aside>
       </div>

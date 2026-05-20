@@ -7,6 +7,12 @@ import type { TaskWithGroup } from "./types";
 
 type CalendarStatus = "connected" | "connect" | "error";
 
+type CalendarLink = {
+  groupId: string;
+  groupName: string;
+  groupColor: string;
+};
+
 type CalendarItem =
   | {
       kind: "task";
@@ -157,11 +163,13 @@ export function DashboardCalendar({
   tasks,
   events,
   status,
+  calendarLinks = {},
 }: {
   month: string;
   tasks: TaskWithGroup[];
   events: CalendarEvent[];
   status: CalendarStatus;
+  calendarLinks?: Record<string, CalendarLink>;
 }) {
   const today = toDateKey(new Date());
   const grid = useMemo(() => buildGrid(month), [month]);
@@ -195,6 +203,7 @@ export function DashboardCalendar({
     for (const event of events) {
       const key = eventDateKey(event);
       const items = map.get(key) ?? [];
+      const link = calendarLinks[event.calendarId];
       items.push({
         kind: "event",
         id: event.id,
@@ -202,14 +211,14 @@ export function DashboardCalendar({
         start: event.start,
         end: event.end,
         allDay: event.allDay,
-        calendar: event.calendarSummary,
-        color: event.calendarColor,
+        calendar: link?.groupName ?? event.calendarSummary,
+        color: link?.groupColor ?? event.calendarColor,
       });
       map.set(key, items);
     }
 
     return map;
-  }, [events, tasks]);
+  }, [calendarLinks, events, tasks]);
 
   const selectedItems = itemsByDate.get(selected) ?? [];
   const hourLabels = Array.from(
