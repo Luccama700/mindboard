@@ -120,7 +120,11 @@ async function fetchCalendarEvents(
     .filter((event) => event.start);
 }
 
-export class GoogleCalendarConnectionError extends Error {}
+export class GoogleCalendarConnectionError extends Error {
+  constructor(message = "google calendar connection failed — sign out and back in to refresh permissions") {
+    super(message);
+  }
+}
 
 export async function getValidAccessToken(userId: string): Promise<string> {
   const supabase = await createClient();
@@ -316,12 +320,19 @@ export async function updateEvent(
     body: JSON.stringify(patch),
   });
 
-  if (response.status === 401 || response.status === 403) {
-    throw new GoogleCalendarConnectionError();
+  if (response.status === 401) {
+    throw new GoogleCalendarConnectionError(
+      "google rejected the access token — sign out and back in",
+    );
+  }
+  if (response.status === 403) {
+    throw new GoogleCalendarConnectionError(
+      "google calendar write access not granted — sign out and back in to authorize the calendar.events scope",
+    );
   }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(`event update failed: ${response.status} ${text}`);
+    throw new Error(`event update failed: ${response.status} ${text || response.statusText}`);
   }
 }
 

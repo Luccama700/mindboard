@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { startTransition, useMemo, useOptimistic, useState } from "react";
+import { useMemo, useState } from "react";
 import type { CalendarEvent } from "@/utils/google/calendar";
 import { rescheduleEvent } from "@/app/actions/calendar";
 import { updateTask } from "@/app/actions/tasks";
@@ -25,10 +25,6 @@ type EventOverride = {
 };
 
 type TaskOverride = string | null;
-
-type OverrideAction =
-  | { kind: "event"; id: string; override: EventOverride }
-  | { kind: "task"; id: string; override: TaskOverride };
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
@@ -141,33 +137,19 @@ export function DashboardCalendar({
   const [selected, setSelected] = useState(initialSelected);
   const [view, setView] = useState<"month" | "week">("month");
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
-
-  type OverrideState = {
-    events: Record<string, EventOverride>;
-    tasks: Record<string, TaskOverride>;
-  };
-
-  const [overrides, applyOverride] = useOptimistic<OverrideState, OverrideAction>(
-    { events: {}, tasks: {} },
-    (state, action) => {
-      if (action.kind === "event") {
-        return {
-          ...state,
-          events: { ...state.events, [action.id]: action.override },
-        };
-      }
-      return {
-        ...state,
-        tasks: { ...state.tasks, [action.id]: action.override },
-      };
-    },
-  );
+  const [eventOverrides, setEventOverrides] = useState<
+    Record<string, EventOverride>
+  >({});
+  const [taskOverrides, setTaskOverrides] = useState<
+    Record<string, TaskOverride>
+  >({});
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const itemsByDate = useMemo(() => {
     const map = new Map<string, CalendarItem[]>();
 
     for (const task of tasks) {
-      const override = overrides.tasks[task.id];
+      const override = taskOverrides[task.id];
       const due = override !== undefined ? override : task.due_date;
       if (!due) continue;
       const items = map.get(due) ?? [];
@@ -182,7 +164,7 @@ export function DashboardCalendar({
     }
 
     for (const event of events) {
-      const override = overrides.events[event.id];
+      const override = eventOverrides[event.id];
       const start = override?.start ?? event.start;
       const end = override?.end ?? event.end;
       const allDay = override?.allDay ?? event.allDay;
@@ -208,24 +190,31 @@ export function DashboardCalendar({
     }
 
     return map;
-  }, [calendarLinks, events, tasks, overrides]);
+  }, [calendarLinks, events, tasks, eventOverrides, taskOverrides]);
 
-  function commitEventReschedule(
+  async function commitEventReschedule(
     eventItem: Extract<CalendarItem, { kind: "event" }>,
     next: EventOverride,
   ) {
-    startTransition(async () => {
-      applyOverride({ kind: "event", id: eventItem.id, override: next });
-      await rescheduleEvent({
-        calendarId: eventItem.calendarId,
-        eventId: eventItem.eventId,
-        allDay: next.allDay,
-        start: next.start,
-        end: next.end,
-        startTimeZone: eventItem.startTimeZone,
-        endTimeZone: eventItem.endTimeZone,
-      });
+    setErrorMessage(null);
+    setEventOverrides((o) => ({ ...o, [eventItem.id]: next }));
+    const result = await rescheduleEvent({
+      calendarId: eventItem.calendarId,
+      eventId: eventItem.eventId,
+      allDay: next.allDay,
+      start: next.start,
+      end: next.end,
+      startTimeZone: eventItem.startTimeZone,
+      endTimeZone: eventItem.endTimeZone,
     });
+    if (result.error) {
+      setEventOverrides((o) => {
+        const copy = { ...o };
+        delete copy[eventItem.id];
+        return copy;
+      });
+      setErrorMessage(result.error || "reschedule failed");
+    }
   }
 
   function findEvent(itemId: string): Extract<CalendarItem, { kind: "event" }> | null {
@@ -241,7 +230,6 @@ export function DashboardCalendar({
     if (!item) return;
 
     if (item.allDay) {
-      const originalStart = item.start.slice(0, 10);
       const originalEnd = item.end.slice(0, 10);
       const newStart = payload.newDateKey;
       const dayShift =
@@ -249,8 +237,7 @@ export function DashboardCalendar({
         new Date(`${payload.startDateKey}T00:00:00`).getTime();
       const newEnd = new Date(`${originalEnd}T00:00:00`);
       newEnd.setTime(newEnd.getTime() + dayShift);
-      void originalStart;
-      commitEventReschedule(item, {
+      void commitEventReschedule(item, {
         start: newStart,
         end: toDateKey(newEnd),
         allDay: true,
@@ -270,7 +257,7 @@ export function DashboardCalendar({
         payload.newDateKey,
         payload.newEndMinutes,
       );
-      commitEventReschedule(item, {
+      void commitEventReschedule(item, {
         start: newStart.toISOString(),
         end: newEnd.toISOString(),
         allDay: false,
@@ -278,22 +265,28 @@ export function DashboardCalendar({
     }
   }
 
-  function onRescheduleTask(payload: RescheduleTask) {
-    startTransition(async () => {
-      applyOverride({
-        kind: "task",
-        id: payload.taskId,
-        override: payload.newDateKey,
-      });
-      await updateTask({ id: payload.taskId, dueDate: payload.newDateKey });
+  async function onRescheduleTask(payload: RescheduleTask) {
+    setErrorMessage(null);
+    setTaskOverrides((o) => ({ ...o, [payload.taskId]: payload.newDateKey }));
+    const result = await updateTask({
+      id: payload.taskId,
+      dueDate: payload.newDateKey,
     });
+    if (result?.error) {
+      setTaskOverrides((o) => {
+        const copy = { ...o };
+        delete copy[payload.taskId];
+        return copy;
+      });
+      setErrorMessage(result.error || "task reschedule failed");
+    }
   }
 
   function onEditEvent(
     eventItem: Extract<CalendarItem, { kind: "event" }>,
     next: EventOverride,
   ) {
-    commitEventReschedule(eventItem, next);
+    void commitEventReschedule(eventItem, next);
   }
 
   const selectedItems = itemsByDate.get(selected) ?? [];
@@ -359,6 +352,22 @@ export function DashboardCalendar({
               ? "connect google calendar by signing out and back in."
               : "google calendar is temporarily unavailable."}
           </p>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="border border-[#ff6b6b] px-3 py-2 mb-4 flex items-start justify-between gap-2">
+          <p className="text-xs text-[#ff6b6b] leading-relaxed">
+            {errorMessage}
+          </p>
+          <button
+            type="button"
+            onClick={() => setErrorMessage(null)}
+            aria-label="dismiss"
+            className="text-[#ff6b6b] hover:text-[#ff8b8b] text-lg leading-none"
+          >
+            ×
+          </button>
         </div>
       )}
 
