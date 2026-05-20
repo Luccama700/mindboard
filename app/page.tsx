@@ -138,13 +138,37 @@ export default async function Home({
       .not("due_date", "is", null),
     supabase
       .from("groups")
-      .select("id, name, color")
+      .select("id, name, color, google_calendar_id")
       .eq("archived", false)
       .order("created_at", { ascending: false }),
   ]);
 
   const tasks = mapTasks((rawTasks ?? []) as RawTask[]);
-  const groups = (groupRows ?? []) as { id: string; name: string; color: string }[];
+  const groupsRaw = (groupRows ?? []) as {
+    id: string;
+    name: string;
+    color: string;
+    google_calendar_id: string | null;
+  }[];
+  const groups = groupsRaw.map((g) => ({
+    id: g.id,
+    name: g.name,
+    color: g.color,
+  }));
+
+  const calendarLinks: Record<
+    string,
+    { groupId: string; groupName: string; groupColor: string }
+  > = {};
+  for (const g of groupsRaw) {
+    if (g.google_calendar_id) {
+      calendarLinks[g.google_calendar_id] = {
+        groupId: g.id,
+        groupName: g.name,
+        groupColor: g.color,
+      };
+    }
+  }
   const calendarTasks = tasks.filter(
     (task) =>
       task.due_date && task.due_date >= startDate && task.due_date < endDate,
@@ -198,7 +222,12 @@ export default async function Home({
             </div>
           </header>
 
-          <TodayClient initial={tasks} groups={groups} />
+          <TodayClient
+            initial={tasks}
+            groups={groups}
+            events={calendarEvents}
+            calendarLinks={calendarLinks}
+          />
         </section>
 
         <aside className="min-w-0 lg:sticky lg:top-8">

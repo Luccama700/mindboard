@@ -6,10 +6,18 @@ import {
   toggleTaskStatus,
   updateTask,
 } from "@/app/actions/tasks";
+import type { CalendarEvent } from "@/utils/google/calendar";
 import { daysFromToday, priorityRank, todayISO } from "./date-utils";
+import { EventRow, type VirtualEvent } from "./event-row";
 import { TaskCaptureBar } from "./task-capture-bar";
 import { TaskRow, type GroupOption } from "./task-row";
 import type { Task, TaskWithGroup } from "./types";
+
+type CalendarLink = {
+  groupId: string;
+  groupName: string;
+  groupColor: string;
+};
 
 type UpdatePatch = {
   title?: string;
@@ -28,6 +36,10 @@ type OptimisticAction =
       patch: UpdatePatch;
       groups: GroupOption[];
     };
+
+type ListItem =
+  | { kind: "task"; sortKey: string; task: TaskWithGroup }
+  | { kind: "event"; sortKey: string; event: VirtualEvent };
 
 function applyPatch(
   task: TaskWithGroup,
@@ -51,12 +63,79 @@ function applyPatch(
   return next;
 }
 
+function toLocalDateKey(iso: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const d = new Date(iso);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function buildVirtualEvents(
+  events: CalendarEvent[],
+  calendarLinks: Record<string, CalendarLink>,
+  todayKey: string,
+): VirtualEvent[] {
+  const now = Date.now();
+  return events.flatMap<VirtualEvent>((event) => {
+    const link = calendarLinks[event.calendarId];
+    if (!link) return [];
+
+    const startDateKey = toLocalDateKey(event.start);
+    if (startDateKey < todayKey) return [];
+
+    if (!event.allDay) {
+      const endMs = new Date(event.end).getTime();
+      if (Number.isFinite(endMs) && endMs <= now) return [];
+    }
+
+    return [
+      {
+        id: event.id,
+        title: event.summary,
+        startDateKey,
+        startTime: event.allDay ? null : formatTime(event.start),
+        endTime: event.allDay ? null : formatTime(event.end),
+        allDay: event.allDay,
+        groupName: link.groupName,
+        groupColor: link.groupColor,
+      },
+    ];
+  });
+}
+
+function eventSortKey(event: VirtualEvent): string {
+  // All-day events sort before timed events within a day.
+  if (event.allDay) return `${event.startDateKey}T00:00`;
+  return `${event.startDateKey}T${event.startTime ?? "00:00"}`;
+}
+
+function taskSortKey(task: TaskWithGroup): string {
+  // Tasks sort after timed events within a day; rank by priority.
+  const dateKey = task.due_date ?? "9999-99-99";
+  const rank = priorityRank(task.priority).toString().padStart(2, "0");
+  return `${dateKey}T99:${rank}-${task.created_at}`;
+}
+
 export function TodayClient({
   initial,
   groups,
+  events,
+  calendarLinks,
 }: {
   initial: TaskWithGroup[];
   groups: GroupOption[];
+  events: CalendarEvent[];
+  calendarLinks: Record<string, CalendarLink>;
 }) {
   const [tasks, dispatch] = useOptimistic<TaskWithGroup[], OptimisticAction>(
     initial,
@@ -120,10 +199,11 @@ export function TodayClient({
   }
 
   const today = todayISO();
+  const virtualEvents = buildVirtualEvents(events, calendarLinks, today);
 
-  const open = tasks.filter((t) => t.status !== "done" && t.due_date);
+  const openTasks = tasks.filter((t) => t.status !== "done" && t.due_date);
 
-  const overdue = open
+  const overdueTasks = openTasks
     .filter((t) => daysFromToday(t.due_date!) < 0)
     .sort((a, b) => {
       const p = priorityRank(a.priority) - priorityRank(b.priority);
@@ -131,7 +211,16 @@ export function TodayClient({
       return a.due_date!.localeCompare(b.due_date!);
     });
 
-  const dueToday = open
+  const todayEvents = virtualEvents.filter(
+    (e) => e.startDateKey === today,
+  );
+  const soonEvents = virtualEvents.filter((e) => {
+    if (e.startDateKey === today) return false;
+    const days = daysFromToday(e.startDateKey);
+    return days > 0 && days <= 7;
+  });
+
+  const dueTodayTasks = openTasks
     .filter((t) => daysFromToday(t.due_date!) === 0)
     .sort((a, b) => {
       const p = priorityRank(a.priority) - priorityRank(b.priority);
@@ -139,7 +228,7 @@ export function TodayClient({
       return a.created_at.localeCompare(b.created_at);
     });
 
-  const dueSoon = open
+  const dueSoonTasks = openTasks
     .filter((t) => {
       const d = daysFromToday(t.due_date!);
       return d > 0 && d <= 7;
@@ -150,19 +239,47 @@ export function TodayClient({
       return a.due_date!.localeCompare(b.due_date!);
     });
 
+  const todayItems: ListItem[] = [
+    ...todayEvents.map<ListItem>((event) => ({
+      kind: "event",
+      sortKey: eventSortKey(event),
+      event,
+    })),
+    ...dueTodayTasks.map<ListItem>((task) => ({
+      kind: "task",
+      sortKey: taskSortKey(task),
+      task,
+    })),
+  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+  const soonItems: ListItem[] = [
+    ...soonEvents.map<ListItem>((event) => ({
+      kind: "event",
+      sortKey: eventSortKey(event),
+      event,
+    })),
+    ...dueSoonTasks.map<ListItem>((task) => ({
+      kind: "task",
+      sortKey: taskSortKey(task),
+      task,
+    })),
+  ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
   const allClear =
-    overdue.length === 0 && dueToday.length === 0 && dueSoon.length === 0;
+    overdueTasks.length === 0 &&
+    todayItems.length === 0 &&
+    soonItems.length === 0;
 
   return (
     <>
       <div className="pb-4 space-y-10">
-        {overdue.length > 0 && (
+        {overdueTasks.length > 0 && (
           <section>
             <p className="text-[10px] tracking-widest uppercase text-[#ff6b6b] mb-2 px-1">
-              overdue · {overdue.length}
+              overdue · {overdueTasks.length}
             </p>
             <div>
-              {overdue.map((t) => (
+              {overdueTasks.map((t) => (
                 <TaskRow
                   key={t.id}
                   task={t}
@@ -180,11 +297,11 @@ export function TodayClient({
         <section>
           <p className="text-[10px] tracking-widest uppercase text-[#f5f0e8] mb-2 px-1">
             today
-            {dueToday.length > 0 && (
-              <span className="text-[#6b6b6b]"> · {dueToday.length}</span>
+            {todayItems.length > 0 && (
+              <span className="text-[#6b6b6b]"> · {todayItems.length}</span>
             )}
           </p>
-          {dueToday.length === 0 ? (
+          {todayItems.length === 0 ? (
             <p className="text-[#6b6b6b] text-sm py-2 px-1">
               {allClear
                 ? "all clear. type below to capture something."
@@ -192,37 +309,45 @@ export function TodayClient({
             </p>
           ) : (
             <div>
-              {dueToday.map((t) => (
-                <TaskRow
-                  key={t.id}
-                  task={t}
-                  groups={groups}
-                  onToggle={onToggle}
-                  onDelete={onDelete}
-                  onUpdate={onUpdate}
-                  hideDate
-                />
-              ))}
+              {todayItems.map((item) =>
+                item.kind === "task" ? (
+                  <TaskRow
+                    key={item.task.id}
+                    task={item.task}
+                    groups={groups}
+                    onToggle={onToggle}
+                    onDelete={onDelete}
+                    onUpdate={onUpdate}
+                    hideDate
+                  />
+                ) : (
+                  <EventRow key={item.event.id} event={item.event} hideDate />
+                ),
+              )}
             </div>
           )}
         </section>
 
-        {dueSoon.length > 0 && (
+        {soonItems.length > 0 && (
           <section>
             <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b] mb-2 px-1">
-              due soon · {dueSoon.length}
+              due soon · {soonItems.length}
             </p>
             <div>
-              {dueSoon.map((t) => (
-                <TaskRow
-                  key={t.id}
-                  task={t}
-                  groups={groups}
-                  onToggle={onToggle}
-                  onDelete={onDelete}
-                  onUpdate={onUpdate}
-                />
-              ))}
+              {soonItems.map((item) =>
+                item.kind === "task" ? (
+                  <TaskRow
+                    key={item.task.id}
+                    task={item.task}
+                    groups={groups}
+                    onToggle={onToggle}
+                    onDelete={onDelete}
+                    onUpdate={onUpdate}
+                  />
+                ) : (
+                  <EventRow key={item.event.id} event={item.event} />
+                ),
+              )}
             </div>
           </section>
         )}

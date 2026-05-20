@@ -7,6 +7,7 @@ import {
   createGroup,
   updateGroup,
 } from "@/app/actions/groups";
+import type { CalendarListEntry } from "@/utils/google/calendar";
 import type { Group } from "./page";
 
 const TYPES: Group["type"][] = ["course", "project", "work", "personal"];
@@ -34,7 +35,13 @@ type OptimisticAction =
   | { kind: "archive"; id: string }
   | { kind: "update"; id: string; patch: Partial<Group> };
 
-export function GroupsClient({ initial }: { initial: Group[] }) {
+export function GroupsClient({
+  initial,
+  calendars,
+}: {
+  initial: Group[];
+  calendars: CalendarListEntry[];
+}) {
   const [groups, dispatch] = useOptimistic<Group[], OptimisticAction>(
     initial,
     (state, action) => {
@@ -98,6 +105,10 @@ export function GroupsClient({ initial }: { initial: Group[] }) {
         name: patch.name,
         type: patch.type,
         color: patch.color,
+        googleCalendarId:
+          patch.google_calendar_id === undefined
+            ? undefined
+            : patch.google_calendar_id,
       });
     });
   }
@@ -176,6 +187,7 @@ export function GroupsClient({ initial }: { initial: Group[] }) {
           <GroupRow
             key={g.id}
             group={g}
+            calendars={calendars}
             onArchive={onArchive}
             onUpdate={onUpdate}
           />
@@ -187,10 +199,12 @@ export function GroupsClient({ initial }: { initial: Group[] }) {
 
 function GroupRow({
   group,
+  calendars,
   onArchive,
   onUpdate,
 }: {
   group: Group;
+  calendars: CalendarListEntry[];
   onArchive: (id: string) => void;
   onUpdate: (id: string, patch: Partial<Group>) => void;
 }) {
@@ -231,6 +245,7 @@ function GroupRow({
       {editOpen && (
         <GroupEditPanel
           group={group}
+          calendars={calendars}
           onUpdate={onUpdate}
           onArchive={(id) => {
             setEditOpen(false);
@@ -244,10 +259,12 @@ function GroupRow({
 
 function GroupEditPanel({
   group,
+  calendars,
   onUpdate,
   onArchive,
 }: {
   group: Group;
+  calendars: CalendarListEntry[];
   onUpdate: (id: string, patch: Partial<Group>) => void;
   onArchive: (id: string) => void;
 }) {
@@ -294,6 +311,12 @@ function GroupEditPanel({
         onChange={(c) => onUpdate(group.id, { color: c })}
       />
 
+      <CalendarLinkPicker
+        value={group.google_calendar_id}
+        calendars={calendars}
+        onChange={(id) => onUpdate(group.id, { google_calendar_id: id })}
+      />
+
       <div className="flex justify-end pt-2">
         <button
           onClick={() => onArchive(group.id)}
@@ -334,6 +357,62 @@ function TypePicker({
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+function CalendarLinkPicker({
+  value,
+  calendars,
+  onChange,
+}: {
+  value: string | null;
+  calendars: CalendarListEntry[];
+  onChange: (id: string | null) => void;
+}) {
+  const linked = value
+    ? (calendars.find((c) => c.id === value) ?? null)
+    : null;
+  const linkedMissing = value !== null && !linked;
+
+  return (
+    <div>
+      <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b] mb-2">
+        google calendar
+      </p>
+      {calendars.length === 0 ? (
+        <p className="text-[#6b6b6b] text-xs">
+          {value
+            ? "linked, but calendar list is not available right now."
+            : "sign in with calendar access to link a calendar."}
+        </p>
+      ) : (
+        <div className="flex items-center gap-2">
+          {(linked || linkedMissing) && (
+            <span
+              className="w-3 h-3 flex-shrink-0"
+              style={{ backgroundColor: linked?.color ?? "#6b6b6b" }}
+              aria-hidden
+            />
+          )}
+          <select
+            value={value ?? ""}
+            onChange={(e) => onChange(e.target.value || null)}
+            aria-label="link google calendar"
+            className="flex-1 min-w-0 bg-[#141414] border border-[#2a2a2a] focus:border-[#b5ff3c] text-[#f5f0e8] text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
+          >
+            <option value="">none</option>
+            {linkedMissing && value && (
+              <option value={value}>linked (not visible)</option>
+            )}
+            {calendars.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.summary}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   );
 }

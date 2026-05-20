@@ -10,8 +10,15 @@ export type CalendarEvent = {
   start: string;
   end: string;
   allDay: boolean;
+  calendarId: string;
   calendarSummary: string;
   calendarColor: string;
+};
+
+export type CalendarListEntry = {
+  id: string;
+  summary: string;
+  color: string;
 };
 
 type TokenRow = {
@@ -90,6 +97,7 @@ async function fetchCalendarEvents(
         start,
         end,
         allDay: Boolean(event.start?.date),
+        calendarId: calendar.id,
         calendarSummary: calendar.summary ?? "google calendar",
         calendarColor: calendar.backgroundColor ?? "#6d8fe8",
       };
@@ -233,6 +241,56 @@ export async function listEvents(
   );
 
   return events.flat().sort((a, b) => a.start.localeCompare(b.start));
+}
+
+export async function listCalendars(
+  userId: string,
+): Promise<CalendarListEntry[]> {
+  const token = await getValidAccessToken(userId);
+  const url = new URL(
+    "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+  );
+  url.searchParams.set("showHidden", "true");
+  url.searchParams.set("maxResults", "250");
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new GoogleCalendarConnectionError();
+  }
+  if (!response.ok) throw new Error("calendar list request failed");
+
+  const payload = (await response.json()) as {
+    items?: GoogleCalendarListEntry[];
+  };
+
+  return (payload.items ?? [])
+    .filter((c) => c.id && c.accessRole !== "freeBusyReader")
+    .map((c) => ({
+      id: c.id,
+      summary: c.summary ?? "google calendar",
+      color: c.backgroundColor ?? "#6d8fe8",
+    }));
+}
+
+export async function listEventsForCalendar(
+  userId: string,
+  calendarId: string,
+  range: { timeMin: string; timeMax: string },
+): Promise<CalendarEvent[]> {
+  const token = await getValidAccessToken(userId);
+  return fetchCalendarEvents(
+    token,
+    {
+      id: calendarId,
+      summary: "google calendar",
+      backgroundColor: "#6d8fe8",
+    },
+    range,
+    { allowForbidden: true },
+  );
 }
 
 export { CALENDAR_SCOPES };

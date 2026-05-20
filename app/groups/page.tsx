@@ -1,6 +1,11 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/utils/supabase/server";
+import {
+  CalendarListEntry,
+  GoogleCalendarConnectionError,
+  listCalendars,
+} from "@/utils/google/calendar";
 import { GroupsClient } from "./groups-client";
 
 export type Group = {
@@ -10,6 +15,7 @@ export type Group = {
   color: string;
   archived: boolean;
   created_at: string;
+  google_calendar_id: string | null;
 };
 
 export default async function GroupsPage() {
@@ -22,9 +28,18 @@ export default async function GroupsPage() {
 
   const { data: groups } = await supabase
     .from("groups")
-    .select("id, name, type, color, archived, created_at")
+    .select("id, name, type, color, archived, created_at, google_calendar_id")
     .eq("archived", false)
     .order("created_at", { ascending: false });
+
+  let calendars: CalendarListEntry[] = [];
+  try {
+    calendars = await listCalendars(user.id);
+  } catch (error) {
+    if (!(error instanceof GoogleCalendarConnectionError)) {
+      console.error("listCalendars failed", error);
+    }
+  }
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-32 max-w-2xl mx-auto">
@@ -40,7 +55,10 @@ export default async function GroupsPage() {
         </h1>
       </header>
 
-      <GroupsClient initial={(groups ?? []) as Group[]} />
+      <GroupsClient
+        initial={(groups ?? []) as Group[]}
+        calendars={calendars}
+      />
     </main>
   );
 }

@@ -43,6 +43,7 @@ export async function updateGroup(input: {
   name?: string;
   type?: string;
   color?: string;
+  googleCalendarId?: string | null;
 }) {
   const supabase = await createClient();
   const {
@@ -68,6 +69,16 @@ export async function updateGroup(input: {
       return { error: "invalid color" };
     }
     updates.color = input.color;
+  }
+  if (input.googleCalendarId !== undefined) {
+    if (
+      input.googleCalendarId !== null &&
+      (typeof input.googleCalendarId !== "string" ||
+        input.googleCalendarId.length > 256)
+    ) {
+      return { error: "invalid calendar" };
+    }
+    updates.google_calendar_id = input.googleCalendarId;
   }
 
   if (Object.keys(updates).length === 0) return { error: null };
