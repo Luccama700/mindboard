@@ -55,7 +55,8 @@ danger        #ff6b6b
 cream
 background    #f5f0e8
 foreground    #2a2620
-accent        #b5ff3c (unchanged)
+accent bg     #c9a572 (cream caramel; for filled buttons/chips)
+accent fg     #8b6332 (rich brown; for accent text, borders, outlines)
 muted text    #897e62
 borders       #d4c9b1 and #beb18f
 danger        #ff6b6b (unchanged)
