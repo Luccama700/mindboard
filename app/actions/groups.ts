@@ -38,6 +38,52 @@ export async function createGroup(formData: FormData) {
   return { error: null };
 }
 
+export async function updateGroup(input: {
+  id: string;
+  name?: string;
+  type?: string;
+  color?: string;
+}) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const updates: Record<string, unknown> = {};
+
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) return { error: "name required" };
+    updates.name = name;
+  }
+  if (input.type !== undefined) {
+    if (!ALLOWED_TYPES.includes(input.type as GroupType)) {
+      return { error: "invalid type" };
+    }
+    updates.type = input.type;
+  }
+  if (input.color !== undefined) {
+    if (!/^#[0-9a-fA-F]{6}$/.test(input.color)) {
+      return { error: "invalid color" };
+    }
+    updates.color = input.color;
+  }
+
+  if (Object.keys(updates).length === 0) return { error: null };
+
+  const { error } = await supabase
+    .from("groups")
+    .update(updates)
+    .eq("id", input.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/groups");
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
 export async function archiveGroup(id: string) {
   const supabase = await createClient();
   const {
