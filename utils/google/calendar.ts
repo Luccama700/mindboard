@@ -39,6 +39,7 @@ type GoogleCalendarListEntry = {
   id: string;
   summary?: string;
   backgroundColor?: string;
+  accessRole?: string;
 };
 
 async function fetchCalendarEvents(
@@ -180,7 +181,6 @@ export async function listEvents(
   const url = new URL(
     "https://www.googleapis.com/calendar/v3/users/me/calendarList",
   );
-  url.searchParams.set("minAccessRole", "reader");
   url.searchParams.set("showHidden", "true");
   url.searchParams.set("maxResults", "250");
 
@@ -206,7 +206,9 @@ export async function listEvents(
   const payload = (await response.json()) as {
     items?: GoogleCalendarListEntry[];
   };
-  const calendars = (payload.items ?? []).filter((calendar) => calendar.id);
+  const calendars = (payload.items ?? []).filter(
+    (calendar) => calendar.id && calendar.accessRole !== "freeBusyReader",
+  );
   if (calendars.length === 0) {
     return fetchCalendarEvents(
       token,
