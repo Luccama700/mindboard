@@ -6,6 +6,7 @@ import {
   type CalendarEvent,
 } from "@/utils/google/calendar";
 import { DashboardCalendar } from "./_components/dashboard-calendar";
+import { SettingsPanel } from "./_components/settings-panel";
 import { ThemeToggle } from "./_components/theme-toggle";
 import { signOut } from "./actions/auth";
 import { TodayClient } from "./_components/today-client";
@@ -210,7 +211,7 @@ export default async function Home({
             </div>
             <div className="flex flex-col items-end gap-3 pt-1">
               <div className="flex items-center gap-2">
-                <ThemeToggle />
+                <SettingsPanel />
                 <Link
                   href="/groups"
                   className="text-xs tracking-widest uppercase px-3 py-2 border border-[#f5f0e8] text-[#f5f0e8] hover:bg-[#f5f0e8] hover:text-[#0d0d0d] transition-colors"

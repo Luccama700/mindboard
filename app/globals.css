@@ -10,6 +10,14 @@
   --font-mono: var(--font-geist-mono);
 }
 
+:root {
+  --accent: #b5ff3c;
+}
+
+html.theme-cream {
+  --accent: #c9a572;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -26,10 +34,24 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* === Accent variable ===
+ * Every Tailwind utility keyed on the lime hex #b5ff3c is rerouted to the
+ * --accent CSS variable so the settings panel can swap the accent at runtime.
+ */
+.bg-\[\#b5ff3c\] { background-color: var(--accent); }
+.text-\[\#b5ff3c\] { color: var(--accent); }
+.border-\[\#b5ff3c\] { border-color: var(--accent); }
+.outline-\[\#b5ff3c\] { outline-color: var(--accent); }
+.accent-\[\#b5ff3c\] { accent-color: var(--accent); }
+.hover\:bg-\[\#b5ff3c\]:hover { background-color: var(--accent); }
+.hover\:text-\[\#b5ff3c\]:hover { color: var(--accent); }
+.hover\:border-\[\#b5ff3c\]:hover { border-color: var(--accent); }
+.focus\:border-\[\#b5ff3c\]:focus { border-color: var(--accent); }
+
 /* === Cream theme overrides ===
  * Activated by adding the class `theme-cream` to <html>.
- * Inverts the dark palette to a warm cream paper feel while keeping the
- * lime accent and red danger color readable on cream.
+ * Inverts the dark palette to a warm cream paper feel; the accent comes from
+ * --accent so it works for both the default caramel and any user override.
  * Group/event chip colors are user data and are not overridden — they come
  * from inline styles, not Tailwind class names.
  */
@@ -49,26 +71,17 @@ html.theme-cream .bg-\[\#1a1a1a\] { background-color: #e8dfcd !important; }
 html.theme-cream .bg-\[\#1f1f1f\] { background-color: #d4c9b1 !important; }
 html.theme-cream .bg-\[\#2a2a2a\] { background-color: #beb18f !important; }
 html.theme-cream .bg-\[\#f5f0e8\] { background-color: #d9cfb9 !important; }
-html.theme-cream .bg-\[\#b5ff3c\] { background-color: #c9a572 !important; }
 
 /* Text */
 html.theme-cream .text-\[\#f5f0e8\] { color: #2a2620 !important; }
 html.theme-cream .text-\[\#6b6b6b\] { color: #897e62 !important; }
 html.theme-cream .text-\[\#3a3a3a\] { color: #a99979 !important; }
-html.theme-cream .text-\[\#b5ff3c\] { color: #8b6332 !important; }
 
 /* Borders */
 html.theme-cream .border-\[\#1f1f1f\] { border-color: #d4c9b1 !important; }
 html.theme-cream .border-\[\#2a2a2a\] { border-color: #beb18f !important; }
 html.theme-cream .border-\[\#3a3a3a\] { border-color: #a99979 !important; }
 html.theme-cream .border-\[\#f5f0e8\] { border-color: #2a2620 !important; }
-html.theme-cream .border-\[\#b5ff3c\] { border-color: #8b6332 !important; }
-
-/* Outline */
-html.theme-cream .outline-\[\#b5ff3c\] { outline-color: #8b6332 !important; }
-
-/* Native form accent (checkboxes etc.) */
-html.theme-cream .accent-\[\#b5ff3c\] { accent-color: #8b6332 !important; }
 
 /* Placeholders */
 html.theme-cream .placeholder-\[\#6b6b6b\]::placeholder { color: #a99979 !important; }
@@ -76,14 +89,8 @@ html.theme-cream .placeholder-\[\#6b6b6b\]::placeholder { color: #a99979 !import
 /* Hover variants */
 html.theme-cream .hover\:bg-\[\#1a1a1a\]:hover { background-color: #e8dfcd !important; }
 html.theme-cream .hover\:bg-\[\#f5f0e8\]:hover { background-color: #d9cfb9 !important; }
-html.theme-cream .hover\:bg-\[\#b5ff3c\]:hover { background-color: #c9a572 !important; }
 html.theme-cream .hover\:text-\[\#f5f0e8\]:hover { color: #2a2620 !important; }
-html.theme-cream .hover\:text-\[\#b5ff3c\]:hover { color: #8b6332 !important; }
 html.theme-cream .hover\:border-\[\#f5f0e8\]:hover { border-color: #2a2620 !important; }
-html.theme-cream .hover\:border-\[\#b5ff3c\]:hover { border-color: #8b6332 !important; }
-
-/* Focus */
-html.theme-cream .focus\:border-\[\#b5ff3c\]:focus { border-color: #8b6332 !important; }
 
 /* Ring offset (used for selected color swatch) */
 html.theme-cream .ring-offset-\[\#141414\] { --tw-ring-offset-color: #ece4d4 !important; }

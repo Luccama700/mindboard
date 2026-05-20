@@ -64,7 +64,11 @@ danger        #ff6b6b (unchanged)
 
 The cream theme is implemented as CSS overrides in `app/globals.css`, keyed by attribute selectors on Tailwind's arbitrary-value class names (e.g. `html.theme-cream .bg-\[\#0d0d0d\]`). User-data colors (group colors, calendar/event colors) come from inline `style={{...}}` and are not affected by the theme.
 
-`app/_components/theme-toggle.tsx` is the toggle button. `app/layout.tsx` runs an inline pre-hydration script to set the class from `localStorage["theme"]` before first paint to avoid a flash.
+The accent color is driven by the CSS variable `--accent`, set per theme in `:root` and `html.theme-cream`. Every Tailwind utility keyed on the lime hex (`bg-[#b5ff3c]`, `text-[#b5ff3c]`, etc.) is rerouted to that variable in `globals.css`, so the user can override the accent at runtime.
+
+`app/_components/theme-toggle.tsx` is the simple toggle used on the get-started screen. `app/_components/settings-panel.tsx` is the dashboard popover that combines a theme switcher with the shared `ColorPicker` for per-theme accent customization. Accent overrides persist in `localStorage` under `accent-dark` and `accent-cream`. `app/layout.tsx` runs an inline pre-hydration script to set the class and the `--accent` variable from `localStorage` before first paint to avoid a flash.
+
+`app/_components/color-picker.tsx` is the shared 12-swatch palette + custom RGB picker, used by both the group edit panel and the settings panel.
 
 Touch targets should be at least 44px. Mobile-first. Keep layouts quiet, dense, and utilitarian.
 

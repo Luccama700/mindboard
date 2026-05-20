@@ -31,7 +31,7 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-const themeInitScript = `(function(){try{if(localStorage.getItem('theme')==='cream'){document.documentElement.classList.add('theme-cream')}}catch(e){}})();`;
+const themeInitScript = `(function(){try{var t=localStorage.getItem('theme');if(t==='cream'){document.documentElement.classList.add('theme-cream')}var a=localStorage.getItem(t==='cream'?'accent-cream':'accent-dark');if(a&&/^#[0-9a-fA-F]{6}$/.test(a)){document.documentElement.style.setProperty('--accent',a)}}catch(e){}})();`;
 
 export default function RootLayout({
   children,
