@@ -6,19 +6,24 @@ const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
 export type CalendarEvent = {
   id: string;
+  eventId: string;
   summary: string;
   start: string;
   end: string;
   allDay: boolean;
+  startTimeZone: string | null;
+  endTimeZone: string | null;
   calendarId: string;
   calendarSummary: string;
   calendarColor: string;
+  writable: boolean;
 };
 
 export type CalendarListEntry = {
   id: string;
   summary: string;
   color: string;
+  writable: boolean;
 };
 
 type TokenRow = {
@@ -35,10 +40,12 @@ type GoogleEvent = {
   start?: {
     date?: string;
     dateTime?: string;
+    timeZone?: string;
   };
   end?: {
     date?: string;
     dateTime?: string;
+    timeZone?: string;
   };
 };
 
@@ -48,6 +55,10 @@ type GoogleCalendarListEntry = {
   backgroundColor?: string;
   accessRole?: string;
 };
+
+function isWritableRole(role: string | undefined): boolean {
+  return role === "owner" || role === "writer";
+}
 
 async function fetchCalendarEvents(
   token: string,
@@ -93,13 +104,17 @@ async function fetchCalendarEvents(
       const end = event.end?.dateTime ?? event.end?.date ?? start;
       return {
         id: `${calendar.id}:${event.id}`,
+        eventId: event.id,
         summary: event.summary ?? "untitled event",
         start,
         end,
         allDay: Boolean(event.start?.date),
+        startTimeZone: event.start?.timeZone ?? null,
+        endTimeZone: event.end?.timeZone ?? null,
         calendarId: calendar.id,
         calendarSummary: calendar.summary ?? "google calendar",
         calendarColor: calendar.backgroundColor ?? "#6d8fe8",
+        writable: isWritableRole(calendar.accessRole),
       };
     })
     .filter((event) => event.start);
@@ -272,7 +287,42 @@ export async function listCalendars(
       id: c.id,
       summary: c.summary ?? "google calendar",
       color: c.backgroundColor ?? "#6d8fe8",
+      writable: isWritableRole(c.accessRole),
     }));
+}
+
+export async function updateEvent(
+  userId: string,
+  calendarId: string,
+  eventId: string,
+  patch: {
+    start: { date?: string; dateTime?: string; timeZone?: string };
+    end: { date?: string; dateTime?: string; timeZone?: string };
+  },
+): Promise<void> {
+  const token = await getValidAccessToken(userId);
+  const url = new URL(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId,
+    )}/events/${encodeURIComponent(eventId)}`,
+  );
+
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(patch),
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new GoogleCalendarConnectionError();
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`event update failed: ${response.status} ${text}`);
+  }
 }
 
 export async function listEventsForCalendar(

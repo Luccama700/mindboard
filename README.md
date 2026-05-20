@@ -14,7 +14,7 @@ The primary use case is an installed iOS PWA: open it, jot a task in a few secon
 - Inbox for tasks without a group.
 - Fast fixed-bottom task capture bar with sticky due-date chips.
 - Embedded dashboard calendar with month and week views.
-- Read-only Google Calendar events from every readable calendar on the signed-in Google account.
+- Google Calendar events from every readable calendar on the signed-in Google account, with drag-to-reschedule and inline date/time editing for events on calendars you can write to.
 - Per-group Google Calendar linking: events from a linked calendar appear as read-only rows in the today list and the group page, tagged with the group's color and name.
 - PWA manifest and iOS home-screen icons.
 
@@ -84,9 +84,11 @@ Add these OAuth consent scopes:
 
 ```text
 https://www.googleapis.com/auth/calendar.readonly
-https://www.googleapis.com/auth/calendar.events.readonly
+https://www.googleapis.com/auth/calendar.events
 https://www.googleapis.com/auth/calendar.calendarlist.readonly
 ```
+
+`calendar.events` is read+write on events (no calendar management) and is required for drag-to-reschedule and inline event editing.
 
 Make sure Supabase Google Auth and Vercel use the same OAuth client:
 

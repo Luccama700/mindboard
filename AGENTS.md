@@ -16,6 +16,7 @@ Mindboard is a personal life dashboard for one primary user. It tracks tasks acr
 - Supabase SSR clients via `@supabase/ssr`.
 - Deployed on Vercel from `main`.
 - No UI library and no state library. Use React built-ins and hand-rolled Tailwind.
+- `@dnd-kit/core` is the one allowed behavior dependency, used for drag-to-reschedule in the week view. Do not pull in `@dnd-kit/sortable` or `@dnd-kit/modifiers` unless a new feature actually needs them.
 
 ## Product State
 
@@ -91,9 +92,11 @@ Current Google scopes:
 
 ```text
 https://www.googleapis.com/auth/calendar.readonly
-https://www.googleapis.com/auth/calendar.events.readonly
+https://www.googleapis.com/auth/calendar.events
 https://www.googleapis.com/auth/calendar.calendarlist.readonly
 ```
+
+`calendar.events` is read+write on events (no calendar management) and powers the drag-to-reschedule and inline edit features.
 
 The app reads all Google calendars the user can access, skips free/busy-only calendars, fetches events from each readable calendar, and falls back to the primary calendar if the calendar-list request is not authorized yet.
 
@@ -118,13 +121,19 @@ After changing Google scopes, the user must:
 
 Dashboard calendar supports month and week views.
 
-- Month view shows a compact 7-column grid with task/event chips and overflow counts.
-- Week view shows a larger week grid with a due/all-day row plus timed Google events in an hourly grid.
+- Month view shows a compact 7-column grid with task/event chips and overflow counts. Month view is read-only.
+- Week view shows a larger week grid with a due/all-day row plus timed Google events in an hourly grid. Week view supports drag-to-reschedule on tasks, all-day events, and timed events:
+  - Tasks drag horizontally between days; the new column becomes the task's `due_date`.
+  - All-day events drag horizontally between days.
+  - Timed events drag in two dimensions; the new x position picks the day, the new y position picks the start time snapped to 15-minute increments. Duration is preserved.
+  - Drag uses `@dnd-kit/core` with a `PointerSensor` (6px activation distance) and a `TouchSensor` (150ms hold delay) so the chips stay tappable on mobile.
+  - Events from non-writable calendars (`reader` accessRole) appear dimmed and are not draggable.
+- Below the grid is a "selected day" list. Tapping an editable Google Calendar event in that list opens an inline edit panel with date and time inputs (or just date inputs for all-day events). Saving PATCHes Google via `rescheduleEvent`.
 - Mindboard tasks currently only have `due_date`, not due times, so they render in the due/all-day row.
 - Google Calendar events can render as timed blocks or all-day items.
 - Calendar events show their Google calendar name/color where available. Events from a calendar linked to a Mindboard group instead show the group's name and color, so a linked group's tasks and events render in the same color across the dashboard calendar widget and the task list.
 
-Do not build Google event editing, event creation, or two-way sync unless the user explicitly starts a new checkpoint for it.
+Event rescheduling (write-back of `start`/`end`) is shipped. Event creation, deletion, title editing, attendee changes, and calendar/calendar-list management are out of scope unless the user explicitly opens a new checkpoint for them.
 
 ## Task UX
 
@@ -160,6 +169,7 @@ Mutations live in:
 
 - `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group), `deleteTask`.
 - `app/actions/groups.ts`: `createGroup`, `updateGroup` (name, type, color, Google Calendar link), `archiveGroup`.
+- `app/actions/calendar.ts`: `rescheduleEvent` (Google Calendar PATCH on `start`/`end`).
 - `app/actions/auth.ts`.
 
 ## Important Files
@@ -168,10 +178,13 @@ Mutations live in:
 - `utils/supabase/server.ts`: server component/action Supabase client.
 - `utils/supabase/client.ts`: browser Supabase client.
 - `utils/supabase/middleware.ts`: proxy helper.
-- `utils/google/calendar.ts`: server-only Google Calendar client (token refresh, `listEvents`, `listEventsForCalendar`, `listCalendars`).
+- `utils/google/calendar.ts`: server-only Google Calendar client (token refresh, `listEvents`, `listEventsForCalendar`, `listCalendars`, `updateEvent`).
 - `app/layout.tsx`: metadata, viewport, root layout.
 - `app/page.tsx`: dashboard server component.
-- `app/_components/dashboard-calendar.tsx`: embedded calendar UI.
+- `app/_components/dashboard-calendar.tsx`: embedded calendar shell + month grid + selected-day list with inline event edit.
+- `app/_components/week-view.tsx`: week grid with `@dnd-kit/core` drag-to-reschedule for tasks, all-day events, and timed events.
+- `app/_components/event-edit-panel.tsx`: inline form for editing an event's start/end date/time.
+- `app/_components/calendar-types.ts`: shared `CalendarItem` discriminated union for tasks vs. events in the calendar widget.
 - `app/_components/task-row.tsx`: shared task row with inline edit panel (title, date, group, delete).
 - `app/_components/event-row.tsx`: read-only virtual row for events from a linked Google Calendar.
 - `app/_components/today-client.tsx`: dashboard task list, mixes tasks with virtual events from linked calendars.
