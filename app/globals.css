@@ -25,3 +25,53 @@ body {
   font-family: var(--font-geist-mono), "Courier New", monospace;
   -webkit-font-smoothing: antialiased;
 }
+
+/* === Cream theme overrides ===
+ * Activated by adding the class `theme-cream` to <html>.
+ * Inverts the dark palette to a warm cream paper feel while keeping the
+ * lime accent and red danger color readable on cream.
+ * Group/event chip colors are user data and are not overridden — they come
+ * from inline styles, not Tailwind class names.
+ */
+
+html.theme-cream,
+html.theme-cream body {
+  background: #f5f0e8;
+  color: #2a2620;
+}
+
+/* Backgrounds */
+html.theme-cream .bg-\[\#0d0d0d\] { background-color: #f5f0e8 !important; }
+html.theme-cream .bg-\[\#0d0d0d\]\/95 { background-color: rgba(245, 240, 232, 0.95) !important; }
+html.theme-cream .bg-\[\#101010\] { background-color: #efe7d8 !important; }
+html.theme-cream .bg-\[\#141414\] { background-color: #ece4d4 !important; }
+html.theme-cream .bg-\[\#1a1a1a\] { background-color: #e8dfcd !important; }
+html.theme-cream .bg-\[\#1f1f1f\] { background-color: #d4c9b1 !important; }
+html.theme-cream .bg-\[\#2a2a2a\] { background-color: #beb18f !important; }
+html.theme-cream .bg-\[\#f5f0e8\] { background-color: #d9cfb9 !important; }
+
+/* Text */
+html.theme-cream .text-\[\#f5f0e8\] { color: #2a2620 !important; }
+html.theme-cream .text-\[\#6b6b6b\] { color: #897e62 !important; }
+html.theme-cream .text-\[\#3a3a3a\] { color: #a99979 !important; }
+
+/* Borders */
+html.theme-cream .border-\[\#1f1f1f\] { border-color: #d4c9b1 !important; }
+html.theme-cream .border-\[\#2a2a2a\] { border-color: #beb18f !important; }
+html.theme-cream .border-\[\#3a3a3a\] { border-color: #a99979 !important; }
+html.theme-cream .border-\[\#f5f0e8\] { border-color: #2a2620 !important; }
+
+/* Placeholders */
+html.theme-cream .placeholder-\[\#6b6b6b\]::placeholder { color: #a99979 !important; }
+
+/* Hover variants */
+html.theme-cream .hover\:bg-\[\#1a1a1a\]:hover { background-color: #e8dfcd !important; }
+html.theme-cream .hover\:bg-\[\#f5f0e8\]:hover { background-color: #d9cfb9 !important; }
+html.theme-cream .hover\:text-\[\#f5f0e8\]:hover { color: #2a2620 !important; }
+html.theme-cream .hover\:border-\[\#f5f0e8\]:hover { border-color: #2a2620 !important; }
+
+/* Focus */
+html.theme-cream .focus\:border-\[\#b5ff3c\]:focus { border-color: #6b9b1f !important; }
+
+/* Ring offset (used for selected color swatch) */
+html.theme-cream .ring-offset-\[\#141414\] { --tw-ring-offset-color: #ece4d4 !important; }

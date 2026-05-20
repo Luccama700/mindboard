@@ -39,17 +39,31 @@ PWA support is shipped:
 
 ## Design System
 
-The aesthetic is "Terminal Calm". Do not add alternate themes.
+The default aesthetic is "Terminal Calm". A soft "cream" light mode is also shipped, activated by adding the class `theme-cream` to `<html>`. Both themes share the same lime accent and red danger color.
 
 ```text
 font          Geist Mono throughout
+
+dark (default)
 background    #0d0d0d
 foreground    #f5f0e8
 accent        #b5ff3c
 muted text    #6b6b6b
 borders       #1f1f1f and #2a2a2a
 danger        #ff6b6b
+
+cream
+background    #f5f0e8
+foreground    #2a2620
+accent        #b5ff3c (unchanged)
+muted text    #897e62
+borders       #d4c9b1 and #beb18f
+danger        #ff6b6b (unchanged)
 ```
+
+The cream theme is implemented as CSS overrides in `app/globals.css`, keyed by attribute selectors on Tailwind's arbitrary-value class names (e.g. `html.theme-cream .bg-\[\#0d0d0d\]`). User-data colors (group colors, calendar/event colors) come from inline `style={{...}}` and are not affected by the theme.
+
+`app/_components/theme-toggle.tsx` is the toggle button. `app/layout.tsx` runs an inline pre-hydration script to set the class from `localStorage["theme"]` before first paint to avoid a flash.
 
 Touch targets should be at least 44px. Mobile-first. Keep layouts quiet, dense, and utilitarian.
 

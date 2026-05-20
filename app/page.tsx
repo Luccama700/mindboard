@@ -6,6 +6,7 @@ import {
   type CalendarEvent,
 } from "@/utils/google/calendar";
 import { DashboardCalendar } from "./_components/dashboard-calendar";
+import { ThemeToggle } from "./_components/theme-toggle";
 import { signOut } from "./actions/auth";
 import { TodayClient } from "./_components/today-client";
 import type { TaskWithGroup } from "./_components/types";
@@ -100,7 +101,10 @@ export default async function Home({
 
   if (!user) {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center px-6">
+      <main className="min-h-screen flex flex-col items-center justify-center px-6 relative">
+        <div className="absolute top-4 right-4">
+          <ThemeToggle />
+        </div>
         <div className="max-w-sm w-full space-y-8">
           <div>
             <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mb-3">
@@ -205,12 +209,15 @@ export default async function Home({
               </h1>
             </div>
             <div className="flex flex-col items-end gap-3 pt-1">
-              <Link
-                href="/groups"
-                className="text-xs tracking-widest uppercase px-3 py-2 border border-[#f5f0e8] text-[#f5f0e8] hover:bg-[#f5f0e8] hover:text-[#0d0d0d] transition-colors"
-              >
-                groups →
-              </Link>
+              <div className="flex items-center gap-2">
+                <ThemeToggle />
+                <Link
+                  href="/groups"
+                  className="text-xs tracking-widest uppercase px-3 py-2 border border-[#f5f0e8] text-[#f5f0e8] hover:bg-[#f5f0e8] hover:text-[#0d0d0d] transition-colors"
+                >
+                  groups →
+                </Link>
+              </div>
               <form action={signOut}>
                 <button
                   type="submit"

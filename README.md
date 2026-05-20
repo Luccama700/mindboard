@@ -17,6 +17,7 @@ The primary use case is an installed iOS PWA: open it, jot a task in a few secon
 - Google Calendar events from every readable calendar on the signed-in Google account, with drag-to-reschedule and inline date/time editing for events on calendars you can write to.
 - Per-group Google Calendar linking: events from a linked calendar appear as read-only rows in the today list and the group page, tagged with the group's color and name.
 - PWA manifest and iOS home-screen icons.
+- Soft cream light theme with a toggle on the dashboard and the get-started screen, persisted in `localStorage`.
 
 ## Tech Stack
 

@@ -31,6 +31,8 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
+const themeInitScript = `(function(){try{if(localStorage.getItem('theme')==='cream'){document.documentElement.classList.add('theme-cream')}}catch(e){}})();`;
+
 export default function RootLayout({
   children,
 }: {
@@ -38,6 +40,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${geistMono.variable} h-full`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body className="min-h-full">{children}</body>
     </html>
   );
