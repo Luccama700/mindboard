@@ -19,10 +19,15 @@ type CalendarItem =
       kind: "event";
       id: string;
       title: string;
+      start: string;
+      end: string;
       allDay: boolean;
     };
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const START_HOUR = 6;
+const END_HOUR = 22;
+const HOUR_HEIGHT = 64;
 type CalendarView = "month" | "week";
 
 function toDateKey(date: Date) {
@@ -89,6 +94,29 @@ function eventDateKey(event: CalendarEvent) {
   return toDateKey(new Date(event.start));
 }
 
+function formatTime(value: string) {
+  return new Date(value).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatEventRange(item: Extract<CalendarItem, { kind: "event" }>) {
+  if (item.allDay) return "all day";
+  return `${formatTime(item.start)} – ${formatTime(item.end)}`;
+}
+
+function timeLabel(hour: number) {
+  return new Date(2000, 0, 1, hour).toLocaleTimeString(undefined, {
+    hour: "numeric",
+  });
+}
+
+function minutesIntoDay(value: string) {
+  const date = new Date(value);
+  return date.getHours() * 60 + date.getMinutes();
+}
+
 function buildGrid(month: string) {
   const first = parseMonth(month);
   const start = new Date(first);
@@ -105,6 +133,21 @@ function buildWeek(selected: string) {
   const start = startOfWeek(new Date(`${selected}T00:00:00`));
 
   return Array.from({ length: 7 }, (_, index) => addDays(start, index));
+}
+
+function timedStyle(item: Extract<CalendarItem, { kind: "event" }>) {
+  const start = Math.min(
+    Math.max(minutesIntoDay(item.start), START_HOUR * 60),
+    END_HOUR * 60 - 30,
+  );
+  const end = Math.max(Math.min(minutesIntoDay(item.end), END_HOUR * 60), start + 30);
+  const top = ((start - START_HOUR * 60) / 60) * HOUR_HEIGHT;
+  const rawHeight = ((end - start) / 60) * HOUR_HEIGHT;
+
+  return {
+    top: `${top}px`,
+    height: `${Math.max(rawHeight, 32)}px`,
+  };
 }
 
 export function DashboardCalendar({
@@ -154,6 +197,8 @@ export function DashboardCalendar({
         kind: "event",
         id: event.id,
         title: event.summary,
+        start: event.start,
+        end: event.end,
         allDay: event.allDay,
       });
       map.set(key, items);
@@ -163,6 +208,11 @@ export function DashboardCalendar({
   }, [events, tasks]);
 
   const selectedItems = itemsByDate.get(selected) ?? [];
+  const hourLabels = Array.from(
+    { length: END_HOUR - START_HOUR + 1 },
+    (_, index) => START_HOUR + index,
+  );
+  const weekHeight = (END_HOUR - START_HOUR) * HOUR_HEIGHT;
   const selectedLabel = new Date(`${selected}T00:00:00`).toLocaleDateString(
     undefined,
     {
@@ -294,54 +344,141 @@ export function DashboardCalendar({
           })}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-px bg-[#1f1f1f] border border-[#1f1f1f] sm:grid-cols-7">
-          {week.map((date) => {
-            const key = toDateKey(date);
-            const items = itemsByDate.get(key) ?? [];
-            const isSelected = selected === key;
-            const isToday = key === today;
+        <div className="overflow-x-auto border border-[#1f1f1f]">
+          <div className="min-w-[52rem] bg-[#0d0d0d]">
+            <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-[#1f1f1f]">
+              <div className="border-r border-[#1f1f1f]" />
+              {week.map((date) => {
+                const key = toDateKey(date);
+                const isSelected = selected === key;
+                const isToday = key === today;
 
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setSelected(key)}
-                className={`min-h-32 bg-[#0d0d0d] p-3 text-left transition-colors lg:min-h-72 ${
-                  isSelected ? "outline outline-1 outline-[#b5ff3c]" : ""
-                }`}
-              >
-                <p className="text-[9px] tracking-widest uppercase text-[#6b6b6b]">
-                  {WEEKDAYS[date.getDay()]}
-                </p>
-                <p
-                  className={`text-2xl font-bold mt-1 ${
-                    isToday ? "text-[#b5ff3c]" : "text-[#f5f0e8]"
-                  }`}
-                >
-                  {date.getDate()}
-                </p>
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setSelected(key)}
+                    className={`min-h-20 border-r border-[#1f1f1f] px-2 py-3 text-center transition-colors last:border-r-0 ${
+                      isSelected ? "bg-[#141414]" : "bg-[#0d0d0d]"
+                    }`}
+                  >
+                    <p className="text-[9px] tracking-widest uppercase text-[#6b6b6b]">
+                      {WEEKDAYS[date.getDay()]}
+                    </p>
+                    <p
+                      className={`mx-auto mt-1 flex h-11 w-11 items-center justify-center text-2xl ${
+                        isToday
+                          ? "rounded-full bg-[#b5ff3c] text-[#0d0d0d]"
+                          : "text-[#f5f0e8]"
+                      }`}
+                    >
+                      {date.getDate()}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
 
-                <div className="space-y-2 mt-4">
-                  {items.length === 0 ? (
-                    <p className="text-xs text-[#3a3a3a]">clear</p>
-                  ) : (
-                    items.map((item) => (
+            <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-[#1f1f1f]">
+              <div className="border-r border-[#1f1f1f] px-2 py-2 text-[9px] tracking-widest uppercase text-[#6b6b6b]">
+                due
+              </div>
+              {week.map((date) => {
+                const key = toDateKey(date);
+                const allDayItems = (itemsByDate.get(key) ?? []).filter(
+                  (item) => item.kind === "task" || item.allDay,
+                );
+
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setSelected(key)}
+                    className="min-h-16 border-r border-[#1f1f1f] p-1.5 text-left last:border-r-0"
+                  >
+                    <div className="space-y-1">
+                      {allDayItems.slice(0, 3).map((item) => (
+                        <div
+                          key={`${item.kind}-${item.id}`}
+                          className={`truncate px-1.5 py-1 text-[10px] ${
+                            item.kind === "task"
+                              ? "bg-[#b5ff3c] text-[#0d0d0d]"
+                              : "bg-[#1a1a1a] text-[#f5f0e8] border border-[#2a2a2a]"
+                          }`}
+                        >
+                          {item.title}
+                        </div>
+                      ))}
+                      {allDayItems.length > 3 && (
+                        <p className="text-[10px] text-[#6b6b6b]">
+                          +{allDayItems.length - 3}
+                        </p>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))]"
+              style={{ height: weekHeight }}
+            >
+              <div className="relative border-r border-[#1f1f1f]">
+                {hourLabels.slice(0, -1).map((hour, index) => (
+                  <div
+                    key={hour}
+                    className="absolute left-0 right-0 border-t border-[#1f1f1f] px-1 pt-1 text-right text-[10px] text-[#6b6b6b]"
+                    style={{ top: index * HOUR_HEIGHT }}
+                  >
+                    {timeLabel(hour)}
+                  </div>
+                ))}
+              </div>
+
+              {week.map((date) => {
+                const key = toDateKey(date);
+                const timedItems = (itemsByDate.get(key) ?? []).filter(
+                  (
+                    item,
+                  ): item is Extract<CalendarItem, { kind: "event" }> =>
+                    item.kind === "event" && !item.allDay,
+                );
+
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setSelected(key)}
+                    className="relative border-r border-[#1f1f1f] text-left last:border-r-0"
+                  >
+                    {hourLabels.slice(0, -1).map((hour, index) => (
                       <div
-                        key={`${item.kind}-${item.id}`}
-                        className={`text-xs leading-snug px-2 py-1 ${
-                          item.kind === "task"
-                            ? "bg-[#b5ff3c] text-[#0d0d0d]"
-                            : "bg-[#1a1a1a] text-[#f5f0e8] border border-[#2a2a2a]"
-                        }`}
+                        key={hour}
+                        className="absolute left-0 right-0 border-t border-[#1f1f1f]"
+                        style={{ top: index * HOUR_HEIGHT }}
+                      />
+                    ))}
+
+                    {timedItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="absolute left-1 right-1 overflow-hidden bg-[#6d8fe8] px-2 py-1 text-[#0d0d0d]"
+                        style={timedStyle(item)}
                       >
-                        <p className="line-clamp-2">{item.title}</p>
+                        <p className="truncate text-xs font-bold">
+                          {item.title}
+                        </p>
+                        <p className="truncate text-[10px]">
+                          {formatEventRange(item)}
+                        </p>
                       </div>
-                    ))
-                  )}
-                </div>
-              </button>
-            );
-          })}
+                    ))}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
@@ -370,7 +507,9 @@ export function DashboardCalendar({
                       item.kind === "task" ? item.color : "#6b6b6b",
                   }}
                 >
-                  {item.kind === "task" ? item.group : "google calendar"}
+                  {item.kind === "task"
+                    ? item.group
+                    : `google calendar · ${formatEventRange(item)}`}
                 </p>
               </div>
             ))}
