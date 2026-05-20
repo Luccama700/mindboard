@@ -55,6 +55,41 @@ export async function toggleTaskStatus(id: string, currentStatus: string) {
   return { error: null, nextStatus };
 }
 
+export async function updateTask(input: {
+  id: string;
+  title?: string;
+  dueDate?: string | null;
+  groupId?: string | null;
+}) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const updates: Record<string, unknown> = {};
+
+  if (input.title !== undefined) {
+    const title = input.title.trim();
+    if (!title) return { error: "title required" };
+    updates.title = title;
+  }
+  if (input.dueDate !== undefined) updates.due_date = input.dueDate;
+  if (input.groupId !== undefined) updates.group_id = input.groupId;
+
+  if (Object.keys(updates).length === 0) return { error: null };
+
+  const { error } = await supabase
+    .from("tasks")
+    .update(updates)
+    .eq("id", input.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
 export async function deleteTask(id: string) {
   const supabase = await createClient();
   const {

@@ -1,25 +1,46 @@
 "use client";
 
 import { startTransition, useOptimistic } from "react";
-import { deleteTask, toggleTaskStatus } from "@/app/actions/tasks";
+import {
+  deleteTask,
+  toggleTaskStatus,
+  updateTask,
+} from "@/app/actions/tasks";
 import { TaskCaptureBar } from "./task-capture-bar";
-import { TaskRow } from "./task-row";
+import { TaskRow, type GroupOption } from "./task-row";
 import type { Task } from "./types";
 
 export type { Task } from "./types";
+
+type UpdatePatch = {
+  title?: string;
+  dueDate?: string | null;
+  groupId?: string | null;
+};
 
 type OptimisticAction =
   | { kind: "add"; task: Task }
   | { kind: "replace"; tempId: string; task: Task }
   | { kind: "toggle"; id: string; nextStatus: "todo" | "done" }
-  | { kind: "delete"; id: string };
+  | { kind: "delete"; id: string }
+  | { kind: "update"; id: string; patch: UpdatePatch };
+
+function applyPatch(task: Task, patch: UpdatePatch): Task {
+  let next = task;
+  if (patch.title !== undefined) next = { ...next, title: patch.title };
+  if (patch.dueDate !== undefined) next = { ...next, due_date: patch.dueDate };
+  if (patch.groupId !== undefined) next = { ...next, group_id: patch.groupId };
+  return next;
+}
 
 export function TasksClient({
   initial,
   groupId,
+  groups,
 }: {
   initial: Task[];
   groupId: string | null;
+  groups: GroupOption[];
 }) {
   const [tasks, dispatch] = useOptimistic<Task[], OptimisticAction>(
     initial,
@@ -46,6 +67,17 @@ export function TasksClient({
           );
         case "delete":
           return state.filter((t) => t.id !== action.id);
+        case "update": {
+          if (
+            action.patch.groupId !== undefined &&
+            action.patch.groupId !== groupId
+          ) {
+            return state.filter((t) => t.id !== action.id);
+          }
+          return state.map((t) =>
+            t.id === action.id ? applyPatch(t, action.patch) : t,
+          );
+        }
       }
     },
   );
@@ -65,6 +97,13 @@ export function TasksClient({
     });
   }
 
+  function onUpdate(id: string, patch: UpdatePatch) {
+    startTransition(async () => {
+      dispatch({ kind: "update", id, patch });
+      await updateTask({ id, ...patch });
+    });
+  }
+
   const active = tasks.filter((t) => t.status !== "done");
   const done = tasks.filter((t) => t.status === "done");
 
@@ -81,8 +120,10 @@ export function TasksClient({
           <TaskRow
             key={t.id}
             task={t}
+            groups={groups}
             onToggle={onToggle}
             onDelete={onDelete}
+            onUpdate={onUpdate}
           />
         ))}
 
@@ -95,8 +136,10 @@ export function TasksClient({
               <TaskRow
                 key={t.id}
                 task={t}
+                groups={groups}
                 onToggle={onToggle}
                 onDelete={onDelete}
+                onUpdate={onUpdate}
               />
             ))}
           </div>

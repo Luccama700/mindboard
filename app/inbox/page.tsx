@@ -11,13 +11,22 @@ export default async function InboxPage() {
 
   if (!user) redirect("/login");
 
-  const { data: tasks } = await supabase
-    .from("tasks")
-    .select(
-      "id, title, due_date, status, priority, group_id, created_at, completed_at",
-    )
-    .is("group_id", null)
-    .order("created_at", { ascending: false });
+  const [{ data: tasks }, { data: groupRows }] = await Promise.all([
+    supabase
+      .from("tasks")
+      .select(
+        "id, title, due_date, status, priority, group_id, created_at, completed_at",
+      )
+      .is("group_id", null)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("groups")
+      .select("id, name, color")
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+  ]);
+
+  const groups = (groupRows ?? []) as { id: string; name: string; color: string }[];
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-40 max-w-2xl mx-auto">
@@ -43,7 +52,7 @@ export default async function InboxPage() {
         </h1>
       </div>
 
-      <TasksClient initial={(tasks ?? []) as Task[]} groupId={null} />
+      <TasksClient initial={(tasks ?? []) as Task[]} groupId={null} groups={groups} />
     </main>
   );
 }

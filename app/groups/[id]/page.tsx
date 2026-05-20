@@ -25,13 +25,22 @@ export default async function GroupTasksPage({
 
   if (!group) notFound();
 
-  const { data: tasks } = await supabase
-    .from("tasks")
-    .select(
-      "id, title, due_date, status, priority, group_id, created_at, completed_at",
-    )
-    .eq("group_id", id)
-    .order("created_at", { ascending: false });
+  const [{ data: tasks }, { data: groupRows }] = await Promise.all([
+    supabase
+      .from("tasks")
+      .select(
+        "id, title, due_date, status, priority, group_id, created_at, completed_at",
+      )
+      .eq("group_id", id)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("groups")
+      .select("id, name, color")
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+  ]);
+
+  const groups = (groupRows ?? []) as { id: string; name: string; color: string }[];
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-40 max-w-2xl mx-auto">
@@ -61,7 +70,7 @@ export default async function GroupTasksPage({
         </h1>
       </div>
 
-      <TasksClient initial={(tasks ?? []) as Task[]} groupId={id} />
+      <TasksClient initial={(tasks ?? []) as Task[]} groupId={id} groups={groups} />
     </main>
   );
 }

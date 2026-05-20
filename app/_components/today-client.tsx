@@ -1,19 +1,63 @@
 "use client";
 
 import { startTransition, useOptimistic } from "react";
-import { deleteTask, toggleTaskStatus } from "@/app/actions/tasks";
+import {
+  deleteTask,
+  toggleTaskStatus,
+  updateTask,
+} from "@/app/actions/tasks";
 import { daysFromToday, priorityRank, todayISO } from "./date-utils";
 import { TaskCaptureBar } from "./task-capture-bar";
-import { TaskRow } from "./task-row";
+import { TaskRow, type GroupOption } from "./task-row";
 import type { Task, TaskWithGroup } from "./types";
+
+type UpdatePatch = {
+  title?: string;
+  dueDate?: string | null;
+  groupId?: string | null;
+};
 
 type OptimisticAction =
   | { kind: "add"; task: TaskWithGroup }
   | { kind: "replace"; tempId: string; task: Task }
   | { kind: "toggle"; id: string; nextStatus: "todo" | "done" }
-  | { kind: "delete"; id: string };
+  | { kind: "delete"; id: string }
+  | {
+      kind: "update";
+      id: string;
+      patch: UpdatePatch;
+      groups: GroupOption[];
+    };
 
-export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
+function applyPatch(
+  task: TaskWithGroup,
+  patch: UpdatePatch,
+  groups: GroupOption[],
+): TaskWithGroup {
+  let next = task;
+  if (patch.title !== undefined) next = { ...next, title: patch.title };
+  if (patch.dueDate !== undefined) next = { ...next, due_date: patch.dueDate };
+  if (patch.groupId !== undefined) {
+    const group = patch.groupId
+      ? (groups.find((g) => g.id === patch.groupId) ?? null)
+      : null;
+    next = {
+      ...next,
+      group_id: patch.groupId,
+      group_name: group?.name ?? null,
+      group_color: group?.color ?? null,
+    };
+  }
+  return next;
+}
+
+export function TodayClient({
+  initial,
+  groups,
+}: {
+  initial: TaskWithGroup[];
+  groups: GroupOption[];
+}) {
   const [tasks, dispatch] = useOptimistic<TaskWithGroup[], OptimisticAction>(
     initial,
     (state, action) => {
@@ -45,6 +89,10 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
           );
         case "delete":
           return state.filter((t) => t.id !== action.id);
+        case "update":
+          return state.map((t) =>
+            t.id === action.id ? applyPatch(t, action.patch, action.groups) : t,
+          );
       }
     },
   );
@@ -61,6 +109,13 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
     startTransition(async () => {
       dispatch({ kind: "delete", id });
       await deleteTask(id);
+    });
+  }
+
+  function onUpdate(id: string, patch: UpdatePatch) {
+    startTransition(async () => {
+      dispatch({ kind: "update", id, patch, groups });
+      await updateTask({ id, ...patch });
     });
   }
 
@@ -111,8 +166,10 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
                 <TaskRow
                   key={t.id}
                   task={t}
+                  groups={groups}
                   onToggle={onToggle}
                   onDelete={onDelete}
+                  onUpdate={onUpdate}
                   variant="overdue"
                 />
               ))}
@@ -139,8 +196,10 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
                 <TaskRow
                   key={t.id}
                   task={t}
+                  groups={groups}
                   onToggle={onToggle}
                   onDelete={onDelete}
+                  onUpdate={onUpdate}
                   hideDate
                 />
               ))}
@@ -158,8 +217,10 @@ export function TodayClient({ initial }: { initial: TaskWithGroup[] }) {
                 <TaskRow
                   key={t.id}
                   task={t}
+                  groups={groups}
                   onToggle={onToggle}
                   onDelete={onDelete}
+                  onUpdate={onUpdate}
                 />
               ))}
             </div>

@@ -128,15 +128,23 @@ export default async function Home({
     );
   }
 
-  const { data: rawTasks } = await supabase
-    .from("tasks")
-    .select(
-      "id, title, due_date, status, priority, group_id, created_at, completed_at, groups(name, color)",
-    )
-    .neq("status", "done")
-    .not("due_date", "is", null);
+  const [{ data: rawTasks }, { data: groupRows }] = await Promise.all([
+    supabase
+      .from("tasks")
+      .select(
+        "id, title, due_date, status, priority, group_id, created_at, completed_at, groups(name, color)",
+      )
+      .neq("status", "done")
+      .not("due_date", "is", null),
+    supabase
+      .from("groups")
+      .select("id, name, color")
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+  ]);
 
   const tasks = mapTasks((rawTasks ?? []) as RawTask[]);
+  const groups = (groupRows ?? []) as { id: string; name: string; color: string }[];
   const calendarTasks = tasks.filter(
     (task) =>
       task.due_date && task.due_date >= startDate && task.due_date < endDate,
@@ -190,7 +198,7 @@ export default async function Home({
             </div>
           </header>
 
-          <TodayClient initial={tasks} />
+          <TodayClient initial={tasks} groups={groups} />
         </section>
 
         <aside className="min-w-0 lg:sticky lg:top-8">
