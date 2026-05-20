@@ -51,6 +51,7 @@ async function fetchCalendarEvents(
     timeMin: string;
     timeMax: string;
   },
+  { allowForbidden = false }: { allowForbidden?: boolean } = {},
 ): Promise<CalendarEvent[]> {
   const url = new URL(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
@@ -69,6 +70,7 @@ async function fetchCalendarEvents(
     },
   });
 
+  if (response.status === 403 && allowForbidden) return [];
   if (response.status === 401 || response.status === 403) {
     throw new GoogleCalendarConnectionError();
   }
@@ -189,7 +191,15 @@ export async function listEvents(
   });
 
   if (response.status === 401 || response.status === 403) {
-    throw new GoogleCalendarConnectionError();
+    return fetchCalendarEvents(
+      token,
+      {
+        id: "primary",
+        summary: "google calendar",
+        backgroundColor: "#6d8fe8",
+      },
+      { timeMin, timeMax },
+    );
   }
   if (!response.ok) throw new Error("calendar list request failed");
 
@@ -197,9 +207,26 @@ export async function listEvents(
     items?: GoogleCalendarListEntry[];
   };
   const calendars = (payload.items ?? []).filter((calendar) => calendar.id);
+  if (calendars.length === 0) {
+    return fetchCalendarEvents(
+      token,
+      {
+        id: "primary",
+        summary: "google calendar",
+        backgroundColor: "#6d8fe8",
+      },
+      { timeMin, timeMax },
+    );
+  }
+
   const events = await Promise.all(
     calendars.map((calendar) =>
-      fetchCalendarEvents(token, calendar, { timeMin, timeMax }),
+      fetchCalendarEvents(
+        token,
+        calendar,
+        { timeMin, timeMax },
+        { allowForbidden: true },
+      ),
     ),
   );
 
