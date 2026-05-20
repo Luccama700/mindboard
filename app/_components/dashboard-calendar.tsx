@@ -22,6 +22,8 @@ type CalendarItem =
       start: string;
       end: string;
       allDay: boolean;
+      calendar: string;
+      color: string;
     };
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -200,6 +202,8 @@ export function DashboardCalendar({
         start: event.start,
         end: event.end,
         allDay: event.allDay,
+        calendar: event.calendarSummary,
+        color: event.calendarColor,
       });
       map.set(key, items);
     }
@@ -326,11 +330,8 @@ export function DashboardCalendar({
                   {visible.map((item) => (
                     <div
                       key={`${item.kind}-${item.id}`}
-                      className={`truncate text-[10px] px-1 py-0.5 ${
-                        item.kind === "task"
-                          ? "bg-[#b5ff3c] text-[#0d0d0d]"
-                          : "bg-[#1a1a1a] text-[#f5f0e8] border border-[#2a2a2a]"
-                      }`}
+                      className="truncate px-1 py-0.5 text-[10px] text-[#0d0d0d]"
+                      style={{ backgroundColor: item.color }}
                     >
                       {item.title}
                     </div>
@@ -401,10 +402,7 @@ export function DashboardCalendar({
                         <div
                           key={`${item.kind}-${item.id}`}
                           className="truncate px-1.5 py-1 text-[10px] font-bold text-[#0d0d0d]"
-                          style={{
-                            backgroundColor:
-                              item.kind === "task" ? item.color : "#6d8fe8",
-                          }}
+                          style={{ backgroundColor: item.color }}
                         >
                           {item.title}
                         </div>
@@ -463,8 +461,11 @@ export function DashboardCalendar({
                     {timedItems.map((item) => (
                       <div
                         key={item.id}
-                        className="absolute left-1 right-1 overflow-hidden bg-[#6d8fe8] px-1.5 py-1 text-[#0d0d0d]"
-                        style={timedStyle(item)}
+                        className="absolute left-1 right-1 overflow-hidden px-1.5 py-1 text-[#0d0d0d]"
+                        style={{
+                          ...timedStyle(item),
+                          backgroundColor: item.color,
+                        }}
                       >
                         <p className="truncate text-[11px] font-bold">
                           {item.title}
@@ -500,10 +501,7 @@ export function DashboardCalendar({
                 <div className="flex items-center gap-2">
                   <span
                     className="h-3 w-3 flex-shrink-0"
-                    style={{
-                      backgroundColor:
-                        item.kind === "task" ? item.color : "#6d8fe8",
-                    }}
+                    style={{ backgroundColor: item.color }}
                     aria-hidden
                   />
                   <p className="truncate text-sm text-[#f5f0e8]">
@@ -519,7 +517,7 @@ export function DashboardCalendar({
                 >
                   {item.kind === "task"
                     ? item.group
-                    : `google calendar · ${formatEventRange(item)}`}
+                    : `${item.calendar} · ${formatEventRange(item)}`}
                 </p>
               </div>
             ))}

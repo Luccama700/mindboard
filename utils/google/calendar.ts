@@ -1,9 +1,8 @@
 import "server-only";
 import { createClient } from "@/utils/supabase/server";
+import { CALENDAR_SCOPES } from "./scopes";
 
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
-const CALENDAR_SCOPE =
-  "https://www.googleapis.com/auth/calendar.events.readonly";
 
 export type CalendarEvent = {
   id: string;
@@ -11,6 +10,8 @@ export type CalendarEvent = {
   start: string;
   end: string;
   allDay: boolean;
+  calendarSummary: string;
+  calendarColor: string;
 };
 
 type TokenRow = {
@@ -33,6 +34,65 @@ type GoogleEvent = {
     dateTime?: string;
   };
 };
+
+type GoogleCalendarListEntry = {
+  id: string;
+  summary?: string;
+  backgroundColor?: string;
+};
+
+async function fetchCalendarEvents(
+  token: string,
+  calendar: GoogleCalendarListEntry,
+  {
+    timeMin,
+    timeMax,
+  }: {
+    timeMin: string;
+    timeMax: string;
+  },
+): Promise<CalendarEvent[]> {
+  const url = new URL(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendar.id,
+    )}/events`,
+  );
+  url.searchParams.set("timeMin", timeMin);
+  url.searchParams.set("timeMax", timeMax);
+  url.searchParams.set("singleEvents", "true");
+  url.searchParams.set("orderBy", "startTime");
+  url.searchParams.set("maxResults", "250");
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new GoogleCalendarConnectionError();
+  }
+  if (!response.ok) throw new Error("calendar request failed");
+
+  const payload = (await response.json()) as { items?: GoogleEvent[] };
+
+  return (payload.items ?? [])
+    .filter((event) => event.status !== "cancelled")
+    .map((event) => {
+      const start = event.start?.dateTime ?? event.start?.date ?? "";
+      const end = event.end?.dateTime ?? event.end?.date ?? start;
+      return {
+        id: `${calendar.id}:${event.id}`,
+        summary: event.summary ?? "untitled event",
+        start,
+        end,
+        allDay: Boolean(event.start?.date),
+        calendarSummary: calendar.summary ?? "google calendar",
+        calendarColor: calendar.backgroundColor ?? "#6d8fe8",
+      };
+    })
+    .filter((event) => event.start);
+}
 
 export class GoogleCalendarConnectionError extends Error {}
 
@@ -116,13 +176,11 @@ export async function listEvents(
 ): Promise<CalendarEvent[]> {
   const token = await getValidAccessToken(userId);
   const url = new URL(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+    "https://www.googleapis.com/calendar/v3/users/me/calendarList",
   );
-  url.searchParams.set("timeMin", timeMin);
-  url.searchParams.set("timeMax", timeMax);
-  url.searchParams.set("singleEvents", "true");
-  url.searchParams.set("orderBy", "startTime");
-  url.searchParams.set("maxResults", "100");
+  url.searchParams.set("minAccessRole", "reader");
+  url.searchParams.set("showHidden", "true");
+  url.searchParams.set("maxResults", "250");
 
   const response = await fetch(url, {
     headers: {
@@ -133,24 +191,19 @@ export async function listEvents(
   if (response.status === 401 || response.status === 403) {
     throw new GoogleCalendarConnectionError();
   }
-  if (!response.ok) throw new Error("calendar request failed");
+  if (!response.ok) throw new Error("calendar list request failed");
 
-  const payload = (await response.json()) as { items?: GoogleEvent[] };
+  const payload = (await response.json()) as {
+    items?: GoogleCalendarListEntry[];
+  };
+  const calendars = (payload.items ?? []).filter((calendar) => calendar.id);
+  const events = await Promise.all(
+    calendars.map((calendar) =>
+      fetchCalendarEvents(token, calendar, { timeMin, timeMax }),
+    ),
+  );
 
-  return (payload.items ?? [])
-    .filter((event) => event.status !== "cancelled")
-    .map((event) => {
-      const start = event.start?.dateTime ?? event.start?.date ?? "";
-      const end = event.end?.dateTime ?? event.end?.date ?? start;
-      return {
-        id: event.id,
-        summary: event.summary ?? "untitled event",
-        start,
-        end,
-        allDay: Boolean(event.start?.date),
-      };
-    })
-    .filter((event) => event.start);
+  return events.flat().sort((a, b) => a.start.localeCompare(b.start));
 }
 
-export { CALENDAR_SCOPE };
+export { CALENDAR_SCOPES };

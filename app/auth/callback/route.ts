@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
-
-const CALENDAR_SCOPE =
-  "https://www.googleapis.com/auth/calendar.events.readonly";
+import { CALENDAR_SCOPES } from "@/utils/google/scopes";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
@@ -39,7 +37,7 @@ export async function GET(request: Request) {
               access_token: providerToken,
               refresh_token: refreshToken,
               expires_at: expiresAt,
-              scopes: CALENDAR_SCOPE,
+              scopes: CALENDAR_SCOPES,
               updated_at: new Date().toISOString(),
             },
             { onConflict: "user_id" },

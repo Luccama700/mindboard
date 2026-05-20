@@ -1,11 +1,9 @@
 "use client";
 
 import { createClient } from "@/utils/supabase/client";
+import { CALENDAR_SCOPES } from "@/utils/google/scopes";
 import Link from "next/link";
 import { useState } from "react";
-
-const CALENDAR_SCOPE =
-  "https://www.googleapis.com/auth/calendar.events.readonly";
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
@@ -17,7 +15,7 @@ export default function LoginPage() {
       provider: "google",
       options: {
         redirectTo: `${window.location.origin}/auth/callback`,
-        scopes: CALENDAR_SCOPE,
+        scopes: CALENDAR_SCOPES,
         queryParams: {
           access_type: "offline",
           prompt: "consent",
