@@ -160,8 +160,8 @@ export default async function Home({
   });
 
   return (
-    <main className="min-h-screen px-5 pt-8 pb-56">
-      <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
+    <main className="min-h-screen px-5 pt-8 pb-56 lg:px-12">
+      <div className="grid gap-8 lg:grid-cols-2 lg:gap-24 lg:items-start">
         <section className="min-w-0">
           <header className="flex items-start justify-between mb-8">
             <div>
