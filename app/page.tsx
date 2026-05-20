@@ -160,9 +160,9 @@ export default async function Home({
   });
 
   return (
-    <main className="min-h-screen px-5 pt-8 pb-56 max-w-7xl mx-auto">
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,0.9fr)_minmax(25rem,1.1fr)] lg:items-start">
-        <section className="min-w-0 lg:max-w-2xl">
+    <main className="min-h-screen px-5 pt-8 pb-56">
+      <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
+        <section className="min-w-0">
           <header className="flex items-start justify-between mb-8">
             <div>
               <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b]">
