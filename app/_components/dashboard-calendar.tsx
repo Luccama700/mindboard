@@ -285,27 +285,27 @@ export function DashboardCalendar({
   );
 
   return (
-    <section className="border border-[#1f1f1f] bg-[#101010] p-3 lg:min-h-[calc(100vh-4rem)]">
+    <section className="border border-line bg-popover p-3 lg:min-h-[calc(100vh-4rem)]">
       <header className="flex items-center justify-between gap-3 mb-3">
         <div>
-          <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b]">
+          <p className="text-[10px] tracking-widest uppercase text-muted">
             calendar
           </p>
-          <h2 className="text-xl font-bold text-[#f5f0e8] mt-1">
+          <h2 className="text-xl font-bold text-fg mt-1">
             {view === "month" ? monthLabel(month) : weekLabel(selected)}
           </h2>
         </div>
         <div className="flex items-center gap-2">
           <Link
             href={`/?m=${addMonths(month, -1)}`}
-            className="flex h-9 min-w-9 items-center justify-center border border-[#2a2a2a] text-[#6b6b6b] transition-colors hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+            className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="previous month"
           >
             ←
           </Link>
           <Link
             href={`/?m=${addMonths(month, 1)}`}
-            className="flex h-9 min-w-9 items-center justify-center border border-[#2a2a2a] text-[#6b6b6b] transition-colors hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+            className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="next month"
           >
             →
@@ -313,7 +313,7 @@ export function DashboardCalendar({
         </div>
       </header>
 
-      <div className="mb-3 ml-auto grid w-56 grid-cols-2 gap-px border border-[#1f1f1f] bg-[#1f1f1f]">
+      <div className="mb-3 ml-auto grid w-56 grid-cols-2 gap-px border border-line bg-line">
         {(["month", "week"] as const).map((option) => (
           <button
             key={option}
@@ -321,8 +321,8 @@ export function DashboardCalendar({
             onClick={() => setView(option)}
             className={`min-h-8 text-[9px] tracking-widest uppercase transition-colors ${
               view === option
-                ? "bg-[#b5ff3c] text-[#0d0d0d]"
-                : "bg-[#0d0d0d] text-[#6b6b6b] hover:text-[#f5f0e8]"
+                ? "bg-accent text-accent-fg"
+                : "bg-page text-muted hover:text-fg"
             }`}
           >
             {option}
@@ -331,8 +331,8 @@ export function DashboardCalendar({
       </div>
 
       {status !== "connected" && (
-        <div className="border border-[#2a2a2a] px-3 py-2 mb-4">
-          <p className="text-xs text-[#6b6b6b] leading-relaxed">
+        <div className="border border-line-strong px-3 py-2 mb-4">
+          <p className="text-xs text-muted leading-relaxed">
             {status === "connect"
               ? "connect google calendar by signing out and back in."
               : "google calendar is temporarily unavailable."}
@@ -341,15 +341,15 @@ export function DashboardCalendar({
       )}
 
       {errorMessage && (
-        <div className="border border-[#ff6b6b] px-3 py-2 mb-4 flex items-start justify-between gap-2">
-          <p className="text-xs text-[#ff6b6b] leading-relaxed">
+        <div className="border border-danger px-3 py-2 mb-4 flex items-start justify-between gap-2">
+          <p className="text-xs text-danger leading-relaxed">
             {errorMessage}
           </p>
           <button
             type="button"
             onClick={() => setErrorMessage(null)}
             aria-label="dismiss"
-            className="text-[#ff6b6b] hover:text-[#ff8b8b] text-lg leading-none"
+            className="text-danger hover:text-danger-hover text-lg leading-none"
           >
             ×
           </button>
@@ -357,11 +357,11 @@ export function DashboardCalendar({
       )}
 
       {view === "month" ? (
-        <div className="grid grid-cols-7 gap-px bg-[#1f1f1f] border border-[#1f1f1f]">
+        <div className="grid grid-cols-7 gap-px bg-line border border-line">
           {WEEKDAYS.map((day) => (
             <div
               key={day}
-              className="bg-[#0d0d0d] text-[9px] tracking-widest uppercase text-[#6b6b6b] px-1 py-2 text-center"
+              className="bg-page text-[9px] tracking-widest uppercase text-muted px-1 py-2 text-center"
             >
               {day}
             </div>
@@ -381,20 +381,20 @@ export function DashboardCalendar({
                 key={key}
                 type="button"
                 onClick={() => setSelected(key)}
-                className={`min-h-24 bg-[#0d0d0d] p-1.5 text-left transition-colors ${
-                  isSelected ? "outline outline-1 outline-[#b5ff3c]" : ""
-                } ${inMonth ? "text-[#f5f0e8]" : "text-[#3a3a3a]"}`}
+                className={`min-h-24 bg-page p-1.5 text-left transition-colors ${
+                  isSelected ? "outline outline-1 outline-accent" : ""
+                } ${inMonth ? "text-fg" : "text-line-subtle"}`}
               >
                 <div className="flex items-center justify-between mb-1">
                   <span
                     className={`text-xs ${
-                      isToday ? "text-[#b5ff3c] font-bold" : ""
+                      isToday ? "text-accent font-bold" : ""
                     }`}
                   >
                     {date.getDate()}
                   </span>
                   {items.length > 0 && (
-                    <span className="text-[9px] text-[#6b6b6b]">
+                    <span className="text-[9px] text-muted">
                       {items.length}
                     </span>
                   )}
@@ -404,14 +404,14 @@ export function DashboardCalendar({
                   {visible.map((item) => (
                     <div
                       key={`${item.kind}-${item.id}`}
-                      className="truncate px-1 py-0.5 text-[10px] text-[#0d0d0d]"
+                      className="truncate px-1 py-0.5 text-[10px] text-accent-fg"
                       style={{ backgroundColor: item.color }}
                     >
                       {item.title}
                     </div>
                   ))}
                   {remaining > 0 && (
-                    <p className="text-[10px] text-[#6b6b6b]">+{remaining}</p>
+                    <p className="text-[10px] text-muted">+{remaining}</p>
                   )}
                 </div>
               </button>
@@ -429,14 +429,14 @@ export function DashboardCalendar({
         />
       )}
 
-      <div className="mt-4 border-t border-[#1f1f1f] pt-4">
-        <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b] mb-2">
+      <div className="mt-4 border-t border-line pt-4">
+        <p className="text-[10px] tracking-widest uppercase text-muted mb-2">
           {selectedLabel}
           {selectedItems.length > 0 && ` · ${selectedItems.length}`}
         </p>
 
         {selectedItems.length === 0 ? (
-          <p className="text-sm text-[#6b6b6b]">nothing scheduled.</p>
+          <p className="text-sm text-muted">nothing scheduled.</p>
         ) : (
           <div className="space-y-2">
             {selectedItems.map((item) => {
@@ -448,7 +448,7 @@ export function DashboardCalendar({
               return (
                 <div
                   key={itemKey}
-                  className="border border-[#1f1f1f]"
+                  className="border border-line"
                 >
                   <button
                     type="button"
@@ -458,7 +458,7 @@ export function DashboardCalendar({
                         : undefined
                     }
                     className={`block w-full text-left px-3 py-2 ${
-                      isEditableEvent ? "hover:bg-[#141414] cursor-pointer" : "cursor-default"
+                      isEditableEvent ? "hover:bg-card cursor-pointer" : "cursor-default"
                     }`}
                   >
                     <div className="flex items-center gap-2">
@@ -467,7 +467,7 @@ export function DashboardCalendar({
                         style={{ backgroundColor: item.color }}
                         aria-hidden
                       />
-                      <p className="truncate text-sm text-[#f5f0e8]">
+                      <p className="truncate text-sm text-fg">
                         {item.title}
                       </p>
                     </div>

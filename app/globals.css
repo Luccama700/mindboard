@@ -1,21 +1,116 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-background: #0d0d0d;
-  --color-foreground: #f5f0e8;
-  --color-accent: #b5ff3c;
-  --color-muted: #2a2a2a;
-  --color-muted-foreground: #6b6b6b;
-  --color-border: #1f1f1f;
+  --color-page: var(--bg);
+  --color-popover: var(--bg-popover);
+  --color-card: var(--bg-card);
+  --color-card-hover: var(--bg-card-hover);
+  --color-line: var(--border-line);
+  --color-line-strong: var(--border-strong);
+  --color-line-subtle: var(--border-subtle);
+  --color-muted: var(--muted);
+  --color-fg: var(--fg);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
   --font-mono: var(--font-geist-mono);
 }
 
 :root {
+  --bg: #0d0d0d;
+  --bg-popover: #101010;
+  --bg-card: #141414;
+  --bg-card-hover: #1a1a1a;
+  --border-line: #1f1f1f;
+  --border-strong: #2a2a2a;
+  --border-subtle: #3a3a3a;
+  --muted: #6b6b6b;
+  --fg: #f5f0e8;
   --accent: #b5ff3c;
+  --accent-fg: #0d0d0d;
+  --danger: #ff6b6b;
+  --danger-hover: #ff8b8b;
 }
 
 html.theme-cream {
+  --bg: #f5f0e8;
+  --bg-popover: #efe7d8;
+  --bg-card: #ece4d4;
+  --bg-card-hover: #e8dfcd;
+  --border-line: #d4c9b1;
+  --border-strong: #beb18f;
+  --border-subtle: #a99979;
+  --muted: #897e62;
+  --fg: #2a2620;
   --accent: #c9a572;
+  --accent-fg: #2a2620;
+  --danger: #ff6b6b;
+  --danger-hover: #ff8b8b;
+}
+
+html.theme-midnight {
+  --bg: #0a0e1c;
+  --bg-popover: #0d1224;
+  --bg-card: #11172d;
+  --bg-card-hover: #161e38;
+  --border-line: #1d2645;
+  --border-strong: #2a3559;
+  --border-subtle: #3d4970;
+  --muted: #7587a8;
+  --fg: #e8ecf8;
+  --accent: #6b9eff;
+  --accent-fg: #0a0e1c;
+  --danger: #ff6b6b;
+  --danger-hover: #ff8b8b;
+}
+
+html.theme-forest {
+  --bg: #0a140d;
+  --bg-popover: #0d1810;
+  --bg-card: #111d14;
+  --bg-card-hover: #16261b;
+  --border-line: #1d3024;
+  --border-strong: #2a4031;
+  --border-subtle: #3d5645;
+  --muted: #7a9886;
+  --fg: #eaf3ec;
+  --accent: #6bff9b;
+  --accent-fg: #0a140d;
+  --danger: #ff6b6b;
+  --danger-hover: #ff8b8b;
+}
+
+html.theme-slate {
+  --bg: #1a1d23;
+  --bg-popover: #1e2229;
+  --bg-card: #23272f;
+  --bg-card-hover: #292e37;
+  --border-line: #2f3540;
+  --border-strong: #404856;
+  --border-subtle: #525c6d;
+  --muted: #8a93a3;
+  --fg: #e8eaef;
+  --accent: #b5ff3c;
+  --accent-fg: #1a1d23;
+  --danger: #ff6b6b;
+  --danger-hover: #ff8b8b;
+}
+
+html.theme-sand {
+  --bg: #ede4d0;
+  --bg-popover: #e6dcc2;
+  --bg-card: #ddd1b1;
+  --bg-card-hover: #d1c39c;
+  --border-line: #c2b18a;
+  --border-strong: #a89976;
+  --border-subtle: #8a7a5c;
+  --muted: #6e6043;
+  --fg: #2d251a;
+  --accent: #d97757;
+  --accent-fg: #2d251a;
+  --danger: #c14b4b;
+  --danger-hover: #b03e3e;
 }
 
 * {
@@ -23,74 +118,13 @@ html.theme-cream {
 }
 
 html {
-  background: #0d0d0d;
-  color: #f5f0e8;
+  background: var(--bg);
+  color: var(--fg);
 }
 
 body {
-  background: #0d0d0d;
-  color: #f5f0e8;
+  background: var(--bg);
+  color: var(--fg);
   font-family: var(--font-geist-mono), "Courier New", monospace;
   -webkit-font-smoothing: antialiased;
 }
-
-/* === Accent variable ===
- * Every Tailwind utility keyed on the lime hex #b5ff3c is rerouted to the
- * --accent CSS variable so the settings panel can swap the accent at runtime.
- */
-.bg-\[\#b5ff3c\] { background-color: var(--accent); }
-.text-\[\#b5ff3c\] { color: var(--accent); }
-.border-\[\#b5ff3c\] { border-color: var(--accent); }
-.outline-\[\#b5ff3c\] { outline-color: var(--accent); }
-.accent-\[\#b5ff3c\] { accent-color: var(--accent); }
-.hover\:bg-\[\#b5ff3c\]:hover { background-color: var(--accent); }
-.hover\:text-\[\#b5ff3c\]:hover { color: var(--accent); }
-.hover\:border-\[\#b5ff3c\]:hover { border-color: var(--accent); }
-.focus\:border-\[\#b5ff3c\]:focus { border-color: var(--accent); }
-
-/* === Cream theme overrides ===
- * Activated by adding the class `theme-cream` to <html>.
- * Inverts the dark palette to a warm cream paper feel; the accent comes from
- * --accent so it works for both the default caramel and any user override.
- * Group/event chip colors are user data and are not overridden — they come
- * from inline styles, not Tailwind class names.
- */
-
-html.theme-cream,
-html.theme-cream body {
-  background: #f5f0e8;
-  color: #2a2620;
-}
-
-/* Backgrounds */
-html.theme-cream .bg-\[\#0d0d0d\] { background-color: #f5f0e8 !important; }
-html.theme-cream .bg-\[\#0d0d0d\]\/95 { background-color: rgba(245, 240, 232, 0.95) !important; }
-html.theme-cream .bg-\[\#101010\] { background-color: #efe7d8 !important; }
-html.theme-cream .bg-\[\#141414\] { background-color: #ece4d4 !important; }
-html.theme-cream .bg-\[\#1a1a1a\] { background-color: #e8dfcd !important; }
-html.theme-cream .bg-\[\#1f1f1f\] { background-color: #d4c9b1 !important; }
-html.theme-cream .bg-\[\#2a2a2a\] { background-color: #beb18f !important; }
-html.theme-cream .bg-\[\#f5f0e8\] { background-color: #d9cfb9 !important; }
-
-/* Text */
-html.theme-cream .text-\[\#f5f0e8\] { color: #2a2620 !important; }
-html.theme-cream .text-\[\#6b6b6b\] { color: #897e62 !important; }
-html.theme-cream .text-\[\#3a3a3a\] { color: #a99979 !important; }
-
-/* Borders */
-html.theme-cream .border-\[\#1f1f1f\] { border-color: #d4c9b1 !important; }
-html.theme-cream .border-\[\#2a2a2a\] { border-color: #beb18f !important; }
-html.theme-cream .border-\[\#3a3a3a\] { border-color: #a99979 !important; }
-html.theme-cream .border-\[\#f5f0e8\] { border-color: #2a2620 !important; }
-
-/* Placeholders */
-html.theme-cream .placeholder-\[\#6b6b6b\]::placeholder { color: #a99979 !important; }
-
-/* Hover variants */
-html.theme-cream .hover\:bg-\[\#1a1a1a\]:hover { background-color: #e8dfcd !important; }
-html.theme-cream .hover\:bg-\[\#f5f0e8\]:hover { background-color: #d9cfb9 !important; }
-html.theme-cream .hover\:text-\[\#f5f0e8\]:hover { color: #2a2620 !important; }
-html.theme-cream .hover\:border-\[\#f5f0e8\]:hover { border-color: #2a2620 !important; }
-
-/* Ring offset (used for selected color swatch) */
-html.theme-cream .ring-offset-\[\#141414\] { --tw-ring-offset-color: #ece4d4 !important; }

@@ -31,10 +31,10 @@ export default function LoginPage() {
     <main className="min-h-screen flex flex-col items-center justify-center px-6">
       <div className="max-w-sm w-full space-y-8">
         <div>
-          <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mb-3">
+          <p className="text-muted text-xs tracking-widest uppercase mb-3">
             sign in
           </p>
-          <h1 className="text-3xl font-bold tracking-tight text-[#f5f0e8]">
+          <h1 className="text-3xl font-bold tracking-tight text-fg">
             mindboard
           </h1>
         </div>
@@ -42,14 +42,14 @@ export default function LoginPage() {
         <button
           onClick={signInWithGoogle}
           disabled={loading}
-          className="w-full bg-[#b5ff3c] text-[#0d0d0d] text-sm font-bold px-6 py-4 hover:bg-[#f5f0e8] transition-colors disabled:opacity-50"
+          className="w-full bg-accent text-accent-fg text-sm font-bold px-6 py-4 hover:opacity-90 transition-colors disabled:opacity-50"
         >
           {loading ? "redirecting..." : "continue with google →"}
         </button>
 
         <Link
           href="/"
-          className="block text-[#6b6b6b] text-xs hover:text-[#f5f0e8] transition-colors"
+          className="block text-muted text-xs hover:text-fg transition-colors"
         >
           ← back
         </Link>

@@ -274,7 +274,7 @@ export function TodayClient({
       <div className="pb-4 space-y-10">
         {overdueTasks.length > 0 && (
           <section>
-            <p className="text-[10px] tracking-widest uppercase text-[#ff6b6b] mb-2 px-1">
+            <p className="text-[10px] tracking-widest uppercase text-danger mb-2 px-1">
               overdue · {overdueTasks.length}
             </p>
             <div>
@@ -294,14 +294,14 @@ export function TodayClient({
         )}
 
         <section>
-          <p className="text-[10px] tracking-widest uppercase text-[#f5f0e8] mb-2 px-1">
+          <p className="text-[10px] tracking-widest uppercase text-fg mb-2 px-1">
             today
             {todayItems.length > 0 && (
-              <span className="text-[#6b6b6b]"> · {todayItems.length}</span>
+              <span className="text-muted"> · {todayItems.length}</span>
             )}
           </p>
           {todayItems.length === 0 ? (
-            <p className="text-[#6b6b6b] text-sm py-2 px-1">
+            <p className="text-muted text-sm py-2 px-1">
               {allClear
                 ? "all clear. type below to capture something."
                 : "nothing due today."}
@@ -329,7 +329,7 @@ export function TodayClient({
 
         {soonItems.length > 0 && (
           <section>
-            <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b] mb-2 px-1">
+            <p className="text-[10px] tracking-widest uppercase text-muted mb-2 px-1">
               due soon · {soonItems.length}
             </p>
             <div>

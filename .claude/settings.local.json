@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\" --no-turbopack)"
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --no-src-dir --import-alias \"@/*\" --no-turbopack)",
+      "Bash(npm run *)",
+      "Bash(git remote *)",
+      "Bash(git -C /Users/luccama/Documents/mindboard status)",
+      "Bash(git -C /Users/luccama/Documents/mindboard add .gitignore app/globals.css app/layout.tsx app/page.tsx next.config.ts)",
+      "Bash(git -C /Users/luccama/Documents/mindboard rm --cached app/favicon.ico public/file.svg public/globe.svg public/next.svg public/vercel.svg public/window.svg)",
+      "Bash(git -C /Users/luccama/Documents/mindboard commit -m ' *)",
+      "Bash(git -C /Users/luccama/Documents/mindboard push -u origin main)"
     ]
   }
 }

@@ -26,31 +26,36 @@ export default async function GroupsPage() {
 
   if (!user) redirect("/login");
 
-  const { data: groups } = await supabase
-    .from("groups")
-    .select("id, name, type, color, archived, created_at, google_calendar_id")
-    .eq("archived", false)
-    .order("created_at", { ascending: false });
+  const calendarsPromise = listCalendars(user.id).catch(
+    (error): CalendarListEntry[] => {
+      if (!(error instanceof GoogleCalendarConnectionError)) {
+        console.error("listCalendars failed", error);
+      }
+      return [];
+    },
+  );
 
-  let calendars: CalendarListEntry[] = [];
-  try {
-    calendars = await listCalendars(user.id);
-  } catch (error) {
-    if (!(error instanceof GoogleCalendarConnectionError)) {
-      console.error("listCalendars failed", error);
-    }
-  }
+  const [groupsResult, calendars] = await Promise.all([
+    supabase
+      .from("groups")
+      .select("id, name, type, color, archived, created_at, google_calendar_id")
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+    calendarsPromise,
+  ]);
+
+  const groups = groupsResult.data;
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-32 max-w-2xl mx-auto">
       <header className="flex items-center justify-between mb-10">
         <Link
           href="/"
-          className="text-[#6b6b6b] text-xs tracking-widest uppercase hover:text-[#f5f0e8] transition-colors"
+          className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
         >
           ← mindboard
         </Link>
-        <h1 className="text-xs tracking-widest uppercase text-[#6b6b6b]">
+        <h1 className="text-xs tracking-widest uppercase text-muted">
           groups
         </h1>
       </header>

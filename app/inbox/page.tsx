@@ -33,21 +33,21 @@ export default async function InboxPage() {
       <header className="flex items-center justify-between mb-8">
         <Link
           href="/groups"
-          className="text-[#6b6b6b] text-xs tracking-widest uppercase hover:text-[#f5f0e8] transition-colors"
+          className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
         >
           ← groups
         </Link>
-        <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b]">
+        <p className="text-[10px] tracking-widest uppercase text-muted">
           unsorted
         </p>
       </header>
 
       <div className="flex items-center gap-3 mb-8">
         <span
-          className="w-1.5 h-8 flex-shrink-0 border-2 border-dashed border-[#3a3a3a]"
+          className="w-1.5 h-8 flex-shrink-0 border-2 border-dashed border-line-subtle"
           aria-hidden
         />
-        <h1 className="text-2xl font-bold tracking-tight text-[#f5f0e8]">
+        <h1 className="text-2xl font-bold tracking-tight text-fg">
           inbox
         </h1>
       </div>

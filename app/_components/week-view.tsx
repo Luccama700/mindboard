@@ -117,7 +117,7 @@ function TaskChip({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`truncate px-1.5 py-1 text-[10px] font-bold text-[#0d0d0d] cursor-grab touch-none ${
+      className={`truncate px-1.5 py-1 text-[10px] font-bold text-accent-fg cursor-grab touch-none ${
         isDragging ? "opacity-30" : ""
       }`}
       style={{ backgroundColor: item.color }}
@@ -147,7 +147,7 @@ function AllDayEventChip({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`truncate px-1.5 py-1 text-[10px] font-bold text-[#0d0d0d] touch-none ${
+      className={`truncate px-1.5 py-1 text-[10px] font-bold text-accent-fg touch-none ${
         isWritable ? "cursor-grab" : "cursor-default opacity-60"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{ backgroundColor: item.color }}
@@ -183,7 +183,7 @@ function TimedEventBlock({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`absolute left-1 right-1 overflow-hidden px-1.5 py-1 text-[#0d0d0d] touch-none ${
+      className={`absolute left-1 right-1 overflow-hidden px-1.5 py-1 text-accent-fg touch-none ${
         isWritable ? "cursor-grab" : "cursor-default opacity-60"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{
@@ -202,7 +202,7 @@ function DragPreview({ item }: { item: CalendarItem }) {
   if (item.kind === "task" || item.allDay) {
     return (
       <div
-        className="truncate px-1.5 py-1 text-[10px] font-bold text-[#0d0d0d] shadow-lg"
+        className="truncate px-1.5 py-1 text-[10px] font-bold text-accent-fg shadow-lg"
         style={{ backgroundColor: color }}
       >
         {item.title}
@@ -211,7 +211,7 @@ function DragPreview({ item }: { item: CalendarItem }) {
   }
   return (
     <div
-      className="px-1.5 py-1 text-[#0d0d0d] shadow-lg"
+      className="px-1.5 py-1 text-accent-fg shadow-lg"
       style={{
         backgroundColor: color,
         width: "9rem",
@@ -337,10 +337,10 @@ export function WeekView({
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveItem(null)}
     >
-      <div className="overflow-x-auto border border-[#1f1f1f]">
-        <div className="min-w-[43rem] bg-[#0d0d0d]">
-          <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-[#1f1f1f]">
-            <div className="border-r border-[#1f1f1f]" />
+      <div className="overflow-x-auto border border-line">
+        <div className="min-w-[43rem] bg-page">
+          <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-line">
+            <div className="border-r border-line" />
             {week.map((date) => {
               const key = toDateKey(date);
               const isSelected = selected === key;
@@ -351,18 +351,18 @@ export function WeekView({
                   key={key}
                   type="button"
                   onClick={() => onSelect(key)}
-                  className={`min-h-16 border-r border-[#1f1f1f] px-2 py-2 text-center transition-colors last:border-r-0 ${
-                    isSelected ? "bg-[#141414]" : "bg-[#0d0d0d]"
+                  className={`min-h-16 border-r border-line px-2 py-2 text-center transition-colors last:border-r-0 ${
+                    isSelected ? "bg-card" : "bg-page"
                   }`}
                 >
-                  <p className="text-[9px] tracking-widest uppercase text-[#6b6b6b]">
+                  <p className="text-[9px] tracking-widest uppercase text-muted">
                     {WEEKDAYS[date.getDay()]}
                   </p>
                   <p
                     className={`mx-auto mt-1 flex h-9 w-9 items-center justify-center text-xl ${
                       isToday
-                        ? "rounded-full bg-[#b5ff3c] text-[#0d0d0d]"
-                        : "text-[#f5f0e8]"
+                        ? "rounded-full bg-accent text-accent-fg"
+                        : "text-fg"
                     }`}
                   >
                     {date.getDate()}
@@ -372,8 +372,8 @@ export function WeekView({
             })}
           </div>
 
-          <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-[#1f1f1f]">
-            <div className="border-r border-[#1f1f1f] px-2 py-2 text-[9px] tracking-widest uppercase text-[#6b6b6b]">
+          <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-line">
+            <div className="border-r border-line px-2 py-2 text-[9px] tracking-widest uppercase text-muted">
               due
             </div>
             {week.map((date) => {
@@ -386,7 +386,7 @@ export function WeekView({
                 <div
                   key={key}
                   onClick={() => onSelect(key)}
-                  className="min-h-24 border-r border-[#1f1f1f] p-1.5 text-left last:border-r-0"
+                  className="min-h-24 border-r border-line p-1.5 text-left last:border-r-0"
                 >
                   <div className="space-y-1">
                     {allDayItems.slice(0, 2).map((item) =>
@@ -405,7 +405,7 @@ export function WeekView({
                       ),
                     )}
                     {allDayItems.length > 2 && (
-                      <span className="inline-flex h-5 items-center border border-[#3a3a3a] px-2 text-[10px] text-[#6b6b6b]">
+                      <span className="inline-flex h-5 items-center border border-line-subtle px-2 text-[10px] text-muted">
                         +{allDayItems.length - 2} more
                       </span>
                     )}
@@ -420,11 +420,11 @@ export function WeekView({
             className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))]"
             style={{ height: weekHeight }}
           >
-            <div className="relative border-r border-[#1f1f1f]">
+            <div className="relative border-r border-line">
               {hourLabels.slice(0, -1).map((hour, index) => (
                 <div
                   key={hour}
-                  className="absolute left-0 right-0 border-t border-[#1f1f1f] px-1 pt-1 text-right text-[10px] text-[#6b6b6b]"
+                  className="absolute left-0 right-0 border-t border-line px-1 pt-1 text-right text-[10px] text-muted"
                   style={{ top: index * HOUR_HEIGHT }}
                 >
                   {timeLabel(hour)}
@@ -443,12 +443,12 @@ export function WeekView({
                 <div
                   key={key}
                   onClick={() => onSelect(key)}
-                  className="relative border-r border-[#1f1f1f] text-left last:border-r-0"
+                  className="relative border-r border-line text-left last:border-r-0"
                 >
                   {hourLabels.slice(0, -1).map((hour, index) => (
                     <div
                       key={hour}
-                      className="absolute left-0 right-0 border-t border-[#1f1f1f]"
+                      className="absolute left-0 right-0 border-t border-line"
                       style={{ top: index * HOUR_HEIGHT }}
                     />
                   ))}

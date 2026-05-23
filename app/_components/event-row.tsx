@@ -33,7 +33,7 @@ export function EventRow({
       : null;
 
   return (
-    <div className="border-b border-[#1f1f1f]">
+    <div className="border-b border-line">
       <div className="flex items-center gap-3 py-3">
         <span
           className="flex-shrink-0 w-7 h-7 border-2 flex items-center justify-center"
@@ -64,8 +64,8 @@ export function EventRow({
           <p
             className={`text-base truncate ${
               isOverdue
-                ? "text-[#f5f0e8] font-bold"
-                : "text-[#f5f0e8]"
+                ? "text-fg font-bold"
+                : "text-fg"
             }`}
           >
             {event.title}
@@ -74,16 +74,16 @@ export function EventRow({
             <span style={{ color: event.groupColor }}>{event.groupName}</span>
             {timeLabel && (
               <>
-                <span className="text-[#3a3a3a]">·</span>
-                <span className={isOverdue ? "text-[#ff6b6b]" : "text-[#6b6b6b]"}>
+                <span className="text-line-subtle">·</span>
+                <span className={isOverdue ? "text-danger" : "text-muted"}>
                   {timeLabel}
                 </span>
               </>
             )}
             {!hideDate && (
               <>
-                <span className="text-[#3a3a3a]">·</span>
-                <span className={isOverdue ? "text-[#ff6b6b]" : "text-[#6b6b6b]"}>
+                <span className="text-line-subtle">·</span>
+                <span className={isOverdue ? "text-danger" : "text-muted"}>
                   {formatDue(event.startDateKey)}
                 </span>
               </>

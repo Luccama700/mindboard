@@ -116,11 +116,11 @@ export function TaskCaptureBar({
     <form
       ref={formRef}
       onSubmit={onSubmit}
-      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] bg-[#0d0d0d]/95 border border-[#1f1f1f] p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:right-auto lg:w-[calc(50vw-3rem)] lg:max-w-2xl xl:left-[calc((100vw-80rem)/2+2rem)]"
+      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] bg-page/95 border border-line p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:right-auto lg:w-[calc(50vw-3rem)] lg:max-w-2xl xl:left-[calc((100vw-80rem)/2+2rem)]"
     >
       <div>
         {groupOpen && (
-          <div className="absolute left-0 right-0 bottom-full mb-2 border border-[#1f1f1f] bg-[#101010] p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
+          <div className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
             <div className="max-h-56 overflow-y-auto">
               <button
                 type="button"
@@ -131,12 +131,12 @@ export function TaskCaptureBar({
                 }}
                 className={`flex min-h-11 w-full items-center gap-2 px-3 text-left text-xs tracking-widest uppercase transition-colors ${
                   selectedGroupId === null
-                    ? "bg-[#b5ff3c] text-[#0d0d0d]"
-                    : "text-[#f5f0e8] hover:bg-[#141414]"
+                    ? "bg-accent text-accent-fg"
+                    : "text-fg hover:bg-card"
                 }`}
               >
                 <span
-                  className="h-3 w-3 flex-shrink-0 border border-[#6b6b6b] border-dashed"
+                  className="h-3 w-3 flex-shrink-0 border border-muted border-dashed"
                   aria-hidden
                 />
                 inbox
@@ -152,8 +152,8 @@ export function TaskCaptureBar({
                   }}
                   className={`flex min-h-11 w-full items-center gap-2 px-3 text-left text-xs tracking-widest uppercase transition-colors ${
                     selectedGroupId === group.id
-                      ? "bg-[#b5ff3c] text-[#0d0d0d]"
-                      : "text-[#f5f0e8] hover:bg-[#141414]"
+                      ? "bg-accent text-accent-fg"
+                      : "text-fg hover:bg-card"
                   }`}
                 >
                   <span
@@ -175,13 +175,13 @@ export function TaskCaptureBar({
             aria-expanded={groupOpen}
             className={`flex min-h-11 max-w-full items-center gap-2 border px-3 py-2 text-[10px] tracking-widest uppercase transition-colors ${
               selectedGroup
-                ? "border-[#2a2a2a] text-[#f5f0e8] hover:border-[#f5f0e8]"
-                : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+                ? "border-line-strong text-fg hover:border-fg"
+                : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
             <span
               className={`h-2.5 w-2.5 flex-shrink-0 ${
-                selectedGroup ? "" : "border border-[#6b6b6b] border-dashed"
+                selectedGroup ? "" : "border border-muted border-dashed"
               }`}
               style={{
                 backgroundColor: selectedGroup?.color ?? "transparent",
@@ -198,8 +198,8 @@ export function TaskCaptureBar({
             onClick={() => setDueDate(isToday ? null : today)}
             className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors ${
               isToday
-                ? "bg-[#b5ff3c] text-[#0d0d0d] border-[#b5ff3c]"
-                : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+                ? "bg-accent text-accent-fg border-accent"
+                : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
             {isToday ? "✓ today" : "today"}
@@ -210,8 +210,8 @@ export function TaskCaptureBar({
             onClick={openDatePicker}
             className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors ${
               isCustomDate
-                ? "bg-[#b5ff3c] text-[#0d0d0d] border-[#b5ff3c]"
-                : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+                ? "bg-accent text-accent-fg border-accent"
+                : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
             {isCustomDate ? `✓ ${formatDue(dueDate!)}` : "+ date"}
@@ -232,7 +232,7 @@ export function TaskCaptureBar({
               type="button"
               onClick={() => setDueDate(null)}
               aria-label="clear date"
-              className="text-[#6b6b6b] text-lg leading-none hover:text-[#f5f0e8] transition-colors px-1.5 py-1"
+              className="text-muted text-lg leading-none hover:text-fg transition-colors px-1.5 py-1"
             >
               ×
             </button>
@@ -244,8 +244,8 @@ export function TaskCaptureBar({
             aria-expanded={notesOpen}
             className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors ${
               notesOpen || hasNotes
-                ? "bg-[#b5ff3c] text-[#0d0d0d] border-[#b5ff3c]"
-                : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+                ? "bg-accent text-accent-fg border-accent"
+                : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
             {hasNotes ? "✓ notes" : "+ notes"}
@@ -260,7 +260,7 @@ export function TaskCaptureBar({
             aria-label="task notes markdown"
             maxLength={5000}
             rows={4}
-            className="mb-2 w-full resize-y bg-[#141414] border border-[#2a2a2a] focus:border-[#b5ff3c] text-[#f5f0e8] placeholder-[#6b6b6b] text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
+            className="mb-2 w-full resize-y bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
           />
         )}
 
@@ -275,12 +275,12 @@ export function TaskCaptureBar({
             autoCapitalize="sentences"
             enterKeyHint="done"
             maxLength={200}
-            className="flex-1 bg-[#141414] border border-[#2a2a2a] focus:border-[#b5ff3c] text-[#f5f0e8] placeholder-[#6b6b6b] text-base px-3 py-3 focus:outline-none transition-colors"
+            className="flex-1 bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-base px-3 py-3 focus:outline-none transition-colors"
           />
           <button
             type="submit"
             disabled={!title.trim() || busy}
-            className="bg-[#b5ff3c] text-[#0d0d0d] text-sm font-bold px-4 py-3 hover:bg-[#f5f0e8] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="bg-accent text-accent-fg text-sm font-bold px-4 py-3 hover:opacity-90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
             add
           </button>

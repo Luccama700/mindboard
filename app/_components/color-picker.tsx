@@ -50,7 +50,7 @@ export function ColorPicker({
 
   return (
     <div>
-      <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b] mb-2">
+      <p className="text-[10px] tracking-widest uppercase text-muted mb-2">
         {label}
       </p>
       <div className="flex flex-wrap gap-3 items-center">
@@ -64,7 +64,7 @@ export function ColorPicker({
               aria-label={`pick color ${c}`}
               className={`w-9 h-9 transition-transform ${
                 selected
-                  ? "ring-2 ring-[#f5f0e8] ring-offset-2 ring-offset-[#141414] scale-110"
+                  ? "ring-2 ring-fg ring-offset-2 ring-offset-card scale-110"
                   : ""
               }`}
               style={{ backgroundColor: c }}
@@ -78,7 +78,7 @@ export function ColorPicker({
           aria-label="pick custom color"
           className={`relative w-9 h-9 transition-transform overflow-hidden ${
             customActive
-              ? "ring-2 ring-[#f5f0e8] ring-offset-2 ring-offset-[#141414] scale-110"
+              ? "ring-2 ring-fg ring-offset-2 ring-offset-card scale-110"
               : ""
           }`}
           style={{
@@ -90,7 +90,7 @@ export function ColorPicker({
           {!customActive && (
             <span
               aria-hidden
-              className="absolute inset-0 flex items-center justify-center text-[#0d0d0d] text-base font-bold"
+              className="absolute inset-0 flex items-center justify-center text-accent-fg text-base font-bold"
             >
               +
             </span>
@@ -108,7 +108,7 @@ export function ColorPicker({
         />
       </div>
       {customActive && (
-        <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b] mt-2">
+        <p className="text-[10px] tracking-widest uppercase text-muted mt-2">
           custom · {value.toUpperCase()}
         </p>
       )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useOptimistic } from "react";
+import { startTransition, useOptimistic, useState } from "react";
 import {
   deleteTask,
   toggleTaskStatus,
@@ -9,8 +9,6 @@ import {
 import { TaskCaptureBar } from "./task-capture-bar";
 import { TaskRow, type GroupOption } from "./task-row";
 import type { Task } from "./types";
-
-export type { Task } from "./types";
 
 type UpdatePatch = {
   title?: string;
@@ -35,14 +33,16 @@ function applyPatch(task: Task, patch: UpdatePatch): Task {
   return next;
 }
 
-export function TasksClient({
+export function GroupDetailClient({
   initial,
   groupId,
   groups,
+  upcomingEventsSlot,
 }: {
   initial: Task[];
-  groupId: string | null;
+  groupId: string;
   groups: GroupOption[];
+  upcomingEventsSlot?: React.ReactNode;
 }) {
   const [tasks, dispatch] = useOptimistic<Task[], OptimisticAction>(
     initial,
@@ -85,6 +85,8 @@ export function TasksClient({
     },
   );
 
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
   function onToggle(task: Task) {
     const nextStatus = task.status === "done" ? "todo" : "done";
     startTransition(async () => {
@@ -94,6 +96,7 @@ export function TasksClient({
   }
 
   function onDelete(id: string) {
+    if (selectedId === id) setSelectedId(null);
     startTransition(async () => {
       dispatch({ kind: "delete", id });
       await deleteTask(id);
@@ -110,43 +113,54 @@ export function TasksClient({
   const active = tasks.filter((t) => t.status !== "done");
   const done = tasks.filter((t) => t.status === "done");
 
+  const selectedTask =
+    selectedId !== null ? (tasks.find((t) => t.id === selectedId) ?? null) : null;
+
+  function renderRow(t: Task) {
+    return (
+      <TaskRow
+        key={t.id}
+        task={t}
+        groups={groups}
+        onToggle={onToggle}
+        onDelete={onDelete}
+        onUpdate={onUpdate}
+        open={selectedId === t.id}
+        onOpenChange={(next) => setSelectedId(next ? t.id : null)}
+        hideNotesInPanel
+      />
+    );
+  }
+
   return (
     <>
-      <div className="space-y-1 pb-4">
-        {active.length === 0 && done.length === 0 && (
-          <p className="text-muted text-sm text-center pt-12 pb-8">
-            no tasks yet — start typing below.
-          </p>
-        )}
+      <div className="grid gap-8 lg:grid-cols-2 lg:gap-12 lg:items-start">
+        <section className="min-w-0">
+          {upcomingEventsSlot}
 
-        {active.map((t) => (
-          <TaskRow
-            key={t.id}
-            task={t}
-            groups={groups}
-            onToggle={onToggle}
-            onDelete={onDelete}
-            onUpdate={onUpdate}
-          />
-        ))}
+          <div className="space-y-1 pb-4">
+            {active.length === 0 && done.length === 0 && (
+              <p className="text-muted text-sm text-center pt-12 pb-8">
+                no tasks yet — start typing below.
+              </p>
+            )}
 
-        {done.length > 0 && (
-          <div className="pt-8">
-            <p className="text-[10px] tracking-widest uppercase text-muted mb-2 px-1">
-              done · {done.length}
-            </p>
-            {done.map((t) => (
-              <TaskRow
-                key={t.id}
-                task={t}
-                groups={groups}
-                onToggle={onToggle}
-                onDelete={onDelete}
-                onUpdate={onUpdate}
-              />
-            ))}
+            {active.map(renderRow)}
+
+            {done.length > 0 && (
+              <div className="pt-8">
+                <p className="text-[10px] tracking-widest uppercase text-muted mb-2 px-1">
+                  done · {done.length}
+                </p>
+                {done.map(renderRow)}
+              </div>
+            )}
           </div>
-        )}
+        </section>
+
+        <aside className="min-w-0 flex flex-col min-h-[320px] lg:sticky lg:top-8 lg:h-[calc(100vh-4rem)]">
+          <NotesPane task={selectedTask} onUpdate={onUpdate} />
+        </aside>
       </div>
 
       <TaskCaptureBar
@@ -156,11 +170,62 @@ export function TasksClient({
           startTransition(() => dispatch({ kind: "add", task }))
         }
         onReplace={(tempId, task) =>
-          startTransition(() =>
-            dispatch({ kind: "replace", tempId, task }),
-          )
+          startTransition(() => dispatch({ kind: "replace", tempId, task }))
         }
       />
     </>
+  );
+}
+
+function NotesPane({
+  task,
+  onUpdate,
+}: {
+  task: Task | null;
+  onUpdate: (id: string, patch: UpdatePatch) => void;
+}) {
+  return (
+    <div className="flex flex-col h-full min-h-[320px]">
+      <p className="text-[10px] tracking-widest uppercase text-muted mb-2 px-1">
+        markdown notes
+      </p>
+      {task ? (
+        <NotesEditor key={task.id} task={task} onUpdate={onUpdate} />
+      ) : (
+        <div className="flex-1 min-h-[280px] border border-line bg-page px-4 py-3 text-muted text-sm">
+          select a task to view its notes.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotesEditor({
+  task,
+  onUpdate,
+}: {
+  task: Task;
+  onUpdate: (id: string, patch: UpdatePatch) => void;
+}) {
+  const [draft, setDraft] = useState(task.notes ?? "");
+
+  function commit() {
+    const next = draft.trim();
+    const current = task.notes ?? "";
+    if (next === current) return;
+    onUpdate(task.id, { notes: next || null });
+  }
+
+  return (
+    <textarea
+      id={`notes-pane-${task.id}`}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      placeholder="add details..."
+      maxLength={5000}
+      aria-label={`markdown notes for ${task.title}`}
+      className="flex-1 min-h-[280px] w-full resize-none bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-4 py-3 focus:outline-none transition-colors"
+    />
   );
 }

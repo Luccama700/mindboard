@@ -25,6 +25,9 @@ export function TaskRow({
   onUpdate,
   variant = "default",
   hideDate = false,
+  open: openProp,
+  onOpenChange,
+  hideNotesInPanel = false,
 }: {
   task: Task | TaskWithGroup;
   groups: GroupOption[];
@@ -33,8 +36,22 @@ export function TaskRow({
   onUpdate: (id: string, patch: UpdatePatch) => void;
   variant?: "default" | "overdue";
   hideDate?: boolean;
+  open?: boolean;
+  onOpenChange?: (next: boolean) => void;
+  hideNotesInPanel?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [openLocal, setOpenLocal] = useState(false);
+  const isControlled = openProp !== undefined;
+  const open = isControlled ? openProp : openLocal;
+
+  function toggleOpen() {
+    const next = !open;
+    if (isControlled) {
+      onOpenChange?.(next);
+    } else {
+      setOpenLocal(next);
+    }
+  }
 
   const isDone = task.status === "done";
   const isOverdue = variant === "overdue";
@@ -48,17 +65,17 @@ export function TaskRow({
   const showSubtitle = hasGroupInfo || showDate || hasNotes;
 
   return (
-    <div className="border-b border-[#1f1f1f]">
+    <div className="border-b border-line">
       <div className="flex items-center gap-3 py-3">
         <button
           onClick={() => onToggle(task)}
           aria-label={isDone ? "mark as todo" : "mark as done"}
           className={`flex-shrink-0 w-7 h-7 border-2 transition-all flex items-center justify-center ${
             isDone
-              ? "bg-[#b5ff3c] border-[#b5ff3c]"
+              ? "bg-accent border-accent"
               : isOverdue
-                ? "border-[#ff6b6b] hover:border-[#ff8b8b]"
-                : "border-[#3a3a3a] hover:border-[#f5f0e8]"
+                ? "border-danger hover:border-danger-hover"
+                : "border-line-subtle hover:border-fg"
           }`}
         >
           {isDone && (
@@ -67,7 +84,7 @@ export function TaskRow({
               width="14"
               height="14"
               fill="none"
-              stroke="#0d0d0d"
+              stroke="var(--accent-fg)"
               strokeWidth="3"
             >
               <path d="M3 8l3.5 3.5L13 5" />
@@ -76,16 +93,16 @@ export function TaskRow({
         </button>
 
         <button
-          onClick={() => setOpen((v) => !v)}
+          onClick={toggleOpen}
           className="flex-1 min-w-0 text-left py-1"
         >
           <p
             className={`text-base truncate transition-colors ${
               isDone
-                ? "text-[#6b6b6b] line-through"
+                ? "text-muted line-through"
                 : isOverdue
-                  ? "text-[#f5f0e8] font-bold"
-                  : "text-[#f5f0e8]"
+                  ? "text-fg font-bold"
+                  : "text-fg"
             }`}
           >
             {task.title}
@@ -94,24 +111,24 @@ export function TaskRow({
             <p className="text-[10px] tracking-widest uppercase mt-0.5 flex items-center gap-1.5">
               {hasGroupInfo && (
                 <span
-                  style={{ color: groupColor ?? "#6b6b6b" }}
+                  style={{ color: groupColor ?? "var(--muted)" }}
                   className={!groupName ? "italic" : ""}
                 >
                   {groupName ?? "inbox"}
                 </span>
               )}
               {hasGroupInfo && showDate && (
-                <span className="text-[#3a3a3a]">·</span>
+                <span className="text-line-subtle">·</span>
               )}
               {showDate && (
-                <span className={isOverdue ? "text-[#ff6b6b]" : "text-[#6b6b6b]"}>
+                <span className={isOverdue ? "text-danger" : "text-muted"}>
                   due {formatDue(task.due_date!)}
                 </span>
               )}
               {(hasGroupInfo || showDate) && hasNotes && (
-                <span className="text-[#3a3a3a]">·</span>
+                <span className="text-line-subtle">·</span>
               )}
-              {hasNotes && <span className="text-[#6b6b6b]">notes</span>}
+              {hasNotes && <span className="text-muted">notes</span>}
             </p>
           )}
         </button>
@@ -123,6 +140,7 @@ export function TaskRow({
           groups={groups}
           onDelete={onDelete}
           onUpdate={onUpdate}
+          hideNotes={hideNotesInPanel}
         />
       )}
     </div>
@@ -134,11 +152,13 @@ function EditPanel({
   groups,
   onDelete,
   onUpdate,
+  hideNotes = false,
 }: {
   task: Task | TaskWithGroup;
   groups: GroupOption[];
   onDelete: (id: string) => void;
   onUpdate: (id: string, patch: UpdatePatch) => void;
+  hideNotes?: boolean;
 }) {
   const [titleDraft, setTitleDraft] = useState(task.title);
   const [notesDraft, setNotesDraft] = useState(task.notes ?? "");
@@ -198,7 +218,7 @@ function EditPanel({
         }}
         maxLength={200}
         aria-label="task title"
-        className="w-full bg-[#141414] border border-[#2a2a2a] focus:border-[#b5ff3c] text-[#f5f0e8] text-sm px-3 py-2 focus:outline-none transition-colors"
+        className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
       />
 
       <div className="flex items-center flex-wrap gap-2">
@@ -207,8 +227,8 @@ function EditPanel({
           onClick={() => onUpdate(task.id, { dueDate: isToday ? null : today })}
           className={`text-[10px] tracking-widest uppercase px-2.5 py-1.5 border transition-colors ${
             isToday
-              ? "bg-[#b5ff3c] text-[#0d0d0d] border-[#b5ff3c]"
-              : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+              ? "bg-accent text-accent-fg border-accent"
+              : "border-line-strong text-muted hover:border-fg hover:text-fg"
           }`}
         >
           {isToday ? "✓ today" : "today"}
@@ -219,8 +239,8 @@ function EditPanel({
           onClick={openDatePicker}
           className={`text-[10px] tracking-widest uppercase px-2.5 py-1.5 border transition-colors ${
             isCustomDate
-              ? "bg-[#b5ff3c] text-[#0d0d0d] border-[#b5ff3c]"
-              : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+              ? "bg-accent text-accent-fg border-accent"
+              : "border-line-strong text-muted hover:border-fg hover:text-fg"
           }`}
         >
           {isCustomDate ? `✓ ${formatDue(task.due_date!)}` : "+ date"}
@@ -243,7 +263,7 @@ function EditPanel({
             type="button"
             onClick={() => onUpdate(task.id, { dueDate: null })}
             aria-label="clear date"
-            className="text-[#6b6b6b] text-lg leading-none hover:text-[#f5f0e8] transition-colors px-1.5 py-1"
+            className="text-muted text-lg leading-none hover:text-fg transition-colors px-1.5 py-1"
           >
             ×
           </button>
@@ -251,7 +271,7 @@ function EditPanel({
       </div>
 
       <div className="flex items-center gap-2">
-        <label className="text-[10px] tracking-widest uppercase text-[#6b6b6b]">
+        <label className="text-[10px] tracking-widest uppercase text-muted">
           group
         </label>
         <select
@@ -260,7 +280,7 @@ function EditPanel({
             onUpdate(task.id, { groupId: e.target.value || null })
           }
           aria-label="task group"
-          className="flex-1 min-w-0 bg-[#141414] border border-[#2a2a2a] focus:border-[#b5ff3c] text-[#f5f0e8] text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
+          className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
         >
           <option value="">inbox</option>
           {groups.map((g) => (
@@ -271,29 +291,31 @@ function EditPanel({
         </select>
       </div>
 
-      <div className="space-y-1.5">
-        <label
-          htmlFor={`task-notes-${task.id}`}
-          className="text-[10px] tracking-widest uppercase text-[#6b6b6b]"
-        >
-          markdown notes
-        </label>
-        <textarea
-          id={`task-notes-${task.id}`}
-          value={notesDraft}
-          onChange={(e) => setNotesDraft(e.target.value)}
-          onBlur={commitNotes}
-          placeholder="add details..."
-          maxLength={5000}
-          rows={4}
-          className="w-full resize-y bg-[#141414] border border-[#2a2a2a] focus:border-[#b5ff3c] text-[#f5f0e8] placeholder-[#6b6b6b] text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
-        />
-      </div>
+      {!hideNotes && (
+        <div className="space-y-1.5">
+          <label
+            htmlFor={`task-notes-${task.id}`}
+            className="text-[10px] tracking-widest uppercase text-muted"
+          >
+            markdown notes
+          </label>
+          <textarea
+            id={`task-notes-${task.id}`}
+            value={notesDraft}
+            onChange={(e) => setNotesDraft(e.target.value)}
+            onBlur={commitNotes}
+            placeholder="add details..."
+            maxLength={5000}
+            rows={4}
+            className="w-full resize-y bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
+          />
+        </div>
+      )}
 
       <div className="flex justify-end">
         <button
           onClick={() => onDelete(task.id)}
-          className="text-[#ff6b6b] text-xs tracking-widest uppercase hover:text-[#ff8b8b] transition-colors py-1.5 px-3"
+          className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-1.5 px-3"
         >
           delete
         </button>

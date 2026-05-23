@@ -43,7 +43,7 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       onClick={toggle}
       aria-label="toggle theme"
       suppressHydrationWarning
-      className={`text-[10px] tracking-widest uppercase px-3 py-2 border border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8] transition-colors ${className}`}
+      className={`text-[10px] tracking-widest uppercase px-3 py-2 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors ${className}`}
     >
       {theme === "dark" ? "cream" : "dark"}
     </button>

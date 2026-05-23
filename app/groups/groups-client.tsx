@@ -99,27 +99,27 @@ export function GroupsClient({
     <div className="space-y-6">
       <Link
         href="/inbox"
-        className="block border border-[#1f1f1f] bg-[#141414] hover:bg-[#1a1a1a] transition-colors"
+        className="block border border-line bg-card hover:bg-card-hover transition-colors"
       >
         <div className="flex items-center gap-3 px-4 py-4">
           <span
-            className="w-2 h-10 flex-shrink-0 border-2 border-dashed border-[#3a3a3a]"
+            className="w-2 h-10 flex-shrink-0 border-2 border-dashed border-line-subtle"
             aria-hidden
           />
           <div className="flex-1 min-w-0">
-            <p className="text-[#f5f0e8] text-base font-bold">inbox</p>
-            <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mt-0.5">
+            <p className="text-fg text-base font-bold">inbox</p>
+            <p className="text-muted text-xs tracking-widest uppercase mt-0.5">
               unsorted
             </p>
           </div>
-          <span className="text-[#6b6b6b] text-xs">›</span>
+          <span className="text-muted text-xs">›</span>
         </div>
       </Link>
 
       {!formOpen ? (
         <button
           onClick={openForm}
-          className="w-full text-left bg-transparent border border-dashed border-[#2a2a2a] hover:border-[#b5ff3c] hover:text-[#b5ff3c] text-[#6b6b6b] text-sm font-bold py-5 px-4 transition-colors"
+          className="w-full text-left bg-transparent border border-dashed border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-5 px-4 transition-colors"
         >
           + new group
         </button>
@@ -127,7 +127,7 @@ export function GroupsClient({
         <form
           ref={formRef}
           action={onSubmit}
-          className="border border-[#1f1f1f] bg-[#141414] p-4 space-y-5"
+          className="border border-line bg-card p-4 space-y-5"
         >
           <input
             ref={nameRef}
@@ -137,26 +137,26 @@ export function GroupsClient({
             required
             maxLength={64}
             autoComplete="off"
-            className="w-full bg-transparent text-[#f5f0e8] placeholder-[#6b6b6b] text-base font-bold focus:outline-none border-b border-[#2a2a2a] focus:border-[#b5ff3c] pb-2 transition-colors"
+            className="w-full bg-transparent text-fg placeholder-muted text-base font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
           />
 
           <TypePicker value={pickedType} onChange={setPickedType} />
           <ColorPicker value={pickedColor} onChange={setPickedColor} />
 
-          {formError && <p className="text-[#ff6b6b] text-xs">{formError}</p>}
+          {formError && <p className="text-danger text-xs">{formError}</p>}
 
           <div className="flex gap-2 pt-2">
             <button
               type="submit"
               disabled={isPending}
-              className="flex-1 bg-[#b5ff3c] text-[#0d0d0d] text-sm font-bold py-3 hover:bg-[#f5f0e8] transition-colors disabled:opacity-50"
+              className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors disabled:opacity-50"
             >
               create
             </button>
             <button
               type="button"
               onClick={closeForm}
-              className="px-4 text-[#6b6b6b] text-sm hover:text-[#f5f0e8] transition-colors"
+              className="px-4 text-muted text-sm hover:text-fg transition-colors"
             >
               cancel
             </button>
@@ -193,11 +193,11 @@ function GroupRow({
   const [editOpen, setEditOpen] = useState(false);
 
   return (
-    <li className="border border-[#1f1f1f] bg-[#141414]">
+    <li className="border border-line bg-card">
       <div className="flex items-stretch">
         <Link
           href={`/groups/${group.id}`}
-          className="flex-1 flex items-center gap-3 px-4 py-4 hover:bg-[#1a1a1a] transition-colors min-w-0"
+          className="flex-1 flex items-center gap-3 px-4 py-4 hover:bg-card-hover transition-colors min-w-0"
         >
           <span
             className="w-2 h-10 flex-shrink-0"
@@ -205,20 +205,20 @@ function GroupRow({
             aria-hidden
           />
           <div className="flex-1 min-w-0">
-            <p className="text-[#f5f0e8] text-base font-bold truncate">
+            <p className="text-fg text-base font-bold truncate">
               {group.name}
             </p>
-            <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mt-0.5">
+            <p className="text-muted text-xs tracking-widest uppercase mt-0.5">
               {group.type}
             </p>
           </div>
-          <span className="text-[#6b6b6b] text-xs">›</span>
+          <span className="text-muted text-xs">›</span>
         </Link>
 
         <button
           onClick={() => setEditOpen((v) => !v)}
           aria-label="group actions"
-          className="px-4 border-l border-[#1f1f1f] text-[#6b6b6b] hover:text-[#f5f0e8] hover:bg-[#1a1a1a] transition-colors text-lg"
+          className="px-4 border-l border-line text-muted hover:text-fg hover:bg-card-hover transition-colors text-lg"
         >
           ···
         </button>
@@ -262,7 +262,7 @@ function GroupEditPanel({
   }
 
   return (
-    <div className="border-t border-[#1f1f1f] p-4 space-y-5">
+    <div className="border-t border-line p-4 space-y-5">
       <input
         type="text"
         value={nameDraft}
@@ -280,7 +280,7 @@ function GroupEditPanel({
         }}
         maxLength={64}
         aria-label="group name"
-        className="w-full bg-transparent text-[#f5f0e8] text-base font-bold focus:outline-none border-b border-[#2a2a2a] focus:border-[#b5ff3c] pb-2 transition-colors"
+        className="w-full bg-transparent text-fg text-base font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
       />
 
       <TypePicker
@@ -302,7 +302,7 @@ function GroupEditPanel({
       <div className="flex justify-end pt-2">
         <button
           onClick={() => onArchive(group.id)}
-          className="text-[#ff6b6b] text-xs tracking-widest uppercase hover:text-[#ff8b8b] transition-colors py-2 px-3"
+          className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
         >
           archive
         </button>
@@ -320,7 +320,7 @@ function TypePicker({
 }) {
   return (
     <div>
-      <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b] mb-2">
+      <p className="text-[10px] tracking-widest uppercase text-muted mb-2">
         type
       </p>
       <div className="flex flex-wrap gap-2">
@@ -331,8 +331,8 @@ function TypePicker({
             onClick={() => onChange(t)}
             className={`text-xs px-3 py-2 border transition-colors ${
               value === t
-                ? "bg-[#f5f0e8] text-[#0d0d0d] border-[#f5f0e8]"
-                : "border-[#2a2a2a] text-[#6b6b6b] hover:border-[#f5f0e8] hover:text-[#f5f0e8]"
+                ? "bg-fg text-accent-fg border-fg"
+                : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
             {t}
@@ -359,11 +359,11 @@ function CalendarLinkPicker({
 
   return (
     <div>
-      <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b] mb-2">
+      <p className="text-[10px] tracking-widest uppercase text-muted mb-2">
         google calendar
       </p>
       {calendars.length === 0 ? (
-        <p className="text-[#6b6b6b] text-xs">
+        <p className="text-muted text-xs">
           {value
             ? "linked, but calendar list is not available right now."
             : "sign in with calendar access to link a calendar."}
@@ -373,7 +373,7 @@ function CalendarLinkPicker({
           {(linked || linkedMissing) && (
             <span
               className="w-3 h-3 flex-shrink-0"
-              style={{ backgroundColor: linked?.color ?? "#6b6b6b" }}
+              style={{ backgroundColor: linked?.color ?? "var(--muted)" }}
               aria-hidden
             />
           )}
@@ -381,7 +381,7 @@ function CalendarLinkPicker({
             value={value ?? ""}
             onChange={(e) => onChange(e.target.value || null)}
             aria-label="link google calendar"
-            className="flex-1 min-w-0 bg-[#141414] border border-[#2a2a2a] focus:border-[#b5ff3c] text-[#f5f0e8] text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
+            className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
           >
             <option value="">none</option>
             {linkedMissing && value && (

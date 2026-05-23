@@ -1,3 +1,4 @@
+import { Suspense, cache } from "react";
 import Link from "next/link";
 import { createClient } from "@/utils/supabase/server";
 import {
@@ -6,8 +7,9 @@ import {
   type CalendarEvent,
 } from "@/utils/google/calendar";
 import { DashboardCalendar } from "./_components/dashboard-calendar";
+import { GetStartedScreen } from "./_components/get-started-screen";
 import { SettingsPanel } from "./_components/settings-panel";
-import { ThemeToggle } from "./_components/theme-toggle";
+import { WelcomeTour } from "./_components/welcome-tour";
 import { signOut } from "./actions/auth";
 import { TodayClient } from "./_components/today-client";
 import { formatLongWeekdayMonthDay } from "./_components/date-utils";
@@ -24,6 +26,17 @@ type RawTask = {
   created_at: string;
   completed_at: string | null;
   groups: { name: string; color: string } | { name: string; color: string }[] | null;
+};
+
+type CalendarLink = {
+  groupId: string;
+  groupName: string;
+  groupColor: string;
+};
+
+type EventsBundle = {
+  events: CalendarEvent[];
+  status: "connected" | "connect" | "error";
 };
 
 function toDateKey(date: Date) {
@@ -88,55 +101,22 @@ function mapTasks(rawTasks: RawTask[]): TaskWithGroup[] {
   });
 }
 
-export default async function Home({
-  searchParams,
-}: {
-  searchParams: Promise<{ m?: string | string[] | undefined }>;
-}) {
-  const query = await searchParams;
-  const calendarMonth = normalizeMonth(query.m);
-  const { startDate, endDate, timeMin, timeMax } =
-    calendarRange(calendarMonth);
-
+const getDashboardData = cache(async (userId: string, month: string) => {
+  const { startDate, endDate, timeMin, timeMax } = calendarRange(month);
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
 
-  if (!user) {
-    return (
-      <main className="min-h-screen flex flex-col items-center justify-center px-6 relative">
-        <div className="absolute top-4 right-4">
-          <ThemeToggle />
-        </div>
-        <div className="max-w-sm w-full space-y-8">
-          <div>
-            <p className="text-[#6b6b6b] text-xs tracking-widest uppercase mb-3">
-              personal dashboard
-            </p>
-            <h1 className="text-4xl font-bold tracking-tight text-[#f5f0e8]">
-              mindboard
-            </h1>
-          </div>
+  const eventsPromise: Promise<EventsBundle> = listEvents(userId, {
+    timeMin,
+    timeMax,
+  })
+    .then<EventsBundle>((events) => ({ events, status: "connected" }))
+    .catch<EventsBundle>((error) => ({
+      events: [],
+      status:
+        error instanceof GoogleCalendarConnectionError ? "connect" : "error",
+    }));
 
-          <p className="text-[#6b6b6b] text-sm leading-relaxed">
-            Track what matters. Ship what ships.
-          </p>
-
-          <div className="pt-4">
-            <Link
-              href="/login"
-              className="inline-block bg-[#b5ff3c] text-[#0d0d0d] text-sm font-bold px-6 py-3 hover:bg-[#f5f0e8] transition-colors"
-            >
-              get started →
-            </Link>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  const [{ data: rawTasks }, { data: groupRows }] = await Promise.all([
+  const [tasksResponse, groupsResponse, eventsResult] = await Promise.all([
     supabase
       .from("tasks")
       .select(
@@ -149,10 +129,11 @@ export default async function Home({
       .select("id, name, color, google_calendar_id")
       .eq("archived", false)
       .order("created_at", { ascending: false }),
+    eventsPromise,
   ]);
 
-  const tasks = mapTasks((rawTasks ?? []) as RawTask[]);
-  const groupsRaw = (groupRows ?? []) as {
+  const tasks = mapTasks((tasksResponse.data ?? []) as RawTask[]);
+  const groupsRaw = (groupsResponse.data ?? []) as {
     id: string;
     name: string;
     color: string;
@@ -164,10 +145,7 @@ export default async function Home({
     color: g.color,
   }));
 
-  const calendarLinks: Record<
-    string,
-    { groupId: string; groupName: string; groupColor: string }
-  > = {};
+  const calendarLinks: Record<string, CalendarLink> = {};
   for (const g of groupsRaw) {
     if (g.google_calendar_id) {
       calendarLinks[g.google_calendar_id] = {
@@ -177,20 +155,109 @@ export default async function Home({
       };
     }
   }
+
   const calendarTasks = tasks.filter(
     (task) =>
       task.due_date && task.due_date >= startDate && task.due_date < endDate,
   );
 
-  let calendarEvents: CalendarEvent[] = [];
-  let calendarStatus: "connected" | "connect" | "error" = "connect";
+  return {
+    tasks,
+    groups,
+    calendarLinks,
+    calendarTasks,
+    events: eventsResult.events,
+    calendarStatus: eventsResult.status,
+  };
+});
 
-  try {
-    calendarEvents = await listEvents(user.id, { timeMin, timeMax });
-    calendarStatus = "connected";
-  } catch (error) {
-    calendarStatus =
-      error instanceof GoogleCalendarConnectionError ? "connect" : "error";
+async function TodaySection({
+  userId,
+  month,
+}: {
+  userId: string;
+  month: string;
+}) {
+  const { tasks, groups, events, calendarLinks } = await getDashboardData(
+    userId,
+    month,
+  );
+  return (
+    <TodayClient
+      initial={tasks}
+      groups={groups}
+      events={events}
+      calendarLinks={calendarLinks}
+    />
+  );
+}
+
+async function CalendarSection({
+  userId,
+  month,
+}: {
+  userId: string;
+  month: string;
+}) {
+  const { calendarTasks, events, calendarStatus, calendarLinks } =
+    await getDashboardData(userId, month);
+  return (
+    <DashboardCalendar
+      key={month}
+      month={month}
+      tasks={calendarTasks}
+      events={events}
+      status={calendarStatus}
+      calendarLinks={calendarLinks}
+    />
+  );
+}
+
+function TodaySkeleton() {
+  return (
+    <div className="pb-4 animate-pulse" aria-hidden>
+      <div className="h-2.5 w-16 bg-line mb-3" />
+      <div className="space-y-px">
+        <div className="h-14 bg-card" />
+        <div className="h-14 bg-card" />
+        <div className="h-14 bg-card" />
+        <div className="h-14 bg-card" />
+      </div>
+    </div>
+  );
+}
+
+function CalendarSkeleton() {
+  return (
+    <div className="border border-line p-4 space-y-3 animate-pulse" aria-hidden>
+      <div className="flex items-center justify-between">
+        <div className="h-3 w-32 bg-line" />
+        <div className="h-3 w-16 bg-line" />
+      </div>
+      <div className="grid grid-cols-7 gap-px">
+        {Array.from({ length: 42 }).map((_, i) => (
+          <div key={i} className="aspect-square bg-card" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ m?: string | string[] | undefined }>;
+}) {
+  const query = await searchParams;
+  const calendarMonth = normalizeMonth(query.m);
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return <GetStartedScreen />;
   }
 
   const todayLabel = formatLongWeekdayMonthDay(new Date());
@@ -201,10 +268,10 @@ export default async function Home({
         <section className="min-w-0">
           <header className="flex items-start justify-between mb-8">
             <div>
-              <p className="text-[10px] tracking-widest uppercase text-[#6b6b6b]">
+              <p className="text-[10px] tracking-widest uppercase text-muted">
                 {todayLabel}
               </p>
-              <h1 className="text-3xl font-bold tracking-tight text-[#f5f0e8] mt-1">
+              <h1 className="text-3xl font-bold tracking-tight text-fg mt-1">
                 today
               </h1>
             </div>
@@ -213,7 +280,7 @@ export default async function Home({
                 <SettingsPanel />
                 <Link
                   href="/groups"
-                  className="text-xs tracking-widest uppercase px-3 py-2 border border-[#f5f0e8] text-[#f5f0e8] hover:bg-[#f5f0e8] hover:text-[#0d0d0d] transition-colors"
+                  className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors"
                 >
                   groups →
                 </Link>
@@ -221,7 +288,7 @@ export default async function Home({
               <form action={signOut}>
                 <button
                   type="submit"
-                  className="text-[10px] tracking-widest uppercase text-[#6b6b6b] hover:text-[#f5f0e8] transition-colors"
+                  className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
                 >
                   sign out
                 </button>
@@ -229,25 +296,18 @@ export default async function Home({
             </div>
           </header>
 
-          <TodayClient
-            initial={tasks}
-            groups={groups}
-            events={calendarEvents}
-            calendarLinks={calendarLinks}
-          />
+          <Suspense fallback={<TodaySkeleton />}>
+            <TodaySection userId={user.id} month={calendarMonth} />
+          </Suspense>
         </section>
 
         <aside className="min-w-0 lg:sticky lg:top-8">
-          <DashboardCalendar
-            key={calendarMonth}
-            month={calendarMonth}
-            tasks={calendarTasks}
-            events={calendarEvents}
-            status={calendarStatus}
-            calendarLinks={calendarLinks}
-          />
+          <Suspense fallback={<CalendarSkeleton />}>
+            <CalendarSection userId={user.id} month={calendarMonth} />
+          </Suspense>
         </aside>
       </div>
+      <WelcomeTour />
     </main>
   );
 }
