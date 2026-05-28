@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { updateEvent } from "@/utils/google/calendar";
 
-export type RescheduleInput = {
+type RescheduleInput = {
   calendarId: string;
   eventId: string;
   allDay: boolean;
@@ -15,7 +15,14 @@ export type RescheduleInput = {
 };
 
 function isValidDate(value: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00`));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
 }
 
 function isValidIso(value: string): boolean {

@@ -19,7 +19,6 @@ import type { TaskWithGroup } from "./types";
 type CalendarStatus = "connected" | "connect" | "error";
 
 type CalendarLink = {
-  groupId: string;
   groupName: string;
   groupColor: string;
 };

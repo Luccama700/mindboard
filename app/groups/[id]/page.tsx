@@ -21,10 +21,6 @@ function toLocalDateKey(iso: string): string {
   return `${year}-${month}-${day}`;
 }
 
-function formatTime(iso: string): string {
-  return formatClockTime(iso);
-}
-
 function toVirtualEvents(
   events: CalendarEvent[],
   group: { name: string; color: string },
@@ -43,8 +39,8 @@ function toVirtualEvents(
         id: event.id,
         title: event.summary,
         startDateKey,
-        startTime: event.allDay ? null : formatTime(event.start),
-        endTime: event.allDay ? null : formatTime(event.end),
+        startTime: event.allDay ? null : formatClockTime(event.start),
+        endTime: event.allDay ? null : formatClockTime(event.end),
         allDay: event.allDay,
         groupName: group.name,
         groupColor: group.color,

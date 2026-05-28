@@ -1,6 +1,5 @@
 import "server-only";
 import { createClient } from "@/utils/supabase/server";
-import { CALENDAR_SCOPES } from "./scopes";
 
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
@@ -126,7 +125,7 @@ export class GoogleCalendarConnectionError extends Error {
   }
 }
 
-export async function getValidAccessToken(userId: string): Promise<string> {
+async function getValidAccessToken(userId: string): Promise<string> {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("google_tokens")
@@ -353,5 +352,3 @@ export async function listEventsForCalendar(
     { allowForbidden: true },
   );
 }
-
-export { CALENDAR_SCOPES };

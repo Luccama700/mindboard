@@ -19,7 +19,6 @@ import { TaskRow, type GroupOption } from "./task-row";
 import type { Task, TaskWithGroup } from "./types";
 
 type CalendarLink = {
-  groupId: string;
   groupName: string;
   groupColor: string;
 };

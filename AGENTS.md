@@ -39,7 +39,7 @@ PWA support is shipped:
 
 ## Design System
 
-The default aesthetic is "Terminal Calm". A soft "cream" light mode is also shipped, activated by adding the class `theme-cream` to `<html>`. Both themes share the same lime accent and red danger color.
+The default aesthetic is "Terminal Calm". Themes are implemented with CSS variables on `<html>`: dark is the default, and cream/midnight/forest/slate/sand are activated with `theme-*` classes. User-data colors (group colors, calendar/event colors) come from inline `style={{...}}` and are not affected by the theme.
 
 ```text
 font          Geist Mono throughout
@@ -62,11 +62,11 @@ borders       #d4c9b1 and #beb18f
 danger        #ff6b6b (unchanged)
 ```
 
-The cream theme is implemented as CSS overrides in `app/globals.css`, keyed by attribute selectors on Tailwind's arbitrary-value class names (e.g. `html.theme-cream .bg-\[\#0d0d0d\]`). User-data colors (group colors, calendar/event colors) come from inline `style={{...}}` and are not affected by the theme.
+The active theme palette lives in `app/globals.css` via `@theme inline` tokens such as `bg-page`, `text-fg`, `bg-card`, `border-line`, and `bg-accent`. Add or adjust colors through `app/_components/themes.ts` and the matching CSS variable block in `globals.css`, not by hard-coding old hex-specific Tailwind selectors.
 
-The accent color is driven by the CSS variable `--accent`, set per theme in `:root` and `html.theme-cream`. Every Tailwind utility keyed on the lime hex (`bg-[#b5ff3c]`, `text-[#b5ff3c]`, etc.) is rerouted to that variable in `globals.css`, so the user can override the accent at runtime.
+Palette customization is per theme. Overrides persist in `localStorage` under `palette-${theme}` and are applied by setting CSS variables at runtime.
 
-`app/_components/theme-toggle.tsx` is the simple toggle used on the get-started screen. `app/_components/settings-panel.tsx` is the dashboard popover that combines a theme switcher with the shared `ColorPicker` for per-theme accent customization. Accent overrides persist in `localStorage` under `accent-dark` and `accent-cream`. `app/_components/theme-initializer.tsx` applies the saved theme class and `--accent` variable after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
+`app/_components/get-started-screen.tsx` lets first-time users choose dark or cream before login. `app/_components/settings-panel.tsx` is the dashboard popover that combines the full theme switcher with the shared `ColorPicker` for palette customization. `app/_components/theme-initializer.tsx` applies the saved theme class and palette variables after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
 
 `app/_components/color-picker.tsx` is the shared 12-swatch palette + custom RGB picker, used by both the group edit panel and the settings panel.
 
@@ -227,7 +227,7 @@ Mutations live in:
 - Validate user input and external API responses; trust internal code where reasonable.
 - Avoid comments unless they explain a non-obvious invariant or constraint.
 - Use `rg` for search.
-- Use `npm run lint` and `npm run build` before declaring code changes complete.
+- Use `npm run lint`, `npm run test`, and `npm run build` before declaring code changes complete.
 - Next build may need network access to fetch Google Fonts.
 - Do not touch or commit unrelated local changes. In particular, `.claude/settings.local.json` has been locally dirty before and should be ignored unless the user asks.
 

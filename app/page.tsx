@@ -29,7 +29,6 @@ type RawTask = {
 };
 
 type CalendarLink = {
-  groupId: string;
   groupName: string;
   groupColor: string;
 };
@@ -149,7 +148,6 @@ const getDashboardData = cache(async (userId: string, month: string) => {
   for (const g of groupsRaw) {
     if (g.google_calendar_id) {
       calendarLinks[g.google_calendar_id] = {
-        groupId: g.id,
         groupName: g.name,
         groupColor: g.color,
       };

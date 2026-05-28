@@ -38,10 +38,6 @@ function startOfWeek(date: Date) {
   return addDays(date, -date.getDay());
 }
 
-function timeLabel(hour: number) {
-  return formatHourLabel(hour);
-}
-
 function minutesIntoDay(value: string) {
   const date = new Date(value);
   return date.getHours() * 60 + date.getMinutes();
@@ -427,7 +423,7 @@ export function WeekView({
                   className="absolute left-0 right-0 border-t border-line px-1 pt-1 text-right text-[10px] text-muted"
                   style={{ top: index * HOUR_HEIGHT }}
                 >
-                  {timeLabel(hour)}
+                  {formatHourLabel(hour)}
                 </div>
               ))}
             </div>

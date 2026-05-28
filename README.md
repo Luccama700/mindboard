@@ -17,7 +17,8 @@ The primary use case is an installed iOS PWA: open it, jot a task in a few secon
 - Google Calendar events from every readable calendar on the signed-in Google account, with drag-to-reschedule and inline date/time editing for events on calendars you can write to.
 - Per-group Google Calendar linking: events from a linked calendar appear as read-only rows in the today list and the group page, tagged with the group's color and name.
 - PWA manifest and iOS home-screen icons.
-- Soft cream light theme with a toggle on the dashboard and the get-started screen, persisted in `localStorage`.
+- Six preset themes (dark, cream, midnight, forest, slate, sand) plus full per-theme palette customization (13 color slots) from the dashboard settings panel, persisted in `localStorage`.
+- Split-screen get-started page that animates the chosen theme to 80% width on tap, and a first-run welcome tour that prompts for a theme and points to the settings panel.
 
 ## Tech Stack
 
@@ -60,6 +61,7 @@ Open `http://localhost:3000`.
 npm run dev
 npm run lint
 npm run build
+npm run test
 npm run start
 ```
 
@@ -137,6 +139,8 @@ font          Geist Mono
 
 Keep the app mobile-first, dense, and quiet. The fixed task capture island is the most important interaction and should remain usable while scrolling. Quick capture supports task title, group, due date, and Markdown notes without leaving the bar.
 
+Theme colors are centralized in `app/globals.css` and `app/_components/themes.ts`. The dashboard settings panel stores per-theme palette overrides in `localStorage` as `palette-${theme}`.
+
 ## Agent Context
 
 For AI agents and Claude Code, read `AGENTS.md` first. It contains the current architecture, product constraints, security rules, and implementation notes. `CLAUDE.md` points to that file.
@@ -151,6 +155,7 @@ Before pushing code changes, run:
 
 ```bash
 npm run lint
+npm run test
 npm run build
 ```
 

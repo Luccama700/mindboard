@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
-import { TasksClient, type Task } from "@/app/_components/tasks-client";
+import { TasksClient } from "@/app/_components/tasks-client";
+import type { Task } from "@/app/_components/types";
 
 export default async function InboxPage() {
   const supabase = await createClient();

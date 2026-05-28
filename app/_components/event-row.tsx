@@ -15,15 +15,11 @@ export type VirtualEvent = {
 
 export function EventRow({
   event,
-  variant = "default",
   hideDate = false,
 }: {
   event: VirtualEvent;
-  variant?: "default" | "overdue";
   hideDate?: boolean;
 }) {
-  const isOverdue = variant === "overdue";
-
   const timeLabel = event.allDay
     ? "all day"
     : event.startTime
@@ -61,13 +57,7 @@ export function EventRow({
         </span>
 
         <div className="flex-1 min-w-0 py-1">
-          <p
-            className={`text-base truncate ${
-              isOverdue
-                ? "text-fg font-bold"
-                : "text-fg"
-            }`}
-          >
+          <p className="text-base truncate text-fg">
             {event.title}
           </p>
           <p className="text-[10px] tracking-widest uppercase mt-0.5 flex items-center gap-1.5">
@@ -75,7 +65,7 @@ export function EventRow({
             {timeLabel && (
               <>
                 <span className="text-line-subtle">·</span>
-                <span className={isOverdue ? "text-danger" : "text-muted"}>
+                <span className="text-muted">
                   {timeLabel}
                 </span>
               </>
@@ -83,7 +73,7 @@ export function EventRow({
             {!hideDate && (
               <>
                 <span className="text-line-subtle">·</span>
-                <span className={isOverdue ? "text-danger" : "text-muted"}>
+                <span className="text-muted">
                   {formatDue(event.startDateKey)}
                 </span>
               </>

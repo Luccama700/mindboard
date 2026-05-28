@@ -10,8 +10,6 @@ import { TaskCaptureBar } from "./task-capture-bar";
 import { TaskRow, type GroupOption } from "./task-row";
 import type { Task } from "./types";
 
-export type { Task } from "./types";
-
 type UpdatePatch = {
   title?: string;
   dueDate?: string | null;
