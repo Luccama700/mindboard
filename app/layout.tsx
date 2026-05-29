@@ -39,7 +39,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${geistMono.variable} h-full`}>
-      <body className="min-h-full">
+      <body className="min-h-full" suppressHydrationWarning>
         <ThemeInitializer />
         {children}
       </body>

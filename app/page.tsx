@@ -277,6 +277,12 @@ export default async function Home({
               <div className="flex items-center gap-2">
                 <SettingsPanel />
                 <Link
+                  href="/inventory"
+                  className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors"
+                >
+                  inventory →
+                </Link>
+                <Link
                   href="/groups"
                   className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors"
                 >

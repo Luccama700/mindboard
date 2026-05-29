@@ -8,6 +8,14 @@ import {
 } from "react";
 import { ColorPicker } from "./color-picker";
 import {
+  GOOGLE_MODELS,
+  OPENAI_MODELS,
+  readImageGenSettings,
+  writeImageGenSettings,
+  type ImageGenSettings,
+  type ImageProvider,
+} from "./image-gen-settings";
+import {
   PALETTE_GROUPS,
   PALETTE_LABELS,
   THEMES,
@@ -130,9 +138,156 @@ export function SettingsPanel() {
             </section>
 
             <PaletteEditor key={theme} theme={theme} />
+
+            <ImageGenEditor />
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ImageGenEditor() {
+  const [settings, setSettings] = useState<ImageGenSettings>(
+    readImageGenSettings,
+  );
+
+  function update(patch: Partial<ImageGenSettings>) {
+    const next = { ...settings, ...patch };
+    setSettings(next);
+    writeImageGenSettings(next);
+  }
+
+  const providers: { id: ImageProvider; label: string }[] = [
+    { id: "openai", label: "openai" },
+    { id: "google", label: "google" },
+  ];
+
+  return (
+    <section className="space-y-3">
+      <p className="text-[10px] tracking-widest uppercase text-muted">
+        ai image generation
+      </p>
+
+      <div className="grid grid-cols-2 gap-px border border-line bg-line">
+        {providers.map((p) => {
+          const selected = settings.provider === p.id;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => update({ provider: p.id })}
+              className={`min-h-11 px-2 py-2 text-[10px] tracking-widest uppercase transition-colors ${
+                selected
+                  ? "bg-accent text-accent-fg"
+                  : "bg-page text-muted hover:text-fg"
+              }`}
+            >
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {settings.provider === "openai" ? (
+        <div className="space-y-2">
+          <KeyInput
+            label="openai api key"
+            value={settings.openaiKey}
+            onChange={(v) => update({ openaiKey: v })}
+          />
+          <ModelSelect
+            value={settings.openaiModel}
+            options={OPENAI_MODELS}
+            onChange={(v) => update({ openaiModel: v })}
+          />
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <KeyInput
+            label="google api key"
+            value={settings.googleKey}
+            onChange={(v) => update({ googleKey: v })}
+          />
+          <ModelSelect
+            value={settings.googleModel}
+            options={GOOGLE_MODELS}
+            onChange={(v) => update({ googleModel: v })}
+          />
+        </div>
+      )}
+
+      <p className="text-[10px] leading-relaxed text-muted">
+        keys are stored only in this browser and sent to the provider when you
+        generate an icon.
+      </p>
+    </section>
+  );
+}
+
+function KeyInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [reveal, setReveal] = useState(false);
+  return (
+    <div>
+      <p className="text-[10px] tracking-widest uppercase text-muted mb-1.5">
+        {label}
+      </p>
+      <div className="flex items-stretch gap-px">
+        <input
+          type={reveal ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="paste key…"
+          autoComplete="off"
+          spellCheck={false}
+          className="flex-1 min-w-0 bg-page border border-line-strong focus:border-accent text-fg placeholder-muted text-xs px-2 py-2 focus:outline-none transition-colors font-mono"
+        />
+        <button
+          type="button"
+          onClick={() => setReveal((v) => !v)}
+          className="px-2 border border-l-0 border-line-strong text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+        >
+          {reveal ? "hide" : "show"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ModelSelect({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <p className="text-[10px] tracking-widest uppercase text-muted mb-1.5">
+        model
+      </p>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="image model"
+        className="w-full bg-page border border-line-strong focus:border-accent text-fg text-xs px-2 py-2 focus:outline-none transition-colors font-mono"
+      >
+        {options.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
