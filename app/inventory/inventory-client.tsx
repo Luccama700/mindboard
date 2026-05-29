@@ -68,6 +68,33 @@ function useViewMode(): ViewMode {
   return useSyncExternalStore(subscribeViewMode, readViewMode, () => "list");
 }
 
+type CountMode = "items" | "totals";
+const COUNT_KEY = "inventory-count-mode";
+const countListeners = new Set<() => void>();
+
+function readCountMode(): CountMode {
+  if (typeof window === "undefined") return "items";
+  return window.localStorage.getItem(COUNT_KEY) === "totals"
+    ? "totals"
+    : "items";
+}
+
+function setCountMode(mode: CountMode) {
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(COUNT_KEY, mode);
+  }
+  for (const cb of countListeners) cb();
+}
+
+function subscribeCountMode(cb: () => void) {
+  countListeners.add(cb);
+  return () => countListeners.delete(cb);
+}
+
+function useCountMode(): CountMode {
+  return useSyncExternalStore(subscribeCountMode, readCountMode, () => "items");
+}
+
 function hexToRgba(hex: string, alpha: number): string {
   const match = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!match) return `rgba(127, 127, 127, ${alpha})`;
@@ -82,6 +109,29 @@ function formatQty(value: number): string {
   const n = Number(value);
   if (!Number.isFinite(n)) return "0";
   return String(Math.round(n * 1000) / 1000);
+}
+
+function summarizeByUnit(items: InventoryItem[]): string {
+  const order: string[] = [];
+  const data = new Map<string, { unit: string; sum: number; count: number }>();
+  for (const it of items) {
+    const unit = it.unit.trim();
+    const key = unit.toLowerCase();
+    const existing = data.get(key);
+    if (existing) {
+      existing.sum += Number(it.quantity) || 0;
+      existing.count += 1;
+    } else {
+      data.set(key, { unit, sum: Number(it.quantity) || 0, count: 1 });
+      order.push(key);
+    }
+  }
+  if (order.length === 0) return "0";
+  return order
+    .map((k) => data.get(k)!)
+    .sort((a, b) => b.count - a.count)
+    .map((e) => `${formatQty(e.sum)}${e.unit ? ` ${e.unit}` : ""}`)
+    .join(", ");
 }
 
 export function InventoryClient({
@@ -133,6 +183,7 @@ export function InventoryClient({
   const [groupFormOpen, setGroupFormOpen] = useState(false);
   const asideRef = useRef<HTMLDivElement>(null);
   const view = useViewMode();
+  const countMode = useCountMode();
 
   const groupColors = useMemo(() => {
     const map = new Map<string, string>();
@@ -313,7 +364,26 @@ export function InventoryClient({
         )}
 
         {!isEmpty && (
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            {view === "list" && (
+              <div className="flex gap-px border border-line bg-line">
+                {(["items", "totals"] as CountMode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setCountMode(m)}
+                    aria-pressed={countMode === m}
+                    className={`min-h-9 px-3 text-[10px] tracking-widest uppercase transition-colors ${
+                      countMode === m
+                        ? "bg-accent text-accent-fg"
+                        : "bg-page text-muted hover:text-fg"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex gap-px border border-line bg-line">
               {(["list", "grid"] as ViewMode[]).map((m) => (
                 <button
@@ -339,7 +409,7 @@ export function InventoryClient({
             no items yet. add your first one.
           </p>
         ) : view === "grid" ? (
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
             {flatItems.map((it) => (
               <ItemTile
                 key={it.id}
@@ -361,6 +431,7 @@ export function InventoryClient({
                 key={group.id}
                 group={group}
                 items={groupItems}
+                countMode={countMode}
                 selectedId={selectedId}
                 onSelect={onSelect}
                 onUpdateGroup={onUpdateGroup}
@@ -378,8 +449,14 @@ export function InventoryClient({
                   <span className="flex-1 truncate text-fg text-sm font-bold">
                     ungrouped
                   </span>
-                  <span className="text-muted text-[10px] tracking-widest uppercase">
-                    {sections.ungrouped.length}
+                  <span
+                    className={`text-muted text-[10px] tabular-nums ${
+                      countMode === "items" ? "tracking-widest uppercase" : ""
+                    }`}
+                  >
+                    {countMode === "items"
+                      ? sections.ungrouped.length
+                      : summarizeByUnit(sections.ungrouped)}
                   </span>
                 </div>
                 <ul>
@@ -504,6 +581,7 @@ function GroupForm({
 function GroupSection({
   group,
   items,
+  countMode,
   selectedId,
   onSelect,
   onUpdateGroup,
@@ -511,6 +589,7 @@ function GroupSection({
 }: {
   group: InventoryGroup;
   items: InventoryItem[];
+  countMode: CountMode;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onUpdateGroup: (id: string, patch: Partial<InventoryGroup>) => void;
@@ -530,8 +609,12 @@ function GroupSection({
           <span className="flex-1 truncate text-fg text-sm font-bold">
             {group.name}
           </span>
-          <span className="text-muted text-[10px] tracking-widest uppercase">
-            {items.length}
+          <span
+            className={`text-muted text-[10px] tabular-nums ${
+              countMode === "items" ? "tracking-widest uppercase" : ""
+            }`}
+          >
+            {countMode === "items" ? items.length : summarizeByUnit(items)}
           </span>
         </div>
         <button
