@@ -12,6 +12,7 @@ import {
   formatMonthYear,
   formatWeekdayMonthDay,
 } from "./date-utils";
+import { formatSignedChange } from "./money";
 import { EventEditPanel } from "./event-edit-panel";
 import { WeekView, type RescheduleEvent, type RescheduleTask } from "./week-view";
 import type { TaskWithGroup } from "./types";
@@ -21,6 +22,17 @@ type CalendarStatus = "connected" | "connect" | "error";
 type CalendarLink = {
   groupName: string;
   groupColor: string;
+};
+
+export type FinanceChange = {
+  id: string;
+  occurredAt: string;
+  title: string;
+  color: string;
+  direction: "in" | "out";
+  amount: number;
+  currency: string;
+  account: string;
 };
 
 type EventOverride = {
@@ -108,12 +120,14 @@ export function DashboardCalendar({
   month,
   tasks,
   events,
+  finance = [],
   status,
   calendarLinks = {},
 }: {
   month: string;
   tasks: TaskWithGroup[];
   events: CalendarEvent[];
+  finance?: FinanceChange[];
   status: CalendarStatus;
   calendarLinks?: Record<string, CalendarLink>;
 }) {
@@ -178,8 +192,23 @@ export function DashboardCalendar({
       map.set(key, items);
     }
 
+    for (const change of finance) {
+      const items = map.get(change.occurredAt) ?? [];
+      items.push({
+        kind: "finance",
+        id: change.id,
+        title: change.title,
+        color: change.color,
+        direction: change.direction,
+        amount: change.amount,
+        currency: change.currency,
+        category: change.account,
+      });
+      map.set(change.occurredAt, items);
+    }
+
     return map;
-  }, [calendarLinks, events, tasks, eventOverrides, taskOverrides]);
+  }, [calendarLinks, events, tasks, finance, eventOverrides, taskOverrides]);
 
   async function commitEventReschedule(
     eventItem: Extract<CalendarItem, { kind: "event" }>,
@@ -406,7 +435,13 @@ export function DashboardCalendar({
                       className="truncate px-1 py-0.5 text-[10px] text-accent-fg"
                       style={{ backgroundColor: item.color }}
                     >
-                      {item.title}
+                      {item.kind === "finance"
+                        ? formatSignedChange(
+                            item.amount,
+                            item.direction,
+                            item.currency,
+                          )
+                        : item.title}
                     </div>
                   ))}
                   {remaining > 0 && (
@@ -474,12 +509,14 @@ export function DashboardCalendar({
                       className="mt-1 text-[10px] uppercase tracking-widest"
                       style={{
                         color:
-                          item.kind === "task" ? item.color : "#6b6b6b",
+                          item.kind === "event" ? "#6b6b6b" : item.color,
                       }}
                     >
                       {item.kind === "task"
                         ? item.group
-                        : `${item.calendar} · ${formatEventRange(item)}`}
+                        : item.kind === "finance"
+                          ? `${item.category} · ${formatSignedChange(item.amount, item.direction, item.currency)}`
+                          : `${item.calendar} · ${formatEventRange(item)}`}
                     </p>
                   </button>
 

@@ -1,6 +1,6 @@
 # Codex handoff prompt
 
-> Current note: this file is historical from the original checkpoint handoff. For the up-to-date project context, shipped state, Google Calendar integration details, and agent rules, read `AGENTS.md` first. Do not treat the CP9 plan below as current ground truth; the calendar now lives on the dashboard (`/`) with month/week views.
+> Current note: this file is historical from the original checkpoint handoff. For the up-to-date project context, shipped state, Google Calendar integration details, and agent rules, read `AGENTS.md` first. Do not treat the CP9 plan below as current ground truth. The app has moved well beyond it: the calendar lives on the dashboard (`/`) with month/week views, and the app now also has a **finance** tracker (`/finance`), an **inventory** tracker (`/inventory`), and an at-a-glance dashboard **vitals** command center. The longer-term direction is an AI "second brain" — see `docs/second-brain-plan.md`. `AGENTS.md` is authoritative.
 
 Copy everything below the `===PROMPT START===` line and paste it into Codex as the first message of a new session. The repo is already checked out locally — Codex should read the actual files for ground truth, not trust this prompt for code-level detail.
 

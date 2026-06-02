@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import type {
   InventoryGroup,
   InventoryItem,
+  InventoryUsage,
 } from "@/app/_components/inventory-types";
 import { InventoryClient } from "./inventory-client";
 
@@ -18,7 +19,7 @@ export default async function InventoryPage() {
 
   if (!user) redirect("/login");
 
-  const [groupsResult, itemsResult] = await Promise.all([
+  const [groupsResult, itemsResult, usagesResult] = await Promise.all([
     supabase
       .from("inventory_groups")
       .select("id, name, color, created_at")
@@ -26,8 +27,12 @@ export default async function InventoryPage() {
     supabase
       .from("inventory_items")
       .select(
-        "id, name, quantity, unit, notes, image_url, inventory_group_id, created_at",
+        "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, created_at",
       )
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("inventory_usages")
+      .select("id, inventory_item_id, amount, period, interval_days, created_at")
       .order("created_at", { ascending: true }),
   ]);
 
@@ -49,6 +54,7 @@ export default async function InventoryPage() {
         userId={user.id}
         initialGroups={(groupsResult.data ?? []) as InventoryGroup[]}
         initialItems={(itemsResult.data ?? []) as InventoryItem[]}
+        initialUsages={(usagesResult.data ?? []) as InventoryUsage[]}
       />
     </main>
   );

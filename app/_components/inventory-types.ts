@@ -13,5 +13,15 @@ export type InventoryItem = {
   notes: string | null;
   image_url: string | null;
   inventory_group_id: string | null;
+  reorder_threshold: number | null;
+  created_at: string;
+};
+
+export type InventoryUsage = {
+  id: string;
+  inventory_item_id: string;
+  amount: number;
+  period: "day" | "week" | "custom";
+  interval_days: number | null;
   created_at: string;
 };

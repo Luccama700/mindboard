@@ -14,6 +14,7 @@ import {
 import { useRef, useState } from "react";
 import type { CalendarItem } from "./calendar-types";
 import { formatClockTime, formatHourLabel } from "./date-utils";
+import { formatSignedChange } from "./money";
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const START_HOUR = 6;
@@ -193,7 +194,23 @@ function TimedEventBlock({
   );
 }
 
+function FinanceChip({
+  item,
+}: {
+  item: Extract<CalendarItem, { kind: "finance" }>;
+}) {
+  return (
+    <div
+      className="truncate px-1.5 py-1 text-[10px] font-bold text-accent-fg"
+      style={{ backgroundColor: item.color }}
+    >
+      {formatSignedChange(item.amount, item.direction, item.currency)}
+    </div>
+  );
+}
+
 function DragPreview({ item }: { item: CalendarItem }) {
+  if (item.kind === "finance") return null;
   const color = item.color;
   if (item.kind === "task" || item.allDay) {
     return (
@@ -375,7 +392,10 @@ export function WeekView({
             {week.map((date) => {
               const key = toDateKey(date);
               const allDayItems = (itemsByDate.get(key) ?? []).filter(
-                (item) => item.kind === "task" || item.allDay,
+                (item) =>
+                  item.kind === "task" ||
+                  item.kind === "finance" ||
+                  item.allDay,
               );
 
               return (
@@ -391,6 +411,11 @@ export function WeekView({
                           key={`${item.kind}-${item.id}`}
                           item={item}
                           dateKey={key}
+                        />
+                      ) : item.kind === "finance" ? (
+                        <FinanceChip
+                          key={`${item.kind}-${item.id}`}
+                          item={item}
                         />
                       ) : (
                         <AllDayEventChip

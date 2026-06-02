@@ -4,8 +4,10 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 
 const ITEM_COLUMNS =
-  "id, name, quantity, unit, notes, inventory_group_id, created_at";
+  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, created_at";
 const GROUP_COLUMNS = "id, name, color, created_at";
+const USAGE_COLUMNS =
+  "id, inventory_item_id, amount, period, interval_days, created_at";
 
 function normalizeQuantity(value: number): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -146,6 +148,7 @@ export async function updateInventoryItem(input: {
   groupId?: string | null;
   notes?: string | null;
   imageUrl?: string | null;
+  reorderThreshold?: number | null;
 }) {
   const supabase = await createClient();
   const {
@@ -178,6 +181,15 @@ export async function updateInventoryItem(input: {
     }
     updates.image_url = input.imageUrl;
   }
+  if (input.reorderThreshold !== undefined) {
+    if (input.reorderThreshold === null) {
+      updates.reorder_threshold = null;
+    } else {
+      const t = normalizeQuantity(input.reorderThreshold);
+      if (t === null) return { error: "invalid threshold" };
+      updates.reorder_threshold = t;
+    }
+  }
 
   if (Object.keys(updates).length === 0) return { error: null };
 
@@ -201,6 +213,107 @@ export async function deleteInventoryItem(id: string) {
 
   const { error } = await supabase
     .from("inventory_items")
+    .delete()
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/inventory");
+  return { error: null };
+}
+
+const USAGE_PERIODS = new Set(["day", "week", "custom"]);
+
+function normalizeUsage(input: {
+  amount: number;
+  period: string;
+  intervalDays?: number | null;
+}): { amount: number; period: string; interval_days: number | null } | null {
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  if (!USAGE_PERIODS.has(input.period)) return null;
+
+  let interval_days: number | null = null;
+  if (input.period === "custom") {
+    const n = Number(input.intervalDays);
+    if (!Number.isInteger(n) || n < 1) return null;
+    interval_days = n;
+  }
+  return { amount, period: input.period, interval_days };
+}
+
+export async function createInventoryUsage(input: {
+  itemId: string;
+  amount: number;
+  period: string;
+  intervalDays?: number | null;
+}) {
+  const normalized = normalizeUsage(input);
+  if (!normalized) return { error: "invalid usage" };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { data, error } = await supabase
+    .from("inventory_usages")
+    .insert({
+      user_id: user.id,
+      inventory_item_id: input.itemId,
+      amount: normalized.amount,
+      period: normalized.period,
+      interval_days: normalized.interval_days,
+    })
+    .select(USAGE_COLUMNS)
+    .single();
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/inventory");
+  return { error: null, usage: data };
+}
+
+export async function updateInventoryUsage(input: {
+  id: string;
+  amount: number;
+  period: string;
+  intervalDays?: number | null;
+}) {
+  const normalized = normalizeUsage(input);
+  if (!normalized) return { error: "invalid usage" };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase
+    .from("inventory_usages")
+    .update({
+      amount: normalized.amount,
+      period: normalized.period,
+      interval_days: normalized.interval_days,
+    })
+    .eq("id", input.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/inventory");
+  return { error: null };
+}
+
+export async function deleteInventoryUsage(id: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase
+    .from("inventory_usages")
     .delete()
     .eq("id", id);
 

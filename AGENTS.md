@@ -6,7 +6,9 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # Mindboard Project Context
 
-Mindboard is a personal life dashboard for one primary user. It tracks tasks across groups of responsibility, shows what matters today, and embeds a Google Calendar view directly on the dashboard. The app is designed for fast capture on iPhone as an installed PWA, so the bottom task input staying quick, focused, and reachable is the most important UX constraint.
+Mindboard is a personal life dashboard for one primary user. It started as a task tracker (tasks across groups of responsibility, with what matters today and an embedded Google Calendar) and has grown into a broader life command center: it now also tracks **finance** (`/finance`) and **inventory** (`/inventory`), and the dashboard opens with an at-a-glance "vitals" strip that synthesizes every domain. The app is designed for fast capture on iPhone as an installed PWA, so the bottom task input staying quick, focused, and reachable is the most important UX constraint.
+
+The longer-term direction is to evolve Mindboard into an AI "second brain" / life command center — an in-app assistant with access to all this data, a notes/knowledge layer, and MCP interoperability. That plan and its phased roadmap live in `docs/second-brain-plan.md`; the groundwork (a typed agent tool layer) has begun. See the "AI Second-Brain Direction" section below.
 
 ## Current Stack
 
@@ -17,17 +19,21 @@ Mindboard is a personal life dashboard for one primary user. It tracks tasks acr
 - Deployed on Vercel from `main`.
 - No UI library and no state library. Use React built-ins and hand-rolled Tailwind.
 - `@dnd-kit/core` is the one allowed behavior dependency, used for drag-to-reschedule in the week view. Do not pull in `@dnd-kit/sortable` or `@dnd-kit/modifiers` unless a new feature actually needs them.
+- Tests run on Vitest (`npm run test`); pure logic (projections, snapshots, money/split math) is unit-tested under `__tests__/`.
+- `app/lib/` holds non-UI logic: `app/lib/data/*` (reusable, `cache()`-deduped, RLS-scoped reads), `app/lib/snapshots/*` (pure cross-domain rollups), and `app/lib/agent/registry.ts` (the agent tool-layer seam — see the AI Second-Brain Direction section).
 
 ## Product State
 
 Shipped routes:
 
-- `/` dashboard: today task sections on the left and embedded calendar on the right on desktop, full viewport width with a ~50/50 split; tasks first and calendar below on mobile.
+- `/` dashboard: an at-a-glance **vitals strip** (command center) across the top, then today task sections on the left and embedded calendar on the right on desktop (full viewport width, ~50/50 split); tasks first and calendar below on mobile.
 - `/login`: Google OAuth sign-in.
 - `/auth/callback`: exchanges Supabase OAuth code and persists Google provider tokens.
 - `/groups`: group list with inline create form, inbox card, and per-group edit panels for renaming, type, color, and Google Calendar link.
 - `/groups/[id]`: tasks for one group, plus upcoming events from the linked Google Calendar (if any).
 - `/inbox`: tasks with no group.
+- `/finance`: accounts + ledger + recurring expenses + income sources + spending categories on the left, a cashflow-forecast calendar on the right. See the Finance section.
+- `/inventory`: stock items grouped, with a per-item depletion-forecast calendar. See the Inventory section.
 
 PWA support is shipped:
 
@@ -91,9 +97,23 @@ Migrations live in `supabase/migrations`.
 
 - `groups.google_calendar_id` (TEXT, nullable): the Google Calendar id linked to this group, used to surface that calendar's events as virtual task rows.
 
+`0004_inventory.sql` creates `inventory_groups` and `inventory_items` (`id`, `user_id`, `inventory_group_id`, `name`, `quantity`, `unit`, `notes`, `created_at`).
+
+`0005_inventory_icons.sql` adds `inventory_items.image_url` and a public `inventory-icons` Supabase Storage bucket; writes are scoped to the user's own `{user_id}/...` folder.
+
+`0006_finance.sql` creates `spending_categories`, `accounts` (manual `balance`, `type`, `currency`, `archived`), and `balance_changes` (append-only ledger: `direction` in/out, `amount`, `balance_after`, `category_id`, `occurred_at`).
+
+`0007_finance_recurring.sql` creates `recurring_expenses` (flat recurring outflows) and `income_sources` (wage jobs linked to a Google calendar).
+
+`0008_recurring_intervals.sql` adds `daily` and `custom` frequencies plus `interval_days`/`start_date` to `recurring_expenses`.
+
+`0009_income_pay_schedule.sql` adds `pay_frequency` (weekly/biweekly/monthly) + `anchor_payday`/`period_start`/`period_end` to `income_sources`.
+
+`0010_inventory_usages.sql` creates `inventory_usages` (recurring consumption rules) and adds `inventory_items.reorder_threshold`.
+
 Every table has RLS enabled and user-scoped policies. Never disable RLS as a debugging shortcut.
 
-Do not add tables for subtasks, recurring tasks, tags, attachments, reminders, dependencies, or two-way sync unless the user explicitly changes the product scope.
+**Scope note.** Mindboard has grown well past the original task app, with the user's explicit approval. Finance and inventory are full features, and their recurring tables (`recurring_expenses`, `income_sources`, `inventory_usages`) are intentional — not violations of the rule below. The AI second-brain direction (see that section) further authorizes future tables for notes/wikilinks, goals, pgvector embeddings, and AI conversation/audit logs. Outside those approved expansions, still do not add tables for subtasks, tags, attachments, reminders, dependencies, or two-way sync unless the user reopens scope.
 
 ## Google Calendar Integration
 
@@ -194,7 +214,46 @@ Mutations live in:
 - `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group, notes), `deleteTask`.
 - `app/actions/groups.ts`: `createGroup`, `updateGroup` (name, type, color, Google Calendar link), `archiveGroup`.
 - `app/actions/calendar.ts`: `rescheduleEvent` (Google Calendar PATCH on `start`/`end`).
+- `app/actions/finance.ts`: category/account/recurring-expense/income-source CRUD, and `recordBalanceChange` (records a balance update as one or more ledger rows; see Finance).
+- `app/actions/inventory.ts`: inventory group/item/usage CRUD and quantity adjustments; `app/actions/inventory-icon.ts`: item icon upload/generation.
 - `app/actions/auth.ts`.
+
+## Finance
+
+`/finance` is a manual money tracker and cashflow forecast. No bank/Plaid sync.
+
+- `accounts` hold a manually-maintained `balance`. Every update is recorded as an append-only `balance_changes` row carrying the signed delta and resulting `balance_after`. A decrease is categorized spending; an increase is recorded silently as income.
+- A single decrease can be **split across multiple spending categories** ("where did it go?"). Each split becomes its own `'out'` row with a running `balance_after`; the amounts must sum to the decrease. So one balance update can produce multiple ledger rows — intentional, and it keeps every reader one-category-per-row. Even-split + per-row amount editing live in `BalanceUpdatePanel`; cent-accurate `splitEvenly`/`sumMoney` are in `app/_components/money.ts`. `recordBalanceChange` takes an optional `allocations[]`; amount edits/deletes of existing rows are out of scope (they'd break the `balance_after` chain).
+- `recurring_expenses` land `monthly` (day-of-month, clamped), `weekly` (weekday), `daily`, or `custom` (every `interval_days` from `start_date`). They are projection inputs only — they do not write ledger rows.
+- `income_sources` are wage jobs: a linked Google Calendar's timed events are treated as worked shifts; net pay = hours × `hourly_wage` × (1 − `tax_rate`/100). An optional pay schedule (weekly/biweekly/monthly + anchor payday + period) pays a lump on each payday; with no schedule, pay lands on the day worked.
+- The right-column finance calendar shows projected end-of-day **net worth** (sum of account balances): days ≤ today are recorded actuals, days > today forecast wage income − recurring expenses. Projection math is pure and unit-tested in `app/_components/finance-projection.ts`.
+
+Files: `app/finance/page.tsx`, `app/finance/finance-client.tsx`, `app/_components/finance-calendar.tsx`, `app/_components/finance-projection.ts`, `app/_components/finance-types.ts`, `app/_components/money.ts`, `app/actions/finance.ts`.
+
+## Inventory
+
+`/inventory` tracks stock with a per-item depletion forecast.
+
+- `inventory_items` (quantity, unit, notes, `image_url`, `reorder_threshold`) are grouped by `inventory_groups`. Inline −/＋ steppers adjust an item's count in place; item creation is via the explicit add form.
+- `inventory_usages` are recurring consumption rules (`day`/`week`/`custom`) spread to an effective daily rate (day = amount, week = amount/7, custom = amount/interval_days). All usages sum to one smooth declining projection — weekly usage does NOT land on a specific weekday.
+- Each item's detail panel shows an `InventoryCalendar` with projected remaining quantity per day, the run-out day, and the reorder-by day when `reorder_threshold` is set. Projection math is pure and unit-tested in `app/_components/inventory-projection.ts`.
+- Item icons are uploaded or generated and served from the public `inventory-icons` storage bucket (migration `0005`).
+
+Files: `app/inventory/page.tsx`, `app/inventory/inventory-client.tsx`, `app/_components/inventory-calendar.tsx`, `app/_components/inventory-projection.ts`, `app/_components/inventory-types.ts`, `app/_components/inventory-units.ts`, `app/_components/unit-picker.tsx`, `app/actions/inventory.ts`, `app/actions/inventory-icon.ts`.
+
+## Command Center (dashboard vitals)
+
+The dashboard (`/`) opens with a horizontally scrollable **vitals strip** that synthesizes every domain at a glance — net worth + today's delta, next bill, tasks due/overdue, next event + free hours today, inventory low/run-out. It is deterministic (no AI), anchored to *today* regardless of the calendar month, and composed from:
+
+- `app/lib/data/*` — reusable, `cache()`-deduped, RLS-scoped reads (finance, inventory). It reuses the dashboard's cached read for tasks/events, so the common current-month view adds no extra Supabase/Google round-trips.
+- `app/lib/snapshots/*` — pure, unit-tested rollups (`financeSnapshot`, `inventorySnapshot`, `tasksSnapshot`, `scheduleSnapshot`) that reuse the finance/inventory projections; the only net-new math is calendar free-gap computation.
+- `app/_components/vitals-strip.tsx` plus `getVitalsData`/`VitalsSection` in `app/page.tsx`, rendered in its own Suspense boundary above the today/calendar grid.
+
+## AI Second-Brain Direction
+
+Mindboard is being evolved into an AI "second brain" / life command center. The architectural spine is a single **agent tool layer** (`app/lib/agent/registry.ts`): a typed catalog of read/write tools intended to be exposed three ways without rewriting logic — an in-app assistant, a remote MCP server, and a proactive "what should I do next" planner. The registry is currently the catalog (the seam); live handlers, an `ai_audit_log`, and the confirmation step are wired in a later phase.
+
+Decided constraints: assistant writes are **propose → confirm** (never silent), and finance is read-safe by default. The AI stack (raw Anthropic SDK vs Vercel AI SDK vs Claude Agent SDK) is intentionally not yet chosen — Phase 0/1 (the read/tool layer + the vitals command center) are stack-agnostic. The full vision, phased roadmap, and decisions are in `docs/second-brain-plan.md`. This direction is what authorizes the future notes/goals/pgvector tables noted in the Data Model scope note.
 
 ## Important Files
 
@@ -209,7 +268,7 @@ Mutations live in:
 - `app/_components/dashboard-calendar.tsx`: embedded calendar shell + month grid + selected-day list with inline event edit.
 - `app/_components/week-view.tsx`: week grid with `@dnd-kit/core` drag-to-reschedule for tasks, all-day events, and timed events.
 - `app/_components/event-edit-panel.tsx`: inline form for editing an event's start/end date/time.
-- `app/_components/calendar-types.ts`: shared `CalendarItem` discriminated union for tasks vs. events in the calendar widget.
+- `app/_components/calendar-types.ts`: shared `CalendarItem` discriminated union for tasks, events, and finance changes in the calendar widget.
 - `app/_components/task-row.tsx`: shared task row with inline edit panel (title, date, group, Markdown notes, delete).
 - `app/_components/event-row.tsx`: read-only virtual row for events from a linked Google Calendar.
 - `app/_components/today-client.tsx`: dashboard task list, mixes tasks with virtual events from linked calendars.
@@ -217,6 +276,15 @@ Mutations live in:
 - `app/_components/types.ts`: shared task types.
 - `app/_components/date-utils.ts`: date helpers.
 - `app/groups/groups-client.tsx`: group list, create form, per-group edit panel, color picker, calendar linker.
+- `app/finance/finance-client.tsx`: finance UI — accounts, ledger, recurring expenses, income sources, categories, and the balance-update panel with multi-category split.
+- `app/_components/finance-projection.ts`: pure, unit-tested net-worth/cashflow projection.
+- `app/_components/money.ts`: money formatting + `splitEvenly`/`sumMoney`.
+- `app/inventory/inventory-client.tsx`: inventory UI — grouped items, steppers, item detail with depletion calendar.
+- `app/_components/inventory-projection.ts`: pure, unit-tested depletion forecast.
+- `app/_components/vitals-strip.tsx`: the dashboard command-center vitals strip.
+- `app/lib/data/*`, `app/lib/snapshots/*`: reusable reads and pure cross-domain rollups feeding the vitals strip.
+- `app/lib/agent/registry.ts`: the agent tool-layer seam (see AI Second-Brain Direction).
+- `docs/second-brain-plan.md`: the second-brain vision, roadmap, and decisions.
 
 ## Engineering Rules
 

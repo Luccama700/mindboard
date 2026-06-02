@@ -1,0 +1,183 @@
+import { describe, expect, test } from "vitest";
+import {
+  buildDayRows,
+  computeIncomeByDate,
+  expensesOnDate,
+  incomeDetailForDay,
+  ruleLandsOn,
+  type IncomeSourceRate,
+  type RecurringRule,
+} from "@/app/_components/finance-projection";
+
+function rule(partial: Partial<RecurringRule>): RecurringRule {
+  return {
+    frequency: "monthly",
+    day_of_month: null,
+    weekday: null,
+    interval_days: null,
+    start_date: null,
+    amount: 0,
+    ...partial,
+  };
+}
+
+describe("recurring rule landing", () => {
+  test("monthly lands on its day-of-month", () => {
+    const r = rule({ frequency: "monthly", day_of_month: 15, amount: 50 });
+    expect(ruleLandsOn(r, new Date(2026, 5, 15))).toBe(true);
+    expect(ruleLandsOn(r, new Date(2026, 5, 14))).toBe(false);
+  });
+
+  test("monthly day-of-month clamps to short months", () => {
+    const r = rule({ frequency: "monthly", day_of_month: 31, amount: 50 });
+    // February 2026 has 28 days, so the 31st lands on the 28th.
+    expect(ruleLandsOn(r, new Date(2026, 1, 28))).toBe(true);
+    expect(ruleLandsOn(r, new Date(2026, 1, 27))).toBe(false);
+    // March has 31 days.
+    expect(ruleLandsOn(r, new Date(2026, 2, 31))).toBe(true);
+  });
+
+  test("weekly lands on its weekday", () => {
+    const r = rule({ frequency: "weekly", weekday: 1, amount: 20 }); // Monday
+    expect(ruleLandsOn(r, new Date(2026, 4, 25))).toBe(true); // Mon 2026-05-25
+    expect(ruleLandsOn(r, new Date(2026, 4, 26))).toBe(false);
+  });
+
+  test("daily lands on every day", () => {
+    const r = rule({ frequency: "daily", amount: 5 });
+    expect(ruleLandsOn(r, new Date(2026, 4, 25))).toBe(true);
+    expect(ruleLandsOn(r, new Date(2026, 11, 31))).toBe(true);
+  });
+
+  test("custom lands every N days from the start date", () => {
+    const r = rule({
+      frequency: "custom",
+      interval_days: 14,
+      start_date: "2026-05-01",
+      amount: 80,
+    });
+    expect(ruleLandsOn(r, new Date(2026, 4, 1))).toBe(true); // start
+    expect(ruleLandsOn(r, new Date(2026, 4, 15))).toBe(true); // +14
+    expect(ruleLandsOn(r, new Date(2026, 4, 29))).toBe(true); // +28
+    expect(ruleLandsOn(r, new Date(2026, 4, 8))).toBe(false); // +7
+    expect(ruleLandsOn(r, new Date(2026, 3, 17))).toBe(false); // before start
+  });
+
+  test("sums multiple expenses landing on the same day", () => {
+    const rules = [
+      rule({ frequency: "monthly", day_of_month: 1, amount: 1000 }),
+      rule({ frequency: "weekly", weekday: 5, amount: 60 }), // Friday
+    ];
+    // 2026-05-01 is a Friday, so both land.
+    expect(expensesOnDate(rules, "2026-05-01")).toBe(1060);
+  });
+});
+
+describe("wage income", () => {
+  function source(partial: Partial<IncomeSourceRate> & { id: string }): IncomeSourceRate {
+    return {
+      hourly_wage: 0,
+      tax_rate: 0,
+      pay_frequency: null,
+      anchor_payday: null,
+      period_start: null,
+      period_end: null,
+      ...partial,
+    };
+  }
+
+  test("unscheduled sources pay on the day worked, netting wage and tax", () => {
+    const sources = [
+      source({ id: "job", hourly_wage: 20, tax_rate: 25 }), // 8 * 20 * 0.75 = 120
+      source({ id: "side", hourly_wage: 50, tax_rate: 0 }), // 2 * 50 = 100
+    ];
+    const hours = {
+      job: { "2026-05-26": 8 },
+      side: { "2026-05-26": 2 },
+    };
+    const income = computeIncomeByDate(sources, hours, {
+      start: "2026-05-01",
+      end: "2026-05-31",
+    });
+    expect(income["2026-05-26"]).toBeCloseTo(220, 5);
+  });
+
+  test("biweekly pay lands a lump on payday for the covered period", () => {
+    // BestBuy: paid June 5 for the May 17–30 shift period, then every 14 days.
+    const bestBuy = source({
+      id: "bestbuy",
+      hourly_wage: 20,
+      tax_rate: 0,
+      pay_frequency: "biweekly",
+      anchor_payday: "2026-06-05",
+      period_start: "2026-05-17",
+      period_end: "2026-05-30",
+    });
+    const hours = {
+      bestbuy: {
+        "2026-05-20": 8,
+        "2026-05-28": 8, // both inside May 17–30 -> paid on June 5
+        "2026-06-02": 6, // inside next period (May 31–Jun 13) -> paid June 19
+      },
+    };
+    const income = computeIncomeByDate([bestBuy], hours, {
+      start: "2026-06-01",
+      end: "2026-06-30",
+    });
+
+    expect(income["2026-06-05"]).toBeCloseTo(320, 5); // 16h * 20
+    expect(income["2026-06-19"]).toBeCloseTo(120, 5); // 6h * 20
+    // no income on the worked days themselves
+    expect(income["2026-05-20"]).toBeUndefined();
+
+    const detail = incomeDetailForDay([bestBuy], hours, "2026-06-05");
+    expect(detail).toHaveLength(1);
+    expect(detail[0].periodStart).toBe("2026-05-17");
+    expect(detail[0].periodEnd).toBe("2026-05-30");
+    expect(detail[0].hours).toBe(16);
+  });
+});
+
+describe("running total projection", () => {
+  const gridDays = ["2026-05-24", "2026-05-25", "2026-05-26", "2026-05-27", "2026-05-28"];
+
+  test("anchors at today's net worth and forecasts forward", () => {
+    const rows = buildDayRows({
+      gridDays,
+      month: "2026-05",
+      today: "2026-05-26",
+      netWorthToday: 1000,
+      changes: [],
+      expenses: [rule({ frequency: "monthly", day_of_month: 27, amount: 200 })],
+      incomeByDate: { "2026-05-28": 300 },
+    });
+    const byDay = Object.fromEntries(rows.map((r) => [r.dateKey, r]));
+
+    expect(byDay["2026-05-26"].runningTotal).toBe(1000); // today = anchor
+    // 27th: -200 expense -> 800
+    expect(byDay["2026-05-27"].runningTotal).toBe(800);
+    expect(byDay["2026-05-27"].outflow).toBe(200);
+    // 28th: +300 income -> 1100
+    expect(byDay["2026-05-28"].runningTotal).toBe(1100);
+    expect(byDay["2026-05-28"].inflow).toBe(300);
+  });
+
+  test("reconstructs past balances from recorded changes", () => {
+    const rows = buildDayRows({
+      gridDays,
+      month: "2026-05",
+      today: "2026-05-26",
+      netWorthToday: 1000,
+      // a 120 deduction was recorded on the 25th; before it the balance was 1120.
+      changes: [{ occurred_at: "2026-05-25", direction: "out", amount: 120 }],
+      expenses: [],
+      incomeByDate: {},
+    });
+    const byDay = Object.fromEntries(rows.map((r) => [r.dateKey, r]));
+
+    expect(byDay["2026-05-26"].runningTotal).toBe(1000);
+    expect(byDay["2026-05-25"].runningTotal).toBe(1000); // end of the 25th, after the deduction
+    expect(byDay["2026-05-25"].outflow).toBe(120);
+    expect(byDay["2026-05-24"].runningTotal).toBe(1120); // before the deduction
+  });
+});

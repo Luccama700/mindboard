@@ -1,0 +1,220 @@
+import { redirect } from "next/navigation";
+import Link from "next/link";
+import { createClient } from "@/utils/supabase/server";
+import {
+  GoogleCalendarConnectionError,
+  listCalendars,
+  listEventsForCalendar,
+  type CalendarListEntry,
+} from "@/utils/google/calendar";
+import type {
+  Account,
+  BalanceChange,
+  IncomeSource,
+  RecurringExpense,
+  SpendingCategory,
+} from "@/app/_components/finance-types";
+import { FinanceClient } from "./finance-client";
+
+type GoogleStatus = "connected" | "connect" | "error";
+
+function toDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function currentMonth() {
+  const today = new Date();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  return `${today.getFullYear()}-${month}`;
+}
+
+function normalizeMonth(value: string | string[] | undefined) {
+  const month = Array.isArray(value) ? value[0] : value;
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return currentMonth();
+  const [year, monthNumber] = month.split("-").map(Number);
+  if (monthNumber < 1 || monthNumber > 12) return currentMonth();
+  if (year < 1970 || year > 2100) return currentMonth();
+  return month;
+}
+
+// Range covering the visible 42-cell grid, extended back to today so the
+// forward forecast between today and a future month stays anchored.
+function eventRange(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const first = new Date(year, monthNumber - 1, 1);
+  const gridStart = new Date(first);
+  gridStart.setDate(first.getDate() - first.getDay());
+  const gridEnd = new Date(gridStart);
+  gridEnd.setDate(gridStart.getDate() + 42);
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const start = new Date(gridStart < todayStart ? gridStart : todayStart);
+  // Pay periods precede their payday, so reach back far enough to cover the
+  // shifts a payday near the window's start is paying for (up to ~monthly + lag).
+  start.setDate(start.getDate() - 62);
+
+  return { timeMin: start.toISOString(), timeMax: gridEnd.toISOString() };
+}
+
+// Sum timed-event durations (in hours) per local day. All-day events have no
+// duration and are ignored.
+function hoursByDay(
+  events: { start: string; end: string; allDay: boolean }[],
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const event of events) {
+    if (event.allDay) continue;
+    const start = new Date(event.start);
+    const end = new Date(event.end);
+    const hours = (end.getTime() - start.getTime()) / 3_600_000;
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    const key = toDateKey(start);
+    out[key] = (out[key] ?? 0) + hours;
+  }
+  return out;
+}
+
+export default async function FinancePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ fm?: string | string[] | undefined }>;
+}) {
+  const query = await searchParams;
+  const financeMonth = normalizeMonth(query.fm);
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) redirect("/login");
+
+  const [
+    accountsResult,
+    categoriesResult,
+    changesResult,
+    expensesResult,
+    incomeResult,
+  ] = await Promise.all([
+    supabase
+      .from("accounts")
+      .select(
+        "id, name, type, color, balance, currency, archived, created_at, updated_at",
+      )
+      .eq("archived", false)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("spending_categories")
+      .select("id, name, color, archived, created_at")
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("balance_changes")
+      .select(
+        "id, account_id, category_id, direction, amount, balance_after, note, occurred_at, created_at",
+      )
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(300),
+    supabase
+      .from("recurring_expenses")
+      .select(
+        "id, name, amount, category_id, frequency, day_of_month, weekday, interval_days, start_date, archived, created_at",
+      )
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("income_sources")
+      .select(
+        "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, archived, created_at",
+      )
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+  ]);
+
+  const incomeSources = (incomeResult.data ?? []) as IncomeSource[];
+
+  // Worked hours per income source for the visible window, read from each
+  // source's linked Google Calendar. Income = hours * wage * (1 - tax%).
+  const { timeMin, timeMax } = eventRange(financeMonth);
+  const sourcesWithCalendar = incomeSources.filter((s) => s.calendar_id);
+
+  function statusFor(error: unknown): GoogleStatus {
+    return error instanceof GoogleCalendarConnectionError ? "connect" : "error";
+  }
+
+  const [calendarsResult, hoursResults] = await Promise.all([
+    listCalendars(user.id)
+      .then((cals) => ({ calendars: cals, status: "connected" as GoogleStatus }))
+      .catch((error) => ({
+        calendars: [] as CalendarListEntry[],
+        status: statusFor(error),
+      })),
+    Promise.all(
+      sourcesWithCalendar.map((source) =>
+        listEventsForCalendar(user.id, source.calendar_id as string, {
+          timeMin,
+          timeMax,
+        })
+          .then((events) => ({
+            sourceId: source.id,
+            hours: hoursByDay(events),
+            status: "connected" as GoogleStatus,
+          }))
+          .catch((error) => ({
+            sourceId: source.id,
+            hours: {} as Record<string, number>,
+            status: statusFor(error),
+          })),
+      ),
+    ),
+  ]);
+
+  const calendars = calendarsResult.calendars;
+  const hoursBySource: Record<string, Record<string, number>> = {};
+  for (const result of hoursResults) {
+    hoursBySource[result.sourceId] = result.hours;
+  }
+
+  const statuses: GoogleStatus[] = [
+    calendarsResult.status,
+    ...hoursResults.map((r) => r.status),
+  ];
+  const googleStatus: GoogleStatus = statuses.includes("connect")
+    ? "connect"
+    : statuses.includes("error")
+      ? "error"
+      : "connected";
+
+  return (
+    <main className="min-h-screen px-5 pt-8 pb-32 lg:px-12">
+      <header className="flex items-center justify-between mb-10">
+        <Link
+          href="/"
+          className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
+        >
+          ← mindboard
+        </Link>
+        <h1 className="text-xs tracking-widest uppercase text-muted">
+          finance
+        </h1>
+      </header>
+
+      <FinanceClient
+        initialAccounts={(accountsResult.data ?? []) as Account[]}
+        initialCategories={(categoriesResult.data ?? []) as SpendingCategory[]}
+        initialChanges={(changesResult.data ?? []) as BalanceChange[]}
+        initialExpenses={(expensesResult.data ?? []) as RecurringExpense[]}
+        initialIncomeSources={incomeSources}
+        calendars={calendars}
+        financeMonth={financeMonth}
+        hoursBySource={hoursBySource}
+        googleStatus={googleStatus}
+      />
+    </main>
+  );
+}

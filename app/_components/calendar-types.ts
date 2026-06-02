@@ -20,4 +20,14 @@ export type CalendarItem =
       writable: boolean;
       startTimeZone: string | null;
       endTimeZone: string | null;
+    }
+  | {
+      kind: "finance";
+      id: string;
+      title: string;
+      color: string;
+      direction: "in" | "out";
+      amount: number;
+      currency: string;
+      category: string;
     };

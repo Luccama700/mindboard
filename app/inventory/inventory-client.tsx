@@ -19,16 +19,22 @@ import {
 import {
   createInventoryGroup,
   createInventoryItem,
+  createInventoryUsage,
   deleteInventoryGroup,
   deleteInventoryItem,
+  deleteInventoryUsage,
   updateInventoryGroup,
   updateInventoryItem,
+  updateInventoryUsage,
 } from "@/app/actions/inventory";
 import { generateItemIcon } from "@/app/actions/inventory-icon";
 import type {
   InventoryGroup,
   InventoryItem,
+  InventoryUsage,
 } from "@/app/_components/inventory-types";
+import { InventoryCalendar } from "@/app/_components/inventory-calendar";
+import type { UsagePeriod } from "@/app/_components/inventory-projection";
 import { createClient } from "@/utils/supabase/client";
 
 type GroupAction =
@@ -39,6 +45,12 @@ type ItemAction =
   | { kind: "add"; item: InventoryItem }
   | { kind: "replace"; tempId: string; item: InventoryItem }
   | { kind: "update"; id: string; patch: Partial<InventoryItem> }
+  | { kind: "remove"; id: string };
+
+type UsageAction =
+  | { kind: "add"; usage: InventoryUsage }
+  | { kind: "replace"; tempId: string; usage: InventoryUsage }
+  | { kind: "update"; id: string; patch: Partial<InventoryUsage> }
   | { kind: "remove"; id: string };
 
 const ICON_BUCKET = "inventory-icons";
@@ -138,10 +150,12 @@ export function InventoryClient({
   userId,
   initialGroups,
   initialItems,
+  initialUsages,
 }: {
   userId: string;
   initialGroups: InventoryGroup[];
   initialItems: InventoryItem[];
+  initialUsages: InventoryUsage[];
 }) {
   const [groups, dispatchGroups] = useOptimistic<
     InventoryGroup[],
@@ -173,6 +187,26 @@ export function InventoryClient({
           );
         case "remove":
           return state.filter((it) => it.id !== action.id);
+      }
+    },
+  );
+
+  const [usages, dispatchUsages] = useOptimistic<InventoryUsage[], UsageAction>(
+    initialUsages,
+    (state, action) => {
+      switch (action.kind) {
+        case "add":
+          return [...state, action.usage];
+        case "replace":
+          return state.map((u) =>
+            u.id === action.tempId ? action.usage : u,
+          );
+        case "update":
+          return state.map((u) =>
+            u.id === action.id ? { ...u, ...action.patch } : u,
+          );
+        case "remove":
+          return state.filter((u) => u.id !== action.id);
       }
     },
   );
@@ -257,6 +291,7 @@ export function InventoryClient({
       notes: null,
       image_url: null,
       inventory_group_id: input.groupId,
+      reorder_threshold: null,
       created_at: new Date().toISOString(),
     };
     setAdding(false);
@@ -277,6 +312,17 @@ export function InventoryClient({
     });
   }
 
+  function onAdjustQuantity(id: string, delta: number) {
+    const current = items.find((it) => it.id === id);
+    if (!current) return;
+    const next = Math.max(
+      0,
+      Math.round((Number(current.quantity) + delta) * 1000) / 1000,
+    );
+    if (next === Number(current.quantity)) return;
+    onUpdateItem(id, { quantity: next });
+  }
+
   function onUpdateItem(id: string, patch: Partial<InventoryItem>) {
     startTransition(async () => {
       dispatchItems({ kind: "update", id, patch });
@@ -288,7 +334,70 @@ export function InventoryClient({
         notes: patch.notes,
         groupId: patch.inventory_group_id,
         imageUrl: patch.image_url,
+        reorderThreshold: patch.reorder_threshold,
       });
+    });
+  }
+
+  function onCreateUsage(
+    itemId: string,
+    input: { amount: number; period: UsagePeriod; intervalDays: number | null },
+  ) {
+    if (itemId.startsWith("temp-")) return;
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const optimistic: InventoryUsage = {
+      id: tempId,
+      inventory_item_id: itemId,
+      amount: input.amount,
+      period: input.period,
+      interval_days: input.intervalDays,
+      created_at: new Date().toISOString(),
+    };
+    startTransition(async () => {
+      dispatchUsages({ kind: "add", usage: optimistic });
+      const result = await createInventoryUsage({
+        itemId,
+        amount: input.amount,
+        period: input.period,
+        intervalDays: input.intervalDays,
+      });
+      if (!result.error && result.usage) {
+        dispatchUsages({
+          kind: "replace",
+          tempId,
+          usage: result.usage as InventoryUsage,
+        });
+      }
+    });
+  }
+
+  function onUpdateUsage(
+    id: string,
+    input: { amount: number; period: UsagePeriod; intervalDays: number | null },
+  ) {
+    startTransition(async () => {
+      dispatchUsages({
+        kind: "update",
+        id,
+        patch: {
+          amount: input.amount,
+          period: input.period,
+          interval_days: input.intervalDays,
+        },
+      });
+      await updateInventoryUsage({
+        id,
+        amount: input.amount,
+        period: input.period,
+        intervalDays: input.intervalDays,
+      });
+    });
+  }
+
+  function onDeleteUsage(id: string) {
+    startTransition(async () => {
+      dispatchUsages({ kind: "remove", id });
+      await deleteInventoryUsage(id);
     });
   }
 
@@ -421,6 +530,7 @@ export function InventoryClient({
                 }
                 selected={it.id === selectedId}
                 onSelect={onSelect}
+                onAdjust={onAdjustQuantity}
               />
             ))}
           </div>
@@ -436,6 +546,7 @@ export function InventoryClient({
                 onSelect={onSelect}
                 onUpdateGroup={onUpdateGroup}
                 onDeleteGroup={onDeleteGroup}
+                onAdjust={onAdjustQuantity}
               />
             ))}
 
@@ -466,6 +577,7 @@ export function InventoryClient({
                       item={it}
                       selected={it.id === selectedId}
                       onSelect={onSelect}
+                      onAdjust={onAdjustQuantity}
                     />
                   ))}
                 </ul>
@@ -491,8 +603,14 @@ export function InventoryClient({
             item={selectedItem}
             groups={groups}
             recentUnits={recentUnits}
+            usages={usages.filter(
+              (u) => u.inventory_item_id === selectedItem.id,
+            )}
             onUpdate={onUpdateItem}
             onDelete={onDeleteItem}
+            onCreateUsage={onCreateUsage}
+            onUpdateUsage={onUpdateUsage}
+            onDeleteUsage={onDeleteUsage}
           />
         ) : (
           <p className="border border-line text-muted text-sm px-4 py-16 text-center">
@@ -586,6 +704,7 @@ function GroupSection({
   onSelect,
   onUpdateGroup,
   onDeleteGroup,
+  onAdjust,
 }: {
   group: InventoryGroup;
   items: InventoryItem[];
@@ -594,6 +713,7 @@ function GroupSection({
   onSelect: (id: string) => void;
   onUpdateGroup: (id: string, patch: Partial<InventoryGroup>) => void;
   onDeleteGroup: (id: string) => void;
+  onAdjust: (id: string, delta: number) => void;
 }) {
   const [editOpen, setEditOpen] = useState(false);
 
@@ -645,6 +765,7 @@ function GroupSection({
               item={it}
               selected={it.id === selectedId}
               onSelect={onSelect}
+              onAdjust={onAdjust}
             />
           ))}
         </ul>
@@ -718,18 +839,22 @@ function ItemRow({
   item,
   selected,
   onSelect,
+  onAdjust,
 }: {
   item: InventoryItem;
   selected: boolean;
   onSelect: (id: string) => void;
+  onAdjust: (id: string, delta: number) => void;
 }) {
   return (
-    <li>
+    <li
+      className={`flex items-stretch border-x border-b border-line transition-colors ${
+        selected ? "bg-card-hover" : ""
+      }`}
+    >
       <button
         onClick={() => onSelect(item.id)}
-        className={`w-full text-left flex items-center gap-3 px-3 min-h-11 py-2 border-x border-b border-line transition-colors ${
-          selected ? "bg-card-hover" : "hover:bg-card-hover"
-        }`}
+        className="flex-1 min-w-0 text-left flex items-center gap-3 px-3 min-h-11 py-2 hover:bg-card-hover transition-colors"
       >
         {item.image_url ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -747,11 +872,29 @@ function ItemRow({
         <span className="flex-1 min-w-0 truncate text-fg text-sm">
           {item.name}
         </span>
-        <span className="text-muted text-xs tabular-nums whitespace-nowrap">
+      </button>
+      <div className="flex items-stretch flex-shrink-0 border-l border-line">
+        <button
+          type="button"
+          onClick={() => onAdjust(item.id, -1)}
+          aria-label={`decrease ${item.name}`}
+          className="w-11 flex items-center justify-center text-muted text-lg leading-none hover:text-fg hover:bg-card-hover transition-colors"
+        >
+          −
+        </button>
+        <span className="flex w-16 items-center justify-center text-fg text-xs tabular-nums text-center px-1">
           {formatQty(item.quantity)}
           {item.unit ? ` ${item.unit}` : ""}
         </span>
-      </button>
+        <button
+          type="button"
+          onClick={() => onAdjust(item.id, 1)}
+          aria-label={`increase ${item.name}`}
+          className="w-11 flex items-center justify-center border-l border-line text-muted text-lg leading-none hover:text-fg hover:bg-card-hover transition-colors"
+        >
+          +
+        </button>
+      </div>
     </li>
   );
 }
@@ -761,19 +904,17 @@ function ItemTile({
   color,
   selected,
   onSelect,
+  onAdjust,
 }: {
   item: InventoryItem;
   color: string | null;
   selected: boolean;
   onSelect: (id: string) => void;
+  onAdjust: (id: string, delta: number) => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(item.id)}
-      title={item.name}
-      aria-pressed={selected}
-      className={`relative flex aspect-square flex-col overflow-hidden border bg-card text-left transition-colors ${
+    <div
+      className={`relative flex aspect-square flex-col overflow-hidden border bg-card transition-colors ${
         selected ? "border-accent ring-1 ring-accent" : "border-line hover:border-fg"
       }`}
       style={color ? { backgroundColor: hexToRgba(color, 0.1) } : undefined}
@@ -783,28 +924,54 @@ function ItemTile({
         style={{ backgroundColor: color ?? "var(--border-subtle)" }}
         aria-hidden
       />
-      <span className="relative min-h-0 flex-1">
-        {item.image_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={item.image_url}
-            alt=""
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        ) : (
-          <span className="absolute inset-0 flex items-center justify-center text-2xl font-bold text-muted">
-            {item.name.slice(0, 1).toUpperCase()}
+      <button
+        type="button"
+        onClick={() => onSelect(item.id)}
+        title={item.name}
+        aria-pressed={selected}
+        className="flex min-h-0 flex-1 flex-col text-left"
+      >
+        <span className="relative min-h-0 flex-1">
+          {item.image_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={item.image_url}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : (
+            <span className="absolute inset-0 flex items-center justify-center text-2xl font-bold text-muted">
+              {item.name.slice(0, 1).toUpperCase()}
+            </span>
+          )}
+          <span className="absolute bottom-1 right-1 border border-line bg-page/85 px-1 py-0.5 text-[10px] leading-none text-fg tabular-nums">
+            {formatQty(item.quantity)}
+            {item.unit ? ` ${item.unit}` : ""}
           </span>
-        )}
-        <span className="absolute bottom-1 right-1 border border-line bg-page/85 px-1 py-0.5 text-[10px] leading-none text-fg tabular-nums">
-          {formatQty(item.quantity)}
-          {item.unit ? ` ${item.unit}` : ""}
         </span>
-      </span>
-      <span className="truncate border-t border-line px-1.5 py-1 text-[10px] text-fg">
-        {item.name}
-      </span>
-    </button>
+        <span className="truncate border-t border-line px-1.5 py-1 text-[10px] text-fg">
+          {item.name}
+        </span>
+      </button>
+      <div className="flex items-stretch border-t border-line text-fg">
+        <button
+          type="button"
+          onClick={() => onAdjust(item.id, -1)}
+          aria-label={`decrease ${item.name}`}
+          className="flex-1 min-h-9 flex items-center justify-center border-r border-line text-base leading-none hover:bg-card-hover transition-colors"
+        >
+          −
+        </button>
+        <button
+          type="button"
+          onClick={() => onAdjust(item.id, 1)}
+          aria-label={`increase ${item.name}`}
+          className="flex-1 min-h-9 flex items-center justify-center text-base leading-none hover:bg-card-hover transition-colors"
+        >
+          +
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1004,15 +1171,29 @@ function ItemDetail({
   item,
   groups,
   recentUnits,
+  usages,
   onUpdate,
   onDelete,
+  onCreateUsage,
+  onUpdateUsage,
+  onDeleteUsage,
 }: {
   userId: string;
   item: InventoryItem;
   groups: InventoryGroup[];
   recentUnits: string[];
+  usages: InventoryUsage[];
   onUpdate: (id: string, patch: Partial<InventoryItem>) => void;
   onDelete: (id: string) => void;
+  onCreateUsage: (
+    itemId: string,
+    input: { amount: number; period: UsagePeriod; intervalDays: number | null },
+  ) => void;
+  onUpdateUsage: (
+    id: string,
+    input: { amount: number; period: UsagePeriod; intervalDays: number | null },
+  ) => void;
+  onDeleteUsage: (id: string) => void;
 }) {
   const [nameDraft, setNameDraft] = useState(item.name);
   const [notesDraft, setNotesDraft] = useState(item.notes ?? "");
@@ -1229,6 +1410,19 @@ function ItemDetail({
           maxLength={5000}
           rows={4}
           className="w-full resize-y bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
+        />
+      </div>
+
+      <div className="border-t border-line pt-5">
+        <InventoryCalendar
+          item={item}
+          usages={usages}
+          onCreateUsage={(input) => onCreateUsage(item.id, input)}
+          onUpdateUsage={onUpdateUsage}
+          onDeleteUsage={onDeleteUsage}
+          onUpdateThreshold={(value) =>
+            onUpdate(item.id, { reorder_threshold: value })
+          }
         />
       </div>
 

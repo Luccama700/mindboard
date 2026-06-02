@@ -6,14 +6,28 @@ import {
   listEvents,
   type CalendarEvent,
 } from "@/utils/google/calendar";
-import { DashboardCalendar } from "./_components/dashboard-calendar";
+import {
+  DashboardCalendar,
+  type FinanceChange,
+} from "./_components/dashboard-calendar";
 import { GetStartedScreen } from "./_components/get-started-screen";
 import { SettingsPanel } from "./_components/settings-panel";
 import { WelcomeTour } from "./_components/welcome-tour";
 import { signOut } from "./actions/auth";
 import { TodayClient } from "./_components/today-client";
-import { formatLongWeekdayMonthDay } from "./_components/date-utils";
+import { formatLongWeekdayMonthDay, todayISO } from "./_components/date-utils";
 import type { TaskWithGroup } from "./_components/types";
+import {
+  getAccounts,
+  getActiveRecurringExpenses,
+  getBalanceChangesOn,
+} from "./lib/data/finance";
+import { getInventoryItems, getInventoryUsages } from "./lib/data/inventory";
+import { financeSnapshot } from "./lib/snapshots/finance";
+import { inventorySnapshot } from "./lib/snapshots/inventory";
+import { tasksSnapshot } from "./lib/snapshots/tasks";
+import { scheduleSnapshot } from "./lib/snapshots/schedule";
+import { VitalsStrip } from "./_components/vitals-strip";
 
 type RawTask = {
   id: string;
@@ -32,6 +46,41 @@ type CalendarLink = {
   groupName: string;
   groupColor: string;
 };
+
+type RelRecord<T> = T | T[] | null;
+
+type RawChange = {
+  id: string;
+  direction: "in" | "out";
+  amount: number;
+  occurred_at: string;
+  accounts: RelRecord<{ name: string; color: string; currency: string }>;
+  spending_categories: RelRecord<{ name: string; color: string }>;
+};
+
+function firstRel<T>(rel: RelRecord<T>): T | null {
+  return Array.isArray(rel) ? (rel[0] ?? null) : (rel ?? null);
+}
+
+function mapFinance(rows: RawChange[]): FinanceChange[] {
+  return rows.map((row) => {
+    const account = firstRel(row.accounts);
+    const category = firstRel(row.spending_categories);
+    const isOut = row.direction === "out";
+    return {
+      id: row.id,
+      occurredAt: row.occurred_at,
+      title: isOut ? (category?.name ?? "uncategorized") : "income",
+      color: isOut
+        ? (category?.color ?? account?.color ?? "#6b6b6b")
+        : (account?.color ?? "#b5ff3c"),
+      direction: row.direction,
+      amount: Number(row.amount),
+      currency: account?.currency ?? "USD",
+      account: account?.name ?? "account",
+    };
+  });
+}
 
 type EventsBundle = {
   events: CalendarEvent[];
@@ -115,21 +164,29 @@ const getDashboardData = cache(async (userId: string, month: string) => {
         error instanceof GoogleCalendarConnectionError ? "connect" : "error",
     }));
 
-  const [tasksResponse, groupsResponse, eventsResult] = await Promise.all([
-    supabase
-      .from("tasks")
-      .select(
-        "id, title, due_date, status, priority, notes, group_id, created_at, completed_at, groups(name, color)",
-      )
-      .neq("status", "done")
-      .not("due_date", "is", null),
-    supabase
-      .from("groups")
-      .select("id, name, color, google_calendar_id")
-      .eq("archived", false)
-      .order("created_at", { ascending: false }),
-    eventsPromise,
-  ]);
+  const [tasksResponse, groupsResponse, changesResponse, eventsResult] =
+    await Promise.all([
+      supabase
+        .from("tasks")
+        .select(
+          "id, title, due_date, status, priority, notes, group_id, created_at, completed_at, groups(name, color)",
+        )
+        .neq("status", "done")
+        .not("due_date", "is", null),
+      supabase
+        .from("groups")
+        .select("id, name, color, google_calendar_id")
+        .eq("archived", false)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("balance_changes")
+        .select(
+          "id, direction, amount, occurred_at, accounts(name, color, currency), spending_categories(name, color)",
+        )
+        .gte("occurred_at", startDate)
+        .lt("occurred_at", endDate),
+      eventsPromise,
+    ]);
 
   const tasks = mapTasks((tasksResponse.data ?? []) as RawTask[]);
   const groupsRaw = (groupsResponse.data ?? []) as {
@@ -159,15 +216,77 @@ const getDashboardData = cache(async (userId: string, month: string) => {
       task.due_date && task.due_date >= startDate && task.due_date < endDate,
   );
 
+  const finance = mapFinance((changesResponse.data ?? []) as RawChange[]);
+
   return {
     tasks,
     groups,
     calendarLinks,
     calendarTasks,
+    finance,
     events: eventsResult.events,
     calendarStatus: eventsResult.status,
   };
 });
+
+// The vitals strip is anchored to *today*, independent of which month the
+// calendar is showing. It reuses the cached dashboard read for tasks/events
+// (so no extra Supabase or Google round-trips on the common current-month view)
+// and adds the reads the dashboard doesn't already make: accounts, recurring
+// expenses, inventory, and today's balance changes.
+const getVitalsData = cache(async (userId: string, month: string) => {
+  const today = todayISO();
+  const [dash, accounts, recurringExpenses, items, usages, todayChanges] =
+    await Promise.all([
+      getDashboardData(userId, month),
+      getAccounts(userId),
+      getActiveRecurringExpenses(userId),
+      getInventoryItems(userId),
+      getInventoryUsages(userId),
+      getBalanceChangesOn(userId, today),
+    ]);
+
+  return {
+    finance: financeSnapshot({ accounts, todayChanges, recurringExpenses, today }),
+    tasks: tasksSnapshot(dash.tasks, today),
+    schedule: scheduleSnapshot({ events: dash.events, now: new Date() }),
+    inventory: inventorySnapshot({ items, usages, today }),
+  };
+});
+
+async function VitalsSection({
+  userId,
+  month,
+}: {
+  userId: string;
+  month: string;
+}) {
+  const { finance, tasks, schedule, inventory } = await getVitalsData(
+    userId,
+    month,
+  );
+  return (
+    <VitalsStrip
+      finance={finance}
+      tasks={tasks}
+      schedule={schedule}
+      inventory={inventory}
+    />
+  );
+}
+
+function VitalsSkeleton() {
+  return (
+    <div className="flex gap-2 overflow-x-auto pb-1 animate-pulse" aria-hidden>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div
+          key={i}
+          className="flex-shrink-0 w-36 h-[4.75rem] border border-line bg-card"
+        />
+      ))}
+    </div>
+  );
+}
 
 async function TodaySection({
   userId,
@@ -197,7 +316,7 @@ async function CalendarSection({
   userId: string;
   month: string;
 }) {
-  const { calendarTasks, events, calendarStatus, calendarLinks } =
+  const { calendarTasks, events, finance, calendarStatus, calendarLinks } =
     await getDashboardData(userId, month);
   return (
     <DashboardCalendar
@@ -205,6 +324,7 @@ async function CalendarSection({
       month={month}
       tasks={calendarTasks}
       events={events}
+      finance={finance}
       status={calendarStatus}
       calendarLinks={calendarLinks}
     />
@@ -262,6 +382,11 @@ export default async function Home({
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-56 lg:px-12">
+      <div className="mb-8">
+        <Suspense fallback={<VitalsSkeleton />}>
+          <VitalsSection userId={user.id} month={calendarMonth} />
+        </Suspense>
+      </div>
       <div className="grid gap-8 lg:grid-cols-2 lg:gap-24 lg:items-start">
         <section className="min-w-0">
           <header className="flex items-start justify-between mb-8">
@@ -276,6 +401,12 @@ export default async function Home({
             <div className="flex flex-col items-end gap-3 pt-1">
               <div className="flex items-center gap-2">
                 <SettingsPanel />
+                <Link
+                  href="/finance"
+                  className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors"
+                >
+                  finance →
+                </Link>
                 <Link
                   href="/inventory"
                   className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors"
