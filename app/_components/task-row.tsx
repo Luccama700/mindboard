@@ -15,6 +15,7 @@ type UpdatePatch = {
   dueDate?: string | null;
   groupId?: string | null;
   notes?: string | null;
+  priority?: "low" | "med" | "high";
 };
 
 export function TaskRow({
@@ -105,6 +106,15 @@ export function TaskRow({
                   : "text-fg"
             }`}
           >
+            {!isDone && task.priority !== "med" && (
+              <span
+                className={`mr-1.5 text-sm font-bold ${
+                  task.priority === "high" ? "text-danger" : "text-muted"
+                }`}
+              >
+                {task.priority === "high" ? "!!!" : "!"}
+              </span>
+            )}
             {task.title}
           </p>
           {showSubtitle && !isDone && (
@@ -268,6 +278,30 @@ function EditPanel({
             ×
           </button>
         )}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <label className="text-[10px] tracking-widest uppercase text-muted">
+          priority
+        </label>
+        {(["low", "med", "high"] as const).map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => onUpdate(task.id, { priority: p })}
+            className={`text-[10px] tracking-widest uppercase px-2.5 py-1.5 border transition-colors ${
+              task.priority === p
+                ? p === "high"
+                  ? "bg-danger text-white border-danger"
+                  : "bg-accent text-accent-fg border-accent"
+                : p === "high"
+                  ? "border-line-strong text-danger hover:border-danger"
+                  : "border-line-strong text-muted hover:border-fg hover:text-fg"
+            }`}
+          >
+            {p === "low" ? "!" : p === "med" ? "!!" : "!!!"}
+          </button>
+        ))}
       </div>
 
       <div className="flex items-center gap-2">

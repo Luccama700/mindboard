@@ -25,6 +25,7 @@ export function TaskCaptureBar({
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(
     groupId,
   );
+  const [priority, setPriority] = useState<"low" | "med" | "high">("med");
   const [groupOpen, setGroupOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -88,7 +89,7 @@ export function TaskCaptureBar({
       title: t,
       due_date: dueDate,
       status: "todo",
-      priority: "med",
+      priority,
       notes: markdownNotes,
       group_id: selectedGroupId,
       created_at: new Date().toISOString(),
@@ -96,12 +97,14 @@ export function TaskCaptureBar({
     };
 
     onOptimisticAdd(optimisticTask);
+    setPriority("med");
 
     const result = await createTask({
       title: t,
       groupId: selectedGroupId,
       dueDate,
       notes: markdownNotes,
+      priority,
     });
 
     if (!result.error && result.task) {
@@ -249,6 +252,25 @@ export function TaskCaptureBar({
             }`}
           >
             {hasNotes ? "✓ notes" : "+ notes"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              setPriority((p) =>
+                p === "med" ? "high" : p === "high" ? "low" : "med",
+              )
+            }
+            aria-label={`priority: ${priority}`}
+            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors font-bold ${
+              priority === "high"
+                ? "border-danger text-danger hover:bg-danger hover:text-white"
+                : priority === "low"
+                  ? "border-line-strong text-muted hover:border-fg hover:text-fg"
+                  : "border-line-strong text-muted hover:border-fg hover:text-fg"
+            }`}
+          >
+            {priority === "high" ? "!!!" : priority === "low" ? "!" : "!!"}
           </button>
         </div>
 

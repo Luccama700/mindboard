@@ -8,6 +8,7 @@ export async function createTask(input: {
   groupId: string | null;
   dueDate: string | null;
   notes?: string | null;
+  priority?: "low" | "med" | "high";
 }) {
   const title = input.title?.trim();
   if (!title) return { error: "title required" };
@@ -27,6 +28,7 @@ export async function createTask(input: {
       title,
       due_date: input.dueDate,
       notes,
+      ...(input.priority ? { priority: input.priority } : {}),
     })
     .select("id, title, due_date, status, priority, notes, group_id, created_at, completed_at")
     .single();
@@ -64,6 +66,7 @@ export async function updateTask(input: {
   dueDate?: string | null;
   groupId?: string | null;
   notes?: string | null;
+  priority?: "low" | "med" | "high";
 }) {
   const supabase = await createClient();
   const {
@@ -81,6 +84,7 @@ export async function updateTask(input: {
   if (input.dueDate !== undefined) updates.due_date = input.dueDate;
   if (input.groupId !== undefined) updates.group_id = input.groupId;
   if (input.notes !== undefined) updates.notes = input.notes?.trim() || null;
+  if (input.priority !== undefined) updates.priority = input.priority;
 
   if (Object.keys(updates).length === 0) return { error: null };
 

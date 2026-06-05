@@ -28,6 +28,7 @@ type UpdatePatch = {
   dueDate?: string | null;
   groupId?: string | null;
   notes?: string | null;
+  priority?: "low" | "med" | "high";
 };
 
 type OptimisticAction =
@@ -55,6 +56,7 @@ function applyPatch(
   if (patch.title !== undefined) next = { ...next, title: patch.title };
   if (patch.dueDate !== undefined) next = { ...next, due_date: patch.dueDate };
   if (patch.notes !== undefined) next = { ...next, notes: patch.notes };
+  if (patch.priority !== undefined) next = { ...next, priority: patch.priority };
   if (patch.groupId !== undefined) {
     const group = patch.groupId
       ? (groups.find((g) => g.id === patch.groupId) ?? null)

@@ -15,6 +15,7 @@ type UpdatePatch = {
   dueDate?: string | null;
   groupId?: string | null;
   notes?: string | null;
+  priority?: "low" | "med" | "high";
 };
 
 type OptimisticAction =
@@ -30,6 +31,7 @@ function applyPatch(task: Task, patch: UpdatePatch): Task {
   if (patch.dueDate !== undefined) next = { ...next, due_date: patch.dueDate };
   if (patch.groupId !== undefined) next = { ...next, group_id: patch.groupId };
   if (patch.notes !== undefined) next = { ...next, notes: patch.notes };
+  if (patch.priority !== undefined) next = { ...next, priority: patch.priority };
   return next;
 }
 
