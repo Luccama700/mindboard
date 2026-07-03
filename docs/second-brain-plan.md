@@ -103,3 +103,81 @@ to the decrease). Helpers `splitEvenly`/`sumMoney` in `app/_components/money.ts`
 - Optional cleanup (not done, to keep changes narrow): the duplicated `toDateKey` /
   `normalizeMonth` / `currentMonth` helpers across `app/page.tsx` and `app/finance/page.tsx`
   could move into `app/_components/date-utils.ts`.
+
+---
+
+## Strategic redirection (2026-07-02) — merge with the 2ndBrain vault
+
+Recorded per `docs/MINDBOARD_KICKOFF.md`. Mindboard has merged, conceptually, with
+**2ndBrain**, an Obsidian vault maintained by Claude in Cowork. The vault owns identity,
+knowledge, goals, and narrative; Mindboard owns operations (tasks, calendar, money,
+inventory). Claude clients span both. Consequences for the phased roadmap above:
+
+- **Phase 3 (notes / wikilinks / pgvector in Postgres): CANCELLED.** The vault is the
+  knowledge layer; a second Postgres knowledge store would split the brain.
+- **Phase 2 (in-app chat assistant): DEPRIORITIZED indefinitely.** Claude-in-Cowork with
+  vault + Supabase-MCP access already is the assistant with full data access.
+- **Phase 4 (morning brief): moves out of this repo.** A Cowork scheduled task will consume
+  the MCP tools.
+- **Phase 5 (MCP server): PROMOTED to the next milestone** (Milestone 1) — the repo's real
+  mission: make Mindboard's data reachable by every Claude surface via a remote MCP server
+  built on the Phase 0 tool registry, preserving write-with-confirmation + audit log.
+
+Net: Phase 3 cancelled; Phase 2 deprioritized; Phase 4 relocated to Cowork; Phase 5 promoted
+(next). Phases 0 & 1 remain done.
+
+---
+
+## Implementation log — Milestone 0 (2026-07-02): bring it back to life
+
+Session goal: app runs locally and in production again; fix only what rot broke. Plan mode
+first, additive only, lint/test/build gated.
+
+**Shipped (local, additive):**
+- Fixed one env-name rot bug: `.env.local` defined `GOOGLE_SECRET_KEY`, but
+  `utils/google/calendar.ts` reads `process.env.GOOGLE_CLIENT_SECRET` (matching the README).
+  Renamed the key in the local, gitignored file (value unchanged). Google Calendar token
+  refresh was silently broken until this.
+
+**Verified green:** `npm install` clean; `npm run lint` clean; `npm run test` 76 pass;
+`npm run build` succeeds. Dev server boots; `/`, `/login`, `/finance`, `/inventory`,
+`/groups`, `/inbox` all return HTTP 200 with no server errors; `proxy.ts` Supabase middleware
+runs.
+
+**Database (via reconnected Supabase MCP, project `kdsunzpcjfzkidejtnyp`):**
+- Migrations required by the committed code (0001–0010 equivalents) are all applied.
+- **Data survived the pause:** 19 tasks, 8 groups, 3 accounts, 15 balance_changes,
+  17 inventory_items, 2 google_tokens, 1 user_settings, 2 auth users.
+
+**Finding — orphaned schema (repo↔DB divergence).** The live DB holds six migrations dated
+2026-06-12 that exist in **no** git branch/history/reflog, in **no** working-tree code, and
+**nowhere** on disk (checked git `-S`, Spotlight, the 2ndBrain vault, and prior agent-session
+logs):
+- `0011_user_settings` — timezone, wake window, hashed iOS-Shortcuts capture token.
+- `0012_goals`, `0013_daily_logs` — Phase 4 intent + capacity layers.
+- `0014_ai_assistant` — `ai_conversations`, `ai_messages`, `ai_audit_log` (Phase 2
+  propose→confirm design).
+- `0015_assistant_api_key` — `user_settings.anthropic_api_key`.
+- `0016_mcp_server` — `user_settings.mcp_token_hash` + `ai_audit_log.source` in
+  {`assistant`,`mcp`} (Phase 5 groundwork).
+
+Repo's last commit is 2026-06-05; there are no commits 2026-06-08…06-16. Conclusion: on
+2026-06-12 a session applied these migrations directly via the Supabase MCP `apply_migration`
+tool, ahead of the roadmap, and the application code was never written / committed /
+persisted. This is **orphaned schema, not lost code.** The SQL is clean and RLS-scoped and is
+a usable foundation for Milestone 1 — its `mcp_token_hash` + audit-log `source` design already
+matches the MCP milestone's intent.
+
+**Decision (owner, this session):** document-only. Leave the orphaned schema in place,
+untouched; do not back-fill migration files and do not drop tables in Milestone 0. Reconcile
+deliberately at the start of Milestone 1.
+
+**Owner-gated, not done this session** (browser/interactive, can't be automated):
+- Smoke test locally: Google OAuth login → create a task → calendar renders → `/finance`
+  loads → vitals strip shows (confirm the 19 tasks / balances appear).
+- Production: confirm `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` on Vercel, redeploy if the
+  last deploy is stale, verify prod end-to-end, confirm the iOS PWA still opens and captures.
+
+**Next:** Milestone 1 — the MCP server (Phase 5). First step: decide back-fill-vs-adopt of the
+orphaned 0011/0014/0016 schema so the server builds on existing tables rather than inventing
+new ones.
