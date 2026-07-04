@@ -102,6 +102,30 @@ After changing scopes, sign out and sign back in. Google provider tokens are cap
 
 No Google API key is used.
 
+## MCP Server (remote)
+
+Mindboard exposes its data to external Claude clients (claude.ai web, mobile, Cowork) as a remote [Model Context Protocol](https://modelcontextprotocol.io) server, built on the Phase 0 tool registry. Reads are safe; writes go through an explicit propose → confirm step, and every executed write is recorded in `ai_audit_log`.
+
+- Endpoint: `POST /api/mcp/mcp` — App Router route at `app/api/mcp/[transport]/route.ts`, via Vercel's `mcp-handler` (stateless streamable HTTP, no Redis).
+- Auth: one static bearer token (`MCP_BEARER_TOKEN`), checked in the route wrapper with a constant-time compare and never logged. HTTPS only.
+- Data access: a service-role Supabase client (`SUPABASE_SERVICE_ROLE_KEY`) scoped to the owner (`MINDBOARD_OWNER_USER_ID`). The service role bypasses RLS, so every query filters by that user id explicitly.
+
+Additional server env vars:
+
+```bash
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_secret   # Dashboard > Settings > API
+MCP_BEARER_TOKEN=a_long_random_secret
+MINDBOARD_OWNER_USER_ID=your_supabase_auth_user_id
+```
+
+Tools:
+
+- Reads: `finance_snapshot`, `tasks_snapshot`, `inventory_snapshot`, `list_tasks`, `list_groups`, `list_accounts`, `list_categories`, `list_recent_ledger`.
+- Writes (propose): `create_task`, `complete_task`, `log_spend` — each returns a preview + `proposalId` and writes nothing on its own.
+- `confirm_action` executes a proposal (applies the write and flips its audit row to `executed`); `cancel_action` discards it.
+
+Test locally with the MCP inspector (`npx @modelcontextprotocol/inspector`). In production, add it to claude.ai as a custom connector (Settings → Connectors → Add custom connector) pointing at `https://<your-domain>/api/mcp/mcp` with the bearer token.
+
 ## Project Structure
 
 ```text

@@ -181,3 +181,53 @@ deliberately at the start of Milestone 1.
 **Next:** Milestone 1 — the MCP server (Phase 5). First step: decide back-fill-vs-adopt of the
 orphaned 0011/0014/0016 schema so the server builds on existing tables rather than inventing
 new ones.
+
+---
+
+## Implementation log — Milestone 1 (2026-07-02): the MCP server (Phase 5)
+
+Built Mindboard's remote MCP server on the Phase 0 tool registry, per the kickoff. Additive —
+no existing behavior changed. Deps: `mcp-handler` 1.1.0, `@modelcontextprotocol/sdk` 1.26.0,
+`zod` 3.25 (SDK ≥1.26.0 for the known-vuln fix).
+
+**Orphaned schema — back-filled (owner decision this session).** The six 2026-06-12 migrations
+were written to `supabase/migrations/0011_user_settings.sql … 0016_mcp_server.sql` verbatim from
+the live DB, so the repo now reproduces production. No DB change (already applied). The server
+adopts the existing `ai_audit_log` (+ its `source` column) rather than creating a new table.
+
+**Server (all new, additive):**
+- `app/api/mcp/[transport]/route.ts` — `createMcpHandler` (basePath `/api/mcp`, stateless
+  streamable HTTP, SSE disabled → no Redis) wrapped with a static bearer-token check
+  (`MCP_BEARER_TOKEN`, constant-time compare, never logged). Endpoint: `POST /api/mcp/mcp`.
+- Session-less data path: `utils/supabase/service.ts` (service-role client) + `app/lib/mcp/config.ts`
+  (`MINDBOARD_OWNER_USER_ID`). Service role bypasses RLS, so every query filters by the owner id
+  explicitly — the invariant that replaces RLS here.
+- Reads (`app/lib/mcp/reads.ts`): reuse the pure snapshots (`financeSnapshot`/`tasksSnapshot`/
+  `inventorySnapshot`) untouched; add list tools (tasks/groups/accounts/categories/recent ledger)
+  so a client has valid ids for writes.
+- Writes (`app/lib/mcp/writes.ts` + `validate.ts` + `audit.ts`): propose → confirm. A propose tool
+  records a `proposed` `ai_audit_log` row (`source='mcp'`) and returns `{ proposalId, preview }`;
+  `confirm_action` re-executes from the stored input scoped to the owner and flips the row to
+  `executed` (guarded so a double-confirm can't re-run a write). Mirrors `createTask` /
+  `toggleTaskStatus` / `recordBalanceChange` semantics session-lessly. Pure validators are unit-tested.
+- 13 tools: 8 reads, `create_task` / `complete_task` / `log_spend`, `confirm_action`, `cancel_action`.
+
+**Verified:** `npm run lint` clean; `npm run test` 90 pass (+14 in `__tests__/mcp-validate.test.ts`);
+`npm run build` succeeds (route `/api/mcp/[transport]` present). Protocol smoke test via the SDK
+client against `npm run dev`: unauthenticated POST → 401; authenticated `tools/list` → all 13 tools;
+a read tool without the service key returns a clean guarded tool-error, not a crash.
+
+**Owner-gated (not automatable this session):**
+- Add `SUPABASE_SERVICE_ROLE_KEY` to `.env.local` + Vercel. `MINDBOARD_OWNER_USER_ID`
+  (`8fd62772-a371-4d26-8a93-678b88c2b879`) and a generated `MCP_BEARER_TOKEN` were added to
+  `.env.local`; set both in Vercel too.
+- Deploy; add `https://<domain>/api/mcp/mcp` on claude.ai as a custom connector with the bearer
+  token; run create_task → confirm and confirm an `ai_audit_log` row lands (the kickoff's done-criteria).
+  Verify claude.ai accepts a static bearer; OAuth is the documented fallback if not (kickoff anticipated this).
+
+**Deferred / notes:** the schedule/Google read tool (session-less Google token refresh). "Today"
+uses server time (UTC on Vercel), consistent with the rest of the app; `user_settings.timezone`
+is not yet consulted. Finance stays read-safe by default — `log_spend` only ever proposes.
+
+**Next (out of this repo):** Cowork swaps raw Supabase reads for the connector and schedules the
+morning brief.
