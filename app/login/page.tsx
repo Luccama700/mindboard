@@ -11,10 +11,17 @@ export default function LoginPage() {
   async function signInWithGoogle() {
     setLoading(true);
     const supabase = createClient();
+    // Preserve a relative ?next= (e.g. the MCP OAuth /authorize URL) across login.
+    const rawNext = new URLSearchParams(window.location.search).get("next");
+    const safeNext =
+      rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : null;
+    const callback = safeNext
+      ? `${window.location.origin}/auth/callback?next=${encodeURIComponent(safeNext)}`
+      : `${window.location.origin}/auth/callback`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: callback,
         scopes: CALENDAR_SCOPES,
         queryParams: {
           access_type: "offline",

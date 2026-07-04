@@ -107,7 +107,7 @@ No Google API key is used.
 Mindboard exposes its data to external Claude clients (claude.ai web, mobile, Cowork) as a remote [Model Context Protocol](https://modelcontextprotocol.io) server, built on the Phase 0 tool registry. Reads are safe; writes go through an explicit propose → confirm step, and every executed write is recorded in `ai_audit_log`.
 
 - Endpoint: `POST /api/mcp/mcp` — App Router route at `app/api/mcp/[transport]/route.ts`, via Vercel's `mcp-handler` (stateless streamable HTTP, no Redis).
-- Auth: one static bearer token (`MCP_BEARER_TOKEN`), checked in the route wrapper with a constant-time compare and never logged. HTTPS only.
+- Auth: **OAuth 2.1** for claude.ai — discovery (`/.well-known/oauth-protected-resource` + `/.well-known/oauth-authorization-server`), dynamic client registration, authorization-code + PKCE. The `/authorize` step reuses the app's Google/Supabase login so only the owner can approve; all OAuth artifacts are stateless HMAC-signed tokens (`MCP_OAUTH_SECRET`), no DB tables. A static `MCP_BEARER_TOKEN` is also accepted for other clients (MCP inspector, curl, Claude Desktop). HTTPS only; tokens never logged.
 - Data access: a service-role Supabase client (`SUPABASE_SERVICE_ROLE_KEY`) scoped to the owner (`MINDBOARD_OWNER_USER_ID`). The service role bypasses RLS, so every query filters by that user id explicitly.
 
 Additional server env vars:
@@ -116,6 +116,7 @@ Additional server env vars:
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_secret   # Dashboard > Settings > API
 MCP_BEARER_TOKEN=a_long_random_secret
 MINDBOARD_OWNER_USER_ID=your_supabase_auth_user_id
+MCP_OAUTH_SECRET=a_long_random_secret   # signs the stateless OAuth tokens
 ```
 
 Tools:
@@ -124,7 +125,7 @@ Tools:
 - Writes (propose): `create_task`, `complete_task`, `log_spend` — each returns a preview + `proposalId` and writes nothing on its own.
 - `confirm_action` executes a proposal (applies the write and flips its audit row to `executed`); `cancel_action` discards it.
 
-Test locally with the MCP inspector (`npx @modelcontextprotocol/inspector`). In production, add it to claude.ai as a custom connector (Settings → Connectors → Add custom connector) pointing at `https://<your-domain>/api/mcp/mcp` with the bearer token.
+In production, add it to claude.ai as a custom connector (Settings → Connectors → Add custom connector) pointing at `https://<your-domain>/api/mcp/mcp` — claude.ai runs the OAuth flow and you approve once via Google login. Test locally with the MCP inspector (`npx @modelcontextprotocol/inspector`) using either OAuth or the static bearer token.
 
 ## Project Structure
 

@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
-import { createMcpHandler } from "mcp-handler";
+import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { z } from "zod";
+import { verifyAccessToken } from "@/app/lib/mcp/oauth";
 import {
   getFinanceSnapshot,
   getInventorySnapshot,
@@ -226,17 +227,11 @@ const mcpHandler = createMcpHandler(
   { basePath: "/api/mcp", maxDuration: 60, disableSse: true, verboseLogs: false },
 );
 
-// ---------- bearer-token auth wrapper ----------
-
-function unauthorized(): Response {
-  return new Response(JSON.stringify({ error: "unauthorized" }), {
-    status: 401,
-    headers: {
-      "content-type": "application/json",
-      "www-authenticate": 'Bearer realm="mindboard-mcp"',
-    },
-  });
-}
+// ---------- auth: OAuth access token OR static bearer ----------
+// claude.ai authenticates via OAuth (see app/api/mcp/oauth/* + the well-known
+// metadata). Other clients (MCP inspector, curl, Claude Desktop) can still use
+// the static MCP_BEARER_TOKEN. withMcpAuth returns 401 + a WWW-Authenticate that
+// points at the protected-resource metadata, which kicks off the OAuth flow.
 
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -245,20 +240,27 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-function withBearerAuth(
-  handler: (req: Request) => Promise<Response>,
-): (req: Request) => Promise<Response> {
-  return async (req: Request) => {
-    const expected = process.env.MCP_BEARER_TOKEN;
-    if (!expected) return unauthorized();
-    const header = req.headers.get("authorization") ?? "";
-    const prefix = "Bearer ";
-    if (!header.startsWith(prefix)) return unauthorized();
-    if (!safeEqual(header.slice(prefix.length), expected)) return unauthorized();
-    return handler(req);
-  };
+function verifyToken(_req: Request, bearer?: string) {
+  if (!bearer) return undefined;
+
+  const staticToken = process.env.MCP_BEARER_TOKEN;
+  if (staticToken && safeEqual(bearer, staticToken)) {
+    return { token: bearer, clientId: "static", scopes: ["mcp"] };
+  }
+
+  const parsed = verifyAccessToken(bearer);
+  if (parsed) {
+    return {
+      token: bearer,
+      clientId: parsed.clientId,
+      scopes: ["mcp"],
+      extra: { ownerId: parsed.ownerId },
+    };
+  }
+
+  return undefined;
 }
 
-const handler = withBearerAuth(mcpHandler);
+const handler = withMcpAuth(mcpHandler, verifyToken, { required: true });
 
 export { handler as GET, handler as POST };

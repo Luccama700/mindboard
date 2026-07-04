@@ -231,3 +231,47 @@ is not yet consulted. Finance stays read-safe by default — `log_spend` only ev
 
 **Next (out of this repo):** Cowork swaps raw Supabase reads for the connector and schedules the
 morning brief.
+
+---
+
+## Implementation log — Milestone 1b (2026-07-03): OAuth for the MCP server
+
+Milestone 1 shipped + deployed with static-bearer auth and was read-verified in prod
+(net worth, tasks, inventory over a real MCP client). But **claude.ai custom connectors require
+OAuth 2.1**, not a static header — so the server became a minimal OAuth 2.1 authorization server.
+Additive; the 13 tools are unchanged.
+
+**Approach — self-hosted, stateless, no new dependency.** Every OAuth artifact (client_id, auth
+code, access + refresh tokens) is an HMAC-SHA256-signed token (`app/lib/mcp/oauth.ts`, keyed by
+`MCP_OAUTH_SECRET`) that embeds its own state — so there are **no OAuth DB tables** and it's
+serverless-safe. Fixed-alg verification (no header-alg trust) avoids alg-confusion; per-token
+`typ` prevents cross-use. TTLs: code 60s, access 1h, refresh 30d. Trade-off: no pre-expiry
+revocation list (acceptable single-user).
+
+**Owner decisions this session:** the `/authorize` gate **reuses the app's Google/Supabase login**
+(only the owner id can approve; unauthenticated → bounce through `/login?next=…` and back). The
+static `MCP_BEARER_TOKEN` is **kept** as an alternate auth for the inspector / curl / Claude Desktop.
+
+**New endpoints (native Next route handlers — the SDK's OAuth code is Express-only):**
+- `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-authorization-server`
+  (CORS-open discovery; origin derived via `mcp-handler`'s `getPublicOrigin`).
+- `POST /api/mcp/oauth/register` (DCR, RFC 7591) → stateless `client_id` embedding redirect_uris.
+- `GET /api/mcp/oauth/authorize` → validates client + PKCE, owner-session gate, issues an auth code.
+- `POST /api/mcp/oauth/token` → `authorization_code` (PKCE S256 verified) + `refresh_token` grants.
+- `app/api/mcp/[transport]/route.ts` now wraps the handler in `mcp-handler`'s `withMcpAuth`;
+  `verifyToken` accepts an OAuth access token **or** the static bearer, and the 401 carries the
+  `WWW-Authenticate` resource_metadata pointer that kicks off discovery.
+- `app/login/page.tsx` now threads a relative `next` through Google login (guarded against open
+  redirect); `app/auth/callback/route.ts` already honored `next`.
+
+**Verified:** lint clean; `npm run test` 105 pass (+15 in `__tests__/mcp-oauth.test.ts` — PKCE,
+token round-trip/tamper/expiry, redirect allow-list, metadata); `npm run build` succeeds (all six
+new routes registered, incl. the `.well-known/*` dot-folders). Scripted end-to-end against
+`npm run dev`: discovery → DCR → `token` (valid PKCE → 200 access+refresh; bad PKCE → 400) →
+MCP call with the OAuth access token → 13 tools + real data; static bearer still works; unauth →
+401 with the resource_metadata `WWW-Authenticate`.
+
+**Owner-gated:** add `MCP_OAUTH_SECRET` to Vercel (copy from `.env.local`) and redeploy; then add
+`https://<domain>/api/mcp/mcp` on claude.ai as a custom connector → approve via Google login →
+run reads + a `create_task → confirm` round-trip. (The browser `/authorize` login-gate is the only
+piece not scriptable locally.)
