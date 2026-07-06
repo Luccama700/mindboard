@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/utils/supabase/server";
 import {
@@ -70,14 +71,15 @@ export const getVaultSettings = cache(
   },
 );
 
-type VaultCredentials = { repo: string; branch: string; token: string };
+export type VaultCredentials = { repo: string; branch: string; token: string };
 
-// Internal read: the only place the token leaves the database. RLS-scoped,
-// never returned to the client and never logged.
-async function getVaultCredentials(
+// The only read path for the token: RLS-scoped on the session client (/brain),
+// explicitly user-filtered on the service client (MCP capture_to_brain). The
+// token is never returned to the client and never logged.
+export async function readVaultCredentials(
+  supabase: SupabaseClient,
   userId: string,
 ): Promise<VaultCredentials | null> {
-  const supabase = await createClient();
   const { data } = await supabase
     .from("vault_settings")
     .select("repo, branch, github_token")
@@ -89,6 +91,12 @@ async function getVaultCredentials(
     branch: data.branch as string,
     token: data.github_token as string,
   };
+}
+
+async function getVaultCredentials(
+  userId: string,
+): Promise<VaultCredentials | null> {
+  return readVaultCredentials(await createClient(), userId);
 }
 
 export function githubHeaders(token: string): Record<string, string> {

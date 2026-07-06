@@ -16,6 +16,7 @@ import { inventorySnapshot } from "@/app/lib/snapshots/inventory";
 import { tasksSnapshot } from "@/app/lib/snapshots/tasks";
 import { freeGaps, scheduleSnapshot } from "@/app/lib/snapshots/schedule";
 import { recordProposal } from "@/app/lib/mcp/audit";
+import { captureToBrainFor } from "@/app/lib/mcp/brain";
 import {
   summarizeCreateTask,
   summarizeLogSpend,
@@ -110,6 +111,29 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
         note: { type: "string" },
       },
       required: ["accountId", "amount"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "capture_to_brain",
+    description:
+      "Save a distilled summary of the current conversation into the user's second brain for later review and filing. Write a summary, not a transcript: what was discussed, decisions made, new facts about the user's life worth keeping, and open questions. Plain markdown; [[wikilinks]] to vault notes welcome when confident. Mark any AI-concluded (not user-stated) claim with (inferred). Executes immediately (no confirm): it only creates a new file in the vault's staging Inbox/, reviewed before becoming vault knowledge, and cannot touch Mindboard data.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", maxLength: 80 },
+        summary_markdown: { type: "string", maxLength: 20000 },
+        source: {
+          type: "string",
+          description: 'Where this came from, e.g. "Mindboard assistant, 2026-07-06".',
+        },
+        topics: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional reviewer hints for filing.",
+        },
+      },
+      required: ["title", "summary_markdown", "source"],
       additionalProperties: false,
     },
   },
@@ -429,6 +453,11 @@ export async function runAssistantTool(
         const outcome = await proposeUpsertGoal(supabase, userId, conversationId, input);
         if (!outcome.ok) return { type: "error", error: outcome.error };
         return { type: "proposal", ...outcome.value };
+      }
+      case "capture_to_brain": {
+        const outcome = await captureToBrainFor(supabase, userId, input);
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "result", content: outcome.value };
       }
       default:
         return { type: "error", error: `unknown tool ${name}` };

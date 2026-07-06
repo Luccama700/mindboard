@@ -19,6 +19,8 @@ import {
   proposeCreateTask,
   proposeLogSpend,
 } from "@/app/lib/mcp/writes";
+import { captureToBrain } from "@/app/lib/mcp/brain";
+import { CAPTURE_SUMMARY_MAX, CAPTURE_TITLE_MAX } from "@/app/lib/mcp/capture";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -189,6 +191,29 @@ const mcpHandler = createMcpHandler(
       (args) =>
         guard(async () => {
           const r = await proposeLogSpend(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    // ---------- direct write (fenced: create-only, vault Inbox/ only) ----------
+    // No propose → confirm step: this cannot touch Mindboard data at all, and
+    // the vault's review-and-file flow is the confirmation.
+    server.registerTool(
+      "capture_to_brain",
+      {
+        title: "Capture to second brain",
+        description:
+          "Save a distilled summary of the current conversation into Lucca's second brain for later review and filing. Write a summary, not a transcript: what was discussed, decisions made, new facts about the user's life worth keeping, and open questions. Plain markdown; [[wikilinks]] to vault notes welcome when confident. Mark any AI-concluded (not user-stated) claim with (inferred). The capture lands in a staging Inbox/ and is reviewed before becoming vault knowledge.",
+        inputSchema: {
+          title: z.string().max(CAPTURE_TITLE_MAX),
+          summary_markdown: z.string().max(CAPTURE_SUMMARY_MAX),
+          source: z.string().describe('Where this came from, e.g. "claude.ai chat, 2026-07-06".'),
+          topics: z.array(z.string()).optional().describe("Optional reviewer hints for filing."),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await captureToBrain(args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
