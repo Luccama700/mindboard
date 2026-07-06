@@ -174,7 +174,6 @@ export default async function FinancePage({
     ),
   ]);
 
-  const calendars = calendarsResult.calendars;
   const hoursBySource: Record<string, Record<string, number>> = {};
   for (const result of hoursResults) {
     hoursBySource[result.sourceId] = result.hours;
@@ -192,25 +191,22 @@ export default async function FinancePage({
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-64 lg:px-12">
-      <header className="flex items-center justify-between mb-10">
+      <header className="mb-8 flex items-center justify-between">
         <Link
           href="/"
-          className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
+          className="flex min-h-11 items-center text-label uppercase text-muted hover:text-fg transition-colors"
         >
           ← mindboard
         </Link>
-        <h1 className="text-xs tracking-widest uppercase text-muted">
-          finance
-        </h1>
+        <h1 className="text-label uppercase text-muted">money</h1>
       </header>
 
       <FinanceClient
         initialAccounts={(accountsResult.data ?? []) as Account[]}
         initialCategories={(categoriesResult.data ?? []) as SpendingCategory[]}
         initialChanges={(changesResult.data ?? []) as BalanceChange[]}
-        initialExpenses={(expensesResult.data ?? []) as RecurringExpense[]}
-        initialIncomeSources={incomeSources}
-        calendars={calendars}
+        expenses={(expensesResult.data ?? []) as RecurringExpense[]}
+        incomeSources={incomeSources}
         financeMonth={financeMonth}
         hoursBySource={hoursBySource}
         googleStatus={googleStatus}

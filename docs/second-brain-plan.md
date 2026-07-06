@@ -651,3 +651,45 @@ registered); unauthenticated POST → 401; /plan renders the setup panel
 pre-key. Owner-gated: add `ASSISTANT_KEY_SECRET` to Vercel, paste the
 Anthropic key in /settings, then the end-to-end check — "plan my Saturday" →
 ghost proposals → confirm → `ai_audit_log` rows with `source='assistant'`.
+
+---
+
+## Implementation log — Redesign M6 (2026-07-06): section de-clutter — the redesign ships complete
+
+The last milestone. All seven milestones of "THE STREAM" (docs/REDESIGN.md)
+are now live.
+
+**Shipped:**
+- **/finance** (two-step, as specced): first a pure extraction of the
+  2,742-line `finance-client.tsx` into cohesive modules (`finance-shared`,
+  `accounts-section`, `recurring-expenses-section`, `income-sources-section`,
+  `categories-section` — code moved verbatim, type-checked as a checkpoint);
+  then the re-layout: net worth as the screen's one `text-display` number +
+  today delta, per-account hairline rows (history and edit demoted behind
+  `history →` / `···`, never rendered by default) with `update balance`
+  opening the untouched split-capable BalanceUpdatePanel inline, the cashflow
+  forecast calendar SECOND (nothing to scroll past on iPhone), and one
+  `configure ▸` row → new `/finance/setup` (recurring · income · categories,
+  full CRUD moved verbatim). finance-client is now 409 lines.
+- **/inventory**: groups stop being containers — one flat, attention-sorted
+  ledger (out → soonest run-out → low → fine, via the existing pure
+  projection helpers; group as a dim inline label; status tokens
+  `out`/`low`/`≈ jul 12`); steppers byte-identical. The item detail inverts:
+  quantity + unit first, forecast block second, icon/rename/delete last
+  behind `appearance ▸`. Add-item collapses to one 44px `+ add item` row;
+  group management behind `groups · N ▸`.
+- **/brain → /plan bridge**: every note page gets `send to copilot ◇`, handing
+  the note title + a 280-char plain-text excerpt to /plan as the opening
+  message — the first knowledge→planning bridge.
+- REDESIGN.md updated with the shipped status + deviations.
+
+**Verified:** lint clean; 195 tests; build green (`/finance/setup`
+registered); all nine routes 200 on dev smoke with zero console errors.
+
+**The redesign, end to end:** home is one ranked queue you clear; the empty
+state is the planning invitation; capture speaks three modes and never got
+slower; scheduling is one gesture; the copilot plans through the same audited
+confirm as your own `$` commands; and every screen leads with its daily verb.
+Remaining owner steps: `ASSISTANT_KEY_SECRET` into Vercel, paste the Anthropic
+key in /settings, and the on-phone feel pass (dock keyboard choreography,
+stream swipes, week drag).

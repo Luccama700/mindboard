@@ -280,6 +280,14 @@ capture_token_hash). RLS untouched everywhere. New env:
 
 ## 13. Milestones
 
+**Status: all seven milestones shipped 2026-07-05 → 2026-07-06** (commits
+M0 5c0158a · M1 e4fb737 · M2 083cfc1 · M3 67b2cd0 · M4 b63fe0a · M5 d798b7c ·
+M6 in the closing commit). Per-milestone notes live in
+`docs/second-brain-plan.md`. Known deviations from this spec are logged there
+per milestone (notably: desktop side-rail folded into the Dock island; event
+reschedule-from-home rides /week; brain send-to-copilot passes a text excerpt,
+not vault tool access).
+
 | # | Ships | Done when |
 |---|---|---|
 | M0 | SIGNAL tokens, primitives, theme cookie SSR, theme-color, reduced motion, this document | zero-FOUC on all 6 themes; no behavior change; green |

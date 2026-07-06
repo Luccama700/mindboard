@@ -64,8 +64,29 @@ export default async function BrainNotePage(props: {
           vault unavailable — {connectionError.toLowerCase()}
         </p>
       ) : note && corpus ? (
-        <NoteView note={note} corpus={corpus} />
+        <>
+          <NoteView note={note} corpus={corpus} />
+          <p className="mt-10 border-t border-hairline pt-4">
+            <Link
+              href={`/plan?q=${encodeURIComponent(copilotPrompt(note.title, note.body))}`}
+              className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11 inline-flex items-center"
+            >
+              send to copilot ◇
+            </Link>
+          </p>
+        </>
       ) : null}
     </main>
   );
+}
+
+// The first knowledge → planning bridge: hand the note (title + a plain-text
+// excerpt) to /plan as the opening message.
+function copilotPrompt(title: string, body: string): string {
+  const excerpt = body
+    .replace(/[#>*`[\]|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 280);
+  return `about my note "${title}": ${excerpt}${excerpt.length >= 280 ? "…" : ""} — help me act on it`;
 }

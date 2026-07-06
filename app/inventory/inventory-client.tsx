@@ -34,7 +34,15 @@ import type {
   InventoryUsage,
 } from "@/app/_components/inventory-types";
 import { InventoryCalendar } from "@/app/_components/inventory-calendar";
-import type { UsagePeriod } from "@/app/_components/inventory-projection";
+import {
+  effectiveDailyRate,
+  runOutDateKey,
+  stockStatus,
+  type StockStatus,
+  type UsagePeriod,
+  type UsageRule,
+} from "@/app/_components/inventory-projection";
+import { todayISO } from "@/app/_components/date-utils";
 import { createClient } from "@/utils/supabase/client";
 
 type GroupAction =
@@ -121,6 +129,12 @@ function formatQty(value: number): string {
   const n = Number(value);
   if (!Number.isFinite(n)) return "0";
   return String(Math.round(n * 1000) / 1000);
+}
+
+function formatRunOut(key: string): string {
+  return new Date(`${key}T00:00:00`)
+    .toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    .toLowerCase();
 }
 
 function summarizeByUnit(items: InventoryItem[]): string {
@@ -225,6 +239,12 @@ export function InventoryClient({
     return map;
   }, [groups]);
 
+  const groupNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const g of groups) map.set(g.id, g.name);
+    return map;
+  }, [groups]);
+
   const recentUnits = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -238,21 +258,43 @@ export function InventoryClient({
     return out;
   }, [items]);
 
-  const sections = useMemo(() => {
-    const byGroup = new Map<string | null, InventoryItem[]>();
-    for (const it of items) {
-      const key = it.inventory_group_id;
-      const bucket = byGroup.get(key);
-      if (bucket) bucket.push(it);
-      else byGroup.set(key, [it]);
+  // Attention order: out (0) → soonest projected run-out (1) → low (2) → fine (3).
+  const rankedItems = useMemo(() => {
+    const today = todayISO();
+    const rulesByItem = new Map<string, UsageRule[]>();
+    for (const u of usages) {
+      const rule: UsageRule = {
+        amount: Number(u.amount),
+        period: u.period,
+        interval_days: u.interval_days,
+      };
+      const bucket = rulesByItem.get(u.inventory_item_id);
+      if (bucket) bucket.push(rule);
+      else rulesByItem.set(u.inventory_item_id, [rule]);
     }
-    const grouped = groups.map((g) => ({
-      group: g,
-      items: byGroup.get(g.id) ?? [],
-    }));
-    const ungrouped = byGroup.get(null) ?? [];
-    return { grouped, ungrouped };
-  }, [groups, items]);
+    return items
+      .map((item) => {
+        const qty = Number(item.quantity);
+        const status = stockStatus(qty, item.reorder_threshold);
+        const runOut =
+          status === "out"
+            ? null
+            : runOutDateKey(
+                today,
+                qty,
+                effectiveDailyRate(rulesByItem.get(item.id) ?? []),
+              );
+        const rank =
+          status === "out" ? 0 : runOut !== null ? 1 : status === "low" ? 2 : 3;
+        return { item, status, runOut, rank };
+      })
+      .sort(
+        (a, b) =>
+          a.rank - b.rank ||
+          (a.runOut ?? "").localeCompare(b.runOut ?? "") ||
+          a.item.name.localeCompare(b.item.name),
+      );
+  }, [items, usages]);
 
   const selectedItem = items.find((it) => it.id === selectedId) ?? null;
 
@@ -440,39 +482,12 @@ export function InventoryClient({
     return createInventoryGroup(input);
   }
 
-  const isEmpty = groups.length === 0 && items.length === 0;
-  const flatItems = [
-    ...sections.grouped.flatMap((s) => s.items),
-    ...sections.ungrouped,
-  ];
+  const hasItems = items.length > 0;
 
   return (
     <div className="grid gap-8 lg:grid-cols-2 lg:gap-24 lg:items-start">
       <section className="min-w-0 space-y-6">
-        <div className="flex gap-2">
-          <button
-            onClick={startAdd}
-            className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors"
-          >
-            + add item
-          </button>
-          <button
-            onClick={() => setGroupFormOpen((v) => !v)}
-            aria-expanded={groupFormOpen}
-            className="px-4 border border-dashed border-line-strong text-muted text-sm hover:border-accent hover:text-accent transition-colors"
-          >
-            + group
-          </button>
-        </div>
-
-        {groupFormOpen && (
-          <GroupForm
-            onCreate={onCreateGroup}
-            onClose={() => setGroupFormOpen(false)}
-          />
-        )}
-
-        {!isEmpty && (
+        {hasItems && (
           <div className="flex justify-end gap-2">
             {view === "list" && (
               <div className="flex gap-px border border-line bg-line">
@@ -513,13 +528,13 @@ export function InventoryClient({
           </div>
         )}
 
-        {isEmpty ? (
+        {!hasItems ? (
           <p className="border border-dashed border-line-strong text-muted text-sm px-4 py-10 text-center">
             no items yet. add your first one.
           </p>
         ) : view === "grid" ? (
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-            {flatItems.map((it) => (
+            {rankedItems.map(({ item: it }) => (
               <ItemTile
                 key={it.id}
                 item={it}
@@ -535,56 +550,74 @@ export function InventoryClient({
             ))}
           </div>
         ) : (
-          <div className="space-y-5">
-            {sections.grouped.map(({ group, items: groupItems }) => (
-              <GroupSection
-                key={group.id}
-                group={group}
-                items={groupItems}
-                countMode={countMode}
-                selectedId={selectedId}
-                onSelect={onSelect}
-                onUpdateGroup={onUpdateGroup}
-                onDeleteGroup={onDeleteGroup}
-                onAdjust={onAdjustQuantity}
-              />
-            ))}
-
-            {sections.ungrouped.length > 0 && (
-              <div>
-                <div className="flex items-center gap-3 border border-line bg-card px-3 py-2">
-                  <span
-                    className="w-2 h-8 border-2 border-dashed border-line-subtle"
-                    aria-hidden
-                  />
-                  <span className="flex-1 truncate text-fg text-sm font-bold">
-                    ungrouped
-                  </span>
-                  <span
-                    className={`text-muted text-[10px] tabular-nums ${
-                      countMode === "items" ? "tracking-widest uppercase" : ""
-                    }`}
-                  >
-                    {countMode === "items"
-                      ? sections.ungrouped.length
-                      : summarizeByUnit(sections.ungrouped)}
-                  </span>
-                </div>
-                <ul>
-                  {sections.ungrouped.map((it) => (
-                    <ItemRow
-                      key={it.id}
-                      item={it}
-                      selected={it.id === selectedId}
-                      onSelect={onSelect}
-                      onAdjust={onAdjustQuantity}
-                    />
-                  ))}
-                </ul>
-              </div>
-            )}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-label uppercase text-muted select-none">
+              <span>stock</span>
+              <span className="flex-1 border-t border-hairline" aria-hidden />
+              <span className="tabular-nums">
+                {countMode === "items"
+                  ? rankedItems.length
+                  : summarizeByUnit(items)}
+              </span>
+            </div>
+            <ul className="border-y border-hairline divide-y divide-hairline">
+              {rankedItems.map(({ item: it, status, runOut }) => (
+                <ItemRow
+                  key={it.id}
+                  item={it}
+                  groupName={
+                    it.inventory_group_id
+                      ? (groupNames.get(it.inventory_group_id) ?? null)
+                      : null
+                  }
+                  status={status}
+                  runOut={runOut}
+                  selected={it.id === selectedId}
+                  onSelect={onSelect}
+                  onAdjust={onAdjustQuantity}
+                />
+              ))}
+            </ul>
           </div>
         )}
+
+        <button
+          type="button"
+          onClick={startAdd}
+          className="flex w-full min-h-11 items-center px-3 text-action lowercase border border-hairline text-muted hover:text-fg hover:border-accent transition-colors"
+        >
+          + add item
+        </button>
+
+        <details className="border border-hairline px-3 py-2">
+          <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center list-none [&::-webkit-details-marker]:hidden">
+            groups · {groups.length} ▸
+          </summary>
+          <div className="space-y-3 pb-2">
+            {groups.map((g) => (
+              <GroupManageRow
+                key={g.id}
+                group={g}
+                onUpdate={onUpdateGroup}
+                onDelete={onDeleteGroup}
+              />
+            ))}
+            {groupFormOpen ? (
+              <GroupForm
+                onCreate={onCreateGroup}
+                onClose={() => setGroupFormOpen(false)}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setGroupFormOpen(true)}
+                className="flex w-full min-h-11 items-center px-3 text-action lowercase border border-dashed border-hairline text-muted hover:text-fg hover:border-accent transition-colors"
+              >
+                + new group
+              </button>
+            )}
+          </div>
+        </details>
       </section>
 
       <aside ref={asideRef} className="min-w-0 lg:sticky lg:top-8">
@@ -696,24 +729,14 @@ function GroupForm({
   );
 }
 
-function GroupSection({
+function GroupManageRow({
   group,
-  items,
-  countMode,
-  selectedId,
-  onSelect,
-  onUpdateGroup,
-  onDeleteGroup,
-  onAdjust,
+  onUpdate,
+  onDelete,
 }: {
   group: InventoryGroup;
-  items: InventoryItem[];
-  countMode: CountMode;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onUpdateGroup: (id: string, patch: Partial<InventoryGroup>) => void;
-  onDeleteGroup: (id: string) => void;
-  onAdjust: (id: string, delta: number) => void;
+  onUpdate: (id: string, patch: Partial<InventoryGroup>) => void;
+  onDelete: (id: string) => void;
 }) {
   const [editOpen, setEditOpen] = useState(false);
 
@@ -729,13 +752,6 @@ function GroupSection({
           <span className="flex-1 truncate text-fg text-sm font-bold">
             {group.name}
           </span>
-          <span
-            className={`text-muted text-[10px] tabular-nums ${
-              countMode === "items" ? "tracking-widest uppercase" : ""
-            }`}
-          >
-            {countMode === "items" ? items.length : summarizeByUnit(items)}
-          </span>
         </div>
         <button
           onClick={() => setEditOpen((v) => !v)}
@@ -749,30 +765,12 @@ function GroupSection({
       {editOpen && (
         <GroupEditPanel
           group={group}
-          onUpdate={onUpdateGroup}
+          onUpdate={onUpdate}
           onDelete={(id) => {
             setEditOpen(false);
-            onDeleteGroup(id);
+            onDelete(id);
           }}
         />
-      )}
-
-      {items.length > 0 ? (
-        <ul>
-          {items.map((it) => (
-            <ItemRow
-              key={it.id}
-              item={it}
-              selected={it.id === selectedId}
-              onSelect={onSelect}
-              onAdjust={onAdjust}
-            />
-          ))}
-        </ul>
-      ) : (
-        <p className="text-muted text-xs px-3 py-3 border-x border-b border-line">
-          empty
-        </p>
       )}
     </div>
   );
@@ -837,18 +835,33 @@ function GroupEditPanel({
 
 function ItemRow({
   item,
+  groupName,
+  status,
+  runOut,
   selected,
   onSelect,
   onAdjust,
 }: {
   item: InventoryItem;
+  groupName: string | null;
+  status: StockStatus;
+  runOut: string | null;
   selected: boolean;
   onSelect: (id: string) => void;
   onAdjust: (id: string, delta: number) => void;
 }) {
+  const statusLabel =
+    status === "out"
+      ? "out"
+      : runOut !== null
+        ? `≈ ${formatRunOut(runOut)}`
+        : status === "low"
+          ? "low"
+          : null;
+
   return (
     <li
-      className={`flex items-stretch border-x border-b border-line transition-colors ${
+      className={`flex items-stretch transition-colors ${
         selected ? "bg-card-hover" : ""
       }`}
     >
@@ -872,6 +885,17 @@ function ItemRow({
         <span className="flex-1 min-w-0 truncate text-fg text-sm">
           {item.name}
         </span>
+        {(groupName !== null || statusLabel !== null) && (
+          <span className="flex-shrink-0 max-w-[45%] truncate text-meta text-muted">
+            {groupName}
+            {groupName !== null && statusLabel !== null ? " · " : ""}
+            {statusLabel !== null && (
+              <span className={status === "ok" ? "" : "text-danger"}>
+                {statusLabel}
+              </span>
+            )}
+          </span>
+        )}
       </button>
       <div className="flex items-stretch flex-shrink-0 border-l border-line">
         <button
@@ -1273,99 +1297,9 @@ function ItemDetail({
 
   return (
     <div className="border border-line bg-card p-4 space-y-5">
-      <input
-        type="text"
-        value={nameDraft}
-        onChange={(e) => setNameDraft(e.target.value)}
-        onBlur={commitName}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            e.currentTarget.blur();
-          }
-          if (e.key === "Escape") {
-            setNameDraft(item.name);
-            e.currentTarget.blur();
-          }
-        }}
-        maxLength={120}
-        aria-label="item name"
-        className="w-full bg-transparent text-fg text-xl font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
-      />
-
-      <div className="space-y-2">
-        <p className="text-[10px] tracking-widest uppercase text-muted">icon</p>
-        <div className="flex gap-3">
-          {item.image_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={item.image_url}
-              alt=""
-              className="w-20 h-20 flex-shrink-0 object-cover border border-line bg-page"
-            />
-          ) : (
-            <div
-              className="w-20 h-20 flex-shrink-0 border border-dashed border-line-subtle bg-page flex items-center justify-center text-muted text-[10px] tracking-widest uppercase"
-              aria-hidden
-            >
-              none
-            </div>
-          )}
-          <div className="flex-1 min-w-0 space-y-2">
-            <input
-              type="text"
-              value={genPrompt}
-              onChange={(e) => setGenPrompt(e.target.value)}
-              placeholder="describe the icon…"
-              maxLength={300}
-              aria-label="icon prompt"
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
-            />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={onGenerate}
-                disabled={busy}
-                className="text-[10px] tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
-              >
-                {busy ? "working…" : "generate"}
-              </button>
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={busy}
-                className="text-[10px] tracking-widest uppercase px-3 py-2 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
-              >
-                upload
-              </button>
-              {item.image_url && (
-                <button
-                  type="button"
-                  onClick={() => onUpdate(item.id, { image_url: null })}
-                  disabled={busy}
-                  className="text-[10px] tracking-widest uppercase px-3 py-2 text-danger hover:text-danger-hover transition-colors disabled:opacity-50"
-                >
-                  remove
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-        {iconError && <p className="text-danger text-xs">{iconError}</p>}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onUpload(f);
-            e.target.value = "";
-          }}
-          tabIndex={-1}
-          aria-hidden
-          className="sr-only"
-        />
-      </div>
+      <h2 className="min-w-0 truncate text-title text-fg border-b border-hairline pb-2">
+        {item.name}
+      </h2>
 
       <div className="space-y-2">
         <p className="text-[10px] tracking-widest uppercase text-muted">
@@ -1382,6 +1316,19 @@ function ItemDetail({
         onChange={(u) => onUpdate(item.id, { unit: u })}
         recent={recentUnits}
       />
+
+      <div className="border-t border-line pt-5">
+        <InventoryCalendar
+          item={item}
+          usages={usages}
+          onCreateUsage={(input) => onCreateUsage(item.id, input)}
+          onUpdateUsage={onUpdateUsage}
+          onDeleteUsage={onDeleteUsage}
+          onUpdateThreshold={(value) =>
+            onUpdate(item.id, { reorder_threshold: value })
+          }
+        />
+      </div>
 
       <div className="space-y-2">
         <p className="text-[10px] tracking-widest uppercase text-muted">
@@ -1413,27 +1360,117 @@ function ItemDetail({
         />
       </div>
 
-      <div className="border-t border-line pt-5">
-        <InventoryCalendar
-          item={item}
-          usages={usages}
-          onCreateUsage={(input) => onCreateUsage(item.id, input)}
-          onUpdateUsage={onUpdateUsage}
-          onDeleteUsage={onDeleteUsage}
-          onUpdateThreshold={(value) =>
-            onUpdate(item.id, { reorder_threshold: value })
-          }
-        />
-      </div>
+      <details className="border border-hairline px-3 py-2">
+        <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center list-none [&::-webkit-details-marker]:hidden">
+          appearance ▸
+        </summary>
+        <div className="space-y-5 pb-2">
+          <input
+            type="text"
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            onBlur={commitName}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+              if (e.key === "Escape") {
+                setNameDraft(item.name);
+                e.currentTarget.blur();
+              }
+            }}
+            maxLength={120}
+            aria-label="item name"
+            className="w-full bg-transparent text-fg text-xl font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
+          />
 
-      <div className="flex justify-end">
-        <button
-          onClick={() => onDelete(item.id)}
-          className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-1.5 px-3"
-        >
-          delete
-        </button>
-      </div>
+          <div className="space-y-2">
+            <p className="text-[10px] tracking-widest uppercase text-muted">
+              icon
+            </p>
+            <div className="flex gap-3">
+              {item.image_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={item.image_url}
+                  alt=""
+                  className="w-20 h-20 flex-shrink-0 object-cover border border-line bg-page"
+                />
+              ) : (
+                <div
+                  className="w-20 h-20 flex-shrink-0 border border-dashed border-line-subtle bg-page flex items-center justify-center text-muted text-[10px] tracking-widest uppercase"
+                  aria-hidden
+                >
+                  none
+                </div>
+              )}
+              <div className="flex-1 min-w-0 space-y-2">
+                <input
+                  type="text"
+                  value={genPrompt}
+                  onChange={(e) => setGenPrompt(e.target.value)}
+                  placeholder="describe the icon…"
+                  maxLength={300}
+                  aria-label="icon prompt"
+                  className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={onGenerate}
+                    disabled={busy}
+                    className="text-[10px] tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
+                  >
+                    {busy ? "working…" : "generate"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={busy}
+                    className="text-[10px] tracking-widest uppercase px-3 py-2 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                  >
+                    upload
+                  </button>
+                  {item.image_url && (
+                    <button
+                      type="button"
+                      onClick={() => onUpdate(item.id, { image_url: null })}
+                      disabled={busy}
+                      className="text-[10px] tracking-widest uppercase px-3 py-2 text-danger hover:text-danger-hover transition-colors disabled:opacity-50"
+                    >
+                      remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+            {iconError && <p className="text-danger text-xs">{iconError}</p>}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) onUpload(f);
+                e.target.value = "";
+              }}
+              tabIndex={-1}
+              aria-hidden
+              className="sr-only"
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              onClick={() => onDelete(item.id)}
+              className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-1.5 px-3"
+            >
+              delete
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
