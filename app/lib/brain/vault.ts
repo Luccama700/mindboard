@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 
+import { createClient } from "@/utils/supabase/server";
 import {
   buildResolver,
   computeBacklinks,
@@ -18,6 +19,19 @@ export class VaultConnectionError extends Error {
     this.name = "VaultConnectionError";
   }
 }
+
+export class VaultNotConfiguredError extends VaultConnectionError {
+  constructor() {
+    super("vault not connected");
+    this.name = "VaultNotConfiguredError";
+  }
+}
+
+export type VaultSettings = {
+  repo: string;
+  branch: string;
+  updated_at: string;
+};
 
 export type VaultNote = {
   path: string;
@@ -39,19 +53,45 @@ const EXCLUDED_PREFIXES = ["_import/", ".obsidian/"];
 const TREE_REVALIDATE_SECONDS = 180;
 const BLOB_BATCH_SIZE = 25;
 
-function vaultRepo(): string {
-  return process.env.VAULT_GITHUB_REPO ?? "Luccama700/2ndBrain";
+export function vaultTag(userId: string): string {
+  return `vault:${userId}`;
 }
 
-function vaultBranch(): string {
-  return process.env.VAULT_GITHUB_BRANCH ?? "main";
+// Public read for pages: connection state without the token column.
+export const getVaultSettings = cache(
+  async (userId: string): Promise<VaultSettings | null> => {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("vault_settings")
+      .select("repo, branch, updated_at")
+      .eq("user_id", userId)
+      .maybeSingle();
+    return (data as VaultSettings | null) ?? null;
+  },
+);
+
+type VaultCredentials = { repo: string; branch: string; token: string };
+
+// Internal read: the only place the token leaves the database. RLS-scoped,
+// never returned to the client and never logged.
+async function getVaultCredentials(
+  userId: string,
+): Promise<VaultCredentials | null> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("vault_settings")
+    .select("repo, branch, github_token")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!data) return null;
+  return {
+    repo: data.repo as string,
+    branch: data.branch as string,
+    token: data.github_token as string,
+  };
 }
 
-function githubHeaders(): Record<string, string> {
-  const token = process.env.VAULT_GITHUB_TOKEN;
-  if (!token) {
-    throw new VaultConnectionError("VAULT_GITHUB_TOKEN is not configured");
-  }
+export function githubHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
     "X-GitHub-Api-Version": "2022-11-28",
@@ -67,21 +107,24 @@ function includedMarkdownPath(path: string): boolean {
 
 type TreeEntry = { path: string; sha: string; type: string };
 
-async function fetchTree(): Promise<TreeEntry[]> {
-  const url = `https://api.github.com/repos/${vaultRepo()}/git/trees/${encodeURIComponent(vaultBranch())}?recursive=1`;
+async function fetchTree(
+  credentials: VaultCredentials,
+  tag: string,
+): Promise<TreeEntry[]> {
+  const url = `https://api.github.com/repos/${credentials.repo}/git/trees/${encodeURIComponent(credentials.branch)}?recursive=1`;
   const response = await fetch(url, {
-    headers: githubHeaders(),
-    next: { revalidate: TREE_REVALIDATE_SECONDS, tags: ["vault"] },
+    headers: githubHeaders(credentials.token),
+    next: { revalidate: TREE_REVALIDATE_SECONDS, tags: [tag] },
   });
   if (response.status === 401 || response.status === 403) {
-    throw new VaultConnectionError("Vault repo access was rejected");
+    throw new VaultConnectionError("vault repo access was rejected");
   }
   if (response.status === 404) {
-    throw new VaultConnectionError("Vault repo or branch not found");
+    throw new VaultConnectionError("vault repo or branch not found");
   }
   if (!response.ok) {
     throw new VaultConnectionError(
-      `Vault tree request failed (${response.status})`,
+      `vault tree request failed (${response.status})`,
     );
   }
   const payload = (await response.json()) as {
@@ -89,81 +132,91 @@ async function fetchTree(): Promise<TreeEntry[]> {
     truncated?: boolean;
   };
   if (payload.truncated) {
-    throw new VaultConnectionError("Vault tree response was truncated");
+    throw new VaultConnectionError("vault tree response was truncated");
   }
   return (payload.tree ?? []).filter(
     (entry) => entry.type === "blob" && includedMarkdownPath(entry.path),
   );
 }
 
-async function fetchBlob(sha: string): Promise<string> {
-  const url = `https://api.github.com/repos/${vaultRepo()}/git/blobs/${sha}`;
+async function fetchBlob(
+  credentials: VaultCredentials,
+  sha: string,
+): Promise<string> {
+  const url = `https://api.github.com/repos/${credentials.repo}/git/blobs/${sha}`;
   const response = await fetch(url, {
     headers: {
-      ...githubHeaders(),
+      ...githubHeaders(credentials.token),
       Accept: "application/vnd.github.raw+json",
     },
     cache: "force-cache",
   });
   if (!response.ok) {
     throw new VaultConnectionError(
-      `Vault file request failed (${response.status})`,
+      `vault file request failed (${response.status})`,
     );
   }
   return response.text();
 }
 
-export const getVaultCorpus = cache(async (): Promise<VaultCorpus> => {
-  const entries = await fetchTree();
-  const contents = new Map<string, string>();
-  for (let i = 0; i < entries.length; i += BLOB_BATCH_SIZE) {
-    const batch = entries.slice(i, i + BLOB_BATCH_SIZE);
-    const texts = await Promise.all(batch.map((entry) => fetchBlob(entry.sha)));
-    batch.forEach((entry, index) => contents.set(entry.path, texts[index]));
-  }
+export const getVaultCorpus = cache(
+  async (userId: string): Promise<VaultCorpus> => {
+    const credentials = await getVaultCredentials(userId);
+    if (!credentials) throw new VaultNotConfiguredError();
 
-  const paths = entries.map((entry) => entry.path);
-  const resolve = buildResolver(paths);
+    const entries = await fetchTree(credentials, vaultTag(userId));
+    const contents = new Map<string, string>();
+    for (let i = 0; i < entries.length; i += BLOB_BATCH_SIZE) {
+      const batch = entries.slice(i, i + BLOB_BATCH_SIZE);
+      const texts = await Promise.all(
+        batch.map((entry) => fetchBlob(credentials, entry.sha)),
+      );
+      batch.forEach((entry, index) => contents.set(entry.path, texts[index]));
+    }
 
-  const notes = new Map<string, VaultNote>();
-  for (const path of paths) {
-    const { frontmatter, body } = parseFrontmatter(contents.get(path) ?? "");
-    const outgoing = [
-      ...new Set(
-        extractWikilinks(body)
-          .map((target) => resolve(target))
-          .filter((resolved): resolved is string => resolved !== null),
-      ),
-    ];
-    notes.set(path, {
-      path,
-      folder: noteFolder(path),
-      title: noteTitle(path),
-      frontmatter,
-      body,
-      outgoing,
-      backlinks: [],
-    });
-  }
+    const paths = entries.map((entry) => entry.path);
+    const resolve = buildResolver(paths);
 
-  const backlinks = computeBacklinks([...notes.values()]);
-  for (const [target, sources] of backlinks) {
-    const note = notes.get(target);
-    if (note) note.backlinks = sources;
-  }
+    const notes = new Map<string, VaultNote>();
+    for (const path of paths) {
+      const { frontmatter, body } = parseFrontmatter(contents.get(path) ?? "");
+      const outgoing = [
+        ...new Set(
+          extractWikilinks(body)
+            .map((target) => resolve(target))
+            .filter((resolved): resolved is string => resolved !== null),
+        ),
+      ];
+      notes.set(path, {
+        path,
+        folder: noteFolder(path),
+        title: noteTitle(path),
+        frontmatter,
+        body,
+        outgoing,
+        backlinks: [],
+      });
+    }
 
-  const folders = new Map<string, VaultNote[]>();
-  for (const note of notes.values()) {
-    const bucket = folders.get(note.folder);
-    if (bucket) bucket.push(note);
-    else folders.set(note.folder, [note]);
-  }
-  for (const bucket of folders.values()) {
-    bucket.sort((a, b) => a.title.localeCompare(b.title));
-  }
+    const backlinks = computeBacklinks([...notes.values()]);
+    for (const [target, sources] of backlinks) {
+      const note = notes.get(target);
+      if (note) note.backlinks = sources;
+    }
 
-  return { notes, folders, resolve };
-});
+    const folders = new Map<string, VaultNote[]>();
+    for (const note of notes.values()) {
+      const bucket = folders.get(note.folder);
+      if (bucket) bucket.push(note);
+      else folders.set(note.folder, [note]);
+    }
+    for (const bucket of folders.values()) {
+      bucket.sort((a, b) => a.title.localeCompare(b.title));
+    }
+
+    return { notes, folders, resolve };
+  },
+);
 
 export function findNote(
   corpus: VaultCorpus,

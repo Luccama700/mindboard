@@ -2,11 +2,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
-import { isVaultOwner } from "@/app/lib/brain/access";
 import { buildGraphData } from "@/app/lib/brain/graph";
 import {
   getVaultCorpus,
   VaultConnectionError,
+  VaultNotConfiguredError,
 } from "@/app/lib/brain/vault";
 import { GraphClient } from "./graph-client";
 
@@ -17,15 +17,16 @@ export default async function BrainGraphPage() {
   } = await supabase.auth.getUser();
 
   if (!user) redirect("/login");
-  if (!isVaultOwner(user.id)) redirect("/");
 
   let data = null;
   let connectionError: string | null = null;
   try {
-    const corpus = await getVaultCorpus();
+    const corpus = await getVaultCorpus(user.id);
     data = buildGraphData([...corpus.notes.values()]);
   } catch (error) {
-    if (error instanceof VaultConnectionError) {
+    if (error instanceof VaultNotConfiguredError) {
+      redirect("/brain");
+    } else if (error instanceof VaultConnectionError) {
       connectionError = error.message;
     } else {
       throw error;

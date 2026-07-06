@@ -362,3 +362,47 @@ phone (kickoff done-criteria).
 **Status:** Milestones 2 and 3 complete. Milestone 4 not started (fenced: only if
 Lucca explicitly asks). Remaining owner steps: `VAULT_GITHUB_TOKEN` in Vercel
 (fine-grained PAT, Contents read-only, only `2ndBrain`), then phone verification.
+
+---
+
+## Implementation log — per-user vault settings (2026-07-05)
+
+Lucca asked (explicitly opening the Milestone 2 fence) for the vault connection to be
+**per user**: each signed-in user pastes their own GitHub token + repo into the app
+instead of a deployment-wide `VAULT_GITHUB_TOKEN` env var. The env var was never set
+in Vercel, so nothing shipped broke.
+
+**What changed:**
+- Migration `0017_vault_settings.sql` (also applied to the live DB via Supabase MCP):
+  `vault_settings` (user_id PK → auth.users, `github_token`, `repo`, `branch`,
+  timestamps), four `_own` RLS policies — the `google_tokens` pattern, which is the
+  right model for a secret that must be readable during server render (the inventory
+  image-gen keys are localStorage-only and were deliberately not copied).
+- `app/lib/brain/vault.ts`: `getVaultSettings(userId)` (no token column selected — the
+  token is only read inside the corpus builder and never reaches the client or logs);
+  `getVaultCorpus(userId)` keyed per user; per-user cache tag `vault:{userId}`;
+  `VaultNotConfiguredError` distinguishes "not connected" from "connection broken".
+  All env handling deleted.
+- `app/actions/brain.ts`: `saveVaultSettings` (pure validation in
+  `app/lib/brain/settings.ts`, unit-tested; verifies the token against
+  `GET /repos/{repo}` before saving; blank token on update keeps the stored one),
+  `disconnectVault`, and per-user `refreshVault`.
+- `app/brain/_components/vault-settings-form.tsx`: masked token input with show/hide
+  (KeyInput pattern from settings-panel), repo/branch fields, connect/save +
+  disconnect, inline errors.
+- `/brain` renders the connect form when unconfigured (and alongside the error message
+  when the connection breaks — bad-token recovery); healthy state gets a collapsed
+  "vault settings" details section. Note/graph pages redirect to `/brain` when
+  unconfigured. The `isVaultOwner` gate and `app/lib/brain/access.ts` are deleted —
+  your own token *is* the access control now; `MINDBOARD_OWNER_USER_ID` remains
+  MCP-only.
+
+**Verified:** lint clean; 148 tests pass (+5 in `__tests__/brain-settings.test.ts`);
+build green; `vault_settings` + all four RLS policies confirmed live via SQL;
+dev-server smoke on a *fresh* server (an earlier stale one was caught serving old
+code): unauthenticated /brain, /brain/graph, /brain/note/* stream skeleton + login
+redirect with zero token strings in the body.
+
+**Owner steps:** none in Vercel anymore. On the deployed app: open /brain → paste the
+fine-grained PAT (Contents read-only, only the vault repo) + `Luccama700/2ndBrain` →
+connect. Phone-verify the Milestone 2/3 done-criteria from there.

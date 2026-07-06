@@ -2,15 +2,16 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
-import { isVaultOwner } from "@/app/lib/brain/access";
 import {
   getVaultCorpus,
+  getVaultSettings,
   VaultConnectionError,
   type VaultCorpus,
 } from "@/app/lib/brain/vault";
 import { noteHref } from "@/app/lib/brain/parse";
 import { NoteView } from "./_components/note-view";
 import { RefreshButton } from "./_components/refresh-button";
+import { VaultSettingsForm } from "./_components/vault-settings-form";
 
 const FOLDER_ORDER = [
   "People",
@@ -79,12 +80,36 @@ export default async function BrainPage() {
   } = await supabase.auth.getUser();
 
   if (!user) redirect("/login");
-  if (!isVaultOwner(user.id)) redirect("/");
+
+  const settings = await getVaultSettings(user.id);
+
+  if (!settings) {
+    return (
+      <main className="min-h-screen px-5 pt-8 pb-32 max-w-2xl mx-auto">
+        <header className="flex items-center justify-between mb-10">
+          <Link
+            href="/"
+            className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
+          >
+            ← mindboard
+          </Link>
+          <h1 className="text-xs tracking-widest uppercase text-muted">
+            brain
+          </h1>
+        </header>
+        <p className="text-sm text-muted mb-6 leading-relaxed">
+          connect an Obsidian vault stored in a GitHub repo to browse it here,
+          read-only.
+        </p>
+        <VaultSettingsForm initialRepo="" initialBranch="main" connected={false} />
+      </main>
+    );
+  }
 
   let corpus: VaultCorpus | null = null;
   let connectionError: string | null = null;
   try {
-    corpus = await getVaultCorpus();
+    corpus = await getVaultCorpus(user.id);
   } catch (error) {
     if (error instanceof VaultConnectionError) {
       connectionError = error.message;
@@ -119,9 +144,16 @@ export default async function BrainPage() {
       </header>
 
       {connectionError ? (
-        <p className="text-sm text-muted border border-line px-4 py-3">
-          vault unavailable — {connectionError.toLowerCase()}
-        </p>
+        <div className="space-y-6">
+          <p className="text-sm text-muted border border-line px-4 py-3">
+            vault unavailable — {connectionError.toLowerCase()}
+          </p>
+          <VaultSettingsForm
+            initialRepo={settings.repo}
+            initialBranch={settings.branch}
+            connected
+          />
+        </div>
       ) : corpus ? (
         <>
           {home ? (
@@ -132,6 +164,18 @@ export default async function BrainPage() {
             </p>
           )}
           <FolderListing corpus={corpus} />
+          <details className="mt-12 border-t border-line pt-4">
+            <summary className="text-xs tracking-widest uppercase text-muted cursor-pointer min-h-11 flex items-center hover:text-fg transition-colors">
+              vault settings — {settings.repo}
+            </summary>
+            <div className="mt-4">
+              <VaultSettingsForm
+                initialRepo={settings.repo}
+                initialBranch={settings.branch}
+                connected
+              />
+            </div>
+          </details>
         </>
       ) : null}
     </main>

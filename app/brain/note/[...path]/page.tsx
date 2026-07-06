@@ -2,11 +2,11 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
-import { isVaultOwner } from "@/app/lib/brain/access";
 import {
   findNote,
   getVaultCorpus,
   VaultConnectionError,
+  VaultNotConfiguredError,
 } from "@/app/lib/brain/vault";
 import { NoteView } from "../../_components/note-view";
 import { RefreshButton } from "../../_components/refresh-button";
@@ -20,7 +20,6 @@ export default async function BrainNotePage(props: {
   } = await supabase.auth.getUser();
 
   if (!user) redirect("/login");
-  if (!isVaultOwner(user.id)) redirect("/");
 
   const { path } = await props.params;
   const notePath = path.join("/") + ".md";
@@ -29,10 +28,12 @@ export default async function BrainNotePage(props: {
   let note = null;
   let corpus = null;
   try {
-    corpus = await getVaultCorpus();
+    corpus = await getVaultCorpus(user.id);
     note = findNote(corpus, notePath);
   } catch (error) {
-    if (error instanceof VaultConnectionError) {
+    if (error instanceof VaultNotConfiguredError) {
+      redirect("/brain");
+    } else if (error instanceof VaultConnectionError) {
       connectionError = error.message;
     } else {
       throw error;
