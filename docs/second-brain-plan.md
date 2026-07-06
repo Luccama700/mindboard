@@ -275,3 +275,52 @@ MCP call with the OAuth access token → 13 tools + real data; static bearer sti
 `https://<domain>/api/mcp/mcp` on claude.ai as a custom connector → approve via Google login →
 run reads + a `create_task → confirm` round-trip. (The browser `/authorize` login-gate is the only
 piece not scriptable locally.)
+
+---
+
+## Implementation log — Milestone 2 (2026-07-05): the vault viewer
+
+Read-only `/brain` renders the 2ndBrain vault from its private GitHub repo
+(`Luccama700/2ndBrain`, confirmed live before starting — the kickoff precondition).
+Additive only; no schema changes.
+
+**Layout:** `app/lib/brain/parse.ts` (pure: frontmatter, wikilink rewrite/extract,
+resolver, backlinks, callout markers) → `app/lib/brain/vault.ts` (server-only GitHub
+fetch + `getVaultCorpus()`), rendered by `app/brain/page.tsx` (Home + folder listing),
+`app/brain/note/[...path]/page.tsx` (note + backlinks), via
+`app/brain/_components/note-view.tsx`. New deps: `react-markdown@10` + `remark-gfm@4`
+(RSC-safe, escapes raw HTML — no sanitizer needed, zero client JS on /brain).
+
+**Design decisions (inside the fence):**
+- Tree fetched with `next: { revalidate: 180, tags: ["vault"] }`; file contents fetched
+  by immutable blob sha with `force-cache` (content-addressed — unchanged notes never
+  refetch; edits self-invalidate via new sha). Refresh button = server action calling
+  `updateTag("vault")` (Next 16: one-arg `revalidateTag` is deprecated, two-arg is
+  stale-while-revalidate — wrong for a refresh button).
+- Wikilinks rewritten to standard links by a fence/inline-code-aware pure pass before
+  react-markdown; unresolved links render as muted text. Resolution is case-insensitive
+  basename with folder-priority tiebreak (root → People → … → Archive).
+- Callouts detected via the hast node in a custom blockquote component; marker line
+  stripped from the rendered body.
+- `/brain` is gated to `MINDBOARD_OWNER_USER_ID` when set (the vault has no RLS behind
+  it and app login is open to any Google account); unset (local dev) allows any
+  signed-in user.
+- Env: `VAULT_GITHUB_TOKEN` (required), `VAULT_GITHUB_REPO` / `VAULT_GITHUB_BRANCH`
+  (default `Luccama700/2ndBrain` / `main`). Server-side only, never logged.
+
+**Verified:** lint clean; 139 tests pass (+28 in `__tests__/brain-parse.test.ts`, +6
+component tests in `__tests__/brain-note-view.test.tsx` — the latter caught a real bug:
+callout marker stripping keyed on tag type, which custom components break); build green
+(both /brain routes registered). Live integration run against the real repo (temp test,
+not committed): corpus builds, `.obsidian`/`.canvas`/`.gitkeep` excluded, Home→CLAUDE
+and Home→Journal links resolve, backlinks land. Dev-server smoke: unauthenticated
+/brain and note URLs stream the skeleton + login redirect with **no vault content in
+the response body** (checked).
+
+**Owner-gated:** create a fine-grained PAT (Contents read-only, only `2ndBrain`) →
+add `VAULT_GITHUB_TOKEN` to Vercel (+ `.env.local`); then phone-verify the kickoff
+done-criteria (Home → wikilinks → backlinks → refresh after a vault commit).
+
+**Scope note:** the user asked to "carry on with each milestone until all done";
+Milestone 3 follows in this session. Milestone 4 stays unstarted — its fence says
+"only if Lucca asks", and a blanket carry-on doesn't open it.

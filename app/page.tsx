@@ -402,6 +402,12 @@ export default async function Home({
               <div className="flex items-center gap-2">
                 <SettingsPanel />
                 <Link
+                  href="/brain"
+                  className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors"
+                >
+                  brain →
+                </Link>
+                <Link
                   href="/finance"
                   className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors"
                 >
