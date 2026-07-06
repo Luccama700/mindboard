@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
 import { signOut } from "@/app/actions/auth";
+import { AssistantKeyForm } from "@/app/_components/assistant-key-form";
 import { SettingsSections } from "@/app/_components/settings-panel";
 import { SectionRuler } from "@/app/_components/ui";
 import { VaultSettingsForm } from "@/app/brain/_components/vault-settings-form";
@@ -16,10 +17,16 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const [prefs, vault] = await Promise.all([
+  const [prefs, vault, settingsRow] = await Promise.all([
     getUserPreferences(user.id),
     getVaultSettings(user.id),
+    supabase
+      .from("user_settings")
+      .select("anthropic_api_key")
+      .eq("user_id", user.id)
+      .maybeSingle(),
   ]);
+  const hasAssistantKey = Boolean(settingsRow.data?.anthropic_api_key);
 
   return (
     <main className="min-h-screen px-5 pt-6 pb-64 max-w-2xl mx-auto space-y-10">
@@ -39,6 +46,11 @@ export default async function SettingsPage() {
           initialWakeStart={prefs.wake_start_hour}
           initialWakeEnd={prefs.wake_end_hour}
         />
+      </section>
+
+      <section className="space-y-4">
+        <SectionRuler label="copilot" />
+        <AssistantKeyForm connected={hasAssistantKey} />
       </section>
 
       <section className="space-y-4">

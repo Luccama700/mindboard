@@ -245,7 +245,7 @@ async function executeLogSpend(
   return { ok: true, value: { change, newBalance } };
 }
 
-const EXECUTORS: Record<
+export const EXECUTORS: Record<
   string,
   (
     supabase: SupabaseClient,

@@ -600,3 +600,54 @@ push→drag→Google PATCH round-trip.
 **Verified:** lint clean; 195 tests (+9); build green. `$14 lunch` on the
 deployed PWA = type → Enter → Enter: three interactions, categorized ledger
 row. Owner-gated: on-phone feel check.
+
+---
+
+## Implementation log — Redesign M5 (2026-07-06): the planning copilot
+
+Phase 2, reopened by the owner and finally real: a conversational planning
+copilot at /plan, on the owner's own Anthropic API key, wired into the same
+propose→confirm→audit machine as everything else.
+
+**Shipped:**
+- **Key custody**: `app/lib/assistant/crypto.ts` — AES-256-GCM with the
+  server-only `ASSISTANT_KEY_SECRET` (generated into `.env.local`; owner adds
+  the same value in Vercel). `saveAssistantKey`/`clearAssistantKey` validate
+  the `sk-ant-…` shape, encrypt, and upsert `user_settings.anthropic_api_key`
+  (the dormant 0015 column, now live). The key is decrypted only inside the
+  route handler; it never appears in client payloads, logs, or errors.
+  /settings gains a copilot section with the masked key form.
+- **Tool surface** (`app/lib/assistant/tools.ts`): the MCP catalog re-hosted
+  on the caller's session (RLS scoping) — `get_snapshot` (all four vitals +
+  free gaps), `list_tasks`, `list_accounts_and_categories`, `list_goals` —
+  plus five propose-only writes: `propose_create_task` (with due-time),
+  `propose_complete_task`, `propose_log_spend`, and the two new planning
+  tools `propose_schedule_task` (date+time+duration, optional Google push)
+  and `propose_upsert_goal`. Proposals reuse `recordProposal` with
+  `source='assistant'` + `conversation_id` (additive param; MCP callers
+  unchanged). Nothing executes in the tool loop — ever.
+- **Confirm path** (`app/actions/assistant.ts`): `confirmProposal` re-uses the
+  MCP executors for complete_task/log_spend, adds create_task-with-time,
+  schedule_task (delegating to `updateTask` + `pushTaskToCalendar`, so Google
+  mirroring rides the existing rails), and upsert_goal (goals table finally
+  written). Double-confirm guard via the existing `resolveProposal` claim.
+- **Route** (`app/api/assistant/route.ts`): SSE streaming; manual agentic
+  loop on `@anthropic-ai/sdk` (`messages.stream` → `finalMessage`, tool
+  rounds ≤8, `pause_turn`/`refusal` handled); adaptive thinking; prompt
+  caching on the frozen instruction block; live context (goals + last-7
+  daily_logs) as an uncached system block. Default model `claude-opus-4-8`,
+  selectable (sonnet-5 / haiku-4-5) with the choice kept in localStorage and
+  allowlisted server-side. Conversations/messages persist to the dormant
+  0014 tables.
+- **/plan UI** (`plan-client.tsx`): mono transcript (accent `›` user lines,
+  dim collapsed `⛁ tool` traces, streaming `▮` cursor), inline ProposalCards
+  (the same component as capture's `$` flow) with confirm/skip and
+  `confirm all (n)`, read-only goals block, past-conversations list
+  (`?c=` reload), key setup panel when no key — the deterministic app is
+  never gated. `?` captures auto-send via `?q=`.
+
+**Verified:** lint clean; 195 tests; build green (`/api/assistant`
+registered); unauthenticated POST → 401; /plan renders the setup panel
+pre-key. Owner-gated: add `ASSISTANT_KEY_SECRET` to Vercel, paste the
+Anthropic key in /settings, then the end-to-end check — "plan my Saturday" →
+ghost proposals → confirm → `ai_audit_log` rows with `source='assistant'`.

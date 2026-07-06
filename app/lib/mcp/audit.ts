@@ -23,12 +23,14 @@ export async function recordProposal(
   toolName: string,
   input: Record<string, unknown>,
   summary: string,
+  options?: { source?: "mcp" | "assistant"; conversationId?: string | null },
 ): Promise<string> {
   const { data, error } = await supabase
     .from("ai_audit_log")
     .insert({
       user_id: ownerId,
-      source: "mcp",
+      source: options?.source ?? "mcp",
+      conversation_id: options?.conversationId ?? null,
       status: "proposed",
       tool_name: toolName,
       input,
