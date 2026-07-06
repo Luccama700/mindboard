@@ -14,6 +14,10 @@ type RawTask = {
   id: string;
   title: string;
   due_date: string | null;
+  due_time: string | null;
+  duration_min: number | null;
+  gcal_event_id: string | null;
+  gcal_calendar_id: string | null;
   status: "todo" | "doing" | "done";
   priority: "low" | "med" | "high";
   notes: string | null;
@@ -118,6 +122,10 @@ function mapTasks(rawTasks: RawTask[]): TaskWithGroup[] {
       id: row.id,
       title: row.title,
       due_date: row.due_date,
+      due_time: row.due_time,
+      duration_min: row.duration_min,
+      gcal_event_id: row.gcal_event_id,
+      gcal_calendar_id: row.gcal_calendar_id,
       status: row.status,
       priority: row.priority,
       notes: row.notes,
@@ -138,7 +146,7 @@ export const getOpenTasks = cache(
     const { data } = await supabase
       .from("tasks")
       .select(
-        "id, title, due_date, status, priority, notes, group_id, created_at, completed_at, groups(name, color)",
+        "id, title, due_date, due_time, duration_min, status, priority, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, groups(name, color)",
       )
       .eq("user_id", userId)
       .neq("status", "done");
@@ -166,7 +174,7 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
       supabase
         .from("tasks")
         .select(
-          "id, title, due_date, status, priority, notes, group_id, created_at, completed_at, groups(name, color)",
+          "id, title, due_date, due_time, duration_min, status, priority, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, groups(name, color)",
         )
         .neq("status", "done")
         .not("due_date", "is", null),

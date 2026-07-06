@@ -16,7 +16,11 @@ import {
 import { getInventoryItems, getInventoryUsages } from "./lib/data/inventory";
 import { getUserPreferences } from "./lib/data/settings";
 import { financeSnapshot } from "./lib/snapshots/finance";
-import { scheduleSnapshot } from "./lib/snapshots/schedule";
+import {
+  freeGaps,
+  scheduleSnapshot,
+  type FreeGap,
+} from "./lib/snapshots/schedule";
 import {
   streamSnapshot,
   type StreamBillInput,
@@ -31,6 +35,7 @@ const getStreamData = cache(
     snapshot: StreamSnapshot;
     accounts: SpendAccount[];
     categories: SpendCategory[];
+    gaps: FreeGap[];
   }> => {
     const today = todayISO();
     const now = new Date();
@@ -84,6 +89,12 @@ const getStreamData = cache(
       today,
     });
     const schedule = scheduleSnapshot({
+      events: dash.events,
+      now,
+      wakeStartHour: prefs.wake_start_hour,
+      wakeEndHour: prefs.wake_end_hour,
+    });
+    const gaps = freeGaps({
       events: dash.events,
       now,
       wakeStartHour: prefs.wake_start_hour,
@@ -158,12 +169,13 @@ const getStreamData = cache(
         currency: a.currency,
       })),
       categories: (categoriesResult.data ?? []) as SpendCategory[],
+      gaps,
     };
   },
 );
 
 async function StreamSection({ userId }: { userId: string }) {
-  const { snapshot, accounts, categories } = await getStreamData(userId);
+  const { snapshot, accounts, categories, gaps } = await getStreamData(userId);
   const now = new Date();
   const clockLabel = `${String(now.getHours()).padStart(2, "0")}:${String(
     now.getMinutes(),
@@ -174,6 +186,7 @@ async function StreamSection({ userId }: { userId: string }) {
       snapshot={snapshot}
       accounts={accounts}
       categories={categories}
+      gaps={gaps}
       todayLabel={formatLongWeekdayMonthDay(now).toLowerCase()}
       clockLabel={clockLabel}
     />

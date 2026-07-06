@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useTransition } from "react";
+import { pushTaskToCalendar } from "@/app/actions/tasks";
 import { formatDue, todayISO } from "./date-utils";
 import type { Task, TaskWithGroup } from "./types";
 
@@ -13,6 +14,8 @@ export type GroupOption = {
 type UpdatePatch = {
   title?: string;
   dueDate?: string | null;
+  dueTime?: string | null;
+  durationMin?: number | null;
   groupId?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
@@ -172,6 +175,8 @@ function EditPanel({
 }) {
   const [titleDraft, setTitleDraft] = useState(task.title);
   const [notesDraft, setNotesDraft] = useState(task.notes ?? "");
+  const [pushState, setPushState] = useState<string | null>(null);
+  const [pushing, startPush] = useTransition();
   const dateInputRef = useRef<HTMLInputElement>(null);
 
   const today = todayISO();
@@ -279,6 +284,67 @@ function EditPanel({
           </button>
         )}
       </div>
+
+      {task.due_date && (
+        <div className="flex items-center flex-wrap gap-2">
+          <label className="text-[10px] tracking-widest uppercase text-muted">
+            time
+          </label>
+          <input
+            type="time"
+            step={900}
+            value={task.due_time ? task.due_time.slice(0, 5) : ""}
+            onChange={(e) =>
+              onUpdate(task.id, { dueTime: e.target.value || null })
+            }
+            aria-label="due time"
+            className="bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
+          />
+          {task.due_time && (
+            <>
+              <select
+                value={task.duration_min ?? 30}
+                onChange={(e) =>
+                  onUpdate(task.id, { durationMin: Number(e.target.value) })
+                }
+                aria-label="duration"
+                className="bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
+              >
+                {[15, 30, 45, 60, 90, 120, 180, 240].map((m) => (
+                  <option key={m} value={m}>
+                    {m < 60 ? `${m}m` : `${m / 60}h`}
+                  </option>
+                ))}
+              </select>
+              {task.gcal_event_id ? (
+                <span className="text-[10px] tracking-widest uppercase text-muted">
+                  ⇅ on calendar
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={pushing}
+                  onClick={() =>
+                    startPush(async () => {
+                      setPushState(null);
+                      const result = await pushTaskToCalendar(task.id);
+                      setPushState(
+                        result.error ? result.error : "pushed ⇅",
+                      );
+                    })
+                  }
+                  className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                >
+                  {pushing ? "pushing…" : "→ calendar event"}
+                </button>
+              )}
+              {pushState && (
+                <span className="text-[10px] text-muted">{pushState}</span>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <label className="text-[10px] tracking-widest uppercase text-muted">

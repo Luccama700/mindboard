@@ -41,7 +41,11 @@ type EventOverride = {
   allDay: boolean;
 };
 
-type TaskOverride = string | null;
+type TaskOverride = {
+  dateKey: string | null;
+  dueTime?: string | null;
+  durationMin?: number | null;
+};
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
@@ -124,6 +128,8 @@ export function DashboardCalendar({
   status,
   calendarLinks = {},
   initialView = "month",
+  wakeStartHour = 8,
+  wakeEndHour = 22,
 }: {
   month: string;
   tasks: TaskWithGroup[];
@@ -132,6 +138,8 @@ export function DashboardCalendar({
   status: CalendarStatus;
   calendarLinks?: Record<string, CalendarLink>;
   initialView?: "month" | "week";
+  wakeStartHour?: number;
+  wakeEndHour?: number;
 }) {
   const today = toDateKey(new Date());
   const grid = useMemo(() => buildGrid(month), [month]);
@@ -155,8 +163,16 @@ export function DashboardCalendar({
 
     for (const task of tasks) {
       const override = taskOverrides[task.id];
-      const due = override !== undefined ? override : task.due_date;
+      const due = override !== undefined ? override.dateKey : task.due_date;
       if (!due) continue;
+      const dueTime =
+        override && override.dueTime !== undefined
+          ? override.dueTime
+          : task.due_time;
+      const durationMin =
+        override && override.durationMin !== undefined
+          ? override.durationMin
+          : task.duration_min;
       const items = map.get(due) ?? [];
       items.push({
         kind: "task",
@@ -164,6 +180,9 @@ export function DashboardCalendar({
         title: task.title,
         color: task.group_color ?? "#b5ff3c",
         group: task.group_name ?? "inbox",
+        dueTime,
+        durationMin,
+        pushed: Boolean(task.gcal_event_id),
       });
       map.set(due, items);
     }
@@ -287,10 +306,17 @@ export function DashboardCalendar({
 
   async function onRescheduleTask(payload: RescheduleTask) {
     setErrorMessage(null);
-    setTaskOverrides((o) => ({ ...o, [payload.taskId]: payload.newDateKey }));
+    setTaskOverrides((o) => ({
+      ...o,
+      [payload.taskId]: {
+        dateKey: payload.newDateKey,
+        ...(payload.newTime !== undefined ? { dueTime: payload.newTime } : {}),
+      },
+    }));
     const result = await updateTask({
       id: payload.taskId,
       dueDate: payload.newDateKey,
+      ...(payload.newTime !== undefined ? { dueTime: payload.newTime } : {}),
     });
     if (result?.error) {
       setTaskOverrides((o) => {
@@ -300,6 +326,25 @@ export function DashboardCalendar({
       });
       setErrorMessage(result.error || "task reschedule failed");
     }
+  }
+
+  async function onResizeTask(taskId: string, durationMin: number) {
+    setErrorMessage(null);
+    setTaskOverrides((o) => {
+      const prev = o[taskId];
+      return {
+        ...o,
+        [taskId]: prev
+          ? { ...prev, durationMin }
+          : {
+              dateKey:
+                tasks.find((t) => t.id === taskId)?.due_date ?? null,
+              durationMin,
+            },
+      };
+    });
+    const result = await updateTask({ id: taskId, durationMin });
+    if (result?.error) setErrorMessage(result.error || "resize failed");
   }
 
   function onEditEvent(
@@ -457,6 +502,9 @@ export function DashboardCalendar({
       ) : (
         <WeekView
           selected={selected}
+          wakeStartHour={wakeStartHour}
+          wakeEndHour={wakeEndHour}
+          onResizeTask={onResizeTask}
           today={today}
           itemsByDate={itemsByDate}
           onSelect={setSelected}

@@ -2,8 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { createTask, toggleTaskStatus, updateTask } from "@/app/actions/tasks";
+import {
+  createTask,
+  toggleTaskStatus,
+  updateTask,
+} from "@/app/actions/tasks";
 import { updateInventoryItem } from "@/app/actions/inventory";
+import type { FreeGap } from "@/app/lib/snapshots/schedule";
 import type {
   StreamCard,
   StreamSnapshot,
@@ -50,8 +55,10 @@ function CardRow({
   card,
   section,
   leaving,
+  gaps,
   onDone,
   onSnooze,
+  onSchedule,
   onLogBill,
   onBuyTask,
   onAdjust,
@@ -61,8 +68,10 @@ function CardRow({
   card: StreamCard;
   section: SectionKey;
   leaving: boolean;
+  gaps: FreeGap[];
   onDone: (card: StreamCard) => void;
   onSnooze: (card: StreamCard, dateKey: string) => void;
+  onSchedule: (card: StreamCard, gap: FreeGap) => void;
   onLogBill: (card: StreamCard) => void;
   onBuyTask: (card: StreamCard) => void;
   onAdjust: (card: StreamCard, delta: number) => void;
@@ -70,6 +79,7 @@ function CardRow({
   boughtIds: Set<string>;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [dx, setDx] = useState(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const today = todayISO();
@@ -138,6 +148,46 @@ function CardRow({
                 {opt.label}
               </button>
             ))}
+          </div>
+        )}
+      </div>,
+    );
+    actions.push(
+      <div key="schedule" className="relative">
+        <button
+          type="button"
+          onClick={() => setScheduleOpen((v) => !v)}
+          aria-expanded={scheduleOpen}
+          className="min-h-11 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors"
+        >
+          schedule ▾
+        </button>
+        {scheduleOpen && (
+          <div className="absolute left-0 top-full mt-1 z-30 border border-line bg-popover shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+            {gaps.map((gap) => (
+              <button
+                key={`${gap.dateKey}-${gap.start}`}
+                type="button"
+                onClick={() => {
+                  setScheduleOpen(false);
+                  onSchedule(card, gap);
+                }}
+                className="flex w-full min-h-11 items-center gap-2 px-4 text-action lowercase text-fg hover:bg-card transition-colors whitespace-nowrap"
+              >
+                <span>
+                  {gap.dateKey === today ? "today" : "tomorrow"} {gap.start}
+                </span>
+                <span className="text-meta text-muted">
+                  {Math.round((gap.minutes / 60) * 10) / 10}h free
+                </span>
+              </button>
+            ))}
+            <Link
+              href="/week"
+              className="flex w-full min-h-11 items-center px-4 text-action lowercase text-muted hover:text-fg hover:bg-card transition-colors whitespace-nowrap"
+            >
+              pick on week →
+            </Link>
           </div>
         )}
       </div>,
@@ -257,12 +307,14 @@ export function StreamClient({
   snapshot,
   accounts,
   categories,
+  gaps,
   todayLabel,
   clockLabel,
 }: {
   snapshot: StreamSnapshot;
   accounts: SpendAccount[];
   categories: SpendCategory[];
+  gaps: FreeGap[];
   todayLabel: string;
   clockLabel: string;
 }) {
@@ -273,7 +325,7 @@ export function StreamClient({
   const [extraNext, setExtraNext] = useState<StreamCard[]>([]);
   const [logOpen, setLogOpen] = useState(false);
   const [mood, setMood] = useState<number | null>(snapshot.pulse.mood);
-  const [spendCard, setSpendCard] = useState<StreamCard | null>(null);
+  const [spendCard, setSpendCard] = useState<{ card: StreamCard; section: SectionKey } | null>(null);
   const [, startTransition] = useTransition();
 
   // Optimistically surface tasks captured from the Dock.
@@ -317,29 +369,51 @@ export function StreamClient({
     [],
   );
 
-  function resolve(cardId: string) {
-    setLeaving((prev) => new Set(prev).add(cardId));
+  // Resolution is scoped to the section a card left from, so the same entity
+  // legitimately reappearing in another section (snooze -> LATER) still shows.
+  function resolve(section: SectionKey, cardId: string) {
+    const key = `${section}:${cardId}`;
+    setLeaving((prev) => new Set(prev).add(key));
     setTimeout(() => {
-      setHidden((prev) => new Set(prev).add(cardId));
+      setHidden((prev) => new Set(prev).add(key));
     }, 300);
   }
 
-  function onDone(card: StreamCard) {
-    if (card.entity.kind !== "task") return;
-    const task = card.entity.task;
-    resolve(card.id);
-    startTransition(async () => {
-      await toggleTaskStatus(task.id, task.status);
-    });
+  function onDone(section: SectionKey) {
+    return (card: StreamCard) => {
+      if (card.entity.kind !== "task") return;
+      const task = card.entity.task;
+      resolve(section, card.id);
+      startTransition(async () => {
+        await toggleTaskStatus(task.id, task.status);
+      });
+    };
   }
 
-  function onSnooze(card: StreamCard, dateKey: string) {
-    if (card.entity.kind !== "task") return;
-    const task = card.entity.task;
-    resolve(card.id);
-    startTransition(async () => {
-      await updateTask({ id: task.id, dueDate: dateKey });
-    });
+  function onSnooze(section: SectionKey) {
+    return (card: StreamCard, dateKey: string) => {
+      if (card.entity.kind !== "task") return;
+      const task = card.entity.task;
+      resolve(section, card.id);
+      startTransition(async () => {
+        await updateTask({ id: task.id, dueDate: dateKey, dueTime: null });
+      });
+    };
+  }
+
+  function onSchedule(section: SectionKey) {
+    return (card: StreamCard, gap: FreeGap) => {
+      if (card.entity.kind !== "task") return;
+      const task = card.entity.task;
+      resolve(section, card.id);
+      startTransition(async () => {
+        await updateTask({
+          id: task.id,
+          dueDate: gap.dateKey,
+          dueTime: gap.start,
+        });
+      });
+    };
   }
 
   function onBuyTask(card: StreamCard) {
@@ -369,13 +443,13 @@ export function StreamClient({
     });
   }
 
-  const visible = (cards: StreamCard[]) =>
-    cards.filter((c) => !hidden.has(c.id));
+  const visible = (section: SectionKey, cards: StreamCard[]) =>
+    cards.filter((c) => !hidden.has(`${section}:${c.id}`));
 
-  const nowCards = visible(snapshot.now);
-  const nextCards = visible([...extraNext, ...snapshot.next]);
-  const laterCards = visible(snapshot.later);
-  const looseCards = visible(snapshot.loose);
+  const nowCards = visible("now", snapshot.now);
+  const nextCards = visible("next", [...extraNext, ...snapshot.next]);
+  const laterCards = visible("later", snapshot.later);
+  const looseCards = visible("loose", snapshot.loose);
   const empty =
     nowCards.length === 0 && nextCards.length === 0 && laterCards.length === 0;
 
@@ -385,16 +459,6 @@ export function StreamClient({
   }, [mood]);
 
   const delta = snapshot.pulse.todayDelta;
-
-  const sectionProps = {
-    onDone,
-    onSnooze,
-    onLogBill: (card: StreamCard) => setSpendCard(card),
-    onBuyTask,
-    onAdjust,
-    onOpenLog: () => setLogOpen(true),
-    boughtIds: bought,
-  };
 
   function renderSection(
     key: SectionKey,
@@ -413,8 +477,16 @@ export function StreamClient({
               key={card.id}
               card={card}
               section={key}
-              leaving={leaving.has(card.id)}
-              {...sectionProps}
+              leaving={leaving.has(`${key}:${card.id}`)}
+              gaps={gaps}
+              onDone={onDone(key)}
+              onSnooze={onSnooze(key)}
+              onSchedule={onSchedule(key)}
+              onLogBill={(card) => setSpendCard({ card, section: key })}
+              onBuyTask={onBuyTask}
+              onAdjust={onAdjust}
+              onOpenLog={() => setLogOpen(true)}
+              boughtIds={bought}
             />
           ))}
         </div>
@@ -502,18 +574,18 @@ export function StreamClient({
           onClose={() => setLogOpen(false)}
           onSaved={(m) => {
             setMood(m);
-            setHidden((prev) => new Set(prev).add("log:today"));
+            setHidden((prev) => new Set(prev).add("later:log:today"));
           }}
         />
       )}
-      {spendCard && spendCard.entity.kind === "bill" && (
+      {spendCard && spendCard.card.entity.kind === "bill" && (
         <SpendSheet
-          billName={spendCard.entity.name}
-          amount={spendCard.entity.amount}
+          billName={spendCard.card.entity.name}
+          amount={spendCard.card.entity.amount}
           accounts={accounts}
           categories={categories}
           onClose={() => setSpendCard(null)}
-          onLogged={() => resolve(spendCard.id)}
+          onLogged={() => resolve(spendCard.section, spendCard.card.id)}
         />
       )}
     </div>

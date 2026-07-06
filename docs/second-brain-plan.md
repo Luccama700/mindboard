@@ -522,3 +522,48 @@ choreography check on the installed PWA (the M1 gate from REDESIGN.md).
 build green; dev smoke 200 with no vault/task leakage pre-auth. Deviation
 noted: the ≥1280px stream-beside-week split and event-card reschedule sheets
 ride with later milestones (M3 gap chips, M6 polish).
+
+---
+
+## Implementation log — Redesign M3 (2026-07-06): scheduling depth
+
+Tasks can now hold a time, become blocks on the week grid, and graduate into
+real Google Calendar events — the checkpoint the owner explicitly opened.
+
+**Shipped:**
+- **Migration `0018_task_scheduling.sql`** (repo + live DB via Supabase MCP):
+  `tasks.due_time`, `duration_min`, `gcal_event_id`, `gcal_calendar_id`. Task
+  type/selects widened everywhere (`TASK_COLUMNS`); MCP read shapes untouched
+  (live external contract).
+- **Actions**: `createTask`/`updateTask` accept `dueTime`/`durationMin`
+  (validated; clearing a date clears the time). `updateTask` mirrors schedule
+  changes of a pushed task to Google via the existing `updateEvent` PATCH,
+  failing soft — the local block is the source of truth. New
+  `pushTaskToCalendar`: new `createEvent` in `utils/google/calendar.ts`
+  (insert; `calendar.events` scope already covered it) on the group-linked
+  calendar else primary, in the user's saved timezone — the first real use of
+  `user_settings.timezone`.
+- **Capture**: pure `extractTrailingTime` in `app/lib/capture/parse.ts`
+  ("3pm" / "17:30" / "9:15am" / "at 7 pm"; bare numbers rejected as
+  quantities; mid-title times ignored) with 14 table-driven tests; the Dock
+  shows a dismissable `⌚ HH:MM` chip and submits title + due_time.
+- **Week view**: time-blocked tasks render as hollow outlined blocks (solid =
+  Google, hollow = yours, `⇅` = mirrored); dragging a task chip into the hour
+  grid sets its time (drop-position math via dnd-kit's translated rect,
+  15-min snap); dragging a block back to the due row clears it; a bottom
+  handle drag-resizes duration; free-gap underlay (accent-wash, wake-window
+  aware, ≥45min, duration labels + `plan ◇` chips) and a now-line in today's
+  column. Event drag behavior byte-identical to before.
+- **[schedule ▾]** on stream task cards: the next 3 free gaps today/tomorrow
+  (pure `freeGaps` in `schedule.ts`, 5 tests: window clipping, short-gap
+  drop, quarter-hour rounding, post-wake-end) as one-tap chips + "pick on
+  week →". The task edit panel gains time input, duration select, and
+  `→ calendar event` push (shows `⇅ on calendar` once pushed).
+- **Stream rule**: due-today tasks with a past due_time now enter NOW (tested);
+  timed tasks sort by time ahead of untimed in NEXT; metas carry `⌚ HH:MM`.
+- Test infra: `server-only` now resolves to a stub via a vitest alias, so
+  server modules are testable without per-test mocks.
+
+**Verified:** lint clean; 186 tests (+22); build green; dev smoke on /, /week,
+/tasks with zero console errors. Owner-gated: on-phone drag feel + a real
+push→drag→Google PATCH round-trip.

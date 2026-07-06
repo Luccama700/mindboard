@@ -13,6 +13,10 @@ function task(over: Partial<TaskWithGroup> & { id: string }): TaskWithGroup {
   return {
     title: `task ${over.id}`,
     due_date: null,
+    due_time: null,
+    duration_min: null,
+    gcal_event_id: null,
+    gcal_calendar_id: null,
     status: "todo",
     priority: "med",
     notes: null,
@@ -51,6 +55,21 @@ function ids(cards: { id: string }[]): string[] {
 }
 
 describe("NOW membership (objective facts only)", () => {
+  test("a due-today task with a past due_time is NOW; a future due_time stays NEXT", () => {
+    const snap = streamSnapshot(
+      base({
+        tasks: [
+          task({ id: "past", due_date: TODAY, due_time: "11:00:00" }),
+          task({ id: "future", due_date: TODAY, due_time: "15:00:00" }),
+          task({ id: "untimed", due_date: TODAY }),
+        ],
+      }),
+    );
+    expect(ids(snap.now)).toEqual(["task:past"]);
+    expect(ids(snap.next)).toEqual(["task:future", "task:untimed"]);
+    expect(snap.now[0].meta).toContain("⌚ 11:00");
+  });
+
   test("overdue task is NOW; due-today task is NEXT; priority never promotes", () => {
     const snap = streamSnapshot(
       base({

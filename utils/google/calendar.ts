@@ -294,6 +294,56 @@ export async function listCalendars(
     }));
 }
 
+// Insert a real Google Calendar event (used to push a time-blocked task out).
+// Returns the created event's id. One-way: Mindboard writes; Google is never
+// a source of task truth.
+export async function createEvent(
+  userId: string,
+  calendarId: string,
+  body: {
+    summary: string;
+    start: { dateTime: string; timeZone: string };
+    end: { dateTime: string; timeZone: string };
+    description?: string;
+  },
+): Promise<string> {
+  const token = await getValidAccessToken(userId);
+  const url = new URL(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      calendarId,
+    )}/events`,
+  );
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (response.status === 401) {
+    throw new GoogleCalendarConnectionError(
+      "google rejected the access token — sign out and back in",
+    );
+  }
+  if (response.status === 403) {
+    throw new GoogleCalendarConnectionError(
+      "google calendar write access not granted — sign out and back in to authorize the calendar.events scope",
+    );
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `event create failed: ${response.status} ${text || response.statusText}`,
+    );
+  }
+  const payload = (await response.json()) as { id?: string };
+  if (!payload.id) throw new Error("event create returned no id");
+  return payload.id;
+}
+
 export async function updateEvent(
   userId: string,
   calendarId: string,

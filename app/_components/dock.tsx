@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createTask } from "@/app/actions/tasks";
+import { extractTrailingTime } from "@/app/lib/capture/parse";
 import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
 import { formatDue, todayISO } from "./date-utils";
 import type { GroupOption } from "./task-row";
@@ -42,6 +43,7 @@ export function Dock({
   const [busy, setBusy] = useState(false);
   const [typing, setTyping] = useState(false);
   const [keyboardUp, setKeyboardUp] = useState(false);
+  const [timeDisabledFor, setTimeDisabledFor] = useState<string | null>(null);
 
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -53,6 +55,11 @@ export function Dock({
   const hasNotes = Boolean(notes.trim());
   const selectedGroup =
     groups.find((group) => group.id === selectedGroupId) ?? null;
+  const parsedRaw = extractTrailingTime(title);
+  // Dismissing the chip only sticks for the exact phrase that was dismissed —
+  // editing the time re-offers it.
+  const parsedTime =
+    parsedRaw && parsedRaw.matched !== timeDisabledFor ? parsedRaw : null;
 
   const railCollapsed = typing || keyboardUp;
 
@@ -108,19 +115,26 @@ export function Dock({
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const t = title.trim();
+    const parsed = parsedTime;
+    const t = (parsed ? parsed.title : title).trim();
+    const dueTime = parsed && dueDate ? parsed.time : null;
     const markdownNotes = notes.trim() || null;
     if (!t || busy) return;
 
     setBusy(true);
     setTitle("");
     setNotes("");
+    setTimeDisabledFor(null);
 
     const tempId = `temp-${crypto.randomUUID()}`;
     const optimisticTask: Task = {
       id: tempId,
       title: t,
       due_date: dueDate,
+      due_time: dueTime,
+      duration_min: null,
+      gcal_event_id: null,
+      gcal_calendar_id: null,
       status: "todo",
       priority,
       notes: markdownNotes,
@@ -136,6 +150,7 @@ export function Dock({
       title: t,
       groupId: selectedGroupId,
       dueDate,
+      dueTime,
       notes: markdownNotes,
       priority,
     });
@@ -351,6 +366,18 @@ export function Dock({
           >
             {hasNotes ? "✓ notes" : "+ notes"}
           </button>
+
+          {parsedTime && dueDate && (
+            <button
+              type="button"
+              onClick={() => setTimeDisabledFor(parsedTime.matched)}
+              aria-label={`remove time ${parsedTime.time}`}
+              title="tap to keep the time words as part of the title"
+              className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border bg-accent text-accent-fg border-accent transition-colors"
+            >
+              ⌚ {parsedTime.time} ×
+            </button>
+          )}
 
           <button
             type="button"

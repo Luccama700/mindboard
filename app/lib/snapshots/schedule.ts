@@ -56,6 +56,95 @@ function freeMsInWindow(busy: Interval[], lo: number, hi: number): number {
   return hi - lo - covered;
 }
 
+export type FreeGap = {
+  dateKey: string; // YYYY-MM-DD
+  start: string; // "HH:MM"
+  end: string; // "HH:MM"
+  minutes: number;
+};
+
+function dateKeyOf(date: Date): string {
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${m}-${d}`;
+}
+
+function clockOf(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(
+    d.getMinutes(),
+  ).padStart(2, "0")}`;
+}
+
+// The next free stretches inside the wake window, today first (from now),
+// then subsequent days. Powers the [schedule ▾] one-tap chips and the week
+// view's free-gap underlay.
+export function freeGaps(input: {
+  events: ScheduleEvent[];
+  now: Date;
+  wakeStartHour?: number;
+  wakeEndHour?: number;
+  days?: number;
+  minMinutes?: number;
+  limit?: number;
+}): FreeGap[] {
+  const {
+    events,
+    now,
+    wakeStartHour = DEFAULT_WAKE_START_HOUR,
+    wakeEndHour = DEFAULT_WAKE_END_HOUR,
+    days = 2,
+    minMinutes = 45,
+    limit = 3,
+  } = input;
+
+  const busy = timedIntervals(events).sort((a, b) => a.start - b.start);
+  const gaps: FreeGap[] = [];
+
+  for (let offset = 0; offset < days && gaps.length < limit; offset++) {
+    const day = new Date(now);
+    day.setDate(now.getDate() + offset);
+    const wakeStart = new Date(day);
+    wakeStart.setHours(wakeStartHour, 0, 0, 0);
+    const wakeEnd = new Date(day);
+    wakeEnd.setHours(wakeEndHour, 0, 0, 0);
+
+    let cursor =
+      offset === 0
+        ? Math.max(now.getTime(), wakeStart.getTime())
+        : wakeStart.getTime();
+    const hi = wakeEnd.getTime();
+    if (cursor >= hi) continue;
+
+    // Round the cursor up to the next quarter hour so chips land on clean times.
+    const quarter = 15 * 60_000;
+    cursor = Math.ceil(cursor / quarter) * quarter;
+
+    const dayBusy = busy
+      .map((b) => ({
+        start: Math.max(b.start, cursor),
+        end: Math.min(b.end, hi),
+      }))
+      .filter((b) => b.end > b.start)
+      .sort((a, b) => a.start - b.start);
+
+    for (const block of [...dayBusy, { start: hi, end: hi }]) {
+      if (block.start - cursor >= minMinutes * 60_000) {
+        gaps.push({
+          dateKey: dateKeyOf(day),
+          start: clockOf(cursor),
+          end: clockOf(block.start),
+          minutes: Math.round((block.start - cursor) / 60_000),
+        });
+        if (gaps.length >= limit) break;
+      }
+      cursor = Math.max(cursor, block.end);
+    }
+  }
+
+  return gaps;
+}
+
 export function scheduleSnapshot(input: {
   events: ScheduleEvent[];
   now: Date;

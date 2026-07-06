@@ -5,6 +5,9 @@ export type CalendarItem =
       title: string;
       color: string;
       group: string;
+      dueTime: string | null; // "HH:MM:SS" — renders as a block in the hour grid
+      durationMin: number | null;
+      pushed: boolean; // mirrored to a real Google Calendar event
     }
   | {
       kind: "event";

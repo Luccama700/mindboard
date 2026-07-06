@@ -170,13 +170,23 @@ function dateKeyOf(iso: string): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
+function shortTime(time: string): string {
+  return time.slice(0, 5);
+}
+
 function taskMeta(task: TaskWithGroup, today: string): string {
   const parts: string[] = [];
   if (task.due_date) {
     const late = daysLate(task.due_date, today);
     if (late > 0) parts.push(late === 1 ? "1d late" : `${late}d late`);
-    else if (late === 0) parts.push("today");
-    else parts.push(shortDate(task.due_date));
+    else if (late === 0)
+      parts.push(task.due_time ? `today ⌚ ${shortTime(task.due_time)}` : "today");
+    else
+      parts.push(
+        task.due_time
+          ? `${shortDate(task.due_date)} ⌚ ${shortTime(task.due_time)}`
+          : shortDate(task.due_date),
+      );
   }
   if (task.priority === "high") parts.push("!!!");
   if (task.group_name) parts.push(task.group_name);
@@ -320,8 +330,16 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .sort((a, b) => a.start.localeCompare(b.start))
     .map((e) => eventCard(e, now));
 
+  const nowClock = `${String(now.getHours()).padStart(2, "0")}:${String(
+    now.getMinutes(),
+  ).padStart(2, "0")}`;
+  const timePast = (t: TaskWithGroup) =>
+    t.due_date === today &&
+    t.due_time !== null &&
+    shortTime(t.due_time) <= nowClock;
+
   const overdueTasks = openTasks
-    .filter((t) => t.due_date && t.due_date < today)
+    .filter((t) => (t.due_date && t.due_date < today) || timePast(t))
     .sort(byPriorityThenLateness(today))
     .map((t) => taskCard(t, today));
 
@@ -364,8 +382,14 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .map((e) => eventCard(e, now, { tomorrow: true }));
 
   const dueTodayTasks = openTasks
-    .filter((t) => t.due_date === today)
-    .sort(byPriorityThenLateness(today))
+    .filter((t) => t.due_date === today && !timePast(t))
+    .sort((a, b) => {
+      // Time-anchored tasks first, by time; untimed after, by priority.
+      if (a.due_time && b.due_time) return a.due_time.localeCompare(b.due_time);
+      if (a.due_time) return -1;
+      if (b.due_time) return 1;
+      return byPriorityThenLateness(today)(a, b);
+    })
     .map((t) => taskCard(t, today));
 
   const lowItems = items

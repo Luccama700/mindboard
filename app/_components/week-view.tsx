@@ -11,6 +11,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
+import Link from "next/link";
 import { useRef, useState } from "react";
 import type { CalendarItem } from "./calendar-types";
 import { formatClockTime, formatHourLabel } from "./date-utils";
@@ -21,6 +22,11 @@ const START_HOUR = 6;
 const END_HOUR = 22;
 const HOUR_HEIGHT = 42;
 const SNAP_MINUTES = 15;
+const DEFAULT_TASK_MINUTES = 30;
+const GAP_MIN_MINUTES = 45;
+
+type TaskItem = Extract<CalendarItem, { kind: "task" }>;
+type EventItem = Extract<CalendarItem, { kind: "event" }>;
 
 function toDateKey(date: Date) {
   const year = date.getFullYear();
@@ -44,15 +50,24 @@ function minutesIntoDay(value: string) {
   return date.getHours() * 60 + date.getMinutes();
 }
 
-function timedStyle(item: Extract<CalendarItem, { kind: "event" }>) {
+function timeToMinutes(time: string) {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function minutesToTime(minutes: number) {
+  const clamped = Math.max(0, Math.min(minutes, 23 * 60 + 45));
+  const hh = String(Math.floor(clamped / 60)).padStart(2, "0");
+  const mm = String(clamped % 60).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function blockStyle(startMinutes: number, endMinutes: number) {
   const start = Math.min(
-    Math.max(minutesIntoDay(item.start), START_HOUR * 60),
+    Math.max(startMinutes, START_HOUR * 60),
     END_HOUR * 60 - 30,
   );
-  const end = Math.max(
-    Math.min(minutesIntoDay(item.end), END_HOUR * 60),
-    start + 30,
-  );
+  const end = Math.max(Math.min(endMinutes, END_HOUR * 60), start + 30);
   const top = ((start - START_HOUR * 60) / 60) * HOUR_HEIGHT;
   const rawHeight = ((end - start) / 60) * HOUR_HEIGHT;
 
@@ -62,7 +77,11 @@ function timedStyle(item: Extract<CalendarItem, { kind: "event" }>) {
   };
 }
 
-function formatRange(item: Extract<CalendarItem, { kind: "event" }>) {
+function timedStyle(item: EventItem) {
+  return blockStyle(minutesIntoDay(item.start), minutesIntoDay(item.end));
+}
+
+function formatRange(item: EventItem) {
   if (item.allDay) return "all day";
   return `${formatClockTime(item.start)} – ${formatClockTime(item.end)}`;
 }
@@ -72,8 +91,22 @@ function buildWeek(selected: string) {
   return Array.from({ length: 7 }, (_, index) => addDays(start, index));
 }
 
+function taskMinutes(item: TaskItem): { start: number; end: number } | null {
+  if (!item.dueTime) return null;
+  const start = timeToMinutes(item.dueTime.slice(0, 5));
+  return { start, end: start + (item.durationMin ?? DEFAULT_TASK_MINUTES) };
+}
+
 type DragData =
   | { kind: "task"; id: string; dateKey: string }
+  | {
+      kind: "task-timed";
+      id: string;
+      dateKey: string;
+      startMinutes: number;
+      durationMin: number;
+    }
+  | { kind: "task-resize"; id: string; durationMin: number }
   | {
       kind: "event-timed";
       id: string;
@@ -94,15 +127,11 @@ export type RescheduleEvent = {
 export type RescheduleTask = {
   taskId: string;
   newDateKey: string;
+  // undefined = keep the current time; null = clear it; "HH:MM" = set it.
+  newTime?: string | null;
 };
 
-function TaskChip({
-  item,
-  dateKey,
-}: {
-  item: Extract<CalendarItem, { kind: "task" }>;
-  dateKey: string;
-}) {
+function TaskChip({ item, dateKey }: { item: TaskItem; dateKey: string }) {
   const draggable = useDraggable({
     id: `task-${item.id}`,
     data: { kind: "task", id: item.id, dateKey } satisfies DragData,
@@ -124,11 +153,78 @@ function TaskChip({
   );
 }
 
+// A time-blocked task: hollow (outlined) so owned blocks read differently
+// from solid Google events; ⇅ marks a block mirrored to Google.
+function TimedTaskBlock({
+  item,
+  dateKey,
+}: {
+  item: TaskItem;
+  dateKey: string;
+}) {
+  const minutes = taskMinutes(item)!;
+  const draggable = useDraggable({
+    id: `task-timed-${item.id}`,
+    data: {
+      kind: "task-timed",
+      id: item.id,
+      dateKey,
+      startMinutes: minutes.start,
+      durationMin: item.durationMin ?? DEFAULT_TASK_MINUTES,
+    } satisfies DragData,
+  });
+  const {
+    attributes: resizeAttributes,
+    listeners: resizeListeners,
+    setNodeRef: setResizeRef,
+  } = useDraggable({
+    id: `task-resize-${item.id}`,
+    data: {
+      kind: "task-resize",
+      id: item.id,
+      durationMin: item.durationMin ?? DEFAULT_TASK_MINUTES,
+    } satisfies DragData,
+  });
+  const { attributes, listeners, setNodeRef, isDragging } = draggable;
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      className={`absolute left-1 right-1 overflow-hidden border-2 bg-page/85 px-1.5 py-0.5 cursor-grab touch-none z-10 ${
+        isDragging ? "opacity-30" : ""
+      }`}
+      style={{
+        ...blockStyle(minutes.start, minutes.end),
+        borderColor: item.color,
+      }}
+    >
+      <p className="truncate text-[11px] font-bold text-fg">
+        {item.pushed && <span aria-hidden>⇅ </span>}
+        {item.title}
+      </p>
+      <p className="truncate text-[10px] text-muted">
+        {minutesToTime(minutes.start)} – {minutesToTime(minutes.end)}
+      </p>
+      <div
+        ref={setResizeRef}
+        {...resizeAttributes}
+        {...resizeListeners}
+        aria-label={`resize ${item.title}`}
+        className="absolute left-0 right-0 bottom-0 h-3 cursor-ns-resize touch-none"
+      >
+        <div className="mx-auto mt-1 h-0.5 w-6" style={{ backgroundColor: item.color }} />
+      </div>
+    </div>
+  );
+}
+
 function AllDayEventChip({
   item,
   dateKey,
 }: {
-  item: Extract<CalendarItem, { kind: "event" }>;
+  item: EventItem;
   dateKey: string;
 }) {
   const isWritable = item.writable !== false;
@@ -158,7 +254,7 @@ function TimedEventBlock({
   item,
   dateKey,
 }: {
-  item: Extract<CalendarItem, { kind: "event" }>;
+  item: EventItem;
   dateKey: string;
 }) {
   const isWritable = item.writable !== false;
@@ -237,6 +333,72 @@ function DragPreview({ item }: { item: CalendarItem }) {
   );
 }
 
+// Free stretches inside the wake window, drawn under the events. Each gap of
+// 45+ minutes shows its duration and a plan ◇ handoff.
+function FreeGapUnderlay({
+  events,
+  isToday,
+  nowMinutes,
+  wakeStartHour,
+  wakeEndHour,
+}: {
+  events: EventItem[];
+  isToday: boolean;
+  nowMinutes: number;
+  wakeStartHour: number;
+  wakeEndHour: number;
+}) {
+  const lo = Math.max(
+    wakeStartHour * 60,
+    START_HOUR * 60,
+    isToday ? Math.ceil(nowMinutes / SNAP_MINUTES) * SNAP_MINUTES : 0,
+  );
+  const hi = Math.min(wakeEndHour * 60, END_HOUR * 60);
+  if (hi <= lo) return null;
+
+  const busy = events
+    .map((e) => ({
+      start: Math.max(minutesIntoDay(e.start), lo),
+      end: Math.min(minutesIntoDay(e.end), hi),
+    }))
+    .filter((b) => b.end > b.start)
+    .sort((a, b) => a.start - b.start);
+
+  const gaps: { start: number; end: number }[] = [];
+  let cursor = lo;
+  for (const block of [...busy, { start: hi, end: hi }]) {
+    if (block.start - cursor >= GAP_MIN_MINUTES) {
+      gaps.push({ start: cursor, end: block.start });
+    }
+    cursor = Math.max(cursor, block.end);
+  }
+
+  return (
+    <>
+      {gaps.map((gap) => {
+        const hours = Math.round(((gap.end - gap.start) / 60) * 10) / 10;
+        return (
+          <div
+            key={gap.start}
+            className="absolute left-0 right-0 bg-accent-wash pointer-events-none"
+            style={blockStyle(gap.start, gap.end)}
+          >
+            <div className="flex items-start justify-between px-1 pt-0.5">
+              <span className="text-[9px] text-muted">{hours}h</span>
+              <Link
+                href="/plan"
+                className="pointer-events-auto text-[9px] text-muted hover:text-fg transition-colors"
+              >
+                plan ◇
+              </Link>
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 export function WeekView({
   selected,
   today,
@@ -244,6 +406,9 @@ export function WeekView({
   onSelect,
   onRescheduleEvent,
   onRescheduleTask,
+  onResizeTask,
+  wakeStartHour = 8,
+  wakeEndHour = 22,
 }: {
   selected: string;
   today: string;
@@ -251,10 +416,16 @@ export function WeekView({
   onSelect: (key: string) => void;
   onRescheduleEvent: (e: RescheduleEvent) => void;
   onRescheduleTask: (t: RescheduleTask) => void;
+  onResizeTask?: (taskId: string, durationMin: number) => void;
+  wakeStartHour?: number;
+  wakeEndHour?: number;
 }) {
   const week = buildWeek(selected);
   const timedRef = useRef<HTMLDivElement>(null);
   const [activeItem, setActiveItem] = useState<CalendarItem | null>(null);
+
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -289,9 +460,31 @@ export function WeekView({
     return null;
   }
 
+  // Where (in day-minutes) the dragged element's top edge landed, or null when
+  // it ended outside the hour grid.
+  function droppedMinutes(event: DragEndEvent): number | null {
+    const grid = timedRef.current;
+    const translated = event.active.rect.current.translated;
+    if (!grid || !translated) return null;
+    const gridRect = grid.getBoundingClientRect();
+    if (
+      translated.top < gridRect.top - 8 ||
+      translated.top > gridRect.bottom
+    ) {
+      return null;
+    }
+    const raw =
+      ((translated.top - gridRect.top) / HOUR_HEIGHT) * 60 + START_HOUR * 60;
+    const snapped = Math.round(raw / SNAP_MINUTES) * SNAP_MINUTES;
+    return Math.max(
+      START_HOUR * 60,
+      Math.min(snapped, END_HOUR * 60 - SNAP_MINUTES),
+    );
+  }
+
   function handleDragStart(event: DragStartEvent) {
     const data = event.active.data.current as DragData | undefined;
-    if (!data) return;
+    if (!data || data.kind === "task-resize") return;
     const item = findItem(data.id);
     if (item) setActiveItem(item);
   }
@@ -304,10 +497,67 @@ export function WeekView({
     const colW = columnWidth();
     const dayShift = Math.round(event.delta.x / colW);
 
+    if (data.kind === "task-resize") {
+      const minuteDelta =
+        Math.round((event.delta.y / HOUR_HEIGHT) * 60 / SNAP_MINUTES) *
+        SNAP_MINUTES;
+      if (minuteDelta === 0) return;
+      const next = Math.max(SNAP_MINUTES, data.durationMin + minuteDelta);
+      onResizeTask?.(data.id, next);
+      return;
+    }
+
     if (data.kind === "task") {
+      const minutes = droppedMinutes(event);
+      if (minutes !== null) {
+        // Dropped inside the hour grid: the task becomes a time-block.
+        onRescheduleTask({
+          taskId: data.id,
+          newDateKey: dayShift === 0 ? data.dateKey : shiftDateKey(data.dateKey, dayShift),
+          newTime: minutesToTime(minutes),
+        });
+        return;
+      }
       if (dayShift === 0) return;
-      const newDateKey = shiftDateKey(data.dateKey, dayShift);
-      onRescheduleTask({ taskId: data.id, newDateKey });
+      onRescheduleTask({
+        taskId: data.id,
+        newDateKey: shiftDateKey(data.dateKey, dayShift),
+      });
+      return;
+    }
+
+    if (data.kind === "task-timed") {
+      const grid = timedRef.current;
+      const translated = event.active.rect.current.translated;
+      if (grid && translated) {
+        const gridRect = grid.getBoundingClientRect();
+        if (translated.top < gridRect.top - 12) {
+          // Dragged back up into the all-day row: the block dissolves.
+          onRescheduleTask({
+            taskId: data.id,
+            newDateKey:
+              dayShift === 0
+                ? data.dateKey
+                : shiftDateKey(data.dateKey, dayShift),
+            newTime: null,
+          });
+          return;
+        }
+      }
+      const rawMinuteShift = (event.delta.y / HOUR_HEIGHT) * 60;
+      const minuteShift =
+        Math.round(rawMinuteShift / SNAP_MINUTES) * SNAP_MINUTES;
+      if (dayShift === 0 && minuteShift === 0) return;
+      const newStart = Math.max(
+        START_HOUR * 60,
+        Math.min(data.startMinutes + minuteShift, END_HOUR * 60 - SNAP_MINUTES),
+      );
+      onRescheduleTask({
+        taskId: data.id,
+        newDateKey:
+          dayShift === 0 ? data.dateKey : shiftDateKey(data.dateKey, dayShift),
+        newTime: minutesToTime(newStart),
+      });
       return;
     }
 
@@ -393,9 +643,9 @@ export function WeekView({
               const key = toDateKey(date);
               const allDayItems = (itemsByDate.get(key) ?? []).filter(
                 (item) =>
-                  item.kind === "task" ||
+                  (item.kind === "task" && !item.dueTime) ||
                   item.kind === "finance" ||
-                  item.allDay,
+                  (item.kind === "event" && item.allDay),
               );
 
               return (
@@ -455,10 +705,18 @@ export function WeekView({
 
             {week.map((date) => {
               const key = toDateKey(date);
-              const timedItems = (itemsByDate.get(key) ?? []).filter(
-                (item): item is Extract<CalendarItem, { kind: "event" }> =>
+              const dayItems = itemsByDate.get(key) ?? [];
+              const timedItems = dayItems.filter(
+                (item): item is EventItem =>
                   item.kind === "event" && !item.allDay,
               );
+              const timedTasks = dayItems.filter(
+                (item): item is TaskItem =>
+                  item.kind === "task" && item.dueTime !== null,
+              );
+              const isToday = key === today;
+              const nowTop =
+                ((nowMinutes - START_HOUR * 60) / 60) * HOUR_HEIGHT;
 
               return (
                 <div
@@ -474,9 +732,34 @@ export function WeekView({
                     />
                   ))}
 
+                  <FreeGapUnderlay
+                    events={timedItems}
+                    isToday={isToday}
+                    nowMinutes={nowMinutes}
+                    wakeStartHour={wakeStartHour}
+                    wakeEndHour={wakeEndHour}
+                  />
+
                   {timedItems.map((item) => (
                     <TimedEventBlock key={item.id} item={item} dateKey={key} />
                   ))}
+
+                  {timedTasks.map((item) => (
+                    <TimedTaskBlock key={item.id} item={item} dateKey={key} />
+                  ))}
+
+                  {isToday &&
+                    nowMinutes >= START_HOUR * 60 &&
+                    nowMinutes <= END_HOUR * 60 && (
+                      <div
+                        aria-hidden
+                        className="absolute left-0 right-0 z-20 pointer-events-none"
+                        style={{ top: nowTop }}
+                      >
+                        <div className="h-px bg-accent" />
+                        <div className="absolute -top-[3px] left-0 h-[7px] w-[7px] rounded-full bg-accent" />
+                      </div>
+                    )}
                 </div>
               );
             })}
