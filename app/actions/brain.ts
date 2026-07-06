@@ -10,20 +10,27 @@ export type VaultActionResult = { error: string | null };
 
 async function verifyVaultAccess(
   repo: string,
+  branch: string,
   token: string,
 ): Promise<string | null> {
+  // Probe the tree endpoint /brain actually reads. GET /repos/{repo} is not
+  // enough: fine-grained PATs get Metadata read automatically, so a token
+  // without Contents read passes that check but fails on git data.
   let response: Response;
   try {
-    response = await fetch(`https://api.github.com/repos/${repo}`, {
-      headers: githubHeaders(token),
-      cache: "no-store",
-    });
+    response = await fetch(
+      `https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(branch)}`,
+      { headers: githubHeaders(token), cache: "no-store" },
+    );
   } catch {
     return "could not reach GitHub";
   }
   if (response.status === 401) return "token was rejected by GitHub";
-  if (response.status === 403 || response.status === 404) {
-    return "token cannot read that repo (check repo name and token scope)";
+  if (response.status === 403) {
+    return "token lacks Contents read permission on that repo";
+  }
+  if (response.status === 404) {
+    return "repo or branch not found (check the name, the branch, and that the token can access this repo with Contents read)";
   }
   if (!response.ok) return `GitHub check failed (${response.status})`;
   return null;
@@ -54,7 +61,11 @@ export async function saveVaultSettings(input: {
     token = existing.github_token as string;
   }
 
-  const accessError = await verifyVaultAccess(normalized.repo, token);
+  const accessError = await verifyVaultAccess(
+    normalized.repo,
+    normalized.branch,
+    token,
+  );
   if (accessError) return { error: accessError };
 
   const { error } = await supabase.from("vault_settings").upsert(

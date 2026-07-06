@@ -117,7 +117,9 @@ async function fetchTree(
     next: { revalidate: TREE_REVALIDATE_SECONDS, tags: [tag] },
   });
   if (response.status === 401 || response.status === 403) {
-    throw new VaultConnectionError("vault repo access was rejected");
+    throw new VaultConnectionError(
+      "vault repo access was rejected (does the token have Contents read permission?)",
+    );
   }
   if (response.status === 404) {
     throw new VaultConnectionError("vault repo or branch not found");
