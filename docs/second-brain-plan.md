@@ -406,3 +406,38 @@ redirect with zero token strings in the body.
 **Owner steps:** none in Vercel anymore. On the deployed app: open /brain → paste the
 fine-grained PAT (Contents read-only, only the vault repo) + `Luccama700/2ndBrain` →
 connect. Phone-verify the Milestone 2/3 done-criteria from there.
+
+---
+
+## Implementation log — Redesign M0 (2026-07-05): SIGNAL foundations
+
+Kickoff of the owner-commissioned full redesign ("THE STREAM" / Terminal Calm v2
+"SIGNAL"). The complete design spec, clutter diagnosis, binding decisions, and
+milestone table now live in `docs/REDESIGN.md` — that file is the redesign's
+durable record; this log tracks per-milestone shipping notes.
+
+**Shipped (skin/foundation only — zero structural or behavioral change):**
+- Token system v2 in `app/globals.css` `@theme`: the six-role type scale
+  (`text-display/title/body/action/meta/label` with baked line-height/tracking/
+  weight), SIGNAL color tokens (`surface-0/1`, `hairline`, `accent-dim`,
+  `accent-wash` — derived via `color-mix` so per-theme palette overrides
+  propagate automatically — and per-theme `positive`), motion tokens
+  (`--ease-signal`, 120/200/280ms durations), and a global
+  `prefers-reduced-motion` clamp.
+- `positive` added to the palette model (`themes.ts`: type, keys, labels,
+  groups, VAR_MAP, all six theme palettes) so the palette editor can customize
+  it like every other slot.
+- **Theme cookie SSR** — `storeTheme` mirrors the theme into a `theme` cookie;
+  the root layout is async, reads it, and renders the `theme-*` class on
+  `<html>` server-side; `generateViewport` emits the per-theme `theme-color`.
+  Kills the light-theme FOUC and the wrong-color iOS status bar.
+  `readStoredTheme` falls back to the server-rendered class if localStorage is
+  empty. Verified by curl: no cookie → no class + `#0d0d0d`; `theme=cream` →
+  `theme-cream` + `#f5f0e8` in the initial HTML.
+- `app/_components/ui.tsx` — the app's ONE button recipe (outline/accent/quiet/
+  danger variants, 44px min, text-action) and ONE input recipe + `SectionRuler`.
+  Adopted surface-by-surface as each milestone rebuilds its screens (documented
+  in REDESIGN.md §13) rather than as a big-bang restyle.
+
+**Verified:** lint clean; 148 tests pass; build green; cookie-SSR smoke test
+above. No route changes, no data changes.

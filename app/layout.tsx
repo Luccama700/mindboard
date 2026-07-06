@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Geist_Mono } from "next/font/google";
+import { cookies } from "next/headers";
 import { ThemeInitializer } from "./_components/theme-initializer";
+import { getTheme, isThemeName, type ThemeName } from "./_components/themes";
 import "./globals.css";
 
 const geistMono = Geist_Mono({
@@ -25,20 +27,32 @@ export const metadata: Metadata = {
   },
 };
 
-export const viewport: Viewport = {
-  themeColor: "#0d0d0d",
-  viewportFit: "cover",
-  width: "device-width",
-  initialScale: 1,
-};
+async function cookieTheme(): Promise<ThemeName> {
+  const store = await cookies();
+  const value = store.get("theme")?.value;
+  return isThemeName(value) ? value : "dark";
+}
 
-export default function RootLayout({
+export async function generateViewport(): Promise<Viewport> {
+  const theme = await cookieTheme();
+  return {
+    themeColor: getTheme(theme).palette.bg,
+    viewportFit: "cover",
+    width: "device-width",
+    initialScale: 1,
+  };
+}
+
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const theme = await cookieTheme();
+  const themeClass = theme === "dark" ? "" : ` theme-${theme}`;
+
   return (
-    <html lang="en" className={`${geistMono.variable} h-full`}>
+    <html lang="en" className={`${geistMono.variable} h-full${themeClass}`}>
       <body className="min-h-full" suppressHydrationWarning>
         <ThemeInitializer />
         {children}

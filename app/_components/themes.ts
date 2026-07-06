@@ -20,6 +20,7 @@ export type Palette = {
   accentFg: string;
   danger: string;
   dangerHover: string;
+  positive: string;
 };
 
 export type ThemeDef = {
@@ -43,6 +44,7 @@ export const PALETTE_KEYS: (keyof Palette)[] = [
   "accentFg",
   "danger",
   "dangerHover",
+  "positive",
 ];
 
 export const PALETTE_LABELS: Record<keyof Palette, string> = {
@@ -59,6 +61,7 @@ export const PALETTE_LABELS: Record<keyof Palette, string> = {
   accentFg: "accent text",
   danger: "danger",
   dangerHover: "danger hover",
+  positive: "positive",
 };
 
 export const PALETTE_GROUPS: { label: string; keys: (keyof Palette)[] }[] = [
@@ -67,6 +70,7 @@ export const PALETTE_GROUPS: { label: string; keys: (keyof Palette)[] }[] = [
   { label: "lines", keys: ["borderLine", "borderStrong", "borderSubtle"] },
   { label: "accent", keys: ["accent", "accentFg"] },
   { label: "danger", keys: ["danger", "dangerHover"] },
+  { label: "signal", keys: ["positive"] },
 ];
 
 const VAR_MAP: Record<keyof Palette, string> = {
@@ -83,6 +87,7 @@ const VAR_MAP: Record<keyof Palette, string> = {
   accentFg: "--accent-fg",
   danger: "--danger",
   dangerHover: "--danger-hover",
+  positive: "--positive",
 };
 
 export const THEMES: ThemeDef[] = [
@@ -104,6 +109,7 @@ export const THEMES: ThemeDef[] = [
       accentFg: "#0d0d0d",
       danger: "#ff6b6b",
       dangerHover: "#ff8b8b",
+      positive: "#4ade80",
     },
   },
   {
@@ -124,6 +130,7 @@ export const THEMES: ThemeDef[] = [
       accentFg: "#2a2620",
       danger: "#ff6b6b",
       dangerHover: "#ff8b8b",
+      positive: "#3d7a4a",
     },
   },
   {
@@ -144,6 +151,7 @@ export const THEMES: ThemeDef[] = [
       accentFg: "#0a0e1c",
       danger: "#ff6b6b",
       dangerHover: "#ff8b8b",
+      positive: "#4ade80",
     },
   },
   {
@@ -164,6 +172,7 @@ export const THEMES: ThemeDef[] = [
       accentFg: "#0a140d",
       danger: "#ff6b6b",
       dangerHover: "#ff8b8b",
+      positive: "#4ade80",
     },
   },
   {
@@ -184,6 +193,7 @@ export const THEMES: ThemeDef[] = [
       accentFg: "#1a1d23",
       danger: "#ff6b6b",
       dangerHover: "#ff8b8b",
+      positive: "#4ade80",
     },
   },
   {
@@ -204,6 +214,7 @@ export const THEMES: ThemeDef[] = [
       accentFg: "#2d251a",
       danger: "#c14b4b",
       dangerHover: "#b03e3e",
+      positive: "#2f6b3c",
     },
   },
 ];
@@ -228,12 +239,25 @@ export function readStoredTheme(): ThemeName {
   } catch {
     // localStorage unavailable
   }
+  // Fall back to whatever the server rendered from the theme cookie, so a
+  // cleared localStorage doesn't snap the UI back to dark.
+  const root = document.documentElement;
+  for (const n of THEME_NAMES) {
+    if (n !== "dark" && root.classList.contains(`theme-${n}`)) return n;
+  }
   return "dark";
 }
 
 export function storeTheme(name: ThemeName) {
   try {
     localStorage.setItem("theme", name);
+  } catch {
+    // ignore
+  }
+  try {
+    // Mirrored into a cookie so the server can render the right theme class
+    // on first paint (no FOUC on non-dark themes).
+    document.cookie = `theme=${name}; path=/; max-age=31536000; samesite=lax`;
   } catch {
     // ignore
   }

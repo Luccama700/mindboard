@@ -15,6 +15,39 @@
   --color-danger: var(--danger);
   --color-danger-hover: var(--danger-hover);
   --font-mono: var(--font-geist-mono);
+
+  /* SIGNAL (Terminal Calm v2) tokens */
+  --color-surface-0: var(--bg);
+  --color-surface-1: var(--surface-1);
+  --color-hairline: var(--border-line);
+  --color-accent-dim: var(--accent-dim);
+  --color-accent-wash: var(--accent-wash);
+  --color-positive: var(--positive);
+
+  /* Type scale — the six text roles. Weights 400/500 only. */
+  --text-display: 28px;
+  --text-display--line-height: 32px;
+  --text-display--letter-spacing: -0.02em;
+  --text-display--font-weight: 500;
+  --text-title: 17px;
+  --text-title--line-height: 24px;
+  --text-title--font-weight: 500;
+  --text-body: 15px;
+  --text-body--line-height: 22px;
+  --text-action: 13px;
+  --text-action--line-height: 20px;
+  --text-action--letter-spacing: 0.02em;
+  --text-action--font-weight: 500;
+  --text-meta: 11px;
+  --text-meta--line-height: 16px;
+  --text-meta--letter-spacing: 0.06em;
+  --text-label: 10px;
+  --text-label--line-height: 14px;
+  --text-label--letter-spacing: 0.14em;
+  --text-label--font-weight: 500;
+
+  /* Motion — the only easing and the three durations. */
+  --ease-signal: cubic-bezier(0.2, 0, 0, 1);
 }
 
 :root {
@@ -31,6 +64,17 @@
   --accent-fg: #0d0d0d;
   --danger: #ff6b6b;
   --danger-hover: #ff8b8b;
+  --positive: #4ade80;
+
+  /* SIGNAL derived tokens — follow the palette (and runtime overrides) automatically. */
+  --surface-1: var(--bg-card);
+  --accent-dim: color-mix(in srgb, var(--accent) 32%, transparent);
+  --accent-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+
+  /* Motion durations */
+  --dur-micro: 120ms;
+  --dur-panel: 200ms;
+  --dur-resolve: 280ms;
 }
 
 html.theme-cream {
@@ -47,6 +91,7 @@ html.theme-cream {
   --accent-fg: #2a2620;
   --danger: #ff6b6b;
   --danger-hover: #ff8b8b;
+  --positive: #3d7a4a;
 }
 
 html.theme-midnight {
@@ -63,6 +108,7 @@ html.theme-midnight {
   --accent-fg: #0a0e1c;
   --danger: #ff6b6b;
   --danger-hover: #ff8b8b;
+  --positive: #4ade80;
 }
 
 html.theme-forest {
@@ -79,6 +125,7 @@ html.theme-forest {
   --accent-fg: #0a140d;
   --danger: #ff6b6b;
   --danger-hover: #ff8b8b;
+  --positive: #4ade80;
 }
 
 html.theme-slate {
@@ -95,6 +142,7 @@ html.theme-slate {
   --accent-fg: #1a1d23;
   --danger: #ff6b6b;
   --danger-hover: #ff8b8b;
+  --positive: #4ade80;
 }
 
 html.theme-sand {
@@ -111,6 +159,7 @@ html.theme-sand {
   --accent-fg: #2d251a;
   --danger: #c14b4b;
   --danger-hover: #b03e3e;
+  --positive: #2f6b3c;
 }
 
 * {
@@ -127,4 +176,14 @@ body {
   color: var(--fg);
   font-family: var(--font-geist-mono), "Courier New", monospace;
   -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
