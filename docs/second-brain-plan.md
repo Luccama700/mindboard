@@ -567,3 +567,36 @@ real Google Calendar events — the checkpoint the owner explicitly opened.
 **Verified:** lint clean; 186 tests (+22); build green; dev smoke on /, /week,
 /tasks with zero console errors. Owner-gated: on-phone drag feel + a real
 push→drag→Google PATCH round-trip.
+
+---
+
+## Implementation log — Redesign M4 (2026-07-06): the capture grammar + ProposalCard
+
+**Shipped:**
+- `parseCapture()` in `app/lib/capture/parse.ts` — the full three-mode grammar,
+  pure and table-driven-tested (23 tests): bare text = task (trailing-time
+  extraction folded in); `$ 12.50 groceries` = spend (amount with . or ,
+  decimals, description, `suggestCategory` — containment or 4+-char word
+  prefix, and it only ever *suggests*); `? …` = copilot handoff. Sigils count
+  only at position zero ("pay $14 back to Dan" stays a task). Nothing else
+  parses, by design.
+- **ProposalCard** (`app/_components/proposal-card.tsx`) — the universal
+  propose→confirm surface: dashed hairline over accent-wash ("not yet real"),
+  title, preview children, accent confirm + quiet skip, pending/error states.
+  Built here for capture; M5's copilot renders every AI write with the same
+  component.
+- **Dock `$` flow**: typing `$…` swaps the task chips for a mode hint; first
+  Enter pins a ProposalCard above the input (amount, description, account
+  picker defaulting to the first account, category chips with the suggestion
+  preselected); second Enter — or the confirm tap — commits through the
+  existing `recordBalanceChange` (newBalance = balance − amount). Zero silent
+  commits; a mis-parse is corrected by tapping chips, not retyping.
+- **Dock `?` flow**: Enter routes to `/plan?q=…`; the stub page now echoes the
+  queued message (M5 consumes it for real).
+- Capture placeholder documents the grammar (`new task…  ($ spend · ? plan)`).
+  Note: the iOS-Shortcuts capture route mentioned in the old spec never
+  existed (`capture_token_hash` is dormant schema) — nothing to repoint.
+
+**Verified:** lint clean; 195 tests (+9); build green. `$14 lunch` on the
+deployed PWA = type → Enter → Enter: three interactions, categorized ledger
+row. Owner-gated: on-phone feel check.

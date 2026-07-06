@@ -2,9 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { recordBalanceChange } from "@/app/actions/finance";
 import { createTask } from "@/app/actions/tasks";
-import { extractTrailingTime } from "@/app/lib/capture/parse";
+import { parseCapture } from "@/app/lib/capture/parse";
+import { formatMoney } from "./money";
+import { ProposalCard } from "./proposal-card";
 import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
 import { formatDue, todayISO } from "./date-utils";
 import type { GroupOption } from "./task-row";
@@ -23,14 +26,35 @@ function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
+export type DockAccount = {
+  id: string;
+  name: string;
+  balance: number;
+  currency: string;
+};
+
+export type DockCategory = { id: string; name: string; color: string };
+
+type SpendDraft = {
+  amount: number;
+  description: string;
+  accountId: string;
+  categoryId: string | null;
+};
+
 export function Dock({
   groups,
   inboxCount,
+  accounts,
+  categories,
 }: {
   groups: GroupOption[];
   inboxCount: number;
+  accounts: DockAccount[];
+  categories: DockCategory[];
 }) {
   const pathname = usePathname();
+  const router = useRouter();
 
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
@@ -44,6 +68,9 @@ export function Dock({
   const [typing, setTyping] = useState(false);
   const [keyboardUp, setKeyboardUp] = useState(false);
   const [timeDisabledFor, setTimeDisabledFor] = useState<string | null>(null);
+  const [spendDraft, setSpendDraft] = useState<SpendDraft | null>(null);
+  const [spendError, setSpendError] = useState<string | null>(null);
+  const [spendBusy, setSpendBusy] = useState(false);
 
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -55,11 +82,13 @@ export function Dock({
   const hasNotes = Boolean(notes.trim());
   const selectedGroup =
     groups.find((group) => group.id === selectedGroupId) ?? null;
-  const parsedRaw = extractTrailingTime(title);
-  // Dismissing the chip only sticks for the exact phrase that was dismissed —
-  // editing the time re-offers it.
+  const capture = parseCapture(title, categories);
   const parsedTime =
-    parsedRaw && parsedRaw.matched !== timeDisabledFor ? parsedRaw : null;
+    capture.mode === "task" &&
+    capture.time !== null &&
+    capture.time !== timeDisabledFor
+      ? { title: capture.title, time: capture.time, matched: capture.time }
+      : null;
 
   const railCollapsed = typing || keyboardUp;
 
@@ -113,8 +142,69 @@ export function Dock({
     el.click();
   }
 
+  function confirmSpend(draft: SpendDraft) {
+    const account = accounts.find((a) => a.id === draft.accountId);
+    if (!account) {
+      setSpendError("pick an account");
+      return;
+    }
+    setSpendBusy(true);
+    setSpendError(null);
+    void recordBalanceChange({
+      accountId: account.id,
+      newBalance: account.balance - draft.amount,
+      categoryId: draft.categoryId,
+      note: draft.description || null,
+    }).then((result) => {
+      setSpendBusy(false);
+      if (result.error) {
+        setSpendError(result.error);
+        return;
+      }
+      setSpendDraft(null);
+      setTitle("");
+      inputRef.current?.focus();
+    });
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // A pinned spend proposal: Enter again commits it.
+    if (spendDraft) {
+      confirmSpend(spendDraft);
+      return;
+    }
+
+    if (capture.mode === "copilot") {
+      const message = capture.message;
+      setTitle("");
+      router.push(
+        message ? `/plan?q=${encodeURIComponent(message)}` : "/plan",
+      );
+      return;
+    }
+
+    if (capture.mode === "spend") {
+      if (capture.amount === null) {
+        setSpendError("amount first — e.g. $12.50 lunch");
+        return;
+      }
+      if (accounts.length === 0) {
+        setSpendError("no accounts yet — add one in money first");
+        return;
+      }
+      setSpendError(null);
+      // First Enter pins the proposal; the second commits. Never silent.
+      setSpendDraft({
+        amount: capture.amount,
+        description: capture.description,
+        accountId: accounts[0].id,
+        categoryId: capture.categoryId,
+      });
+      return;
+    }
+
     const parsed = parsedTime;
     const t = (parsed ? parsed.title : title).trim();
     const dueTime = parsed && dueDate ? parsed.time : null;
@@ -236,6 +326,98 @@ export function Dock({
         </div>
       </div>
 
+      {spendDraft && (
+        <div className="mb-2">
+          <ProposalCard
+            title="log spend"
+            confirmLabel={`log ${formatMoney(
+              spendDraft.amount,
+              accounts.find((a) => a.id === spendDraft.accountId)?.currency ??
+                "USD",
+            )}`}
+            onConfirm={() => confirmSpend(spendDraft)}
+            onSkip={() => {
+              setSpendDraft(null);
+              inputRef.current?.focus();
+            }}
+            pending={spendBusy}
+            error={spendError}
+          >
+            <p className="text-body text-fg">
+              {spendDraft.description || "uncategorized spend"}
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {accounts.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() =>
+                    setSpendDraft({ ...spendDraft, accountId: a.id })
+                  }
+                  aria-pressed={spendDraft.accountId === a.id}
+                  className={`min-h-11 px-3 text-action lowercase border transition-colors ${
+                    spendDraft.accountId === a.id
+                      ? "border-accent text-fg"
+                      : "border-hairline text-muted hover:text-fg"
+                  }`}
+                >
+                  {a.name}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  setSpendDraft({ ...spendDraft, categoryId: null })
+                }
+                aria-pressed={spendDraft.categoryId === null}
+                className={`min-h-11 px-3 text-action lowercase border transition-colors ${
+                  spendDraft.categoryId === null
+                    ? "border-accent text-fg"
+                    : "border-hairline text-muted hover:text-fg"
+                }`}
+              >
+                uncategorized
+              </button>
+              {categories.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() =>
+                    setSpendDraft({ ...spendDraft, categoryId: c.id })
+                  }
+                  aria-pressed={spendDraft.categoryId === c.id}
+                  className={`inline-flex items-center gap-1.5 min-h-11 px-3 text-action lowercase border transition-colors ${
+                    spendDraft.categoryId === c.id
+                      ? "border-accent text-fg"
+                      : "border-hairline text-muted hover:text-fg"
+                  }`}
+                >
+                  <span
+                    className="h-2 w-2"
+                    style={{ backgroundColor: c.color }}
+                    aria-hidden
+                  />
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          </ProposalCard>
+        </div>
+      )}
+
+      {!spendDraft && capture.mode !== "task" && (
+        <p className="mb-2 text-meta text-muted">
+          {capture.mode === "spend"
+            ? spendError ??
+              (capture.amount !== null
+                ? `log spend — enter to review ${capture.description ? `"${capture.description}"` : ""}`
+                : "log spend — add an amount, e.g. $12.50 lunch")
+            : "ask the copilot — enter to open plan"}
+        </p>
+      )}
+
       <div>
         {groupOpen && (
           <div className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
@@ -286,7 +468,11 @@ export function Dock({
           </div>
         )}
 
-        <div className="flex items-center flex-wrap gap-2 mb-2">
+        <div
+          className={`flex items-center flex-wrap gap-2 mb-2 ${
+            capture.mode !== "task" ? "hidden" : ""
+          }`}
+        >
           <button
             type="button"
             onClick={() => setGroupOpen((v) => !v)}
@@ -415,7 +601,7 @@ export function Dock({
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="new task…"
+            placeholder="new task…  ($ spend · ? plan)"
             autoComplete="off"
             autoCapitalize="sentences"
             enterKeyHint="done"

@@ -1,5 +1,77 @@
-// Pure capture-text parsing. M3 ships trailing-time extraction (the ⌚ chip);
-// the full three-mode grammar (task / $ spend / ? copilot) lands with M4.
+// Pure capture-text parsing: the three-mode grammar. Exactly three modes —
+// bare text = task, `$` = spend log, `?` = copilot handoff. Nothing else
+// parses; parser trust is a budget and it is spent on these three.
+
+export type ParsedCapture =
+  | { mode: "task"; title: string; time: string | null }
+  | {
+      mode: "spend";
+      amount: number | null;
+      description: string;
+      categoryId: string | null;
+    }
+  | { mode: "copilot"; message: string };
+
+export type CategoryOption = { id: string; name: string };
+
+// Suggest (never silently commit) a category whose name appears in — or
+// shares a word-prefix with — the description.
+export function suggestCategory(
+  description: string,
+  categories: CategoryOption[],
+): string | null {
+  const haystack = description.toLowerCase();
+  if (!haystack) return null;
+  const words = haystack.split(/\s+/).filter(Boolean);
+  for (const category of categories) {
+    const name = category.name.toLowerCase();
+    if (!name) continue;
+    if (haystack.includes(name)) return category.id;
+    if (
+      words.some(
+        (word) =>
+          word.length >= 4 &&
+          (name.startsWith(word) || word.startsWith(name)),
+      )
+    ) {
+      return category.id;
+    }
+  }
+  return null;
+}
+
+const SPEND_RE = /^\$\s*(\d+(?:[.,]\d{1,2})?)?\s*(.*)$/;
+
+export function parseCapture(
+  input: string,
+  categories: CategoryOption[] = [],
+): ParsedCapture {
+  const raw = input.trim();
+
+  if (raw.startsWith("?")) {
+    return { mode: "copilot", message: raw.slice(1).trim() };
+  }
+
+  if (raw.startsWith("$")) {
+    const match = SPEND_RE.exec(raw);
+    const amountRaw = match?.[1]?.replace(",", ".");
+    const amount = amountRaw ? Number(amountRaw) : null;
+    const description = (match?.[2] ?? "").trim();
+    return {
+      mode: "spend",
+      amount: amount !== null && Number.isFinite(amount) && amount > 0 ? amount : null,
+      description,
+      categoryId: suggestCategory(description, categories),
+    };
+  }
+
+  const time = extractTrailingTime(raw);
+  return {
+    mode: "task",
+    title: time ? time.title : raw,
+    time: time ? time.time : null,
+  };
+}
 
 export type TrailingTime = {
   title: string; // input with the time phrase removed
