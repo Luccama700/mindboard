@@ -16,8 +16,8 @@ export type ScheduleVitals = {
   freeHoursToday: number;
 };
 
-const WAKE_START_HOUR = 8;
-const WAKE_END_HOUR = 22;
+const DEFAULT_WAKE_START_HOUR = 8;
+const DEFAULT_WAKE_END_HOUR = 22;
 
 type Interval = { start: number; end: number };
 
@@ -59,8 +59,12 @@ function freeMsInWindow(busy: Interval[], lo: number, hi: number): number {
 export function scheduleSnapshot(input: {
   events: ScheduleEvent[];
   now: Date;
+  wakeStartHour?: number;
+  wakeEndHour?: number;
 }): ScheduleVitals {
   const { events, now } = input;
+  const wakeStartHour = input.wakeStartHour ?? DEFAULT_WAKE_START_HOUR;
+  const wakeEndHour = input.wakeEndHour ?? DEFAULT_WAKE_END_HOUR;
   const nowMs = now.getTime();
   const intervals = timedIntervals(events);
 
@@ -72,9 +76,9 @@ export function scheduleSnapshot(input: {
     : null;
 
   const wakeStart = new Date(now);
-  wakeStart.setHours(WAKE_START_HOUR, 0, 0, 0);
+  wakeStart.setHours(wakeStartHour, 0, 0, 0);
   const wakeEnd = new Date(now);
-  wakeEnd.setHours(WAKE_END_HOUR, 0, 0, 0);
+  wakeEnd.setHours(wakeEndHour, 0, 0, 0);
 
   const lo = Math.max(nowMs, wakeStart.getTime());
   const hi = wakeEnd.getTime();

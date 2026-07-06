@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
+import { Suspense } from "react";
 import { Geist_Mono } from "next/font/google";
 import { cookies } from "next/headers";
+import { DockMount } from "./_components/dock-mount";
 import { ThemeInitializer } from "./_components/theme-initializer";
 import { getTheme, isThemeName, type ThemeName } from "./_components/themes";
 import "./globals.css";
@@ -56,6 +58,9 @@ export default async function RootLayout({
       <body className="min-h-full" suppressHydrationWarning>
         <ThemeInitializer />
         {children}
+        <Suspense fallback={null}>
+          <DockMount />
+        </Suspense>
       </body>
     </html>
   );

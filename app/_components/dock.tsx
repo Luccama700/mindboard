@@ -1,34 +1,47 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { createTask } from "@/app/actions/tasks";
+import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
 import { formatDue, todayISO } from "./date-utils";
 import type { GroupOption } from "./task-row";
 import type { Task } from "./types";
 
-export function TaskCaptureBar({
-  groupId,
+const RAIL_TABS = [
+  { href: "/", glyph: "◆", label: "now" },
+  { href: "/week", glyph: "▦", label: "week" },
+  { href: "/plan", glyph: "◇", label: "plan" },
+  { href: "/finance", glyph: "$", label: "money" },
+  { href: "/inventory", glyph: "▤", label: "stock" },
+] as const;
+
+function isActive(pathname: string, href: string) {
+  if (href === "/") return pathname === "/";
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+export function Dock({
   groups,
-  defaultDueDate = null,
-  onOptimisticAdd,
-  onReplace,
+  inboxCount,
 }: {
-  groupId: string | null;
   groups: GroupOption[];
-  defaultDueDate?: string | null;
-  onOptimisticAdd: (task: Task) => void;
-  onReplace: (tempId: string, task: Task) => void;
+  inboxCount: number;
 }) {
+  const pathname = usePathname();
+
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
-  const [dueDate, setDueDate] = useState<string | null>(defaultDueDate);
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(
-    groupId,
-  );
+  const [dueDate, setDueDate] = useState<string | null>(() => todayISO());
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [priority, setPriority] = useState<"low" | "med" | "high">("med");
   const [groupOpen, setGroupOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const [keyboardUp, setKeyboardUp] = useState(false);
 
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -41,22 +54,42 @@ export function TaskCaptureBar({
   const selectedGroup =
     groups.find((group) => group.id === selectedGroupId) ?? null;
 
+  const railCollapsed = typing || keyboardUp;
+
   useEffect(() => {
-    inputRef.current?.focus();
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => {
+      setKeyboardUp(window.innerHeight - vv.height > 120);
+    };
+    vv.addEventListener("resize", onResize);
+    return () => vv.removeEventListener("resize", onResize);
   }, []);
 
   useEffect(() => {
-    if (!groupOpen) return;
+    if (!groupOpen && !moreOpen) return;
 
     function onPointerDown(e: PointerEvent) {
       if (!formRef.current?.contains(e.target as Node)) {
         setGroupOpen(false);
+        setMoreOpen(false);
       }
     }
 
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [groupOpen]);
+  }, [groupOpen, moreOpen]);
+
+  function onFormFocus() {
+    setTyping(true);
+    setMoreOpen(false);
+  }
+
+  function onFormBlur(e: React.FocusEvent<HTMLFormElement>) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setTyping(false);
+    }
+  }
 
   function openDatePicker() {
     const el = dateInputRef.current;
@@ -96,7 +129,7 @@ export function TaskCaptureBar({
       completed_at: null,
     };
 
-    onOptimisticAdd(optimisticTask);
+    emitTaskOptimistic(optimisticTask);
     setPriority("med");
 
     const result = await createTask({
@@ -108,7 +141,7 @@ export function TaskCaptureBar({
     });
 
     if (!result.error && result.task) {
-      onReplace(tempId, result.task as Task);
+      emitTaskReplace(tempId, result.task as Task);
     }
 
     setBusy(false);
@@ -119,8 +152,75 @@ export function TaskCaptureBar({
     <form
       ref={formRef}
       onSubmit={onSubmit}
-      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] bg-page/95 border border-line p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:right-auto lg:w-[calc(50vw-3rem)] lg:max-w-2xl xl:left-[calc((100vw-80rem)/2+2rem)]"
+      onFocus={onFormFocus}
+      onBlur={onFormBlur}
+      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] rounded-t-[8px] bg-page/95 border border-line p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:left-1/2 lg:right-auto lg:w-[min(44rem,calc(100vw-4rem))] lg:-translate-x-1/2"
     >
+      {moreOpen && (
+        <nav className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
+          {[
+            { href: "/tasks", label: "tasks", badge: inboxCount },
+            { href: "/brain", label: "brain", badge: 0 },
+            { href: "/settings", label: "settings", badge: 0 },
+          ].map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={() => setMoreOpen(false)}
+              className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+            >
+              <span>{item.label}</span>
+              {item.badge > 0 && (
+                <span className="text-meta text-muted">{item.badge} inbox</span>
+              )}
+            </Link>
+          ))}
+        </nav>
+      )}
+
+      <div
+        className={`overflow-hidden transition-[max-height,opacity,margin] duration-200 ease-signal ${
+          railCollapsed ? "max-h-0 opacity-0 mb-0" : "max-h-14 opacity-100 mb-2"
+        }`}
+      >
+        <div className="flex items-stretch">
+          {RAIL_TABS.map((tab) => {
+            const active = isActive(pathname, tab.href);
+            return (
+              <Link
+                key={tab.href}
+                href={tab.href}
+                aria-current={active ? "page" : undefined}
+                className={`flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 transition-colors ${
+                  active
+                    ? "border-accent text-fg"
+                    : "border-transparent text-muted hover:text-fg"
+                }`}
+              >
+                <span className="text-body leading-none" aria-hidden>
+                  {tab.glyph}
+                </span>
+                <span className="text-label uppercase">{tab.label}</span>
+              </Link>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+            aria-label="more"
+            className={`flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 border-transparent transition-colors ${
+              moreOpen ? "text-fg" : "text-muted hover:text-fg"
+            }`}
+          >
+            <span className="text-body leading-none" aria-hidden>
+              ≡
+            </span>
+            <span className="text-label uppercase">more</span>
+          </button>
+        </div>
+      </div>
+
       <div>
         {groupOpen && (
           <div className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
@@ -191,9 +291,7 @@ export function TaskCaptureBar({
               }}
               aria-hidden
             />
-            <span className="truncate">
-              {selectedGroup?.name ?? "inbox"}
-            </span>
+            <span className="truncate">{selectedGroup?.name ?? "inbox"}</span>
           </button>
 
           <button
@@ -265,9 +363,7 @@ export function TaskCaptureBar({
             className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors font-bold ${
               priority === "high"
                 ? "border-danger text-danger hover:bg-danger hover:text-white"
-                : priority === "low"
-                  ? "border-line-strong text-muted hover:border-fg hover:text-fg"
-                  : "border-line-strong text-muted hover:border-fg hover:text-fg"
+                : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
             {priority === "high" ? "!!!" : priority === "low" ? "!" : "!!"}

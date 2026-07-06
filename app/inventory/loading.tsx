@@ -1,7 +1,7 @@
 export default function Loading() {
   return (
     <main
-      className="min-h-screen px-5 pt-8 pb-32 lg:px-12 animate-pulse"
+      className="min-h-screen px-5 pt-8 pb-64 lg:px-12 animate-pulse"
       aria-hidden
     >
       <div className="flex items-center justify-between mb-10">

@@ -85,7 +85,7 @@ export default async function BrainPage() {
 
   if (!settings) {
     return (
-      <main className="min-h-screen px-5 pt-8 pb-32 max-w-2xl mx-auto">
+      <main className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto">
         <header className="flex items-center justify-between mb-10">
           <Link
             href="/"
@@ -121,7 +121,7 @@ export default async function BrainPage() {
   const home = corpus?.notes.get("Home.md") ?? null;
 
   return (
-    <main className="min-h-screen px-5 pt-8 pb-32 max-w-2xl mx-auto">
+    <main className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto">
       <header className="flex items-center justify-between mb-10">
         <Link
           href="/"
@@ -164,18 +164,14 @@ export default async function BrainPage() {
             </p>
           )}
           <FolderListing corpus={corpus} />
-          <details className="mt-12 border-t border-line pt-4">
-            <summary className="text-xs tracking-widest uppercase text-muted cursor-pointer min-h-11 flex items-center hover:text-fg transition-colors">
-              vault settings — {settings.repo}
-            </summary>
-            <div className="mt-4">
-              <VaultSettingsForm
-                initialRepo={settings.repo}
-                initialBranch={settings.branch}
-                connected
-              />
-            </div>
-          </details>
+          <p className="mt-12 border-t border-line pt-4">
+            <Link
+              href="/settings"
+              className="text-xs tracking-widest uppercase text-muted hover:text-fg transition-colors min-h-11 inline-flex items-center"
+            >
+              vault settings — {settings.repo} →
+            </Link>
+          </p>
         </>
       ) : null}
     </main>

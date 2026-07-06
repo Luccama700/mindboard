@@ -37,7 +37,7 @@ export default async function InventoryPage() {
   ]);
 
   return (
-    <main className="min-h-screen px-5 pt-8 pb-32 lg:px-12">
+    <main className="min-h-screen px-5 pt-8 pb-64 lg:px-12">
       <header className="flex items-center justify-between mb-10">
         <Link
           href="/"

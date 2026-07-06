@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useState, useSyncExternalStore } from "react";
 import { ColorPicker } from "./color-picker";
 import {
   GOOGLE_MODELS,
@@ -58,26 +53,14 @@ function getThemeServerSnapshot(): ThemeName {
   return "dark";
 }
 
-export function SettingsPanel() {
+// The appearance sections (theme grid, palette editor, image-gen keys),
+// rendered inline on /settings. The old header popover retired with the Dock.
+export function SettingsSections() {
   const theme = useSyncExternalStore(
     subscribeTheme,
     getThemeSnapshot,
     getThemeServerSnapshot,
   );
-
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(e: PointerEvent) {
-      if (!containerRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
 
   function selectTheme(next: ThemeName) {
     setActiveTheme(next);
@@ -85,64 +68,44 @@ export function SettingsPanel() {
   }
 
   return (
-    <div ref={containerRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-label="settings"
-        aria-expanded={open}
-        className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors"
-      >
-        settings
-      </button>
-
-      {open && (
-        <div
-          role="dialog"
-          aria-label="settings"
-          className="absolute right-0 top-full mt-2 w-[min(384px,calc(100vw-2rem))] z-50 border border-line bg-card max-h-[calc(100vh-6rem)] overflow-y-auto shadow-[0_8px_32px_rgba(0,0,0,0.55)]"
-        >
-          <div className="p-4 space-y-5">
-            <section>
-              <p className="text-[10px] tracking-widest uppercase text-muted mb-2">
-                theme
-              </p>
-              <div className="grid grid-cols-3 gap-px border border-line bg-line">
-                {THEMES.map((t) => {
-                  const selected = t.name === theme;
-                  return (
-                    <button
-                      key={t.name}
-                      type="button"
-                      onClick={() => selectTheme(t.name)}
-                      title={t.tagline}
-                      className={`min-h-12 px-2 py-2 text-[10px] tracking-widest uppercase transition-colors flex flex-col items-center justify-center gap-1 ${
-                        selected
-                          ? "bg-accent text-accent-fg"
-                          : "bg-page text-muted hover:text-fg"
-                      }`}
-                    >
-                      <span>{t.label}</span>
-                      <span
-                        aria-hidden
-                        className="w-6 h-1.5"
-                        style={{ backgroundColor: t.palette.accent }}
-                      />
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-[10px] tracking-widest uppercase text-muted mt-2">
-                {getTheme(theme).tagline}
-              </p>
-            </section>
-
-            <PaletteEditor key={theme} theme={theme} />
-
-            <ImageGenEditor />
-          </div>
+    <div className="space-y-5">
+      <section>
+        <p className="text-[10px] tracking-widest uppercase text-muted mb-2">
+          theme
+        </p>
+        <div className="grid grid-cols-3 gap-px border border-line bg-line">
+          {THEMES.map((t) => {
+            const selected = t.name === theme;
+            return (
+              <button
+                key={t.name}
+                type="button"
+                onClick={() => selectTheme(t.name)}
+                title={t.tagline}
+                className={`min-h-12 px-2 py-2 text-[10px] tracking-widest uppercase transition-colors flex flex-col items-center justify-center gap-1 ${
+                  selected
+                    ? "bg-accent text-accent-fg"
+                    : "bg-page text-muted hover:text-fg"
+                }`}
+              >
+                <span>{t.label}</span>
+                <span
+                  aria-hidden
+                  className="w-6 h-1.5"
+                  style={{ backgroundColor: t.palette.accent }}
+                />
+              </button>
+            );
+          })}
         </div>
-      )}
+        <p className="text-[10px] tracking-widest uppercase text-muted mt-2">
+          {getTheme(theme).tagline}
+        </p>
+      </section>
+
+      <PaletteEditor key={theme} theme={theme} />
+
+      <ImageGenEditor />
     </div>
   );
 }

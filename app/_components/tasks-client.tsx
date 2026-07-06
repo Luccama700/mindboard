@@ -1,12 +1,12 @@
 "use client";
 
-import { startTransition, useOptimistic } from "react";
+import { startTransition, useEffect, useOptimistic } from "react";
 import {
   deleteTask,
   toggleTaskStatus,
   updateTask,
 } from "@/app/actions/tasks";
-import { TaskCaptureBar } from "./task-capture-bar";
+import { subscribeCapture } from "./capture-bus";
 import { TaskRow, type GroupOption } from "./task-row";
 import type { Task } from "./types";
 
@@ -35,13 +35,22 @@ function applyPatch(task: Task, patch: UpdatePatch): Task {
   return next;
 }
 
+// filter: "all" shows every task; null shows the inbox (no group); a group id
+// shows that group's tasks.
+export type TaskFilter = "all" | string | null;
+
+function matchesFilter(groupId: string | null, filter: TaskFilter): boolean {
+  if (filter === "all") return true;
+  return groupId === filter;
+}
+
 export function TasksClient({
   initial,
-  groupId,
+  filter,
   groups,
 }: {
   initial: Task[];
-  groupId: string | null;
+  filter: TaskFilter;
   groups: GroupOption[];
 }) {
   const [tasks, dispatch] = useOptimistic<Task[], OptimisticAction>(
@@ -49,7 +58,7 @@ export function TasksClient({
     (state, action) => {
       switch (action.kind) {
         case "add":
-          if (action.task.group_id !== groupId) return state;
+          if (!matchesFilter(action.task.group_id, filter)) return state;
           return [action.task, ...state];
         case "replace":
           return state.map((t) =>
@@ -73,7 +82,7 @@ export function TasksClient({
         case "update": {
           if (
             action.patch.groupId !== undefined &&
-            action.patch.groupId !== groupId
+            !matchesFilter(action.patch.groupId, filter)
           ) {
             return state.filter((t) => t.id !== action.id);
           }
@@ -83,6 +92,18 @@ export function TasksClient({
         }
       }
     },
+  );
+
+  useEffect(
+    () =>
+      subscribeCapture({
+        onOptimisticAdd: (task) =>
+          startTransition(() => dispatch({ kind: "add", task })),
+        onReplace: (tempId, task) =>
+          startTransition(() => dispatch({ kind: "replace", tempId, task })),
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filter],
   );
 
   function onToggle(task: Task) {
@@ -111,56 +132,41 @@ export function TasksClient({
   const done = tasks.filter((t) => t.status === "done");
 
   return (
-    <>
-      <div className="space-y-1 pb-4">
-        {active.length === 0 && done.length === 0 && (
-          <p className="text-muted text-sm text-center pt-12 pb-8">
-            no tasks yet — start typing below.
+    <div className="space-y-1 pb-4">
+      {active.length === 0 && done.length === 0 && (
+        <p className="text-muted text-sm text-center pt-12 pb-8">
+          no tasks here — capture one below.
+        </p>
+      )}
+
+      {active.map((t) => (
+        <TaskRow
+          key={t.id}
+          task={t}
+          groups={groups}
+          onToggle={onToggle}
+          onDelete={onDelete}
+          onUpdate={onUpdate}
+        />
+      ))}
+
+      {done.length > 0 && (
+        <div className="pt-8">
+          <p className="text-[10px] tracking-widest uppercase text-muted mb-2 px-1">
+            done · {done.length}
           </p>
-        )}
-
-        {active.map((t) => (
-          <TaskRow
-            key={t.id}
-            task={t}
-            groups={groups}
-            onToggle={onToggle}
-            onDelete={onDelete}
-            onUpdate={onUpdate}
-          />
-        ))}
-
-        {done.length > 0 && (
-          <div className="pt-8">
-            <p className="text-[10px] tracking-widest uppercase text-muted mb-2 px-1">
-              done · {done.length}
-            </p>
-            {done.map((t) => (
-              <TaskRow
-                key={t.id}
-                task={t}
-                groups={groups}
-                onToggle={onToggle}
-                onDelete={onDelete}
-                onUpdate={onUpdate}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <TaskCaptureBar
-        groupId={groupId}
-        groups={groups}
-        onOptimisticAdd={(task) =>
-          startTransition(() => dispatch({ kind: "add", task }))
-        }
-        onReplace={(tempId, task) =>
-          startTransition(() =>
-            dispatch({ kind: "replace", tempId, task }),
-          )
-        }
-      />
-    </>
+          {done.map((t) => (
+            <TaskRow
+              key={t.id}
+              task={t}
+              groups={groups}
+              onToggle={onToggle}
+              onDelete={onDelete}
+              onUpdate={onUpdate}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

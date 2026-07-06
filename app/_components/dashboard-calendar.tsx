@@ -123,6 +123,7 @@ export function DashboardCalendar({
   finance = [],
   status,
   calendarLinks = {},
+  initialView = "month",
 }: {
   month: string;
   tasks: TaskWithGroup[];
@@ -130,6 +131,7 @@ export function DashboardCalendar({
   finance?: FinanceChange[];
   status: CalendarStatus;
   calendarLinks?: Record<string, CalendarLink>;
+  initialView?: "month" | "week";
 }) {
   const today = toDateKey(new Date());
   const grid = useMemo(() => buildGrid(month), [month]);
@@ -138,7 +140,7 @@ export function DashboardCalendar({
     ? today
     : firstInMonth;
   const [selected, setSelected] = useState(initialSelected);
-  const [view, setView] = useState<"month" | "week">("month");
+  const [view, setView] = useState<"month" | "week">(initialView);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [eventOverrides, setEventOverrides] = useState<
     Record<string, EventOverride>

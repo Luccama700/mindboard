@@ -1,12 +1,13 @@
 "use client";
 
-import { startTransition, useOptimistic } from "react";
+import { startTransition, useEffect, useOptimistic } from "react";
 import {
   deleteTask,
   toggleTaskStatus,
   updateTask,
 } from "@/app/actions/tasks";
 import type { CalendarEvent } from "@/utils/google/calendar";
+import { subscribeCapture } from "./capture-bus";
 import {
   daysFromToday,
   formatClockTime,
@@ -14,7 +15,6 @@ import {
   todayISO,
 } from "./date-utils";
 import { EventRow, type VirtualEvent } from "./event-row";
-import { TaskCaptureBar } from "./task-capture-bar";
 import { TaskRow, type GroupOption } from "./task-row";
 import type { Task, TaskWithGroup } from "./types";
 
@@ -174,6 +174,27 @@ export function TodayClient({
           );
       }
     },
+  );
+
+  useEffect(
+    () =>
+      subscribeCapture({
+        onOptimisticAdd: (task) =>
+          startTransition(() =>
+            dispatch({
+              kind: "add",
+              task: applyPatch(
+                { ...task, group_name: null, group_color: null },
+                { groupId: task.group_id },
+                groups,
+              ),
+            }),
+          ),
+        onReplace: (tempId, task) =>
+          startTransition(() => dispatch({ kind: "replace", tempId, task })),
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups],
   );
 
   function onToggle(task: Task) {
@@ -353,26 +374,6 @@ export function TodayClient({
         )}
       </div>
 
-      <TaskCaptureBar
-        groupId={null}
-        groups={groups}
-        defaultDueDate={today}
-        onOptimisticAdd={(task) =>
-          startTransition(() =>
-            dispatch({
-              kind: "add",
-              task: applyPatch(
-                { ...task, group_name: null, group_color: null },
-                { groupId: task.group_id },
-                groups,
-              ),
-            }),
-          )
-        }
-        onReplace={(tempId, task) =>
-          startTransition(() => dispatch({ kind: "replace", tempId, task }))
-        }
-      />
     </>
   );
 }

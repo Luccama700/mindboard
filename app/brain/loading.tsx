@@ -1,7 +1,7 @@
 export default function BrainLoading() {
   return (
     <main
-      className="min-h-screen px-5 pt-8 pb-32 max-w-2xl mx-auto animate-pulse"
+      className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto animate-pulse"
       aria-hidden
     >
       <div className="flex items-center justify-between mb-10">

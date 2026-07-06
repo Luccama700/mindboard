@@ -9,7 +9,7 @@ import {
 } from "@/app/actions/groups";
 import type { CalendarListEntry } from "@/utils/google/calendar";
 import { ColorPicker, PALETTE } from "@/app/_components/color-picker";
-import type { Group } from "./page";
+import type { Group } from "./groups-types";
 
 const TYPES: Group["type"][] = ["course", "project", "work", "personal"];
 
@@ -98,7 +98,7 @@ export function GroupsClient({
   return (
     <div className="space-y-6">
       <Link
-        href="/inbox"
+        href="/tasks?group=inbox"
         className="block border border-line bg-card hover:bg-card-hover transition-colors"
       >
         <div className="flex items-center gap-3 px-4 py-4">
@@ -196,7 +196,7 @@ function GroupRow({
     <li className="border border-line bg-card">
       <div className="flex items-stretch">
         <Link
-          href={`/groups/${group.id}`}
+          href={`/tasks?group=${group.id}`}
           className="flex-1 flex items-center gap-3 px-4 py-4 hover:bg-card-hover transition-colors min-w-0"
         >
           <span

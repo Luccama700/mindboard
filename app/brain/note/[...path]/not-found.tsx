@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function BrainNoteNotFound() {
   return (
-    <main className="min-h-screen px-5 pt-8 pb-32 max-w-2xl mx-auto">
+    <main className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto">
       <header className="flex items-center justify-between mb-10">
         <Link
           href="/brain"

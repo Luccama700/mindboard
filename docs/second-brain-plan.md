@@ -441,3 +441,44 @@ durable record; this log tracks per-milestone shipping notes.
 
 **Verified:** lint clean; 148 tests pass; build green; cookie-SSR smoke test
 above. No route changes, no data changes.
+
+---
+
+## Implementation log — Redesign M1 (2026-07-06): Dock + information architecture
+
+**Shipped:**
+- **The Dock** (`app/_components/dock.tsx`, mounted app-wide from the root layout
+  via the server shell `dock-mount.tsx`): one fixed bottom island, nav rail on
+  top (◆ now · ▦ week · ◇ plan · $ money · ▤ stock · ≡ more), capture input on
+  the bottom edge with all its contract intact (sticky group/date chips —
+  date now defaults to today —, notes, priority cycle, optimistic insert,
+  focus retention). The rail collapses 200ms when the input focuses or the
+  keyboard is up (`visualViewport`); the ≡ sheet holds tasks (with inbox
+  count), brain, settings. Capture is now global: it emits over a window
+  event bus (`capture-bus.ts`) and whichever task list is on screen
+  subscribes for optimistic insert/replace. Deliberate change: the input no
+  longer autofocuses on page load (a global dock popping the iOS keyboard on
+  /finance would be wrong); it still refocuses after every submit.
+- **Routes**: `/week` (the calendar promoted to a route, week view default via
+  new `initialView` prop; `/` keeps its embedded month calendar until M2);
+  `/tasks` (absorbs groups + inbox: filter chip-rail all/inbox/per-group,
+  rewritten `TasksClient` with an `all` filter, group CRUD via the moved
+  `groups-client.tsx` under a `manage groups` disclosure); `/settings`
+  (appearance = the old popover's sections as `SettingsSections`; timezone +
+  wake-window preferences persisted to `user_settings` via new
+  `savePreferences`; the brain vault form; sign out). `/plan` placeholder
+  stub so the rail is complete. `/groups`, `/groups/[id]`, `/inbox` deleted
+  with permanent redirects in `next.config.ts`.
+- **Wake window wired**: `scheduleSnapshot` takes `wakeStartHour/wakeEndHour`;
+  the vitals free-hours math now reads the user's saved window
+  (`app/lib/data/settings.ts#getUserPreferences`). Timezone is stored and
+  editable; deep timezone-correct "today" math remains on the debt list.
+- `getDashboardData`/`normalizeMonth` extracted to `app/lib/data/dashboard.ts`
+  (shared by `/` and `/week`). Dashboard header pruned to date + title (pills,
+  settings popover, sign-out all superseded by the Dock/settings page). All
+  dock-overlaid pages got `pb-64` clearance.
+
+**Verified:** lint clean; 148 tests; build green (routes: /, /week, /plan,
+/tasks, /settings + existing); dev smoke: every route 200, /groups → 308
+/tasks, /inbox → 308 /tasks?group=inbox. Owner-gated: on-device keyboard
+choreography check on the installed PWA (the M1 gate from REDESIGN.md).
