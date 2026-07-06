@@ -324,3 +324,41 @@ done-criteria (Home → wikilinks → backlinks → refresh after a vault commit
 **Scope note:** the user asked to "carry on with each milestone until all done";
 Milestone 3 follows in this session. Milestone 4 stays unstarted — its fence says
 "only if Lucca asks", and a blanket carry-on doesn't open it.
+
+---
+
+## Implementation log — Milestone 3 (2026-07-05): the brain graph
+
+`/brain/graph` renders the vault as a force-directed graph — notes as nodes, wikilinks
+as edges — reusing Milestone 2's cached corpus (`getVaultCorpus()` → pure
+`buildGraphData` in `app/lib/brain/graph.ts`; nothing parsed twice, no extra endpoint:
+the server component is the "small server endpoint").
+
+**Design decisions (inside the fence):**
+- Rendering library: `react-force-graph-2d@1.29` (canvas; built-in d3-zoom pinch/pan
+  and drag-vs-tap disambiguation on touch — the mobile feel is the point of the
+  milestone, and hand-rolling that input handling is the risky part, not the physics).
+  Loaded client-side only via `next/dynamic` `ssr: false` inside a client wrapper;
+  next/dynamic doesn't forward refs, so the instance is exposed via a `graphRef` prop
+  (used for one-time `zoomToFit` on engine stop).
+- Node colors are fixed hex matching the vault's Obsidian graph groups (People green,
+  Projects orange, Areas blue, Topics purple, Journal gray, Archive dark gray; root
+  notes cream) — canvas can't read theme CSS variables, and the kickoff pins these.
+- Nice-to-haves inside the fence, both done: node size scales with inbound link count;
+  one-tap per-folder filter chips (links pruned to surviving endpoints; graphData
+  memoized + copied so the d3 simulation only restarts on filter change and never
+  mutates props). Labels draw under nodes past a zoom threshold. `cooldownTicks`
+  capped at 200 so the sim settles and stops burning battery.
+- Tap a node → `router.push` to the Milestone 2 note viewer; generous
+  `nodePointerAreaPaint` hit areas for touch.
+
+**Verified:** lint clean; 143 tests pass (+4 in `__tests__/brain-graph.test.ts`:
+node/edge construction, inbound counts, self-link + dangling-link pruning, empty
+corpus); build green (`/brain/graph` registered; TS validated the force-graph props).
+Dev-server smoke: unauthenticated request streams skeleton + login redirect, no vault
+data in the body. Pinch/drag/tap feel and the 10x-size check are owner-verified on the
+phone (kickoff done-criteria).
+
+**Status:** Milestones 2 and 3 complete. Milestone 4 not started (fenced: only if
+Lucca explicitly asks). Remaining owner steps: `VAULT_GITHUB_TOKEN` in Vercel
+(fine-grained PAT, Contents read-only, only `2ndBrain`), then phone verification.

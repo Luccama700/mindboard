@@ -108,6 +108,12 @@ export default async function BrainPage() {
           <h1 className="text-xs tracking-widest uppercase text-muted">
             brain
           </h1>
+          <Link
+            href="/brain/graph"
+            className="text-xs tracking-widest uppercase text-muted hover:text-fg transition-colors min-h-11 flex items-center"
+          >
+            graph →
+          </Link>
           <RefreshButton />
         </div>
       </header>
