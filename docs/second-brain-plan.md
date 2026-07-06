@@ -482,3 +482,43 @@ above. No route changes, no data changes.
 /tasks, /settings + existing); dev smoke: every route 200, /groups → 308
 /tasks, /inbox → 308 /tasks?group=inbox. Owner-gated: on-device keyboard
 choreography check on the installed PWA (the M1 gate from REDESIGN.md).
+
+---
+
+## Implementation log — Redesign M2 (2026-07-06): the Stream
+
+`/` is no longer dashboards you scan; it is one ranked queue you clear.
+
+**Shipped:**
+- `app/lib/snapshots/stream.ts` — pure `streamSnapshot()`: NOW (objective
+  time-facts only, uncapped: overdue tasks · events in progress/≤60min ·
+  bills landing today via `ruleLandsOn` · run-outs ≤ today), NEXT (cap 5:
+  due-today tasks · later-today events · tomorrow's first event · low stock),
+  LATER (cap 5, by date: ≤7d tasks · next bill · run-outs · evening daily-log
+  invite), LOOSE ENDS (absent when tidy: inbox count · dateless tasks >14d ·
+  quiet active goals · pending copilot proposals), pulse data, next-up hint.
+  Priority orders within sections and never promotes. 18 tests in
+  `__tests__/stream-snapshot.test.ts` encode the REDESIGN.md §6 rule table,
+  including boundary cases (60-min event lead, 7-day windows, caps/overflow,
+  all-day exclusion, done-task exclusion, wake-window-gated log invite).
+- `app/_components/stream-client.tsx` — cards in the strict grammar (tick ·
+  glyph · one-line fact · `·`-joined meta · one 44px verb row): tasks get
+  [done] + [later ▾] (tomorrow/weekend/next-week snooze = real due-date
+  writes) + swipe right-to-complete / left-to-snooze with exit animation;
+  bills get [log it] opening a spend sheet (account + category + prefilled
+  amount → `recordBalanceChange`); stock gets [buy task] (creates a dated
+  task) + inline − / ＋ steppers; the daily-log card and pulse dots open a
+  mood/energy/sleep sheet writing `daily_logs` (first dormant-table
+  activation). Dock captures due today appear in NEXT optimistically via the
+  capture bus.
+- Pulse line: date · time · signed today-delta (new `--positive` token) ·
+  N-to-clear · free-hours (links /week) · check-in dots. Empty state is the
+  planning invitation: `[plan tomorrow ◇] [open week ▦]` + next-up line.
+- Retired from `/`: vitals strip, today list, embedded calendar, welcome tour
+  (it described the old dashboard). `getOpenTasks` added to the shared
+  dashboard read (the stream needs dateless tasks; the calendar read doesn't).
+
+**Verified:** lint clean; 164 tests pass (+18 minus retired event-row tests);
+build green; dev smoke 200 with no vault/task leakage pre-auth. Deviation
+noted: the ≥1280px stream-beside-week split and event-card reschedule sheets
+ride with later milestones (M3 gap chips, M6 polish).

@@ -1,11 +1,13 @@
 import { Suspense, cache } from "react";
 import { createClient } from "@/utils/supabase/server";
-import { DashboardCalendar } from "./_components/dashboard-calendar";
 import { GetStartedScreen } from "./_components/get-started-screen";
-import { WelcomeTour } from "./_components/welcome-tour";
-import { TodayClient } from "./_components/today-client";
+import { StreamClient } from "./_components/stream-client";
 import { formatLongWeekdayMonthDay, todayISO } from "./_components/date-utils";
-import { getDashboardData, normalizeMonth } from "./lib/data/dashboard";
+import type {
+  SpendAccount,
+  SpendCategory,
+} from "./_components/stream-sheets";
+import { currentMonth, getDashboardData, getOpenTasks } from "./lib/data/dashboard";
 import {
   getAccounts,
   getActiveRecurringExpenses,
@@ -14,157 +16,192 @@ import {
 import { getInventoryItems, getInventoryUsages } from "./lib/data/inventory";
 import { getUserPreferences } from "./lib/data/settings";
 import { financeSnapshot } from "./lib/snapshots/finance";
-import { inventorySnapshot } from "./lib/snapshots/inventory";
-import { tasksSnapshot } from "./lib/snapshots/tasks";
 import { scheduleSnapshot } from "./lib/snapshots/schedule";
-import { VitalsStrip } from "./_components/vitals-strip";
+import {
+  streamSnapshot,
+  type StreamBillInput,
+  type StreamSnapshot,
+} from "./lib/snapshots/stream";
+import type { UsageRule } from "./_components/inventory-projection";
 
-// The vitals strip is anchored to *today*, independent of which month the
-// calendar is showing. It reuses the cached dashboard read for tasks/events
-// (so no extra Supabase or Google round-trips on the common current-month view)
-// and adds the reads the dashboard doesn't already make: accounts, recurring
-// expenses, inventory, and today's balance changes.
-const getVitalsData = cache(async (userId: string, month: string) => {
-  const today = todayISO();
-  const [dash, accounts, recurringExpenses, items, usages, todayChanges, prefs] =
-    await Promise.all([
-      getDashboardData(userId, month),
+const getStreamData = cache(
+  async (
+    userId: string,
+  ): Promise<{
+    snapshot: StreamSnapshot;
+    accounts: SpendAccount[];
+    categories: SpendCategory[];
+  }> => {
+    const today = todayISO();
+    const now = new Date();
+    const supabase = await createClient();
+
+    const [
+      dash,
+      tasks,
+      accounts,
+      recurringExpenses,
+      items,
+      usages,
+      todayChanges,
+      prefs,
+      goalsResult,
+      logResult,
+      proposalsResult,
+      categoriesResult,
+    ] = await Promise.all([
+      getDashboardData(userId, currentMonth()),
+      getOpenTasks(userId),
       getAccounts(userId),
       getActiveRecurringExpenses(userId),
       getInventoryItems(userId),
       getInventoryUsages(userId),
       getBalanceChangesOn(userId, today),
       getUserPreferences(userId),
+      supabase
+        .from("goals")
+        .select("id, title, status, created_at")
+        .eq("status", "active"),
+      supabase
+        .from("daily_logs")
+        .select("mood")
+        .eq("log_date", today)
+        .maybeSingle(),
+      supabase
+        .from("ai_audit_log")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "proposed"),
+      supabase
+        .from("spending_categories")
+        .select("id, name, color")
+        .order("name", { ascending: true }),
     ]);
 
-  return {
-    finance: financeSnapshot({ accounts, todayChanges, recurringExpenses, today }),
-    tasks: tasksSnapshot(dash.tasks, today),
-    schedule: scheduleSnapshot({
+    const finance = financeSnapshot({
+      accounts,
+      todayChanges,
+      recurringExpenses,
+      today,
+    });
+    const schedule = scheduleSnapshot({
       events: dash.events,
-      now: new Date(),
+      now,
       wakeStartHour: prefs.wake_start_hour,
       wakeEndHour: prefs.wake_end_hour,
-    }),
-    inventory: inventorySnapshot({ items, usages, today }),
-  };
-});
+    });
 
-async function VitalsSection({
-  userId,
-  month,
-}: {
-  userId: string;
-  month: string;
-}) {
-  const { finance, tasks, schedule, inventory } = await getVitalsData(
-    userId,
-    month,
-  );
+    const bills: StreamBillInput[] = recurringExpenses.map((expense) => ({
+      id: expense.id,
+      name: expense.name,
+      amount: Number(expense.amount),
+      frequency: expense.frequency,
+      day_of_month: expense.day_of_month,
+      weekday: expense.weekday,
+      interval_days: expense.interval_days,
+      start_date: expense.start_date,
+    }));
+
+    const usagesByItem: Record<string, UsageRule[]> = {};
+    for (const usage of usages) {
+      const list = usagesByItem[usage.inventory_item_id] ?? [];
+      list.push({
+        amount: Number(usage.amount),
+        period: usage.period,
+        interval_days: usage.interval_days,
+      });
+      usagesByItem[usage.inventory_item_id] = list;
+    }
+
+    const log = logResult.data as { mood: number | null } | null;
+
+    const snapshot = streamSnapshot({
+      today,
+      now,
+      tasks,
+      events: dash.events.map((e) => ({
+        id: e.id,
+        summary: e.summary,
+        start: e.start,
+        end: e.end,
+        allDay: e.allDay,
+      })),
+      bills,
+      items: items.map((item) => ({
+        id: item.id,
+        name: item.name,
+        quantity: Number(item.quantity),
+        unit: item.unit,
+        reorder_threshold: item.reorder_threshold,
+      })),
+      usagesByItem,
+      goals: (goalsResult.data ?? []) as {
+        id: string;
+        title: string;
+        status: string;
+        created_at: string;
+      }[],
+      hasDailyLogToday: log !== null,
+      moodToday: log?.mood ?? null,
+      pendingProposals: proposalsResult.count ?? 0,
+      wakeEndHour: prefs.wake_end_hour,
+      freeHoursToday: schedule.freeHoursToday,
+      todayDelta: finance.todayDelta,
+      currency: finance.currency,
+    });
+
+    return {
+      snapshot,
+      accounts: accounts.map((a) => ({
+        id: a.id,
+        name: a.name,
+        balance: Number(a.balance),
+        currency: a.currency,
+      })),
+      categories: (categoriesResult.data ?? []) as SpendCategory[],
+    };
+  },
+);
+
+async function StreamSection({ userId }: { userId: string }) {
+  const { snapshot, accounts, categories } = await getStreamData(userId);
+  const now = new Date();
+  const clockLabel = `${String(now.getHours()).padStart(2, "0")}:${String(
+    now.getMinutes(),
+  ).padStart(2, "0")}`;
+
   return (
-    <VitalsStrip
-      finance={finance}
-      tasks={tasks}
-      schedule={schedule}
-      inventory={inventory}
+    <StreamClient
+      snapshot={snapshot}
+      accounts={accounts}
+      categories={categories}
+      todayLabel={formatLongWeekdayMonthDay(now).toLowerCase()}
+      clockLabel={clockLabel}
     />
   );
 }
 
-function VitalsSkeleton() {
+function StreamSkeleton() {
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1 animate-pulse" aria-hidden>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div
-          key={i}
-          className="flex-shrink-0 w-36 h-[4.75rem] border border-line bg-card"
-        />
+    <div className="animate-pulse" aria-hidden>
+      <div className="flex items-center justify-between mb-8">
+        <div className="h-4 w-40 bg-card" />
+        <div className="h-4 w-48 bg-card" />
+      </div>
+      {[3, 2, 2].map((rows, section) => (
+        <div key={section} className="mb-8">
+          <div className="h-3 w-full bg-card mb-2" />
+          <div className="space-y-px">
+            {Array.from({ length: rows }).map((_, i) => (
+              <div key={i} className="h-16 bg-card" />
+            ))}
+          </div>
+        </div>
       ))}
     </div>
   );
 }
 
-async function TodaySection({
-  userId,
-  month,
-}: {
-  userId: string;
-  month: string;
-}) {
-  const { tasks, groups, events, calendarLinks } = await getDashboardData(
-    userId,
-    month,
-  );
-  return (
-    <TodayClient
-      initial={tasks}
-      groups={groups}
-      events={events}
-      calendarLinks={calendarLinks}
-    />
-  );
-}
-
-async function CalendarSection({
-  userId,
-  month,
-}: {
-  userId: string;
-  month: string;
-}) {
-  const { calendarTasks, events, finance, calendarStatus, calendarLinks } =
-    await getDashboardData(userId, month);
-  return (
-    <DashboardCalendar
-      key={month}
-      month={month}
-      tasks={calendarTasks}
-      events={events}
-      finance={finance}
-      status={calendarStatus}
-      calendarLinks={calendarLinks}
-    />
-  );
-}
-
-function TodaySkeleton() {
-  return (
-    <div className="pb-4 animate-pulse" aria-hidden>
-      <div className="h-2.5 w-16 bg-line mb-3" />
-      <div className="space-y-px">
-        <div className="h-14 bg-card" />
-        <div className="h-14 bg-card" />
-        <div className="h-14 bg-card" />
-        <div className="h-14 bg-card" />
-      </div>
-    </div>
-  );
-}
-
-function CalendarSkeleton() {
-  return (
-    <div className="border border-line p-4 space-y-3 animate-pulse" aria-hidden>
-      <div className="flex items-center justify-between">
-        <div className="h-3 w-32 bg-line" />
-        <div className="h-3 w-16 bg-line" />
-      </div>
-      <div className="grid grid-cols-7 gap-px">
-        {Array.from({ length: 42 }).map((_, i) => (
-          <div key={i} className="aspect-square bg-card" />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export default async function Home({
-  searchParams,
-}: {
-  searchParams: Promise<{ m?: string | string[] | undefined }>;
-}) {
-  const query = await searchParams;
-  const calendarMonth = normalizeMonth(query.m);
-
+export default async function Home() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -174,38 +211,11 @@ export default async function Home({
     return <GetStartedScreen />;
   }
 
-  const todayLabel = formatLongWeekdayMonthDay(new Date());
-
   return (
-    <main className="min-h-screen px-5 pt-8 pb-64 lg:px-12">
-      <div className="mb-8">
-        <Suspense fallback={<VitalsSkeleton />}>
-          <VitalsSection userId={user.id} month={calendarMonth} />
-        </Suspense>
-      </div>
-      <div className="grid gap-8 lg:grid-cols-2 lg:gap-24 lg:items-start">
-        <section className="min-w-0">
-          <header className="mb-8">
-            <p className="text-[10px] tracking-widest uppercase text-muted">
-              {todayLabel}
-            </p>
-            <h1 className="text-3xl font-bold tracking-tight text-fg mt-1">
-              today
-            </h1>
-          </header>
-
-          <Suspense fallback={<TodaySkeleton />}>
-            <TodaySection userId={user.id} month={calendarMonth} />
-          </Suspense>
-        </section>
-
-        <aside className="min-w-0 lg:sticky lg:top-8">
-          <Suspense fallback={<CalendarSkeleton />}>
-            <CalendarSection userId={user.id} month={calendarMonth} />
-          </Suspense>
-        </aside>
-      </div>
-      <WelcomeTour />
+    <main className="min-h-screen px-5 pt-6 pb-64 max-w-2xl mx-auto">
+      <Suspense fallback={<StreamSkeleton />}>
+        <StreamSection userId={user.id} />
+      </Suspense>
     </main>
   );
 }

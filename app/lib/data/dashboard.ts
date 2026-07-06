@@ -130,6 +130,22 @@ function mapTasks(rawTasks: RawTask[]): TaskWithGroup[] {
   });
 }
 
+// Every non-done task, with or without a due date — the Stream's task input
+// (the dashboard read below only fetches dated tasks).
+export const getOpenTasks = cache(
+  async (userId: string): Promise<TaskWithGroup[]> => {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("tasks")
+      .select(
+        "id, title, due_date, status, priority, notes, group_id, created_at, completed_at, groups(name, color)",
+      )
+      .eq("user_id", userId)
+      .neq("status", "done");
+    return mapTasks((data ?? []) as RawTask[]);
+  },
+);
+
 export const getDashboardData = cache(async (userId: string, month: string) => {
   const { startDate, endDate, timeMin, timeMax } = calendarRange(month);
   const supabase = await createClient();
