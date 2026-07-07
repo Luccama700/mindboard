@@ -116,13 +116,25 @@ export function Dock({
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [groupOpen, moreOpen]);
 
-  function onFormFocus() {
-    setTyping(true);
-    setMoreOpen(false);
+  // Only collapsing the rail for the capture text fields — not the nav links or
+  // toolbar buttons, whose focus would otherwise collapse the rail out from
+  // under the tap and eat the click.
+  function isTextEntry(el: EventTarget | null): boolean {
+    return (
+      el === inputRef.current ||
+      (el instanceof HTMLElement && el.tagName === "TEXTAREA")
+    );
+  }
+
+  function onFormFocus(e: React.FocusEvent<HTMLFormElement>) {
+    if (isTextEntry(e.target)) {
+      setTyping(true);
+      setMoreOpen(false);
+    }
   }
 
   function onFormBlur(e: React.FocusEvent<HTMLFormElement>) {
-    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+    if (!isTextEntry(e.relatedTarget)) {
       setTyping(false);
     }
   }
