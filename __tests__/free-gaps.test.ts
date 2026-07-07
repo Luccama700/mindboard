@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { freeGaps } from "@/app/lib/snapshots/schedule";
+import { freeGaps, freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
 
 const NOON = new Date(2026, 6, 6, 12, 0, 0); // 2026-07-06 12:00 local
 
@@ -73,5 +73,70 @@ describe("freeGaps", () => {
     const oddNow = new Date(2026, 6, 6, 12, 7, 0);
     const gaps = freeGaps({ events: [], now: oddNow, days: 1, limit: 1 });
     expect(gaps[0].start).toBe("12:15");
+  });
+});
+
+describe("freeIntervalsForDay", () => {
+  test("an empty future day is one full wake-window interval", () => {
+    const intervals = freeIntervalsForDay({
+      events: [],
+      dateKey: "2026-07-07",
+      now: NOON,
+    });
+    expect(intervals).toEqual([
+      { startMinutes: 8 * 60, endMinutes: 22 * 60, minutes: 840 },
+    ]);
+  });
+
+  test("today clips past time; other days do not", () => {
+    const today = freeIntervalsForDay({
+      events: [],
+      dateKey: "2026-07-06",
+      now: NOON,
+    });
+    expect(today).toEqual([
+      { startMinutes: 12 * 60, endMinutes: 22 * 60, minutes: 600 },
+    ]);
+  });
+
+  test("sub-45-minute slivers are returned, unlike freeGaps", () => {
+    const intervals = freeIntervalsForDay({
+      events: [
+        event("2026-07-06T13:00:00", "2026-07-06T14:00:00"),
+        event("2026-07-06T14:30:00", "2026-07-06T20:00:00"),
+      ],
+      dateKey: "2026-07-06",
+      now: NOON,
+    });
+    expect(intervals).toEqual([
+      { startMinutes: 12 * 60, endMinutes: 13 * 60, minutes: 60 },
+      { startMinutes: 14 * 60, endMinutes: 14 * 60 + 30, minutes: 30 },
+      { startMinutes: 20 * 60, endMinutes: 22 * 60, minutes: 120 },
+    ]);
+  });
+
+  test("overlapping events merge and all-day events are ignored", () => {
+    const intervals = freeIntervalsForDay({
+      events: [
+        event("2026-07-07T09:00:00", "2026-07-07T11:00:00"),
+        event("2026-07-07T10:00:00", "2026-07-07T12:00:00"),
+        { summary: "allday", start: "2026-07-07", end: "2026-07-08", allDay: true },
+      ],
+      dateKey: "2026-07-07",
+      now: NOON,
+    });
+    expect(intervals).toEqual([
+      { startMinutes: 8 * 60, endMinutes: 9 * 60, minutes: 60 },
+      { startMinutes: 12 * 60, endMinutes: 22 * 60, minutes: 600 },
+    ]);
+  });
+
+  test("a busy day past wake end yields nothing", () => {
+    const intervals = freeIntervalsForDay({
+      events: [event("2026-07-06T08:00:00", "2026-07-06T22:00:00")],
+      dateKey: "2026-07-06",
+      now: NOON,
+    });
+    expect(intervals).toEqual([]);
   });
 });

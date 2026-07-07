@@ -36,24 +36,34 @@ function timedIntervals(events: ScheduleEvent[]): (Interval & {
     .filter((x) => Number.isFinite(x.start) && Number.isFinite(x.end));
 }
 
-// Total free milliseconds inside [lo, hi] not covered by the busy intervals.
-function freeMsInWindow(busy: Interval[], lo: number, hi: number): number {
-  if (hi <= lo) return 0;
+// The free intervals inside [lo, hi] not covered by the busy intervals — the
+// single sweep behind freeMsInWindow, freeGaps, and freeIntervalsForDay.
+function freeIntervalsInWindow(
+  busy: Interval[],
+  lo: number,
+  hi: number,
+): Interval[] {
+  if (hi <= lo) return [];
   const clipped = busy
     .map((b) => ({ start: Math.max(b.start, lo), end: Math.min(b.end, hi) }))
     .filter((b) => b.end > b.start)
     .sort((a, b) => a.start - b.start);
 
-  let covered = 0;
+  const free: Interval[] = [];
   let cursor = lo;
   for (const b of clipped) {
-    if (b.start > cursor) cursor = b.start;
-    if (b.end > cursor) {
-      covered += b.end - cursor;
-      cursor = b.end;
-    }
+    if (b.start > cursor) free.push({ start: cursor, end: b.start });
+    cursor = Math.max(cursor, b.end);
   }
-  return hi - lo - covered;
+  if (cursor < hi) free.push({ start: cursor, end: hi });
+  return free;
+}
+
+function freeMsInWindow(busy: Interval[], lo: number, hi: number): number {
+  return freeIntervalsInWindow(busy, lo, hi).reduce(
+    (sum, iv) => sum + (iv.end - iv.start),
+    0,
+  );
 }
 
 export type FreeGap = {
@@ -120,29 +130,66 @@ export function freeGaps(input: {
     const quarter = 15 * 60_000;
     cursor = Math.ceil(cursor / quarter) * quarter;
 
-    const dayBusy = busy
-      .map((b) => ({
-        start: Math.max(b.start, cursor),
-        end: Math.min(b.end, hi),
-      }))
-      .filter((b) => b.end > b.start)
-      .sort((a, b) => a.start - b.start);
-
-    for (const block of [...dayBusy, { start: hi, end: hi }]) {
-      if (block.start - cursor >= minMinutes * 60_000) {
+    for (const iv of freeIntervalsInWindow(busy, cursor, hi)) {
+      if (iv.end - iv.start >= minMinutes * 60_000) {
         gaps.push({
           dateKey: dateKeyOf(day),
-          start: clockOf(cursor),
-          end: clockOf(block.start),
-          minutes: Math.round((block.start - cursor) / 60_000),
+          start: clockOf(iv.start),
+          end: clockOf(iv.end),
+          minutes: Math.round((iv.end - iv.start) / 60_000),
         });
         if (gaps.length >= limit) break;
       }
-      cursor = Math.max(cursor, block.end);
     }
   }
 
   return gaps;
+}
+
+export type FreeInterval = {
+  startMinutes: number; // minutes into the day, e.g. 12:30 = 750
+  endMinutes: number;
+  minutes: number;
+};
+
+// Every free interval of one day's wake window (no minimum, no cap) — the
+// drawable rects for the week view's free-time underlay. For today, time
+// before `now` is not free; other days ignore `now`.
+export function freeIntervalsForDay(input: {
+  events: ScheduleEvent[];
+  dateKey: string; // YYYY-MM-DD
+  now: Date;
+  wakeStartHour?: number;
+  wakeEndHour?: number;
+}): FreeInterval[] {
+  const { events, dateKey, now } = input;
+  const wakeStartHour = input.wakeStartHour ?? DEFAULT_WAKE_START_HOUR;
+  const wakeEndHour = input.wakeEndHour ?? DEFAULT_WAKE_END_HOUR;
+
+  const [y, m, d] = dateKey.split("-").map(Number);
+  if (!y || !m || !d) return [];
+  const wakeStart = new Date(y, m - 1, d, wakeStartHour, 0, 0, 0);
+  const wakeEnd = new Date(y, m - 1, d, wakeEndHour, 0, 0, 0);
+
+  const lo =
+    dateKeyOf(now) === dateKey
+      ? Math.max(wakeStart.getTime(), now.getTime())
+      : wakeStart.getTime();
+
+  const minutesOf = (ms: number) => {
+    const t = new Date(ms);
+    return t.getHours() * 60 + t.getMinutes();
+  };
+
+  return freeIntervalsInWindow(
+    timedIntervals(events),
+    lo,
+    wakeEnd.getTime(),
+  ).map((iv) => {
+    const startMinutes = minutesOf(iv.start);
+    const endMinutes = minutesOf(iv.end);
+    return { startMinutes, endMinutes, minutes: endMinutes - startMinutes };
+  });
 }
 
 export function scheduleSnapshot(input: {
