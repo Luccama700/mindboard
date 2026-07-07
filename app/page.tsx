@@ -1,5 +1,6 @@
 import { Suspense, cache } from "react";
 import { createClient } from "@/utils/supabase/server";
+import { DashboardCalendar } from "./_components/dashboard-calendar";
 import { GetStartedScreen } from "./_components/get-started-screen";
 import { StreamClient } from "./_components/stream-client";
 import { formatLongWeekdayMonthDay, todayISO } from "./_components/date-utils";
@@ -7,7 +8,12 @@ import type {
   SpendAccount,
   SpendCategory,
 } from "./_components/stream-sheets";
-import { currentMonth, getDashboardData, getOpenTasks } from "./lib/data/dashboard";
+import {
+  currentMonth,
+  getDashboardData,
+  getOpenTasks,
+  normalizeMonth,
+} from "./lib/data/dashboard";
 import {
   getAccounts,
   getActiveRecurringExpenses,
@@ -193,6 +199,62 @@ async function StreamSection({ userId }: { userId: string }) {
   );
 }
 
+// Desktop-only right pane: the same week calendar /week serves, sharing the
+// stream's cached getDashboardData/getUserPreferences promises for the
+// current month.
+async function WeekPaneSection({
+  userId,
+  month,
+}: {
+  userId: string;
+  month: string;
+}) {
+  const [
+    { calendarTasks, events, finance, calendarStatus, calendarLinks },
+    prefs,
+  ] = await Promise.all([
+    getDashboardData(userId, month),
+    getUserPreferences(userId),
+  ]);
+
+  const schedule = scheduleSnapshot({
+    events,
+    now: new Date(),
+    wakeStartHour: prefs.wake_start_hour,
+    wakeEndHour: prefs.wake_end_hour,
+  });
+
+  return (
+    <DashboardCalendar
+      key={month}
+      month={month}
+      tasks={calendarTasks}
+      events={events}
+      finance={finance}
+      status={calendarStatus}
+      calendarLinks={calendarLinks}
+      initialView="week"
+      wakeStartHour={prefs.wake_start_hour}
+      wakeEndHour={prefs.wake_end_hour}
+      scheduleVitals={schedule}
+      basePath="/"
+    />
+  );
+}
+
+function WeekPaneSkeleton() {
+  return (
+    <div
+      className="animate-pulse border border-line bg-popover p-3 min-h-[calc(100vh-4rem)]"
+      aria-hidden
+    >
+      <div className="h-3 w-16 bg-card mb-2" />
+      <div className="h-6 w-32 bg-card mb-6" />
+      <div className="h-full max-h-[36rem] bg-card" />
+    </div>
+  );
+}
+
 function StreamSkeleton() {
   return (
     <div className="animate-pulse" aria-hidden>
@@ -214,7 +276,14 @@ function StreamSkeleton() {
   );
 }
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ m?: string | string[] | undefined }>;
+}) {
+  const query = await searchParams;
+  const month = normalizeMonth(query.m);
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -225,10 +294,19 @@ export default async function Home() {
   }
 
   return (
-    <main className="min-h-screen px-5 pt-6 pb-64 max-w-2xl mx-auto">
-      <Suspense fallback={<StreamSkeleton />}>
-        <StreamSection userId={user.id} />
-      </Suspense>
+    <main className="min-h-screen px-5 pt-6 pb-64 mx-auto max-w-2xl lg:max-w-none lg:px-10 2xl:max-w-[110rem]">
+      <div className="lg:grid lg:grid-cols-2 lg:gap-12 lg:items-start">
+        <div className="min-w-0 w-full max-w-2xl mx-auto">
+          <Suspense fallback={<StreamSkeleton />}>
+            <StreamSection userId={user.id} />
+          </Suspense>
+        </div>
+        <div className="hidden lg:block min-w-0">
+          <Suspense fallback={<WeekPaneSkeleton />}>
+            <WeekPaneSection userId={user.id} month={month} />
+          </Suspense>
+        </div>
+      </div>
     </main>
   );
 }
