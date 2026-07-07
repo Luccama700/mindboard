@@ -3,8 +3,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
 import { ownerUserId, todayKey } from "./config";
 import {
-  computeSpendBalance,
-  roundCents,
   summarizeCreateRecurringTask,
   summarizeCreateTask,
   summarizeLogSpend,
@@ -13,6 +11,8 @@ import {
   validateLogSpend,
   type Result,
 } from "./validate";
+import { changeFingerprint } from "@/app/lib/finance/derive";
+import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 import { formatRecurrence } from "@/app/lib/recurrence";
 import { loadProposal, recordProposal, resolveProposal } from "./audit";
 import {
@@ -23,6 +23,18 @@ import {
   type ResolvableGroup,
   type ResolvableItem,
 } from "./inventory-ops";
+import {
+  financeOpsDateSpan,
+  financeReceiptLine,
+  renderFinanceReceipt,
+  resolveFinanceOps,
+  validateFinanceOps,
+  validateResolvedFinanceOps,
+  type ExistingChange,
+  type ResolvableAccount,
+  type ResolvableCategory,
+  type ResolvableRecurring,
+} from "./finance-ops";
 
 // The MCP write layer. Each write is two steps (the plan's locked
 // write-with-confirmation rule):
@@ -287,6 +299,106 @@ export async function proposeUpdateStock(raw: unknown): Promise<Result<Proposal>
   return proposeUpdateStockFor(createServiceClient(), ownerUserId(), raw);
 }
 
+// The statement-import batch (docs/finance-automation-plan.md): resolve refs
+// against live accounts/categories/recurring rules, flag duplicates against
+// existing fingerprints in the batch's date span, store the RESOLVED ops on the
+// proposal, return the receipt. Shared by the in-app assistant and MCP.
+export async function proposeUpdateFinanceFor(
+  supabase: SupabaseClient,
+  userId: string,
+  raw: unknown,
+  options?: { source?: "mcp" | "assistant"; conversationId?: string | null },
+): Promise<Result<Proposal>> {
+  const parsed = validateFinanceOps(raw);
+  if (!parsed.ok) return parsed;
+  const ops = parsed.value;
+
+  const span = financeOpsDateSpan(ops);
+  const changeIds = [
+    ...new Set(
+      ops.flatMap((op) =>
+        op.op === "adjust" || op.op === "remove" ? [op.changeId] : [],
+      ),
+    ),
+  ];
+
+  const CHANGE_SELECT = "id, account_id, occurred_at, direction, amount, note";
+  const [accountsRes, categoriesRes, recurringRes, spanRes, idsRes] =
+    await Promise.all([
+      supabase
+        .from("accounts")
+        .select("id, name, currency")
+        .eq("user_id", userId)
+        .eq("archived", false),
+      supabase
+        .from("spending_categories")
+        .select("id, name")
+        .eq("user_id", userId)
+        .eq("archived", false),
+      supabase
+        .from("recurring_expenses")
+        .select("id, name")
+        .eq("user_id", userId)
+        .eq("archived", false),
+      span
+        ? supabase
+            .from("balance_changes")
+            .select(CHANGE_SELECT)
+            .eq("user_id", userId)
+            .gte("occurred_at", span.min)
+            .lte("occurred_at", span.max)
+            .limit(1000)
+        : Promise.resolve({ data: [] as unknown[] }),
+      changeIds.length > 0
+        ? supabase
+            .from("balance_changes")
+            .select(CHANGE_SELECT)
+            .eq("user_id", userId)
+            .in("id", changeIds)
+        : Promise.resolve({ data: [] as unknown[] }),
+    ]);
+
+  const existingById = new Map<string, ExistingChange>();
+  for (const row of [
+    ...((spanRes.data ?? []) as ExistingChange[]),
+    ...((idsRes.data ?? []) as ExistingChange[]),
+  ]) {
+    existingById.set(row.id, row);
+  }
+
+  const resolved = resolveFinanceOps(ops, {
+    accounts: (accountsRes.data ?? []) as ResolvableAccount[],
+    categories: (categoriesRes.data ?? []) as ResolvableCategory[],
+    recurring: (recurringRes.data ?? []) as ResolvableRecurring[],
+    existingChanges: [...existingById.values()],
+    today: todayKey(),
+  });
+  if (!resolved.ok) return resolved;
+
+  if (resolved.value.every((op) => op.kind === "skip_duplicate")) {
+    return {
+      ok: false,
+      error:
+        "every operation matches an existing entry — nothing to import (set force on specific ops to override)",
+    };
+  }
+
+  const preview = renderFinanceReceipt(resolved.value);
+  const proposalId = await recordProposal(
+    supabase,
+    userId,
+    "update_finance",
+    { operations: resolved.value } as unknown as Record<string, unknown>,
+    preview,
+    options,
+  );
+  return { ok: true, value: { proposalId, preview } };
+}
+
+export async function proposeUpdateFinance(raw: unknown): Promise<Result<Proposal>> {
+  return proposeUpdateFinanceFor(createServiceClient(), ownerUserId(), raw);
+}
+
 // ---------- execute (called by confirm, scoped to the owner) ----------
 
 async function executeCreateTask(
@@ -403,20 +515,13 @@ async function executeLogSpend(
   if (!parsed.ok) return parsed;
   const v = parsed.value;
 
-  const { data: account } = await supabase
-    .from("accounts")
-    .select("id, balance")
-    .eq("id", v.accountId)
-    .eq("user_id", ownerId)
-    .maybeSingle();
-  if (!account) return { ok: false, error: "account not found" };
+  if (!(await ownsRow(supabase, "accounts", v.accountId, ownerId))) {
+    return { ok: false, error: "account not found" };
+  }
 
   if (v.categoryId && !(await ownsRow(supabase, "spending_categories", v.categoryId, ownerId))) {
     return { ok: false, error: "category not found" };
   }
-
-  const current = roundCents(Number((account as { balance: number }).balance)) ?? 0;
-  const newBalance = computeSpendBalance(current, v.amount);
 
   const { data: change, error: insertError } = await supabase
     .from("balance_changes")
@@ -426,24 +531,21 @@ async function executeLogSpend(
       category_id: v.categoryId,
       direction: "out",
       amount: v.amount,
-      balance_after: newBalance,
       note: v.note,
       occurred_at: todayKey(),
+      source: "assistant",
+      fingerprint: changeFingerprint(todayKey(), "out", v.amount),
     })
-    .select("id, amount, balance_after, occurred_at")
+    .select("id, amount, occurred_at")
     .single();
   if (insertError || !change) {
     return { ok: false, error: insertError?.message ?? "insert failed" };
   }
 
-  const { error: updateError } = await supabase
-    .from("accounts")
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq("id", v.accountId)
-    .eq("user_id", ownerId);
-  if (updateError) return { ok: false, error: updateError.message };
+  const recomputed = await recomputeAccountBalance(supabase, ownerId, v.accountId);
+  if (recomputed.error) return { ok: false, error: recomputed.error };
 
-  return { ok: true, value: { change, newBalance } };
+  return { ok: true, value: { change, newBalance: recomputed.balance } };
 }
 
 // Applies a confirmed stock batch. Quantities are re-read at execute time:
@@ -558,6 +660,278 @@ async function executeUpdateStock(
   return { ok: true, value: { applied } };
 }
 
+// Applies a confirmed finance batch. Ops run in stored order (category creates
+// first, reconciles last — the resolver guarantees it) and the first failure
+// aborts the rest (already-applied ops stand; the error says how far it got).
+// Every touched account's cached balance is re-derived once at the end.
+async function executeUpdateFinance(
+  supabase: SupabaseClient,
+  ownerId: string,
+  input: Record<string, unknown>,
+): Promise<Result<Record<string, unknown>>> {
+  const parsed = validateResolvedFinanceOps(input);
+  if (!parsed.ok) return parsed;
+  const ops = parsed.value;
+
+  // Ownership sweep: the stored proposal is data — re-verify every referenced
+  // account and category id against the owner before writing anything.
+  const accountIds = new Set<string>();
+  const categoryIds = new Set<string>();
+  for (const op of ops) {
+    switch (op.kind) {
+      case "spend":
+      case "income":
+      case "reconcile":
+        accountIds.add(op.accountId);
+        break;
+      case "transfer":
+        accountIds.add(op.fromId);
+        accountIds.add(op.toId);
+        break;
+      case "adjust":
+      case "remove":
+        accountIds.add(op.accountId);
+        break;
+      default:
+        break;
+    }
+    if ((op.kind === "spend" || op.kind === "create_recurring" || op.kind === "adjust") && op.categoryId) {
+      categoryIds.add(op.categoryId);
+    }
+  }
+  if (accountIds.size > 0) {
+    const { data, error } = await supabase
+      .from("accounts")
+      .select("id")
+      .eq("user_id", ownerId)
+      .in("id", [...accountIds]);
+    if (error) return { ok: false, error: error.message };
+    if ((data ?? []).length !== accountIds.size) {
+      return { ok: false, error: "an account in this proposal no longer exists" };
+    }
+  }
+  if (categoryIds.size > 0) {
+    const { data, error } = await supabase
+      .from("spending_categories")
+      .select("id")
+      .eq("user_id", ownerId)
+      .in("id", [...categoryIds]);
+    if (error) return { ok: false, error: error.message };
+    if ((data ?? []).length !== categoryIds.size) {
+      return { ok: false, error: "a category in this proposal no longer exists" };
+    }
+  }
+
+  const applied: string[] = [];
+  const touched = new Set<string>();
+  const createdCategories = new Map<string, string>(); // lowercased name → id
+
+  const categoryFor = (
+    categoryId: string | null,
+    pendingCategory: string | null,
+  ): Result<string | null> => {
+    if (categoryId) return { ok: true, value: categoryId };
+    if (pendingCategory) {
+      const id = createdCategories.get(pendingCategory.toLowerCase());
+      if (!id) {
+        return { ok: false, error: `category "${pendingCategory}" was not created` };
+      }
+      return { ok: true, value: id };
+    }
+    return { ok: true, value: null };
+  };
+
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    const fail = (message: string): Result<Record<string, unknown>> => ({
+      ok: false,
+      error: `${message} (applied ${i} of ${ops.length} operations)`,
+    });
+
+    switch (op.kind) {
+      case "skip_duplicate":
+        applied.push(financeReceiptLine(op));
+        break;
+      case "create_category": {
+        const { data, error } = await supabase
+          .from("spending_categories")
+          .insert({ user_id: ownerId, name: op.name, color: op.color })
+          .select("id")
+          .single();
+        if (error || !data) return fail(error?.message ?? "category insert failed");
+        createdCategories.set(op.name.toLowerCase(), data.id as string);
+        applied.push(financeReceiptLine(op));
+        break;
+      }
+      case "spend": {
+        const category = categoryFor(op.categoryId, op.pendingCategory);
+        if (!category.ok) return fail(category.error);
+        const { error } = await supabase.from("balance_changes").insert({
+          user_id: ownerId,
+          account_id: op.accountId,
+          category_id: category.value,
+          direction: "out",
+          amount: op.amount,
+          note: op.note,
+          occurred_at: op.date,
+          source: "import",
+          fingerprint: changeFingerprint(op.date, "out", op.amount),
+        });
+        if (error) return fail(error.message);
+        touched.add(op.accountId);
+        applied.push(financeReceiptLine(op));
+        break;
+      }
+      case "income": {
+        const { error } = await supabase.from("balance_changes").insert({
+          user_id: ownerId,
+          account_id: op.accountId,
+          category_id: null,
+          direction: "in",
+          amount: op.amount,
+          note: op.note,
+          occurred_at: op.date,
+          source: "import",
+          fingerprint: changeFingerprint(op.date, "in", op.amount),
+        });
+        if (error) return fail(error.message);
+        touched.add(op.accountId);
+        applied.push(financeReceiptLine(op));
+        break;
+      }
+      case "transfer": {
+        const { error } = await supabase.from("balance_changes").insert([
+          {
+            user_id: ownerId,
+            account_id: op.fromId,
+            category_id: null,
+            direction: "out",
+            amount: op.amount,
+            note: op.note ?? `transfer to ${op.toName}`,
+            occurred_at: op.date,
+            source: "import",
+            is_transfer: true,
+            fingerprint: changeFingerprint(op.date, "out", op.amount),
+          },
+          {
+            user_id: ownerId,
+            account_id: op.toId,
+            category_id: null,
+            direction: "in",
+            amount: op.amount,
+            note: op.note ?? `transfer from ${op.fromName}`,
+            occurred_at: op.date,
+            source: "import",
+            is_transfer: true,
+            fingerprint: changeFingerprint(op.date, "in", op.amount),
+          },
+        ]);
+        if (error) return fail(error.message);
+        touched.add(op.fromId);
+        touched.add(op.toId);
+        applied.push(financeReceiptLine(op));
+        break;
+      }
+      case "reconcile": {
+        const { error } = await supabase.from("account_reconciliations").insert({
+          user_id: ownerId,
+          account_id: op.accountId,
+          balance: op.balance,
+          as_of: op.asOf,
+          source: "import",
+          note: "statement reconcile",
+        });
+        if (error) return fail(error.message);
+        touched.add(op.accountId);
+        applied.push(financeReceiptLine(op));
+        break;
+      }
+      case "create_recurring": {
+        const category = categoryFor(op.categoryId, op.pendingCategory);
+        if (!category.ok) return fail(category.error);
+        const { error } = await supabase.from("recurring_expenses").insert({
+          user_id: ownerId,
+          name: op.name,
+          amount: op.amount,
+          category_id: category.value,
+          frequency: op.frequency,
+          day_of_month: op.dayOfMonth,
+          weekday: op.weekday,
+          interval_days: op.intervalDays,
+          start_date: op.startDate,
+        });
+        if (error) return fail(error.message);
+        applied.push(financeReceiptLine(op));
+        break;
+      }
+      case "adjust": {
+        const { data: row, error: loadError } = await supabase
+          .from("balance_changes")
+          .select("id, direction, amount, occurred_at")
+          .eq("id", op.changeId)
+          .eq("user_id", ownerId)
+          .maybeSingle();
+        if (loadError) return fail(loadError.message);
+        if (!row) return fail("a ledger row in this proposal no longer exists");
+        const existing = row as {
+          direction: "in" | "out";
+          amount: number;
+          occurred_at: string;
+        };
+
+        const category = categoryFor(op.categoryId, op.pendingCategory);
+        if (!category.ok) return fail(category.error);
+
+        const updates: Record<string, unknown> = {};
+        if (op.amount !== null) updates.amount = op.amount;
+        if (op.date !== null) updates.occurred_at = op.date;
+        if (op.categoryId !== null || op.pendingCategory !== null) {
+          updates.category_id = category.value;
+        }
+        if (op.note !== null) updates.note = op.note;
+        if (op.amount !== null || op.date !== null) {
+          updates.fingerprint = changeFingerprint(
+            op.date ?? existing.occurred_at,
+            existing.direction,
+            op.amount ?? Number(existing.amount),
+          );
+        }
+        const { error } = await supabase
+          .from("balance_changes")
+          .update(updates)
+          .eq("id", op.changeId)
+          .eq("user_id", ownerId);
+        if (error) return fail(error.message);
+        touched.add(op.accountId);
+        applied.push(financeReceiptLine(op));
+        break;
+      }
+      case "remove": {
+        const { error } = await supabase
+          .from("balance_changes")
+          .delete()
+          .eq("id", op.changeId)
+          .eq("user_id", ownerId);
+        if (error) return fail(error.message);
+        touched.add(op.accountId);
+        applied.push(financeReceiptLine(op));
+        break;
+      }
+    }
+  }
+
+  const balances: Record<string, number> = {};
+  for (const accountId of touched) {
+    const recomputed = await recomputeAccountBalance(supabase, ownerId, accountId);
+    if (recomputed.error) {
+      return { ok: false, error: `balance recompute failed: ${recomputed.error}` };
+    }
+    if (recomputed.balance !== undefined) balances[accountId] = recomputed.balance;
+  }
+
+  return { ok: true, value: { applied, balances } };
+}
+
 export const EXECUTORS: Record<
   string,
   (
@@ -572,6 +946,7 @@ export const EXECUTORS: Record<
   complete_task: executeCompleteTask,
   log_spend: executeLogSpend,
   update_stock: executeUpdateStock,
+  update_finance: executeUpdateFinance,
 };
 
 // ---------- confirm / cancel ----------

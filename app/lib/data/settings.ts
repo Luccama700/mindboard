@@ -15,6 +15,20 @@ const DEFAULTS: UserPreferences = {
   wake_end_hour: 22,
 };
 
+// Manual everyday-spend fallback for the cashflow forecast (null = unset).
+export const getDailySpendEstimate = cache(
+  async (userId: string): Promise<number | null> => {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("user_settings")
+      .select("daily_spend_estimate")
+      .eq("user_id", userId)
+      .maybeSingle();
+    const value = data?.daily_spend_estimate;
+    return value === null || value === undefined ? null : Number(value);
+  },
+);
+
 export const getUserPreferences = cache(
   async (userId: string): Promise<UserPreferences> => {
     const supabase = await createClient();

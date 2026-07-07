@@ -11,6 +11,7 @@ import {
   listGroups,
   listInventory,
   listRecentLedger,
+  listRecurringExpenses,
   listRecurringTasks,
   listTasks,
 } from "@/app/lib/mcp/reads";
@@ -22,9 +23,11 @@ import {
   proposeCreateRecurringTask,
   proposeCreateTask,
   proposeLogSpend,
+  proposeUpdateFinance,
   proposeUpdateStock,
 } from "@/app/lib/mcp/writes";
 import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
+import { MAX_FINANCE_OPS } from "@/app/lib/mcp/finance-ops";
 import { captureToBrain } from "@/app/lib/mcp/brain";
 import { CAPTURE_SUMMARY_MAX, CAPTURE_TITLE_MAX } from "@/app/lib/mcp/capture";
 
@@ -158,10 +161,22 @@ const mcpHandler = createMcpHandler(
       "list_recent_ledger",
       {
         title: "List recent ledger rows",
-        description: "The most recent balance changes (spending and income), newest first.",
+        description:
+          "The most recent transactions (spending, income, transfers), newest first, with row ids. Before a statement import, read a window covering the statement period: the ids feed update_finance's adjust/remove ops and the notes let you judge whether a flagged duplicate is really the same purchase.",
         inputSchema: { limit: z.number().int().positive().max(100).optional() },
       },
       (args) => guard(async () => ok(await listRecentLedger(args.limit))),
+    );
+
+    server.registerTool(
+      "list_recurring_expenses",
+      {
+        title: "List recurring expenses",
+        description:
+          "Recurring bill/subscription rules (id, name, amount, schedule). Check this before proposing a create_recurring op in update_finance so you never duplicate an existing rule.",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await listRecurringExpenses())),
     );
 
     // ---------- writes (propose step) ----------
@@ -250,7 +265,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: log spending",
         description:
-          "Propose recording money spent from an account (decreases its balance, appends a ledger row). Returns a preview + proposalId; call confirm_action to apply. amount is a positive number; find accountId/categoryId via list_accounts/list_categories.",
+          "Propose recording a single spend from an account today (appends a dated ledger row; the balance re-derives). For anything dated, batched, or statement-shaped use update_finance instead. Returns a preview + proposalId; call confirm_action to apply. amount is a positive number; find accountId/categoryId via list_accounts/list_categories.",
         inputSchema: {
           accountId: z.string(),
           amount: z.number().positive(),
@@ -261,6 +276,93 @@ const mcpHandler = createMcpHandler(
       (args) =>
         guard(async () => {
           const r = await proposeLogSpend(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "update_finance",
+      {
+        title: "Propose: batched finance update (statement import)",
+        description:
+          "Propose a batch of finance edits in one confirmable receipt — THE tool for importing a bank statement or account screenshot. Ops: spend (dated, categorized outflow), income (dated inflow), transfer (between two accounts, e.g. a credit-card payment — never a spend), reconcile (assert an account's ending balance as of a date; put it last), create_category (when no existing category fits), create_recurring (a repeated charge not yet in list_recurring_expenses), adjust/remove (fix or delete an existing row by id from list_recent_ledger). Accounts and categories accept an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Duplicates (same account+date+direction+amount as an existing row) are skipped and shown in the receipt; set force:true on an op to import it anyway after checking the notes differ. Credit accounts store the owed amount as a NEGATIVE balance: card purchases are spend ops, card payments are transfers. Read list_accounts, list_categories, list_recent_ledger (covering the statement period) and list_recurring_expenses first. Batch the WHOLE statement into ONE call. Returns a receipt preview + proposalId; call confirm_action after the user approves.",
+        inputSchema: {
+          operations: z
+            .array(
+              z.object({
+                op: z.enum([
+                  "spend",
+                  "income",
+                  "transfer",
+                  "reconcile",
+                  "create_category",
+                  "create_recurring",
+                  "adjust",
+                  "remove",
+                ]),
+                account: z
+                  .string()
+                  .optional()
+                  .describe("Account id or name (spend/income/reconcile)."),
+                amount: z
+                  .number()
+                  .positive()
+                  .optional()
+                  .describe("Positive amount (spend/income/transfer/create_recurring/adjust)."),
+                date: z
+                  .string()
+                  .optional()
+                  .describe("YYYY-MM-DD the transaction happened (spend/income/transfer/adjust)."),
+                category: z
+                  .string()
+                  .optional()
+                  .describe(
+                    "Category id or name (spend/create_recurring/adjust); may name a create_category earlier in this batch.",
+                  ),
+                note: z.string().optional().describe("Merchant / description."),
+                force: z
+                  .boolean()
+                  .optional()
+                  .describe("Import a spend/income even though it matches an existing row."),
+                from: z.string().optional().describe("Source account (transfer)."),
+                to: z.string().optional().describe("Destination account (transfer)."),
+                balance: z
+                  .number()
+                  .optional()
+                  .describe("Ending balance (reconcile); negative for credit accounts."),
+                asOf: z
+                  .string()
+                  .optional()
+                  .describe("YYYY-MM-DD the balance was true, e.g. the statement end date (reconcile)."),
+                name: z
+                  .string()
+                  .optional()
+                  .describe("New category or recurring-expense name (create_category/create_recurring)."),
+                color: z
+                  .string()
+                  .optional()
+                  .describe("Optional #rrggbb for create_category."),
+                frequency: z
+                  .enum(["monthly", "weekly", "daily", "custom"])
+                  .optional()
+                  .describe("create_recurring cadence."),
+                dayOfMonth: z.number().int().min(1).max(31).optional(),
+                weekday: z.number().int().min(0).max(6).optional(),
+                intervalDays: z.number().int().min(1).max(366).optional(),
+                startDate: z.string().optional(),
+                changeId: z
+                  .string()
+                  .optional()
+                  .describe("Ledger row id from list_recent_ledger (adjust/remove)."),
+              }),
+            )
+            .min(1)
+            .max(MAX_FINANCE_OPS),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeUpdateFinance(args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -352,7 +454,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Confirm a proposed write",
         description:
-          "Execute a previously proposed write (create_task / complete_task / create_recurring_task / archive_recurring_task / log_spend / update_stock) by its proposalId. Only call after the user has approved the preview.",
+          "Execute a previously proposed write (create_task / complete_task / create_recurring_task / archive_recurring_task / log_spend / update_stock / update_finance) by its proposalId. Only call after the user has approved the preview.",
         inputSchema: { proposalId: z.string() },
       },
       (args) =>

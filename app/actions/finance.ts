@@ -2,12 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
+import { changeFingerprint } from "@/app/lib/finance/derive";
+import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 
 const ACCOUNT_COLUMNS =
   "id, name, type, color, balance, currency, archived, created_at, updated_at";
 const CATEGORY_COLUMNS = "id, name, color, archived, created_at";
 const CHANGE_COLUMNS =
-  "id, account_id, category_id, direction, amount, balance_after, note, occurred_at, created_at";
+  "id, account_id, category_id, direction, amount, note, occurred_at, created_at, source, is_transfer";
 
 const ACCOUNT_TYPES = [
   "checking",
@@ -172,11 +174,23 @@ export async function createAccount(input: {
       account_id: account.id,
       direction: "in",
       amount: balance,
-      balance_after: balance,
       note: "opening balance",
       occurred_at: todayKey(),
+      source: "manual",
+      fingerprint: changeFingerprint(todayKey(), "in", balance),
     });
   }
+
+  // Anchor the derived balance at the opening state (inserted after the
+  // opening row so that row sits inside the anchor — see app/lib/finance/derive.ts).
+  await supabase.from("account_reconciliations").insert({
+    user_id: user.id,
+    account_id: account.id,
+    balance,
+    as_of: todayKey(),
+    source: "manual",
+    note: "opening balance",
+  });
 
   revalidatePath("/finance");
   revalidatePath("/", "layout");
@@ -239,9 +253,10 @@ export async function archiveAccount(id: string) {
 // ---------- balance changes ----------
 
 // The core action: the user sets a new balance for an account. We diff it
-// against the stored balance, record the delta as an append-only ledger row,
-// and persist the new balance. A decrease ('out') carries a spending category;
-// an increase ('in') is recorded silently.
+// against the stored balance, record the delta as dated transaction rows, and
+// stamp a reconciliation anchor at the new balance (the anchor — not the rows —
+// is what pins the derived balance; any drift is absorbed by it). A decrease
+// ('out') carries a spending category; an increase ('in') is recorded silently.
 export async function recordBalanceChange(input: {
   accountId: string;
   newBalance: number;
@@ -285,6 +300,29 @@ export async function recordBalanceChange(input: {
   const direction = delta < 0 ? "out" : "in";
   const amount = Math.abs(delta);
 
+  const userId = user.id;
+
+  // Anchor + cached balance, written after the transaction rows so those rows
+  // sit inside the anchor (see app/lib/finance/derive.ts).
+  async function anchorAt(balance: number): Promise<string | null> {
+    const { error: anchorError } = await supabase
+      .from("account_reconciliations")
+      .insert({
+        user_id: userId,
+        account_id: input.accountId,
+        balance,
+        as_of: todayKey(),
+        source: "manual",
+        note,
+      });
+    if (anchorError) return anchorError.message;
+    const { error: updateError } = await supabase
+      .from("accounts")
+      .update({ balance, updated_at: new Date().toISOString() })
+      .eq("id", input.accountId);
+    return updateError?.message ?? null;
+  }
+
   // ---- split path: a categorized decrease spread across multiple categories ----
   if (direction === "out" && input.allocations && input.allocations.length > 0) {
     const rows: {
@@ -293,11 +331,11 @@ export async function recordBalanceChange(input: {
       category_id: string | null;
       direction: "out";
       amount: number;
-      balance_after: number;
       note: string | null;
       occurred_at: string;
+      source: "manual";
+      fingerprint: string;
     }[] = [];
-    let running = current;
     let allocated = 0;
 
     for (const alloc of input.allocations) {
@@ -308,16 +346,16 @@ export async function recordBalanceChange(input: {
         return { error: "invalid category" };
       }
       allocated = toCents(allocated + amt) ?? allocated;
-      running = toCents(running - amt) ?? running;
       rows.push({
         user_id: user.id,
         account_id: input.accountId,
         category_id: allocCategoryId,
         direction: "out",
         amount: amt,
-        balance_after: running,
         note,
         occurred_at: occurredAt,
+        source: "manual",
+        fingerprint: changeFingerprint(occurredAt, "out", amt),
       });
     }
 
@@ -332,12 +370,8 @@ export async function recordBalanceChange(input: {
 
     if (insertError) return { error: insertError.message };
 
-    const { error: updateError } = await supabase
-      .from("accounts")
-      .update({ balance: newBalance, updated_at: new Date().toISOString() })
-      .eq("id", input.accountId);
-
-    if (updateError) return { error: updateError.message };
+    const anchorError = await anchorAt(newBalance);
+    if (anchorError) return { error: anchorError };
 
     revalidatePath("/finance");
     revalidatePath("/", "layout");
@@ -355,41 +389,54 @@ export async function recordBalanceChange(input: {
       category_id: categoryId,
       direction,
       amount,
-      balance_after: newBalance,
       note,
       occurred_at: occurredAt,
+      source: "manual",
+      fingerprint: changeFingerprint(occurredAt, direction, amount),
     })
     .select(CHANGE_COLUMNS)
     .single();
 
   if (insertError) return { error: insertError.message };
 
-  const { error: updateError } = await supabase
-    .from("accounts")
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq("id", input.accountId);
-
-  if (updateError) return { error: updateError.message };
+  const anchorError = await anchorAt(newBalance);
+  if (anchorError) return { error: anchorError };
 
   revalidatePath("/finance");
   revalidatePath("/", "layout");
   return { error: null, change, changes: [change], newBalance };
 }
 
-// Edit only the metadata of an existing ledger row (re-categorize / fix the
-// date / note). Amount edits and deletes are intentionally out of scope to
-// avoid recomputing the balance_after chain.
+// Edit an existing transaction (re-categorize / fix the amount / date / note).
+// Amount and date edits are legal in the transactions-first model: the cached
+// account balance is re-derived afterwards. Rows dated at or before the
+// account's latest reconciliation anchor change history but not the balance.
 export async function updateBalanceChange(input: {
   id: string;
   categoryId?: string | null;
   note?: string | null;
   occurredAt?: string;
+  amount?: number;
 }) {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
+
+  const { data: existing, error: loadError } = await supabase
+    .from("balance_changes")
+    .select("id, account_id, direction, amount, occurred_at")
+    .eq("id", input.id)
+    .maybeSingle();
+  if (loadError) return { error: loadError.message };
+  if (!existing) return { error: "change not found" };
+  const row = existing as {
+    account_id: string;
+    direction: "in" | "out";
+    amount: number;
+    occurred_at: string;
+  };
 
   const updates: Record<string, unknown> = {};
 
@@ -399,8 +446,21 @@ export async function updateBalanceChange(input: {
     if (!ISO_DATE.test(input.occurredAt)) return { error: "invalid date" };
     updates.occurred_at = input.occurredAt;
   }
+  if (input.amount !== undefined) {
+    const amount = toCents(input.amount);
+    if (amount === null || amount <= 0) return { error: "invalid amount" };
+    updates.amount = amount;
+  }
 
   if (Object.keys(updates).length === 0) return { error: null };
+
+  if (input.amount !== undefined || input.occurredAt !== undefined) {
+    updates.fingerprint = changeFingerprint(
+      (updates.occurred_at as string | undefined) ?? row.occurred_at,
+      row.direction,
+      (updates.amount as number | undefined) ?? Number(row.amount),
+    );
+  }
 
   const { error } = await supabase
     .from("balance_changes")
@@ -408,6 +468,47 @@ export async function updateBalanceChange(input: {
     .eq("id", input.id);
 
   if (error) return { error: error.message };
+
+  if (input.amount !== undefined || input.occurredAt !== undefined) {
+    const recomputed = await recomputeAccountBalance(
+      supabase,
+      user.id,
+      row.account_id,
+    );
+    if (recomputed.error) return { error: recomputed.error };
+  }
+
+  revalidatePath("/finance");
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+// Delete a transaction outright (the correction path for import mistakes). The
+// cached balance is re-derived from the anchor + remaining rows.
+export async function deleteBalanceChange(id: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { data: existing, error: loadError } = await supabase
+    .from("balance_changes")
+    .select("id, account_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (loadError) return { error: loadError.message };
+  if (!existing) return { error: "change not found" };
+
+  const { error } = await supabase.from("balance_changes").delete().eq("id", id);
+  if (error) return { error: error.message };
+
+  const recomputed = await recomputeAccountBalance(
+    supabase,
+    user.id,
+    (existing as { account_id: string }).account_id,
+  );
+  if (recomputed.error) return { error: recomputed.error };
 
   revalidatePath("/finance");
   revalidatePath("/", "layout");

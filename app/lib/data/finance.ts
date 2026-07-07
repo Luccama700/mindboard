@@ -6,6 +6,7 @@ import type {
   BalanceChange,
   RecurringExpense,
 } from "@/app/_components/finance-types";
+import type { SpendHistoryRow } from "@/app/_components/spend-baseline";
 
 // Reusable finance reads. Selects mirror app/finance/page.tsx; RLS scopes every
 // row to the caller, so no explicit user_id filter is needed. Each read is
@@ -15,7 +16,7 @@ import type {
 const ACCOUNT_COLUMNS =
   "id, name, type, color, balance, currency, archived, created_at, updated_at";
 const CHANGE_COLUMNS =
-  "id, account_id, category_id, direction, amount, balance_after, note, occurred_at, created_at";
+  "id, account_id, category_id, direction, amount, note, occurred_at, created_at, source, is_transfer";
 const RECURRING_COLUMNS =
   "id, name, amount, category_id, frequency, day_of_month, weekday, interval_days, start_date, archived, created_at";
 
@@ -55,5 +56,26 @@ export const getBalanceChangesOn = cache(
       .eq("user_id", userId)
       .eq("occurred_at", dateKey);
     return (data ?? []) as BalanceChange[];
+  },
+);
+
+// Trailing transaction history feeding the everyday-spend baseline (90 days
+// comfortably covers the 12-week weekday window).
+export const getSpendHistory = cache(
+  async (userId: string, days = 90): Promise<SpendHistoryRow[]> => {
+    const supabase = await createClient();
+    const start = new Date();
+    start.setDate(start.getDate() - days);
+    const startKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+    const { data } = await supabase
+      .from("balance_changes")
+      .select("occurred_at, direction, amount, category_id, is_transfer")
+      .eq("user_id", userId)
+      .gte("occurred_at", startKey)
+      .limit(2000);
+    return ((data ?? []) as SpendHistoryRow[]).map((row) => ({
+      ...row,
+      amount: Number(row.amount),
+    }));
   },
 );

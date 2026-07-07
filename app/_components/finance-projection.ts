@@ -54,6 +54,9 @@ export type DayRow = {
   isPast: boolean;
   inflow: number;
   outflow: number;
+  // everyday-spend estimate (future days only) — kept apart from the firm
+  // recurring-bill outflow so the UI can render it as an estimate (~).
+  estimatedOutflow: number;
   runningTotal: number;
 };
 
@@ -282,9 +285,13 @@ export function buildDayRows(input: {
   changes: RecordedDelta[];
   expenses: RecurringRule[];
   incomeByDate: Record<string, number>;
+  // projected everyday spend per future day (weekday baseline or manual
+  // fallback); must cover (today, last grid day] like incomeByDate.
+  estimatedSpendByDate?: Record<string, number>;
 }): DayRow[] {
   const { gridDays, month, today, netWorthToday, changes, expenses, incomeByDate } =
     input;
+  const estimatedSpendByDate = input.estimatedSpendByDate ?? {};
 
   if (gridDays.length === 0) return [];
 
@@ -310,7 +317,10 @@ export function buildDayRows(input: {
   let cum = 0;
   let cursor = addDaysKey(today, 1);
   while (cursor <= maxDay) {
-    cum += (incomeByDate[cursor] ?? 0) - expensesOnDate(expenses, cursor);
+    cum +=
+      (incomeByDate[cursor] ?? 0) -
+      expensesOnDate(expenses, cursor) -
+      (estimatedSpendByDate[cursor] ?? 0);
     futureCum.set(cursor, cum);
     cursor = addDaysKey(cursor, 1);
   }
@@ -333,15 +343,18 @@ export function buildDayRows(input: {
     const isPast = dateKey <= today;
     let inflow: number;
     let outflow: number;
+    let estimatedOutflow: number;
     let runningTotal: number;
 
     if (isPast) {
       inflow = inByDate.get(dateKey) ?? 0;
       outflow = outByDate.get(dateKey) ?? 0;
+      estimatedOutflow = 0;
       runningTotal = netWorthToday - (pastSubtract.get(dateKey) ?? 0);
     } else {
       inflow = incomeByDate[dateKey] ?? 0;
       outflow = expensesOnDate(expenses, dateKey);
+      estimatedOutflow = estimatedSpendByDate[dateKey] ?? 0;
       runningTotal = netWorthToday + (futureCum.get(dateKey) ?? 0);
     }
 
@@ -352,6 +365,7 @@ export function buildDayRows(input: {
       isPast,
       inflow,
       outflow,
+      estimatedOutflow,
       runningTotal,
     };
   });

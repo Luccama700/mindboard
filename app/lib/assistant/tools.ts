@@ -19,6 +19,7 @@ import { recordProposal } from "@/app/lib/mcp/audit";
 import {
   proposeArchiveRecurringTaskFor,
   proposeCreateRecurringTaskFor,
+  proposeUpdateFinanceFor,
   proposeUpdateStockFor,
 } from "@/app/lib/mcp/writes";
 import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
@@ -53,8 +54,20 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "list_accounts_and_categories",
     description:
-      "List money accounts (id, name, balance, currency) and spending categories (id, name). Needed before propose_log_spend.",
+      "List money accounts (id, name, balance, currency), spending categories (id, name), and recurring-expense rules (id, name, amount, schedule). Needed before propose_log_spend or propose_update_finance.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "list_recent_ledger",
+    description:
+      "The most recent transactions (spending, income, transfers) with row ids, newest first. The ids feed propose_update_finance's adjust/remove ops; the notes help judge whether a flagged duplicate is really the same purchase.",
+    input_schema: {
+      type: "object",
+      properties: {
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "list_goals",
@@ -231,7 +244,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "propose_log_spend",
     description:
-      "Propose logging a spend against an account (and optional category). Finance is read-safe: this only ever proposes. User must confirm.",
+      "Propose logging a single spend against an account today (and optional category). For anything dated, batched, or statement-shaped use propose_update_finance instead. Finance writes only ever propose. User must confirm.",
     input_schema: {
       type: "object",
       properties: {
@@ -241,6 +254,100 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
         note: { type: "string" },
       },
       required: ["accountId", "amount"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_update_finance",
+    description:
+      "Propose a batch of finance edits in one confirmable receipt — the statement-import tool. Ops: spend (dated, categorized outflow), income (dated inflow), transfer (between two accounts, e.g. a credit-card payment — never a spend), reconcile (assert an account's ending balance as of a date; put it last), create_category (when nothing fits), create_recurring (a repeated charge not yet tracked), adjust/remove (fix or delete a row by id from list_recent_ledger). Accounts/categories accept an id or name (unique substrings work). Duplicates (same account+date+direction+amount as an existing row) are skipped and shown in the receipt; set force:true after checking the notes differ. Credit accounts store owed as a NEGATIVE balance: card purchases are spends, card payments are transfers. Read list_accounts_and_categories and list_recent_ledger first; batch everything into ONE call. User must confirm.",
+    input_schema: {
+      type: "object",
+      properties: {
+        operations: {
+          type: "array",
+          minItems: 1,
+          maxItems: 60,
+          items: {
+            type: "object",
+            properties: {
+              op: {
+                type: "string",
+                enum: [
+                  "spend",
+                  "income",
+                  "transfer",
+                  "reconcile",
+                  "create_category",
+                  "create_recurring",
+                  "adjust",
+                  "remove",
+                ],
+              },
+              account: {
+                type: "string",
+                description: "Account id or name (spend/income/reconcile).",
+              },
+              amount: {
+                type: "number",
+                exclusiveMinimum: 0,
+                description:
+                  "Positive amount (spend/income/transfer/create_recurring/adjust).",
+              },
+              date: {
+                type: "string",
+                description:
+                  "YYYY-MM-DD the transaction happened (spend/income/transfer/adjust).",
+              },
+              category: {
+                type: "string",
+                description:
+                  "Category id or name (spend/create_recurring/adjust); may name a create_category earlier in this batch.",
+              },
+              note: { type: "string", description: "Merchant / description." },
+              force: {
+                type: "boolean",
+                description:
+                  "Import a spend/income even though it matches an existing row.",
+              },
+              from: { type: "string", description: "Source account (transfer)." },
+              to: { type: "string", description: "Destination account (transfer)." },
+              balance: {
+                type: "number",
+                description:
+                  "Ending balance (reconcile); negative for credit accounts.",
+              },
+              asOf: {
+                type: "string",
+                description:
+                  "YYYY-MM-DD the balance was true, e.g. the statement end date (reconcile).",
+              },
+              name: {
+                type: "string",
+                description:
+                  "New category or recurring-expense name (create_category/create_recurring).",
+              },
+              color: { type: "string", description: "Optional #rrggbb for create_category." },
+              frequency: {
+                type: "string",
+                enum: ["monthly", "weekly", "daily", "custom"],
+                description: "create_recurring cadence.",
+              },
+              dayOfMonth: { type: "integer", minimum: 1, maximum: 31 },
+              weekday: { type: "integer", minimum: 0, maximum: 6 },
+              intervalDays: { type: "integer", minimum: 1, maximum: 366 },
+              startDate: { type: "string" },
+              changeId: {
+                type: "string",
+                description: "Ledger row id from list_recent_ledger (adjust/remove).",
+              },
+            },
+            required: ["op"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["operations"],
       additionalProperties: false,
     },
   },
@@ -464,19 +571,65 @@ export async function runAssistantTool(
         };
       }
       case "list_accounts_and_categories": {
-        const [accountsResult, categoriesResult] = await Promise.all([
-          supabase
-            .from("accounts")
-            .select("id, name, balance, currency")
-            .eq("archived", false),
-          supabase.from("spending_categories").select("id, name"),
-        ]);
+        const [accountsResult, categoriesResult, recurringResult] =
+          await Promise.all([
+            supabase
+              .from("accounts")
+              .select("id, name, type, balance, currency")
+              .eq("archived", false),
+            supabase.from("spending_categories").select("id, name").eq("archived", false),
+            supabase
+              .from("recurring_expenses")
+              .select("id, name, amount, frequency, day_of_month, weekday, interval_days, start_date")
+              .eq("archived", false),
+          ]);
         return {
           type: "result",
           content: {
             accounts: accountsResult.data ?? [],
             categories: categoriesResult.data ?? [],
+            recurringExpenses: recurringResult.data ?? [],
           },
+        };
+      }
+      case "list_recent_ledger": {
+        const limit = Math.min(Math.max(1, Number(input.limit) || 20), 100);
+        const { data } = await supabase
+          .from("balance_changes")
+          .select(
+            "id, account_id, direction, amount, note, occurred_at, is_transfer, spending_categories(name), accounts(name, currency)",
+          )
+          .order("occurred_at", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(limit);
+        type Rel<T> = T | T[] | null;
+        const first = <T,>(rel: Rel<T>): T | null =>
+          Array.isArray(rel) ? (rel[0] ?? null) : (rel ?? null);
+        type Row = {
+          id: string;
+          direction: "in" | "out";
+          amount: number;
+          note: string | null;
+          occurred_at: string;
+          is_transfer: boolean;
+          spending_categories: Rel<{ name: string }>;
+          accounts: Rel<{ name: string; currency: string }>;
+        };
+        return {
+          type: "result",
+          content: ((data ?? []) as unknown as Row[]).map((row) => ({
+            id: row.id,
+            direction: row.direction,
+            amount: Number(row.amount),
+            note: row.note,
+            occurredAt: row.occurred_at,
+            isTransfer: row.is_transfer,
+            account: first(row.accounts)?.name ?? "account",
+            category:
+              row.direction === "out"
+                ? (first(row.spending_categories)?.name ?? "uncategorized")
+                : null,
+          })),
         };
       }
       case "list_goals": {
@@ -628,6 +781,14 @@ export async function runAssistantTool(
       }
       case "propose_update_stock": {
         const outcome = await proposeUpdateStockFor(supabase, userId, input, {
+          source: "assistant",
+          conversationId,
+        });
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "proposal", ...outcome.value };
+      }
+      case "propose_update_finance": {
+        const outcome = await proposeUpdateFinanceFor(supabase, userId, input, {
           source: "assistant",
           conversationId,
         });

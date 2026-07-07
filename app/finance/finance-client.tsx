@@ -17,10 +17,12 @@ import type {
   RecurringExpense,
   SpendingCategory,
 } from "@/app/_components/finance-types";
+import type { WeekdayBaseline } from "@/app/_components/spend-baseline";
 import {
   archiveAccount,
   createAccount,
   createCategory,
+  deleteBalanceChange,
   recordBalanceChange,
   updateAccount,
   updateBalanceChange,
@@ -39,7 +41,8 @@ type ChangeAction =
   | { kind: "addMany"; changes: BalanceChange[] }
   | { kind: "replace"; tempId: string; change: BalanceChange }
   | { kind: "replaceMany"; tempIds: string[]; changes: BalanceChange[] }
-  | { kind: "update"; id: string; patch: Partial<BalanceChange> };
+  | { kind: "update"; id: string; patch: Partial<BalanceChange> }
+  | { kind: "remove"; id: string };
 
 export function FinanceClient({
   initialAccounts,
@@ -50,6 +53,8 @@ export function FinanceClient({
   financeMonth,
   hoursBySource,
   googleStatus,
+  spendBaseline,
+  manualSpendEstimate,
 }: {
   initialAccounts: Account[];
   initialCategories: SpendingCategory[];
@@ -59,6 +64,8 @@ export function FinanceClient({
   financeMonth: string;
   hoursBySource: Record<string, Record<string, number>>;
   googleStatus: "connected" | "connect" | "error";
+  spendBaseline: WeekdayBaseline;
+  manualSpendEstimate: number | null;
 }) {
   const [accounts, dispatchAccounts] = useOptimistic<Account[], AccountAction>(
     initialAccounts,
@@ -107,6 +114,8 @@ export function FinanceClient({
           return state.map((c) =>
             c.id === action.id ? { ...c, ...action.patch } : c,
           );
+        case "remove":
+          return state.filter((c) => c.id !== action.id);
       }
     },
   );
@@ -223,23 +232,20 @@ export function FinanceClient({
       });
 
       // A categorized decrease, possibly split across categories -> one 'out'
-      // row per allocation, with a running balance_after ending at newBalance.
+      // row per allocation.
       if (direction === "out" && input.allocations.length > 0) {
-        let running = current;
-        const tempRows: BalanceChange[] = input.allocations.map((a) => {
-          running = toCents(running - a.amount);
-          return {
-            id: `temp-${crypto.randomUUID()}`,
-            account_id: account.id,
-            category_id: a.categoryId,
-            direction: "out",
-            amount: a.amount,
-            balance_after: running,
-            note: input.note,
-            occurred_at: input.occurredAt,
-            created_at: new Date().toISOString(),
-          };
-        });
+        const tempRows: BalanceChange[] = input.allocations.map((a) => ({
+          id: `temp-${crypto.randomUUID()}`,
+          account_id: account.id,
+          category_id: a.categoryId,
+          direction: "out" as const,
+          amount: a.amount,
+          note: input.note,
+          occurred_at: input.occurredAt,
+          created_at: new Date().toISOString(),
+          source: "manual" as const,
+          is_transfer: false,
+        }));
         dispatchChanges({ kind: "addMany", changes: tempRows });
         const result = await recordBalanceChange({
           accountId: account.id,
@@ -267,10 +273,11 @@ export function FinanceClient({
         category_id: null,
         direction,
         amount: Math.abs(delta),
-        balance_after: toCents(input.newBalance),
         note: input.note,
         occurred_at: input.occurredAt,
         created_at: new Date().toISOString(),
+        source: "manual",
+        is_transfer: false,
       };
       dispatchChanges({ kind: "add", change: optimistic });
       const result = await recordBalanceChange({
@@ -298,7 +305,15 @@ export function FinanceClient({
         categoryId: patch.category_id,
         note: patch.note,
         occurredAt: patch.occurred_at,
+        amount: patch.amount,
       });
+    });
+  }
+
+  function onDeleteChange(id: string) {
+    startTransition(async () => {
+      dispatchChanges({ kind: "remove", id });
+      await deleteBalanceChange(id);
     });
   }
 
@@ -360,6 +375,7 @@ export function FinanceClient({
               onUpdateAccount={onUpdateAccount}
               onArchiveAccount={onArchiveAccount}
               onUpdateChange={onUpdateChange}
+              onDeleteChange={onDeleteChange}
               onCreateCategory={onCreateCategory}
             />
           ))}
@@ -392,6 +408,8 @@ export function FinanceClient({
           incomeSources={incomeSources}
           hoursBySource={hoursBySource}
           googleStatus={googleStatus}
+          spendBaseline={spendBaseline}
+          manualSpendEstimate={manualSpendEstimate}
         />
       </aside>
 

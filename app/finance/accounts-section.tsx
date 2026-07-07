@@ -72,6 +72,7 @@ export function AccountRow({
   onUpdateAccount,
   onArchiveAccount,
   onUpdateChange,
+  onDeleteChange,
   onCreateCategory,
 }: {
   account: Account;
@@ -91,6 +92,7 @@ export function AccountRow({
   onUpdateAccount: (id: string, patch: Partial<Account>) => void;
   onArchiveAccount: (id: string) => void;
   onUpdateChange: (id: string, patch: Partial<BalanceChange>) => void;
+  onDeleteChange: (id: string) => void;
   onCreateCategory: (input: {
     name: string;
     color: string;
@@ -188,6 +190,7 @@ export function AccountRow({
                     categoryById={categoryById}
                     currency={account.currency}
                     onUpdateChange={onUpdateChange}
+                    onDeleteChange={onDeleteChange}
                   />
                 ))}
               </ul>
@@ -707,14 +710,17 @@ function HistoryRow({
   categoryById,
   currency,
   onUpdateChange,
+  onDeleteChange,
 }: {
   change: BalanceChange;
   categories: SpendingCategory[];
   categoryById: Map<string, SpendingCategory>;
   currency: string;
   onUpdateChange: (id: string, patch: Partial<BalanceChange>) => void;
+  onDeleteChange: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const category = change.category_id
     ? (categoryById.get(change.category_id) ?? null)
     : null;
@@ -773,6 +779,53 @@ function HistoryRow({
               </select>
             </div>
           )}
+          <div className="flex gap-3">
+            <div className="flex-1 space-y-1">
+              <p className="text-[10px] tracking-widest uppercase text-muted">
+                amount
+              </p>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="any"
+                min="0.01"
+                defaultValue={String(Number(change.amount))}
+                onBlur={(e) => {
+                  const next = Number(e.target.value);
+                  if (
+                    Number.isFinite(next) &&
+                    next > 0 &&
+                    Math.round(next * 100) !== Math.round(Number(change.amount) * 100)
+                  ) {
+                    onUpdateChange(change.id, {
+                      amount: Math.round(next * 100) / 100,
+                    });
+                  } else {
+                    e.target.value = String(Number(change.amount));
+                  }
+                }}
+                aria-label="amount"
+                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm tabular-nums px-3 py-2 focus:outline-none transition-colors"
+              />
+            </div>
+            <div className="flex-1 space-y-1">
+              <p className="text-[10px] tracking-widest uppercase text-muted">
+                date
+              </p>
+              <input
+                type="date"
+                defaultValue={change.occurred_at.slice(0, 10)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (next && next !== change.occurred_at.slice(0, 10)) {
+                    onUpdateChange(change.id, { occurred_at: next });
+                  }
+                }}
+                aria-label="date"
+                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+              />
+            </div>
+          </div>
           <div className="space-y-1">
             <p className="text-[10px] tracking-widest uppercase text-muted">
               note
@@ -791,10 +844,41 @@ function HistoryRow({
               className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
             />
           </div>
-          <p className="text-[10px] text-muted tabular-nums">
-            balance after ·{" "}
-            {formatMoney(Number(change.balance_after), currency)}
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] text-muted">
+              {change.is_transfer
+                ? "transfer"
+                : change.source !== "manual"
+                  ? `via ${change.source}`
+                  : " "}
+            </p>
+            {confirmDelete ? (
+              <span className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onDeleteChange(change.id)}
+                  className="text-danger text-[10px] tracking-widest uppercase hover:text-danger-hover transition-colors py-2"
+                >
+                  delete — sure?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  className="text-muted text-[10px] tracking-widest uppercase hover:text-fg transition-colors py-2"
+                >
+                  keep
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                className="text-muted text-[10px] tracking-widest uppercase hover:text-danger transition-colors py-2"
+              >
+                delete
+              </button>
+            )}
+          </div>
         </div>
       )}
     </li>

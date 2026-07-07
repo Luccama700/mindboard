@@ -29,7 +29,7 @@ const ACCOUNT_COLUMNS =
 const RECURRING_COLUMNS =
   "id, name, amount, category_id, frequency, day_of_month, weekday, interval_days, start_date, archived, created_at";
 const CHANGE_COLUMNS =
-  "id, account_id, category_id, direction, amount, balance_after, note, occurred_at, created_at";
+  "id, account_id, category_id, direction, amount, note, occurred_at, created_at, source, is_transfer";
 const ITEM_COLUMNS =
   "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, archived, archived_at, last_restocked_at, created_at";
 const USAGE_COLUMNS =
@@ -289,13 +289,41 @@ export async function listCategories() {
   return data ?? [];
 }
 
+// Recurring-expense rules with a readable schedule. Feeds update_finance's
+// create_recurring dedup (Claude checks here before proposing a new rule).
+export async function listRecurringExpenses() {
+  const { supabase, ownerId } = scoped();
+  const { data } = await supabase
+    .from("recurring_expenses")
+    .select(RECURRING_COLUMNS)
+    .eq("user_id", ownerId)
+    .eq("archived", false)
+    .order("created_at", { ascending: true });
+
+  const weekdays = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  return ((data ?? []) as RecurringExpense[]).map((row) => ({
+    id: row.id,
+    name: row.name,
+    amount: Number(row.amount),
+    categoryId: row.category_id,
+    schedule:
+      row.frequency === "monthly"
+        ? `monthly on day ${row.day_of_month}`
+        : row.frequency === "weekly"
+          ? `weekly on ${weekdays[row.weekday ?? 0]}`
+          : row.frequency === "daily"
+            ? "daily"
+            : `every ${row.interval_days} days from ${row.start_date}`,
+  }));
+}
+
 export async function listRecentLedger(limit = 20) {
   const { supabase, ownerId } = scoped();
   const capped = Math.min(Math.max(1, limit), 100);
   const { data } = await supabase
     .from("balance_changes")
     .select(
-      `id, direction, amount, balance_after, note, occurred_at,
+      `id, direction, amount, note, occurred_at, is_transfer,
        accounts(name, currency), spending_categories(name)`,
     )
     .eq("user_id", ownerId)
@@ -307,9 +335,9 @@ export async function listRecentLedger(limit = 20) {
     id: string;
     direction: "in" | "out";
     amount: number;
-    balance_after: number;
     note: string | null;
     occurred_at: string;
+    is_transfer: boolean;
     accounts: Rel<{ name: string; currency: string }>;
     spending_categories: Rel<{ name: string }>;
   };
@@ -321,9 +349,9 @@ export async function listRecentLedger(limit = 20) {
       id: row.id,
       direction: row.direction,
       amount: Number(row.amount),
-      balanceAfter: Number(row.balance_after),
       note: row.note,
       occurredAt: row.occurred_at,
+      isTransfer: row.is_transfer,
       account: account?.name ?? "account",
       currency: account?.currency ?? "USD",
       category: row.direction === "out" ? (category?.name ?? "uncategorized") : null,

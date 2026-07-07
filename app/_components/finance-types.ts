@@ -26,16 +26,19 @@ export type Account = {
   updated_at: string;
 };
 
+export type ChangeSource = "manual" | "import" | "assistant";
+
 export type BalanceChange = {
   id: string;
   account_id: string;
   category_id: string | null;
   direction: "in" | "out";
   amount: number;
-  balance_after: number;
   note: string | null;
   occurred_at: string;
   created_at: string;
+  source: ChangeSource;
+  is_transfer: boolean;
 };
 
 export type RecurringFrequency = "monthly" | "weekly" | "daily" | "custom";

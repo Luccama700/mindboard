@@ -44,10 +44,11 @@ function change(partial: Partial<BalanceChange>): BalanceChange {
     category_id: null,
     direction: "out",
     amount: 0,
-    balance_after: 0,
     note: null,
     occurred_at: "2026-06-01",
     created_at: "2026-06-01T00:00:00Z",
+    source: "manual",
+    is_transfer: false,
     ...partial,
   };
 }

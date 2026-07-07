@@ -179,6 +179,33 @@ export const toolRegistry: ToolDescriptor[] = [
     mapsTo: "app/actions/finance#recordBalanceChange",
     confirm: true,
   },
+  {
+    name: "finance.recurring.list",
+    kind: "read",
+    description:
+      "List recurring-expense rules (id, name, amount, schedule) — checked before proposing a new one during import.",
+    inputSchema: EMPTY_INPUT,
+    mapsTo: "app/lib/mcp/reads#listRecurringExpenses",
+  },
+  {
+    name: "finance.import",
+    kind: "write",
+    description:
+      "Batched finance update in one confirmable receipt (the statement-import tool): dated spends/incomes/transfers with duplicate skipping, an ending-balance reconcile, category and recurring-expense creates, and row-level corrections.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operations: {
+          type: "array",
+          description:
+            "spend / income / transfer / reconcile / create_category / create_recurring / adjust / remove ops; accounts and categories by id or name.",
+        },
+      },
+      required: ["operations"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeUpdateFinance",
+    confirm: true,
+  },
 ];
 
 export function getTool(name: string): ToolDescriptor | undefined {

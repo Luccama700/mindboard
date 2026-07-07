@@ -14,6 +14,9 @@ import type {
   RecurringExpense,
   SpendingCategory,
 } from "@/app/_components/finance-types";
+import { computeWeekdayBaseline } from "@/app/_components/spend-baseline";
+import { getSpendHistory } from "@/app/lib/data/finance";
+import { getDailySpendEstimate } from "@/app/lib/data/settings";
 import { FinanceClient } from "./finance-client";
 
 type GoogleStatus = "connected" | "connect" | "error";
@@ -99,6 +102,8 @@ export default async function FinancePage({
     changesResult,
     expensesResult,
     incomeResult,
+    spendHistory,
+    manualSpendEstimate,
   ] = await Promise.all([
     supabase
       .from("accounts")
@@ -115,7 +120,7 @@ export default async function FinancePage({
     supabase
       .from("balance_changes")
       .select(
-        "id, account_id, category_id, direction, amount, balance_after, note, occurred_at, created_at",
+        "id, account_id, category_id, direction, amount, note, occurred_at, created_at, source, is_transfer",
       )
       .order("occurred_at", { ascending: false })
       .order("created_at", { ascending: false })
@@ -134,9 +139,28 @@ export default async function FinancePage({
       )
       .eq("archived", false)
       .order("created_at", { ascending: false }),
+    getSpendHistory(user.id),
+    getDailySpendEstimate(user.id),
   ]);
 
   const incomeSources = (incomeResult.data ?? []) as IncomeSource[];
+  const expenses = (expensesResult.data ?? []) as RecurringExpense[];
+
+  // Everyday-spend baseline: weekday medians over trailing history, with bill
+  // payments excluded via the active recurring rules (see spend-baseline.ts).
+  const spendBaseline = computeWeekdayBaseline({
+    history: spendHistory,
+    rules: expenses.map((e) => ({
+      frequency: e.frequency,
+      day_of_month: e.day_of_month,
+      weekday: e.weekday,
+      interval_days: e.interval_days,
+      start_date: e.start_date,
+      amount: Number(e.amount),
+      category_id: e.category_id,
+    })),
+    today: toDateKey(new Date()),
+  });
 
   // Worked hours per income source for the visible window, read from each
   // source's linked Google Calendar. Income = hours * wage * (1 - tax%).
@@ -205,11 +229,13 @@ export default async function FinancePage({
         initialAccounts={(accountsResult.data ?? []) as Account[]}
         initialCategories={(categoriesResult.data ?? []) as SpendingCategory[]}
         initialChanges={(changesResult.data ?? []) as BalanceChange[]}
-        expenses={(expensesResult.data ?? []) as RecurringExpense[]}
+        expenses={expenses}
         incomeSources={incomeSources}
         financeMonth={financeMonth}
         hoursBySource={hoursBySource}
         googleStatus={googleStatus}
+        spendBaseline={spendBaseline}
+        manualSpendEstimate={manualSpendEstimate}
       />
     </main>
   );

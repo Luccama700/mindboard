@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import {
   formatMonthDay,
   formatMonthYear,
@@ -10,11 +10,14 @@ import {
 } from "./date-utils";
 import { formatMoney } from "./money";
 import {
+  addDaysKey,
   buildDayRows,
   computeIncomeByDate,
   incomeDetailForDay,
   ruleLandsOn,
 } from "./finance-projection";
+import { estimatedSpendOn, type WeekdayBaseline } from "./spend-baseline";
+import { saveDailySpendEstimate } from "@/app/actions/settings";
 import type {
   BalanceChange,
   IncomeSource,
@@ -69,6 +72,8 @@ export function FinanceCalendar({
   incomeSources,
   hoursBySource,
   googleStatus,
+  spendBaseline,
+  manualSpendEstimate,
 }: {
   month: string;
   currency: string;
@@ -78,6 +83,8 @@ export function FinanceCalendar({
   incomeSources: IncomeSource[];
   hoursBySource: Record<string, Record<string, number>>;
   googleStatus: GoogleStatus;
+  spendBaseline: WeekdayBaseline;
+  manualSpendEstimate: number | null;
 }) {
   const today = todayISO();
   const gridDays = useMemo(() => buildGrid(month), [month]);
@@ -88,6 +95,20 @@ export function FinanceCalendar({
     const end = gridDays[gridDays.length - 1] ?? today;
     return computeIncomeByDate(incomeSources, hoursBySource, { start, end });
   }, [incomeSources, hoursBySource, gridDays, today]);
+
+  // Everyday-spend estimate per future day, covering (today, grid end] so the
+  // running total stays anchored when viewing a far-future month.
+  const estimatedSpendByDate = useMemo(() => {
+    const out: Record<string, number> = {};
+    const end = gridDays[gridDays.length - 1] ?? today;
+    let cursor = addDaysKey(today, 1);
+    while (cursor <= end) {
+      const estimate = estimatedSpendOn(spendBaseline, manualSpendEstimate, cursor);
+      if (estimate > 0) out[cursor] = estimate;
+      cursor = addDaysKey(cursor, 1);
+    }
+    return out;
+  }, [gridDays, today, spendBaseline, manualSpendEstimate]);
 
   const rows = useMemo(
     () =>
@@ -103,8 +124,9 @@ export function FinanceCalendar({
         })),
         expenses,
         incomeByDate,
+        estimatedSpendByDate,
       }),
-    [gridDays, month, today, netWorthToday, changes, expenses, incomeByDate],
+    [gridDays, month, today, netWorthToday, changes, expenses, incomeByDate, estimatedSpendByDate],
   );
 
   const rowByDate = useMemo(() => {
@@ -149,6 +171,12 @@ export function FinanceCalendar({
           </Link>
         </div>
       </header>
+
+      <EverydaySpendRow
+        baseline={spendBaseline}
+        manual={manualSpendEstimate}
+        currency={currency}
+      />
 
       {incomeLinked && googleStatus !== "connected" && (
         <div className="border border-line-strong px-3 py-2 mb-3">
@@ -211,6 +239,11 @@ export function FinanceCalendar({
                     −{formatMoney(row.outflow, currency)}
                   </p>
                 )}
+                {row.estimatedOutflow > 0 && (
+                  <p className="text-[10px] tabular-nums text-muted leading-tight">
+                    ~−{formatMoney(row.estimatedOutflow, currency)}
+                  </p>
+                )}
               </div>
             </button>
           );
@@ -229,6 +262,112 @@ export function FinanceCalendar({
         />
       )}
     </section>
+  );
+}
+
+// The everyday-spend line under the calendar header. With enough history the
+// weekday baseline drives the forecast and this is a read-only summary; with a
+// thin ledger it exposes the manual flat estimate (saved to user_settings).
+function EverydaySpendRow({
+  baseline,
+  manual,
+  currency,
+}: {
+  baseline: WeekdayBaseline;
+  manual: number | null;
+  currency: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(manual !== null ? String(manual) : "");
+  const [isPending, startTransition] = useTransition();
+
+  const weekAvg =
+    Math.round((baseline.byWeekday.reduce((sum, v) => sum + v, 0) / 7) * 100) / 100;
+
+  function save(value: number | null) {
+    startTransition(async () => {
+      await saveDailySpendEstimate(value);
+      setEditing(false);
+    });
+  }
+
+  if (baseline.confident) {
+    return (
+      <p className="mb-3 text-[10px] tracking-widest uppercase text-muted">
+        everyday spend · from your history · ~{formatMoney(weekAvg, currency)}/day
+      </p>
+    );
+  }
+
+  if (!editing) {
+    return (
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-[10px] tracking-widest uppercase text-muted">
+          everyday spend ·{" "}
+          {manual !== null
+            ? `manual · ~${formatMoney(manual, currency)}/day`
+            : "not enough history yet"}
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(manual !== null ? String(manual) : "");
+            setEditing(true);
+          }}
+          className="text-[10px] tracking-widest uppercase text-muted hover:text-accent transition-colors py-2"
+        >
+          {manual !== null ? "edit" : "set estimate"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form
+      className="mb-3 flex items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const value = Number(draft);
+        if (draft.trim() === "" || !Number.isFinite(value) || value < 0) return;
+        save(value);
+      }}
+    >
+      <input
+        type="number"
+        inputMode="decimal"
+        step="any"
+        min="0"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="expected spend per day"
+        aria-label="expected daily spend"
+        className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm tabular-nums px-3 py-2 focus:outline-none transition-colors"
+      />
+      <button
+        type="submit"
+        disabled={isPending}
+        className="text-[10px] tracking-widest uppercase text-fg border border-fg px-3 py-2 hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
+      >
+        save
+      </button>
+      {manual !== null && (
+        <button
+          type="button"
+          disabled={isPending}
+          onClick={() => save(null)}
+          className="text-[10px] tracking-widest uppercase text-muted hover:text-danger transition-colors px-2 py-2 disabled:opacity-50"
+        >
+          clear
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={() => setEditing(false)}
+        className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors px-2 py-2"
+      >
+        cancel
+      </button>
+    </form>
   );
 }
 
@@ -285,7 +424,8 @@ function SelectedDay({
   const empty =
     recorded.length === 0 &&
     projectedExpenses.length === 0 &&
-    projectedIncome.length === 0;
+    projectedIncome.length === 0 &&
+    row.estimatedOutflow === 0;
 
   return (
     <div className="mt-4 border-t border-line pt-4">
@@ -334,6 +474,22 @@ function SelectedDay({
               </p>
             </div>
           ))}
+
+          {row.estimatedOutflow > 0 && (
+            <div className="flex items-center gap-2 border border-line border-dashed px-3 py-2">
+              <span
+                className="h-3 w-3 flex-shrink-0 border border-line-strong"
+                aria-hidden
+              />
+              <p className="flex-1 min-w-0 truncate text-sm text-muted">
+                everyday spending
+                <span className="text-muted"> · estimated</span>
+              </p>
+              <p className="text-sm font-bold tabular-nums text-muted whitespace-nowrap">
+                ~−{formatMoney(row.estimatedOutflow, currency)}
+              </p>
+            </div>
+          )}
 
           {projectedExpenses.map((expense) => (
             <div

@@ -48,3 +48,37 @@ export async function savePreferences(input: {
   revalidatePath("/", "layout");
   return { error: null };
 }
+
+// Manual everyday-spend fallback for the cashflow forecast (null clears it and
+// the forecast shows nothing until spending history is thick enough).
+export async function saveDailySpendEstimate(
+  value: number | null,
+): Promise<{ error: string | null }> {
+  let estimate: number | null = null;
+  if (value !== null) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0 || n > 100000) {
+      return { error: "invalid amount" };
+    }
+    estimate = Math.round(n * 100) / 100;
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase.from("user_settings").upsert(
+    {
+      user_id: user.id,
+      daily_spend_estimate: estimate,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" },
+  );
+  if (error) return { error: error.message };
+
+  revalidatePath("/finance");
+  return { error: null };
+}
