@@ -3,8 +3,7 @@
 import {
   DndContext,
   DragOverlay,
-  PointerSensor,
-  TouchSensor,
+  MouseSensor,
   useDraggable,
   useSensor,
   useSensors,
@@ -153,7 +152,7 @@ function TaskChip({ item, dateKey }: { item: TaskItem; dateKey: string }) {
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`truncate px-1.5 py-1 text-[10px] font-bold text-accent-fg cursor-grab touch-none ${
+      className={`truncate px-1.5 py-1 text-[10px] font-bold text-accent-fg cursor-grab ${
         isDragging ? "opacity-30" : ""
       }`}
       style={{ backgroundColor: item.color }}
@@ -202,7 +201,7 @@ function TimedTaskBlock({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`absolute left-1 right-1 overflow-hidden border-2 bg-page/85 px-1.5 py-0.5 cursor-grab touch-none z-10 ${
+      className={`absolute left-1 right-1 overflow-hidden border-2 bg-page/85 px-1.5 py-0.5 cursor-grab z-10 ${
         isDragging ? "opacity-30" : ""
       }`}
       style={{
@@ -222,7 +221,7 @@ function TimedTaskBlock({
         {...resizeAttributes}
         {...resizeListeners}
         aria-label={`resize ${item.title}`}
-        className="absolute left-0 right-0 bottom-0 h-3 cursor-ns-resize touch-none"
+        className="absolute left-0 right-0 bottom-0 h-3 cursor-ns-resize"
       >
         <div className="mx-auto mt-1 h-0.5 w-6" style={{ backgroundColor: item.color }} />
       </div>
@@ -279,7 +278,7 @@ function AllDayEventChip({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`truncate px-1.5 py-1 text-[10px] font-bold text-accent-fg touch-none ${
+      className={`truncate px-1.5 py-1 text-[10px] font-bold text-accent-fg ${
         isWritable ? "cursor-grab" : "cursor-default opacity-60"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{ backgroundColor: item.color }}
@@ -315,7 +314,7 @@ function TimedEventBlock({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`absolute left-1 right-1 overflow-hidden px-1.5 py-1 text-accent-fg touch-none shadow-[inset_2px_0_0_rgba(0,0,0,0.35)] ${
+      className={`absolute left-1 right-1 overflow-hidden px-1.5 py-1 text-accent-fg shadow-[inset_2px_0_0_rgba(0,0,0,0.35)] ${
         isWritable ? "cursor-grab" : "cursor-default opacity-60"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{
@@ -502,11 +501,11 @@ export function WeekView({
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
+  // Mouse-only on purpose: drag-to-reschedule is a desktop affordance. On
+  // touch it fought scrolling (and needed touch-action: none on every chip),
+  // so mobile taps through to the selected-day list / edit panels instead.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, {
-      activationConstraint: { delay: 150, tolerance: 8 },
-    }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
   );
 
   const hourLabels = Array.from(

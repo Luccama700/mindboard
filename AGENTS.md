@@ -169,7 +169,7 @@ Dashboard calendar supports month and week views.
   - Tasks drag horizontally between days; the new column becomes the task's `due_date`.
   - All-day events drag horizontally between days.
   - Timed events drag in two dimensions; the new x position picks the day, the new y position picks the start time snapped to 15-minute increments. Duration is preserved.
-  - Drag uses `@dnd-kit/core` with a `PointerSensor` (6px activation distance) and a `TouchSensor` (150ms hold delay) so the chips stay tappable on mobile.
+  - Drag uses `@dnd-kit/core` with a `MouseSensor` only (6px activation distance): drag-to-reschedule is a desktop affordance and is deliberately disabled on touch, where chips tap through to the selected-day list and its edit panels instead.
   - Events from non-writable calendars (`reader` accessRole) appear dimmed and are not draggable.
 - Below the grid is a "selected day" list. Tapping an editable Google Calendar event in that list opens an inline edit panel with date and time inputs (or just date inputs for all-day events). Saving PATCHes Google via `rescheduleEvent`.
 - Mindboard tasks currently only have `due_date`, not due times, so they render in the due/all-day row.
