@@ -31,6 +31,7 @@ const LABEL_MIN_MINUTES = 45;
 
 type TaskItem = Extract<CalendarItem, { kind: "task" }>;
 type EventItem = Extract<CalendarItem, { kind: "event" }>;
+type RtaskItem = Extract<CalendarItem, { kind: "rtask" }>;
 
 function toDateKey(date: Date) {
   const year = date.getFullYear();
@@ -97,6 +98,11 @@ function buildWeek(selected: string) {
 
 function taskMinutes(item: TaskItem): { start: number; end: number } | null {
   if (!item.dueTime) return null;
+  const start = timeToMinutes(item.dueTime.slice(0, 5));
+  return { start, end: start + (item.durationMin ?? DEFAULT_TASK_MINUTES) };
+}
+
+function rtaskMinutes(item: RtaskItem): { start: number; end: number } {
   const start = timeToMinutes(item.dueTime.slice(0, 5));
   return { start, end: start + (item.durationMin ?? DEFAULT_TASK_MINUTES) };
 }
@@ -224,6 +230,35 @@ function TimedTaskBlock({
   );
 }
 
+// A recurring occurrence: dashed hollow block, never draggable — the rule owns
+// its schedule. Dimmed and struck once completed today.
+function RecurringTaskBlock({ item }: { item: RtaskItem }) {
+  const minutes = rtaskMinutes(item);
+  return (
+    <div
+      className={`absolute left-1 right-1 overflow-hidden border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
+        item.done ? "opacity-50" : ""
+      }`}
+      style={{
+        ...blockStyle(minutes.start, minutes.end),
+        borderColor: item.color,
+      }}
+    >
+      <p
+        className={`truncate text-[11px] font-bold text-fg ${
+          item.done ? "line-through" : ""
+        }`}
+      >
+        <span aria-hidden>↻ </span>
+        {item.title}
+      </p>
+      <p className="truncate text-[10px] text-muted">
+        {minutesToTime(minutes.start)} – {minutesToTime(minutes.end)}
+      </p>
+    </div>
+  );
+}
+
 function AllDayEventChip({
   item,
   dateKey,
@@ -310,7 +345,7 @@ function FinanceChip({
 }
 
 function DragPreview({ item }: { item: CalendarItem }) {
-  if (item.kind === "finance") return null;
+  if (item.kind === "finance" || item.kind === "rtask") return null;
   const color = item.color;
   if (item.kind === "task" || item.allDay) {
     return (
@@ -354,6 +389,7 @@ function underlayStyle(startMinutes: number, endMinutes: number) {
 function FreeGapUnderlay({
   events,
   timedTasks,
+  recurring,
   dateKey,
   now,
   wakeStartHour,
@@ -361,6 +397,7 @@ function FreeGapUnderlay({
 }: {
   events: EventItem[];
   timedTasks: TaskItem[];
+  recurring: RtaskItem[];
   dateKey: string;
   now: Date;
   wakeStartHour: number;
@@ -384,6 +421,15 @@ function FreeGapUnderlay({
           allDay: false,
         },
       ];
+    }),
+    ...recurring.map((r) => {
+      const minutes = rtaskMinutes(r);
+      return {
+        summary: r.title,
+        start: `${dateKey}T${minutesToTime(minutes.start)}:00`,
+        end: `${dateKey}T${minutesToTime(minutes.end)}:00`,
+        allDay: false,
+      };
     }),
   ];
 
@@ -671,7 +717,7 @@ export function WeekView({
             {week.map((date) => {
               const key = toDateKey(date);
               const allDayItems = (itemsByDate.get(key) ?? []).filter(
-                (item) =>
+                (item): item is Exclude<CalendarItem, { kind: "rtask" }> =>
                   (item.kind === "task" && !item.dueTime) ||
                   item.kind === "finance" ||
                   (item.kind === "event" && item.allDay),
@@ -745,6 +791,9 @@ export function WeekView({
                 (item): item is TaskItem =>
                   item.kind === "task" && item.dueTime !== null,
               );
+              const recurringItems = dayItems.filter(
+                (item): item is RtaskItem => item.kind === "rtask",
+              );
               const isToday = key === today;
               const nowTop =
                 ((nowMinutes - START_HOUR * 60) / 60) * HOUR_HEIGHT;
@@ -768,6 +817,7 @@ export function WeekView({
                   <FreeGapUnderlay
                     events={timedItems}
                     timedTasks={timedTasks}
+                    recurring={recurringItems}
                     dateKey={key}
                     now={now}
                     wakeStartHour={wakeStartHour}
@@ -776,6 +826,10 @@ export function WeekView({
 
                   {timedItems.map((item) => (
                     <TimedEventBlock key={item.id} item={item} dateKey={key} />
+                  ))}
+
+                  {recurringItems.map((item) => (
+                    <RecurringTaskBlock key={item.id} item={item} />
                   ))}
 
                   {timedTasks.map((item) => (

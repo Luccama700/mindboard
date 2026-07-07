@@ -4,8 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { recordBalanceChange } from "@/app/actions/finance";
+import { createRecurringTask } from "@/app/actions/recurring-tasks";
 import { createTask } from "@/app/actions/tasks";
-import { parseCapture } from "@/app/lib/capture/parse";
+import {
+  extractTrailingRecurrence,
+  extractTrailingTime,
+  parseCapture,
+} from "@/app/lib/capture/parse";
+import { formatRecurrence, type TaskRecurrence } from "@/app/lib/recurrence";
 import { formatMoney } from "./money";
 import { ProposalCard } from "./proposal-card";
 import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
@@ -68,6 +74,13 @@ export function Dock({
   const [typing, setTyping] = useState(false);
   const [keyboardUp, setKeyboardUp] = useState(false);
   const [timeDisabledFor, setTimeDisabledFor] = useState<string | null>(null);
+  const [recurrenceDisabledFor, setRecurrenceDisabledFor] = useState<
+    string | null
+  >(null);
+  const [manualRule, setManualRule] = useState<TaskRecurrence | null>(null);
+  const [repeatOpen, setRepeatOpen] = useState(false);
+  const [draftDays, setDraftDays] = useState<number[]>([]);
+  const [draftInterval, setDraftInterval] = useState(2);
   const [spendDraft, setSpendDraft] = useState<SpendDraft | null>(null);
   const [spendError, setSpendError] = useState<string | null>(null);
   const [spendBusy, setSpendBusy] = useState(false);
@@ -83,12 +96,38 @@ export function Dock({
   const selectedGroup =
     groups.find((group) => group.id === selectedGroupId) ?? null;
   const capture = parseCapture(title, categories);
-  const parsedTime =
-    capture.mode === "task" &&
-    capture.time !== null &&
-    capture.time !== timeDisabledFor
-      ? { title: capture.title, time: capture.time, matched: capture.time }
+
+  // Trailing recurrence runs on the time-stripped title ("gym mon/wed/fri
+  // 17:00"); when the recurrence trails instead ("lunch 12:30 daily"), a
+  // second time pass runs on what the recurrence left behind.
+  const recExtract =
+    capture.mode === "task" ? extractTrailingRecurrence(capture.title) : null;
+  const recurrenceActive =
+    recExtract !== null && recExtract.matched !== recurrenceDisabledFor;
+  const innerTime =
+    recurrenceActive && capture.mode === "task" && capture.time === null
+      ? extractTrailingTime(recExtract.title)
       : null;
+  const taskTime =
+    capture.mode === "task"
+      ? (capture.time ?? (innerTime ? innerTime.time : null))
+      : null;
+  const parsedTime =
+    capture.mode === "task" && taskTime !== null && taskTime !== timeDisabledFor
+      ? {
+          title: innerTime ? innerTime.title : capture.title,
+          time: taskTime,
+          matched: taskTime,
+        }
+      : null;
+  const parsedRecurrence = recurrenceActive
+    ? {
+        title: innerTime ? innerTime.title : recExtract.title,
+        rule: recExtract.rule,
+        matched: recExtract.matched,
+      }
+    : null;
+  const effectiveRule = parsedRecurrence?.rule ?? manualRule;
 
   const railCollapsed = typing || keyboardUp;
 
@@ -214,6 +253,43 @@ export function Dock({
         accountId: accounts[0].id,
         categoryId: capture.categoryId,
       });
+      return;
+    }
+
+    if (effectiveRule) {
+      const rt = (
+        parsedRecurrence?.title ??
+        parsedTime?.title ??
+        title
+      ).trim();
+      const rule = effectiveRule;
+      if (!rt || busy) return;
+
+      setBusy(true);
+      setTitle("");
+      setNotes("");
+      setTimeDisabledFor(null);
+      setRecurrenceDisabledFor(null);
+      setManualRule(null);
+      setDraftDays([]);
+      setRepeatOpen(false);
+
+      await createRecurringTask({
+        title: rt,
+        groupId: selectedGroupId,
+        notes: notes.trim() || null,
+        priority,
+        frequency: rule.frequency,
+        weekdays: rule.weekdays,
+        dayOfMonth: rule.day_of_month,
+        intervalDays: rule.interval_days,
+        startDate: rule.start_date,
+        dueTime: parsedTime?.time ?? null,
+      });
+
+      setPriority("med");
+      setBusy(false);
+      inputRef.current?.focus();
       return;
     }
 
@@ -480,6 +556,100 @@ export function Dock({
           </div>
         )}
 
+        {repeatOpen && !effectiveRule && capture.mode === "task" && (
+          <div className="mb-2 border border-line bg-popover p-3 space-y-3">
+            <button
+              type="button"
+              onClick={() => {
+                setManualRule({
+                  frequency: "daily",
+                  weekdays: null,
+                  day_of_month: null,
+                  interval_days: null,
+                  start_date: null,
+                });
+                setRepeatOpen(false);
+              }}
+              className="min-h-11 w-full border border-line-strong px-3 text-[10px] tracking-widest uppercase text-fg hover:border-accent transition-colors"
+            >
+              every day
+            </button>
+            <div className="flex gap-1">
+              {["s", "m", "t", "w", "t", "f", "s"].map((label, day) => {
+                const active = draftDays.includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => {
+                      const next = active
+                        ? draftDays.filter((d) => d !== day)
+                        : [...draftDays, day].sort((a, b) => a - b);
+                      setDraftDays(next);
+                      setManualRule(
+                        next.length > 0
+                          ? {
+                              frequency: "weekly",
+                              weekdays: next,
+                              day_of_month: null,
+                              interval_days: null,
+                              start_date: null,
+                            }
+                          : null,
+                      );
+                    }}
+                    className={`min-h-11 flex-1 border text-[10px] tracking-widest uppercase transition-colors ${
+                      active
+                        ? "bg-accent text-accent-fg border-accent"
+                        : "border-line-strong text-muted hover:border-fg hover:text-fg"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] tracking-widest uppercase text-muted">
+                every
+              </span>
+              <input
+                type="number"
+                min={2}
+                max={365}
+                value={draftInterval}
+                onChange={(e) =>
+                  setDraftInterval(
+                    Math.max(2, Math.min(365, Number(e.target.value) || 2)),
+                  )
+                }
+                aria-label="repeat every N days"
+                className="w-16 bg-card border border-line-strong text-fg text-sm px-2 py-2 focus:border-accent focus:outline-none transition-colors"
+              />
+              <span className="text-[10px] tracking-widest uppercase text-muted">
+                days
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setManualRule({
+                    frequency: "custom",
+                    weekdays: null,
+                    day_of_month: null,
+                    interval_days: draftInterval,
+                    start_date: null,
+                  });
+                  setRepeatOpen(false);
+                }}
+                className="min-h-11 border border-line-strong px-3 text-[10px] tracking-widest uppercase text-muted hover:border-fg hover:text-fg transition-colors"
+              >
+                set
+              </button>
+            </div>
+          </div>
+        )}
+
         <div
           className={`flex items-center flex-wrap gap-2 mb-2 ${
             capture.mode !== "task" ? "hidden" : ""
@@ -565,7 +735,7 @@ export function Dock({
             {hasNotes ? "✓ notes" : "+ notes"}
           </button>
 
-          {parsedTime && dueDate && (
+          {parsedTime && (dueDate || effectiveRule) && (
             <button
               type="button"
               onClick={() => setTimeDisabledFor(parsedTime.matched)}
@@ -574,6 +744,33 @@ export function Dock({
               className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border bg-accent text-accent-fg border-accent transition-colors"
             >
               ⌚ {parsedTime.time} ×
+            </button>
+          )}
+
+          {effectiveRule ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (parsedRecurrence) {
+                  setRecurrenceDisabledFor(parsedRecurrence.matched);
+                }
+                setManualRule(null);
+                setDraftDays([]);
+              }}
+              aria-label={`remove repeat ${formatRecurrence(effectiveRule)}`}
+              title="tap to remove the repeat"
+              className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border bg-accent text-accent-fg border-accent transition-colors"
+            >
+              ↻ {formatRecurrence(effectiveRule)} ×
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setRepeatOpen((v) => !v)}
+              aria-expanded={repeatOpen}
+              className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors"
+            >
+              ↻ repeat
             </button>
           )}
 

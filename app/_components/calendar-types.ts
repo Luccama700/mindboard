@@ -33,4 +33,17 @@ export type CalendarItem =
       amount: number;
       currency: string;
       category: string;
+    }
+  | {
+      // A virtual occurrence of a timed recurring task: rendered as a dashed,
+      // non-draggable block; untimed rules never enter the calendar.
+      kind: "rtask";
+      id: string; // `rtask:${ruleId}:${dateKey}`
+      ruleId: string;
+      title: string;
+      color: string;
+      dueTime: string; // "HH:MM:SS"
+      durationMin: number | null;
+      scheduleLabel: string; // "every day", "mon/wed/fri", …
+      done: boolean;
     };

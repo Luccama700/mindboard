@@ -6,6 +6,8 @@ import type { CalendarEvent } from "@/utils/google/calendar";
 import { rescheduleEvent } from "@/app/actions/calendar";
 import { updateTask } from "@/app/actions/tasks";
 import type { ScheduleVitals } from "@/app/lib/snapshots/schedule";
+import type { CalendarRecurringTask } from "@/app/lib/data/dashboard";
+import { formatRecurrence, taskRuleLandsOn } from "@/app/lib/recurrence";
 import type { CalendarItem } from "./calendar-types";
 import {
   formatClockTime,
@@ -134,6 +136,8 @@ export function DashboardCalendar({
   wakeEndHour = 22,
   scheduleVitals,
   basePath = "/",
+  recurringTasks = [],
+  recurringCompletions = [],
 }: {
   month: string;
   tasks: TaskWithGroup[];
@@ -146,6 +150,8 @@ export function DashboardCalendar({
   wakeEndHour?: number;
   scheduleVitals?: ScheduleVitals;
   basePath?: string;
+  recurringTasks?: CalendarRecurringTask[];
+  recurringCompletions?: { rule_id: string; occurred_on: string }[];
 }) {
   const today = toDateKey(new Date());
   const grid = useMemo(() => buildGrid(month), [month]);
@@ -234,8 +240,43 @@ export function DashboardCalendar({
       map.set(change.occurredAt, items);
     }
 
+    if (recurringTasks.length > 0) {
+      const completed = new Set(
+        recurringCompletions.map((c) => `${c.rule_id}:${c.occurred_on}`),
+      );
+      for (const date of grid) {
+        const key = toDateKey(date);
+        for (const rule of recurringTasks) {
+          if (!taskRuleLandsOn(rule, date)) continue;
+          const items = map.get(key) ?? [];
+          items.push({
+            kind: "rtask",
+            id: `rtask:${rule.id}:${key}`,
+            ruleId: rule.id,
+            title: rule.title,
+            color: rule.group_color ?? "#b5ff3c",
+            dueTime: rule.due_time,
+            durationMin: rule.duration_min,
+            scheduleLabel: formatRecurrence(rule),
+            done: completed.has(`${rule.id}:${key}`),
+          });
+          map.set(key, items);
+        }
+      }
+    }
+
     return map;
-  }, [calendarLinks, events, tasks, finance, eventOverrides, taskOverrides]);
+  }, [
+    calendarLinks,
+    events,
+    tasks,
+    finance,
+    eventOverrides,
+    taskOverrides,
+    recurringTasks,
+    recurringCompletions,
+    grid,
+  ]);
 
   async function commitEventReschedule(
     eventItem: Extract<CalendarItem, { kind: "event" }>,
@@ -586,7 +627,9 @@ export function DashboardCalendar({
                         ? item.group
                         : item.kind === "finance"
                           ? `${item.category} · ${formatSignedChange(item.amount, item.direction, item.currency)}`
-                          : `${item.calendar} · ${formatEventRange(item)}`}
+                          : item.kind === "rtask"
+                            ? `↻ ${item.scheduleLabel} · ${item.dueTime.slice(0, 5)}${item.done ? " · done" : ""}`
+                            : `${item.calendar} · ${formatEventRange(item)}`}
                     </p>
                   </button>
 

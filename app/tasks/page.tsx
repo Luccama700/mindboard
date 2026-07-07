@@ -8,8 +8,10 @@ import {
 } from "@/utils/google/calendar";
 import { TasksClient, type TaskFilter } from "@/app/_components/tasks-client";
 import type { Task } from "@/app/_components/types";
+import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
 import type { Group } from "./groups-types";
 import { GroupsClient } from "./groups-client";
+import { RecurringClient } from "./recurring-client";
 
 function parseFilter(value: string | string[] | undefined): TaskFilter {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -53,15 +55,17 @@ export default async function TasksPage({
     tasksQuery = tasksQuery.eq("group_id", filter);
   }
 
-  const [{ data: tasks }, groupsResult, calendars] = await Promise.all([
-    tasksQuery,
-    supabase
-      .from("groups")
-      .select("id, name, type, color, archived, created_at, google_calendar_id")
-      .eq("archived", false)
-      .order("created_at", { ascending: false }),
-    calendarsPromise,
-  ]);
+  const [{ data: tasks }, groupsResult, calendars, recurringRules] =
+    await Promise.all([
+      tasksQuery,
+      supabase
+        .from("groups")
+        .select("id, name, type, color, archived, created_at, google_calendar_id")
+        .eq("archived", false)
+        .order("created_at", { ascending: false }),
+      calendarsPromise,
+      getActiveRecurringTasks(user.id),
+    ]);
 
   const groups = (groupsResult.data ?? []) as Group[];
   const groupOptions = groups.map((g) => ({
@@ -130,6 +134,15 @@ export default async function TasksPage({
       />
 
       <details className="mt-12 border-t border-hairline pt-4">
+        <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center hover:text-fg transition-colors">
+          repeating{recurringRules.length > 0 && ` · ${recurringRules.length}`}
+        </summary>
+        <div className="mt-4">
+          <RecurringClient initial={recurringRules} groups={groupOptions} />
+        </div>
+      </details>
+
+      <details className="mt-4 border-t border-hairline pt-4">
         <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center hover:text-fg transition-colors">
           manage groups
         </summary>

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  extractTrailingRecurrence,
   extractTrailingTime,
   parseCapture,
   suggestCategory,
@@ -119,5 +120,63 @@ describe("extractTrailingTime", () => {
 
   test("a time in the middle of the title is not extracted", () => {
     expect(extractTrailingTime("3pm call with landlord")).toBeNull();
+  });
+});
+
+describe("extractTrailingRecurrence", () => {
+  test("daily forms", () => {
+    for (const input of ["lunch daily", "lunch every day", "lunch everyday"]) {
+      const rec = extractTrailingRecurrence(input);
+      expect(rec).not.toBeNull();
+      expect(rec!.title).toBe("lunch");
+      expect(rec!.rule.frequency).toBe("daily");
+    }
+  });
+
+  test("weekday slash lists dedupe and sort", () => {
+    const rec = extractTrailingRecurrence("gym fri/mon/wed/mon");
+    expect(rec).not.toBeNull();
+    expect(rec!.title).toBe("gym");
+    expect(rec!.rule).toMatchObject({ frequency: "weekly", weekdays: [1, 3, 5] });
+  });
+
+  test("every <weekday> and weekdays", () => {
+    expect(extractTrailingRecurrence("laundry every sunday")!.rule).toMatchObject({
+      frequency: "weekly",
+      weekdays: [0],
+    });
+    expect(extractTrailingRecurrence("standup weekdays")!.rule).toMatchObject({
+      frequency: "weekly",
+      weekdays: [1, 2, 3, 4, 5],
+    });
+  });
+
+  test("every N days is custom; every 1 day collapses to daily", () => {
+    expect(extractTrailingRecurrence("water plants every 3 days")!.rule).toMatchObject({
+      frequency: "custom",
+      interval_days: 3,
+    });
+    expect(extractTrailingRecurrence("stretch every 1 day")!.rule.frequency).toBe(
+      "daily",
+    );
+  });
+
+  test.each([
+    "buy every day pass tomorrow", // recurrence words not trailing
+    "call mom mon", // single bare weekday is too ambiguous
+    "run every morning", // not a weekday
+    "daily", // no title left
+  ])("rejects %s", (input) => {
+    expect(extractTrailingRecurrence(input)).toBeNull();
+  });
+
+  test("the three modes stay untouched", () => {
+    expect(parseCapture("$12 lunch daily").mode).toBe("spend");
+    expect(parseCapture("? plan my week daily").mode).toBe("copilot");
+    expect(parseCapture("lunch daily")).toEqual({
+      mode: "task",
+      title: "lunch daily",
+      time: null,
+    });
   });
 });

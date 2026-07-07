@@ -16,7 +16,13 @@ import { inventorySnapshot } from "@/app/lib/snapshots/inventory";
 import { tasksSnapshot } from "@/app/lib/snapshots/tasks";
 import { freeGaps, scheduleSnapshot } from "@/app/lib/snapshots/schedule";
 import { recordProposal } from "@/app/lib/mcp/audit";
-import { proposeUpdateStockFor } from "@/app/lib/mcp/writes";
+import {
+  proposeArchiveRecurringTaskFor,
+  proposeCreateRecurringTaskFor,
+  proposeUpdateStockFor,
+} from "@/app/lib/mcp/writes";
+import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
+import { formatRecurrence } from "@/app/lib/recurrence";
 import { captureToBrainFor } from "@/app/lib/mcp/brain";
 import {
   summarizeCreateTask,
@@ -79,6 +85,57 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
       type: "object",
       properties: { taskId: { type: "string" } },
       required: ["taskId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_recurring_tasks",
+    description:
+      "List repeating-task rules (id, title, schedule, time, group). Use the id for propose_archive_recurring_task.",
+    input_schema: {
+      type: "object",
+      properties: { includeArchived: { type: "boolean" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_create_recurring_task",
+    description:
+      "Propose a repeating task rule for habits like 'lunch every day 12:30' or 'gym mon/wed/fri at 5pm' — do NOT create N individual tasks for a recurring ask. Occurrences appear automatically; missed days skip silently. weekly needs weekdays (0=sun … 6=sat, several allowed); monthly needs dayOfMonth; custom needs intervalDays. dueTime makes it a calendar block that counts against free time. User must confirm.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        groupId: { type: "string" },
+        notes: { type: "string" },
+        priority: { type: "string", enum: ["low", "med", "high"] },
+        frequency: {
+          type: "string",
+          enum: ["daily", "weekly", "monthly", "custom"],
+        },
+        weekdays: {
+          type: "array",
+          items: { type: "integer", minimum: 0, maximum: 6 },
+          description: "For weekly: 0=sun … 6=sat, several allowed.",
+        },
+        dayOfMonth: { type: "integer", minimum: 1, maximum: 31 },
+        intervalDays: { type: "integer", minimum: 1 },
+        startDate: { type: "string", description: "YYYY-MM-DD, for custom" },
+        dueTime: { type: "string", description: "HH:MM 24h, optional" },
+        durationMin: { type: "integer", minimum: 15 },
+      },
+      required: ["title", "frequency"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_archive_recurring_task",
+    description:
+      "Propose stopping a repeating task rule (by id; completion history is kept). User must confirm.",
+    input_schema: {
+      type: "object",
+      properties: { ruleId: { type: "string" } },
+      required: ["ruleId"],
       additionalProperties: false,
     },
   },
@@ -531,6 +588,43 @@ export async function runAssistantTool(
             groups,
           },
         };
+      }
+      case "list_recurring_tasks": {
+        const rules = await getActiveRecurringTasks(userId);
+        return {
+          type: "result",
+          content: {
+            rules: rules.map((r) => ({
+              id: r.id,
+              title: r.title,
+              schedule: formatRecurrence(r),
+              dueTime: r.due_time ? r.due_time.slice(0, 5) : null,
+              durationMin: r.duration_min,
+              priority: r.priority,
+              group: r.group_name,
+            })),
+          },
+        };
+      }
+      case "propose_create_recurring_task": {
+        const outcome = await proposeCreateRecurringTaskFor(
+          supabase,
+          userId,
+          input,
+          { source: "assistant", conversationId },
+        );
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "proposal", ...outcome.value };
+      }
+      case "propose_archive_recurring_task": {
+        const outcome = await proposeArchiveRecurringTaskFor(
+          supabase,
+          userId,
+          input,
+          { source: "assistant", conversationId },
+        );
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "proposal", ...outcome.value };
       }
       case "propose_update_stock": {
         const outcome = await proposeUpdateStockFor(supabase, userId, input, {

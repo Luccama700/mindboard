@@ -9,6 +9,25 @@ import {
 } from "@/utils/google/calendar";
 import type { FinanceChange } from "@/app/_components/dashboard-calendar";
 import type { TaskWithGroup } from "@/app/_components/types";
+import type { TaskRecurrence } from "@/app/lib/recurrence";
+
+// Timed recurring-task rules for the calendar: occurrences are computed
+// client-side per grid day; completions mark them done/struck.
+export type CalendarRecurringTask = TaskRecurrence & {
+  id: string;
+  title: string;
+  due_time: string; // timed rules only — untimed never reach the calendar
+  duration_min: number | null;
+  group_name: string | null;
+  group_color: string | null;
+};
+
+type RawRecurringTask = Omit<
+  CalendarRecurringTask,
+  "group_name" | "group_color"
+> & {
+  groups: { name: string; color: string } | { name: string; color: string }[] | null;
+};
 
 type RawTask = {
   id: string;
@@ -169,29 +188,47 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
         error instanceof GoogleCalendarConnectionError ? "connect" : "error",
     }));
 
-  const [tasksResponse, groupsResponse, changesResponse, eventsResult] =
-    await Promise.all([
-      supabase
-        .from("tasks")
-        .select(
-          "id, title, due_date, due_time, duration_min, status, priority, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, groups(name, color)",
-        )
-        .neq("status", "done")
-        .not("due_date", "is", null),
-      supabase
-        .from("groups")
-        .select("id, name, color, google_calendar_id")
-        .eq("archived", false)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("balance_changes")
-        .select(
-          "id, direction, amount, occurred_at, accounts(name, color, currency), spending_categories(name, color)",
-        )
-        .gte("occurred_at", startDate)
-        .lt("occurred_at", endDate),
-      eventsPromise,
-    ]);
+  const [
+    tasksResponse,
+    groupsResponse,
+    changesResponse,
+    recurringResponse,
+    completionsResponse,
+    eventsResult,
+  ] = await Promise.all([
+    supabase
+      .from("tasks")
+      .select(
+        "id, title, due_date, due_time, duration_min, status, priority, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, groups(name, color)",
+      )
+      .neq("status", "done")
+      .not("due_date", "is", null),
+    supabase
+      .from("groups")
+      .select("id, name, color, google_calendar_id")
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("balance_changes")
+      .select(
+        "id, direction, amount, occurred_at, accounts(name, color, currency), spending_categories(name, color)",
+      )
+      .gte("occurred_at", startDate)
+      .lt("occurred_at", endDate),
+    supabase
+      .from("recurring_tasks")
+      .select(
+        "id, title, frequency, weekdays, day_of_month, interval_days, start_date, due_time, duration_min, groups(name, color)",
+      )
+      .eq("archived", false)
+      .not("due_time", "is", null),
+    supabase
+      .from("recurring_task_completions")
+      .select("rule_id, occurred_on")
+      .gte("occurred_on", startDate)
+      .lt("occurred_on", endDate),
+    eventsPromise,
+  ]);
 
   const tasks = mapTasks((tasksResponse.data ?? []) as RawTask[]);
   const groupsRaw = (groupsResponse.data ?? []) as {
@@ -223,12 +260,28 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
 
   const finance = mapFinance((changesResponse.data ?? []) as RawChange[]);
 
+  const recurringTasks: CalendarRecurringTask[] = (
+    (recurringResponse.data ?? []) as unknown as RawRecurringTask[]
+  ).map(({ groups, ...rest }) => {
+    const group = Array.isArray(groups) ? (groups[0] ?? null) : groups;
+    return {
+      ...rest,
+      group_name: group?.name ?? null,
+      group_color: group?.color ?? null,
+    };
+  });
+
   return {
     tasks,
     groups,
     calendarLinks,
     calendarTasks,
     finance,
+    recurringTasks,
+    recurringCompletions: (completionsResponse.data ?? []) as {
+      rule_id: string;
+      occurred_on: string;
+    }[],
     events: eventsResult.events,
     calendarStatus: eventsResult.status,
   };

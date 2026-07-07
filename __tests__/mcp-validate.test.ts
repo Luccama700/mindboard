@@ -1,11 +1,102 @@
 import { describe, expect, test } from "vitest";
 import {
   computeSpendBalance,
+  summarizeCreateRecurringTask,
   summarizeCreateTask,
   summarizeLogSpend,
+  validateCreateRecurringTask,
   validateCreateTask,
   validateLogSpend,
 } from "@/app/lib/mcp/validate";
+
+describe("validateCreateRecurringTask", () => {
+  test("weekly needs at least one valid weekday; dedupes and sorts", () => {
+    expect(
+      validateCreateRecurringTask({ title: "gym", frequency: "weekly" }).ok,
+    ).toBe(false);
+    expect(
+      validateCreateRecurringTask({
+        title: "gym",
+        frequency: "weekly",
+        weekdays: [7],
+      }).ok,
+    ).toBe(false);
+    const r = validateCreateRecurringTask({
+      title: "gym",
+      frequency: "weekly",
+      weekdays: [5, 1, 3, 1],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.weekdays).toEqual([1, 3, 5]);
+  });
+
+  test("monthly needs dayOfMonth; custom needs intervalDays", () => {
+    expect(
+      validateCreateRecurringTask({ title: "rent", frequency: "monthly" }).ok,
+    ).toBe(false);
+    expect(
+      validateCreateRecurringTask({
+        title: "rent",
+        frequency: "monthly",
+        dayOfMonth: 31,
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateCreateRecurringTask({ title: "water", frequency: "custom" }).ok,
+    ).toBe(false);
+    expect(
+      validateCreateRecurringTask({
+        title: "water",
+        frequency: "custom",
+        intervalDays: 3,
+      }).ok,
+    ).toBe(true);
+  });
+
+  test("rejects bad dueTime and durationMin without a time", () => {
+    expect(
+      validateCreateRecurringTask({
+        title: "lunch",
+        frequency: "daily",
+        dueTime: "25:00",
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCreateRecurringTask({
+        title: "lunch",
+        frequency: "daily",
+        durationMin: 30,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCreateRecurringTask({
+        title: "lunch",
+        frequency: "daily",
+        dueTime: "12:30",
+        durationMin: 30,
+      }).ok,
+    ).toBe(true);
+  });
+
+  test("summary reads like a schedule and names the first landing day", () => {
+    const r = validateCreateRecurringTask({
+      title: "gym",
+      groupId: "g1",
+      frequency: "weekly",
+      weekdays: [1, 3, 5],
+      dueTime: "17:00",
+      durationMin: 60,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const summary = summarizeCreateRecurringTask(r.value, "health", "2026-07-07");
+    expect(summary).toContain('"gym"');
+    expect(summary).toContain("mon/wed/fri");
+    expect(summary).toContain("at 17:00 (60min)");
+    expect(summary).toContain('group "health"');
+    expect(summary).toContain("First lands 2026-07-08"); // Tue -> Wed
+  });
+});
 
 describe("validateCreateTask", () => {
   test("requires a non-empty title", () => {

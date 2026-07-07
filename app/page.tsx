@@ -20,7 +20,12 @@ import {
   getBalanceChangesOn,
 } from "./lib/data/finance";
 import { getInventoryItems, getInventoryUsages } from "./lib/data/inventory";
+import {
+  getActiveRecurringTasks,
+  getRecurringCompletions,
+} from "./lib/data/recurring-tasks";
 import { getUserPreferences } from "./lib/data/settings";
+import { occurrenceBusyEvents } from "./lib/recurrence";
 import { financeSnapshot } from "./lib/snapshots/finance";
 import {
   freeGaps,
@@ -28,6 +33,7 @@ import {
   type FreeGap,
 } from "./lib/snapshots/schedule";
 import {
+  addDaysKey,
   streamSnapshot,
   type StreamBillInput,
   type StreamSnapshot,
@@ -52,6 +58,8 @@ const getStreamData = cache(
       tasks,
       accounts,
       recurringExpenses,
+      recurringTasks,
+      recurringCompletions,
       items,
       usages,
       todayChanges,
@@ -65,6 +73,8 @@ const getStreamData = cache(
       getOpenTasks(userId),
       getAccounts(userId),
       getActiveRecurringExpenses(userId),
+      getActiveRecurringTasks(userId),
+      getRecurringCompletions(userId, today, today),
       getInventoryItems(userId),
       getInventoryUsages(userId),
       getBalanceChangesOn(userId, today),
@@ -94,14 +104,20 @@ const getStreamData = cache(
       recurringExpenses,
       today,
     });
+    // Timed recurring occurrences count as busy time in the free-hours math
+    // and the schedule chips, alongside real Google events.
+    const busyEvents = [
+      ...dash.events,
+      ...occurrenceBusyEvents(recurringTasks, [today, addDaysKey(today, 1)]),
+    ];
     const schedule = scheduleSnapshot({
-      events: dash.events,
+      events: busyEvents,
       now,
       wakeStartHour: prefs.wake_start_hour,
       wakeEndHour: prefs.wake_end_hour,
     });
     const gaps = freeGaps({
-      events: dash.events,
+      events: busyEvents,
       now,
       wakeStartHour: prefs.wake_start_hour,
       wakeEndHour: prefs.wake_end_hour,
@@ -143,6 +159,10 @@ const getStreamData = cache(
         allDay: e.allDay,
       })),
       bills,
+      recurringTasks,
+      completedRecurringToday: new Set(
+        recurringCompletions.map((c) => c.rule_id),
+      ),
       items: items.map((item) => ({
         id: item.id,
         name: item.name,
@@ -211,15 +231,27 @@ async function WeekPaneSection({
   month: string;
 }) {
   const [
-    { calendarTasks, events, finance, calendarStatus, calendarLinks },
+    {
+      calendarTasks,
+      events,
+      finance,
+      calendarStatus,
+      calendarLinks,
+      recurringTasks,
+      recurringCompletions,
+    },
     prefs,
   ] = await Promise.all([
     getDashboardData(userId, month),
     getUserPreferences(userId),
   ]);
 
+  const today = todayISO();
   const schedule = scheduleSnapshot({
-    events,
+    events: [
+      ...events,
+      ...occurrenceBusyEvents(recurringTasks, [today, addDaysKey(today, 1)]),
+    ],
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,
     wakeEndHour: prefs.wake_end_hour,
@@ -239,6 +271,8 @@ async function WeekPaneSection({
       wakeEndHour={prefs.wake_end_hour}
       scheduleVitals={schedule}
       basePath="/"
+      recurringTasks={recurringTasks}
+      recurringCompletions={recurringCompletions}
     />
   );
 }

@@ -12,6 +12,11 @@ import {
   runOutDateKey,
   type UsageRule,
 } from "@/app/_components/inventory-projection";
+import {
+  formatRecurrence,
+  taskRuleLandsOn,
+  type TaskRecurrence,
+} from "@/app/lib/recurrence";
 import { formatMoney } from "@/app/_components/money";
 import type { TaskWithGroup } from "@/app/_components/types";
 
@@ -41,6 +46,15 @@ export type StreamGoalInput = {
   created_at: string;
 };
 
+export type StreamRecurringTaskInput = TaskRecurrence & {
+  id: string;
+  title: string;
+  due_time: string | null;
+  duration_min: number | null;
+  priority: "low" | "med" | "high";
+  group_name: string | null;
+};
+
 export type StreamSection = "now" | "next" | "later" | "loose";
 export type StreamDomain =
   | "task"
@@ -53,6 +67,14 @@ export type StreamDomain =
 
 export type StreamEntity =
   | { kind: "task"; task: TaskWithGroup }
+  | {
+      kind: "rtask";
+      ruleId: string;
+      dateKey: string;
+      title: string;
+      dueTime: string | null;
+      durationMin: number | null;
+    }
   | { kind: "event"; id: string; summary: string; start: string; end: string }
   | { kind: "bill"; id: string; name: string; amount: number; dateKey: string }
   | {
@@ -97,6 +119,8 @@ export type StreamInput = {
   tasks: TaskWithGroup[]; // every non-done task, with or without a due date
   events: StreamEventInput[];
   bills: StreamBillInput[];
+  recurringTasks: StreamRecurringTaskInput[];
+  completedRecurringToday: Set<string>; // rule ids checked off today
   items: StreamItemInput[];
   usagesByItem: Record<string, UsageRule[]>;
   goals: StreamGoalInput[];
@@ -206,6 +230,33 @@ function taskCard(task: TaskWithGroup, today: string): StreamCard {
   };
 }
 
+function rtaskCard(
+  rule: StreamRecurringTaskInput,
+  today: string,
+): StreamCard {
+  const parts: string[] = [
+    rule.due_time ? `today ⌚ ${shortTime(rule.due_time)}` : "today",
+    formatRecurrence(rule),
+  ];
+  if (rule.priority === "high") parts.push("!!!");
+  if (rule.group_name) parts.push(rule.group_name);
+  return {
+    id: `rtask:${rule.id}:${today}`,
+    domain: "task",
+    glyph: "↻",
+    fact: rule.title,
+    meta: parts.join(" · "),
+    entity: {
+      kind: "rtask",
+      ruleId: rule.id,
+      dateKey: today,
+      title: rule.title,
+      dueTime: rule.due_time,
+      durationMin: rule.duration_min,
+    },
+  };
+}
+
 function eventCard(
   e: StreamEventInput,
   now: Date,
@@ -289,6 +340,8 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     tasks,
     events,
     bills,
+    recurringTasks,
+    completedRecurringToday,
     items,
     usagesByItem,
     goals,
@@ -374,6 +427,20 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .filter((b) => ruleLandsOn(b, todayDate))
     .map((b) => billCard(b, today, today, currency));
 
+  // Today's uncompleted recurring occurrences. Timed + time-passed escalate to
+  // NOW like a due-today task; the rest interleave into NEXT. Yesterday's
+  // misses never appear — each day is fresh (completions are the history).
+  const rtaskTimePast = (r: StreamRecurringTaskInput) =>
+    r.due_time !== null && shortTime(r.due_time) <= nowClock;
+  const todaysRules = recurringTasks.filter(
+    (r) => taskRuleLandsOn(r, todayDate) && !completedRecurringToday.has(r.id),
+  );
+  const rtasksNow = todaysRules
+    .filter(rtaskTimePast)
+    .sort((a, b) => shortTime(a.due_time!).localeCompare(shortTime(b.due_time!)))
+    .map((r) => rtaskCard(r, today));
+  const rtasksUpcoming = todaysRules.filter((r) => !rtaskTimePast(r));
+
   const urgentStock = streamItems
     .filter(itemUrgent)
     .sort((a, b) => {
@@ -418,6 +485,7 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     ...nowEvents,
     ...urgentStock,
     ...overdueTasks,
+    ...rtasksNow,
     ...billsToday,
     ...runOutNow,
   ];
@@ -437,16 +505,44 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .slice(0, 1)
     .map((e) => eventCard(e, now, { tomorrow: true }));
 
-  const dueTodayTasks = openTasks
-    .filter((t) => t.due_date === today && !timePast(t))
+  // Due-today tasks and today's upcoming recurring occurrences interleave:
+  // time-anchored first by time, untimed after by priority.
+  type DueTodayEntry = {
+    dueTime: string | null;
+    priority: TaskWithGroup["priority"];
+    created: string;
+    card: StreamCard;
+  };
+  const dueTodayTasks = [
+    ...openTasks
+      .filter((t) => t.due_date === today && !timePast(t))
+      .map(
+        (t): DueTodayEntry => ({
+          dueTime: t.due_time,
+          priority: t.priority,
+          created: t.created_at,
+          card: taskCard(t, today),
+        }),
+      ),
+    ...rtasksUpcoming.map(
+      (r): DueTodayEntry => ({
+        dueTime: r.due_time,
+        priority: r.priority,
+        created: "",
+        card: rtaskCard(r, today),
+      }),
+    ),
+  ]
     .sort((a, b) => {
-      // Time-anchored tasks first, by time; untimed after, by priority.
-      if (a.due_time && b.due_time) return a.due_time.localeCompare(b.due_time);
-      if (a.due_time) return -1;
-      if (b.due_time) return 1;
-      return byPriorityThenLateness(today)(a, b);
+      if (a.dueTime && b.dueTime)
+        return shortTime(a.dueTime).localeCompare(shortTime(b.dueTime));
+      if (a.dueTime) return -1;
+      if (b.dueTime) return 1;
+      const p = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+      if (p !== 0) return p;
+      return a.created.localeCompare(b.created);
     })
-    .map((t) => taskCard(t, today));
+    .map((entry) => entry.card);
 
   const lowItems = streamItems
     .filter((item) => {

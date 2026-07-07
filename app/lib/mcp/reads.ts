@@ -1,6 +1,7 @@
 import "server-only";
 import { createServiceClient } from "@/utils/supabase/service";
 import { ownerUserId, todayKey } from "./config";
+import { formatRecurrence } from "@/app/lib/recurrence";
 import { financeSnapshot, type FinanceVitals } from "@/app/lib/snapshots/finance";
 import { tasksSnapshot, type TaskVitals } from "@/app/lib/snapshots/tasks";
 import {
@@ -143,6 +144,58 @@ export async function listTasks(filter: {
       ...task,
       group_name: group?.name ?? null,
       group_color: group?.color ?? null,
+    };
+  });
+}
+
+// Repeating-task rules with a readable schedule label. The ids feed
+// archive_recurring_task; occurrences themselves are virtual.
+export async function listRecurringTasks(filter?: { includeArchived?: boolean }) {
+  const { supabase, ownerId } = scoped();
+
+  let query = supabase
+    .from("recurring_tasks")
+    .select(
+      "id, title, priority, frequency, weekdays, day_of_month, interval_days, start_date, due_time, duration_min, group_id, archived, groups(name)",
+    )
+    .eq("user_id", ownerId)
+    .order("created_at", { ascending: true });
+  if (!filter?.includeArchived) query = query.eq("archived", false);
+
+  const { data } = await query;
+
+  type Row = {
+    id: string;
+    title: string;
+    priority: "low" | "med" | "high";
+    frequency: "daily" | "weekly" | "monthly" | "custom";
+    weekdays: number[] | null;
+    day_of_month: number | null;
+    interval_days: number | null;
+    start_date: string | null;
+    due_time: string | null;
+    duration_min: number | null;
+    group_id: string | null;
+    archived: boolean;
+    groups: { name: string } | { name: string }[] | null;
+  };
+
+  return ((data ?? []) as unknown as Row[]).map((row) => {
+    const group = Array.isArray(row.groups) ? (row.groups[0] ?? null) : row.groups;
+    return {
+      id: row.id,
+      title: row.title,
+      priority: row.priority,
+      schedule: formatRecurrence(row),
+      frequency: row.frequency,
+      weekdays: row.weekdays,
+      dayOfMonth: row.day_of_month,
+      intervalDays: row.interval_days,
+      startDate: row.start_date,
+      dueTime: row.due_time ? row.due_time.slice(0, 5) : null,
+      durationMin: row.duration_min,
+      group: group?.name ?? null,
+      archived: row.archived,
     };
   });
 }

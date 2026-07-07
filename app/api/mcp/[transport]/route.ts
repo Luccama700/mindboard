@@ -11,12 +11,15 @@ import {
   listGroups,
   listInventory,
   listRecentLedger,
+  listRecurringTasks,
   listTasks,
 } from "@/app/lib/mcp/reads";
 import {
   cancelAction,
   confirmAction,
+  proposeArchiveRecurringTask,
   proposeCompleteTask,
+  proposeCreateRecurringTask,
   proposeCreateTask,
   proposeLogSpend,
   proposeUpdateStock,
@@ -141,6 +144,17 @@ const mcpHandler = createMcpHandler(
     );
 
     server.registerTool(
+      "list_recurring_tasks",
+      {
+        title: "List repeating tasks",
+        description:
+          "List recurring-task rules (id, title, schedule like \"mon/wed/fri\", time, group). Occurrences are generated automatically — never create N individual tasks for a habit. Use the id for archive_recurring_task.",
+        inputSchema: { includeArchived: z.boolean().optional() },
+      },
+      (args) => guard(async () => ok(await listRecurringTasks(args))),
+    );
+
+    server.registerTool(
       "list_recent_ledger",
       {
         title: "List recent ledger rows",
@@ -185,6 +199,48 @@ const mcpHandler = createMcpHandler(
       (args) =>
         guard(async () => {
           const r = await proposeCompleteTask(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "create_recurring_task",
+      {
+        title: "Propose: create a repeating task",
+        description:
+          "Propose a repeating task rule for habits like \"lunch every day 12:30\" or \"gym mon/wed/fri 17:00\" — do NOT create N individual tasks. Occurrences appear automatically each day they land; missed days skip silently. weekly needs weekdays (0=sun … 6=sat, several allowed); monthly needs dayOfMonth; custom needs intervalDays (startDate defaults to today). dueTime (HH:MM) makes it a calendar block that counts against free time. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          title: z.string(),
+          groupId: z.string().nullish(),
+          notes: z.string().nullish(),
+          priority: z.enum(["low", "med", "high"]).optional(),
+          frequency: z.enum(["daily", "weekly", "monthly", "custom"]),
+          weekdays: z.array(z.number().int().min(0).max(6)).optional(),
+          dayOfMonth: z.number().int().min(1).max(31).optional(),
+          intervalDays: z.number().int().min(1).optional(),
+          startDate: z.string().nullish(),
+          dueTime: z.string().nullish(),
+          durationMin: z.number().int().min(15).optional(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeCreateRecurringTask(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "archive_recurring_task",
+      {
+        title: "Propose: stop a repeating task",
+        description:
+          "Propose stopping a repeating task rule (archives it; completion history is kept). Find the ruleId via list_recurring_tasks. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: { ruleId: z.string() },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeArchiveRecurringTask(args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -296,7 +352,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Confirm a proposed write",
         description:
-          "Execute a previously proposed write (create_task / complete_task / log_spend / update_stock) by its proposalId. Only call after the user has approved the preview.",
+          "Execute a previously proposed write (create_task / complete_task / create_recurring_task / archive_recurring_task / log_spend / update_stock) by its proposalId. Only call after the user has approved the preview.",
         inputSchema: { proposalId: z.string() },
       },
       (args) =>

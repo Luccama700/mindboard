@@ -5,12 +5,15 @@ import { ownerUserId, todayKey } from "./config";
 import {
   computeSpendBalance,
   roundCents,
+  summarizeCreateRecurringTask,
   summarizeCreateTask,
   summarizeLogSpend,
+  validateCreateRecurringTask,
   validateCreateTask,
   validateLogSpend,
   type Result,
 } from "./validate";
+import { formatRecurrence } from "@/app/lib/recurrence";
 import { loadProposal, recordProposal, resolveProposal } from "./audit";
 import {
   renderStockReceipt,
@@ -151,6 +154,94 @@ export async function proposeLogSpend(raw: unknown): Promise<Result<Proposal>> {
 }
 
 // Shared with the in-app assistant (session client + RLS) and the MCP server
+// (service client + owner scoping), like proposeUpdateStockFor below.
+export async function proposeCreateRecurringTaskFor(
+  supabase: SupabaseClient,
+  userId: string,
+  raw: unknown,
+  options?: { source?: "mcp" | "assistant"; conversationId?: string | null },
+): Promise<Result<Proposal>> {
+  const parsed = validateCreateRecurringTask((raw ?? {}) as Record<string, unknown>);
+  if (!parsed.ok) return parsed;
+
+  let groupName: string | null = null;
+  if (parsed.value.groupId) {
+    const { data } = await supabase
+      .from("groups")
+      .select("name")
+      .eq("id", parsed.value.groupId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!data) return { ok: false, error: "group not found" };
+    groupName = (data as { name: string }).name;
+  }
+
+  const summary = summarizeCreateRecurringTask(parsed.value, groupName, todayKey());
+  const proposalId = await recordProposal(
+    supabase,
+    userId,
+    "create_recurring_task",
+    parsed.value as unknown as Record<string, unknown>,
+    summary,
+    options,
+  );
+  return { ok: true, value: { proposalId, preview: summary } };
+}
+
+export async function proposeCreateRecurringTask(raw: unknown): Promise<Result<Proposal>> {
+  return proposeCreateRecurringTaskFor(createServiceClient(), ownerUserId(), raw);
+}
+
+export async function proposeArchiveRecurringTaskFor(
+  supabase: SupabaseClient,
+  userId: string,
+  raw: unknown,
+  options?: { source?: "mcp" | "assistant"; conversationId?: string | null },
+): Promise<Result<Proposal>> {
+  const ruleId = (raw as { ruleId?: unknown })?.ruleId;
+  if (typeof ruleId !== "string" || !ruleId) {
+    return { ok: false, error: "ruleId is required" };
+  }
+
+  const { data } = await supabase
+    .from("recurring_tasks")
+    .select(
+      "id, title, frequency, weekdays, day_of_month, interval_days, start_date, archived",
+    )
+    .eq("id", ruleId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!data) return { ok: false, error: "repeating task not found" };
+  const rule = data as {
+    title: string;
+    archived: boolean;
+    frequency: "daily" | "weekly" | "monthly" | "custom";
+    weekdays: number[] | null;
+    day_of_month: number | null;
+    interval_days: number | null;
+    start_date: string | null;
+  };
+  if (rule.archived) {
+    return { ok: false, error: `"${rule.title}" is already stopped` };
+  }
+
+  const summary = `Stop repeating "${rule.title}" (${formatRecurrence(rule)}).`;
+  const proposalId = await recordProposal(
+    supabase,
+    userId,
+    "archive_recurring_task",
+    { ruleId },
+    summary,
+    options,
+  );
+  return { ok: true, value: { proposalId, preview: summary } };
+}
+
+export async function proposeArchiveRecurringTask(raw: unknown): Promise<Result<Proposal>> {
+  return proposeArchiveRecurringTaskFor(createServiceClient(), ownerUserId(), raw);
+}
+
+// Shared with the in-app assistant (session client + RLS) and the MCP server
 // (service client + owner scoping): resolve the batch against live rows, store
 // the RESOLVED ops (ids, not names) on the proposal, return the receipt.
 export async function proposeUpdateStockFor(
@@ -225,6 +316,62 @@ async function executeCreateTask(
     .single();
   if (error || !data) return { ok: false, error: error?.message ?? "insert failed" };
   return { ok: true, value: { task: data } };
+}
+
+async function executeCreateRecurringTask(
+  supabase: SupabaseClient,
+  ownerId: string,
+  input: Record<string, unknown>,
+): Promise<Result<Record<string, unknown>>> {
+  const parsed = validateCreateRecurringTask(input);
+  if (!parsed.ok) return parsed;
+  const v = parsed.value;
+
+  if (v.groupId && !(await ownsRow(supabase, "groups", v.groupId, ownerId))) {
+    return { ok: false, error: "group not found" };
+  }
+
+  const { data, error } = await supabase
+    .from("recurring_tasks")
+    .insert({
+      user_id: ownerId,
+      group_id: v.groupId,
+      title: v.title,
+      notes: v.notes,
+      priority: v.priority,
+      frequency: v.frequency,
+      weekdays: v.weekdays,
+      day_of_month: v.day_of_month,
+      interval_days: v.interval_days,
+      start_date:
+        v.frequency === "custom" ? (v.start_date ?? todayKey()) : v.start_date,
+      due_time: v.dueTime ? `${v.dueTime}:00` : null,
+      duration_min: v.durationMin,
+    })
+    .select("id, title, frequency, weekdays, due_time")
+    .single();
+  if (error || !data) return { ok: false, error: error?.message ?? "insert failed" };
+  return { ok: true, value: { rule: data } };
+}
+
+async function executeArchiveRecurringTask(
+  supabase: SupabaseClient,
+  ownerId: string,
+  input: Record<string, unknown>,
+): Promise<Result<Record<string, unknown>>> {
+  const ruleId = input.ruleId;
+  if (typeof ruleId !== "string") return { ok: false, error: "ruleId is required" };
+
+  const { data, error } = await supabase
+    .from("recurring_tasks")
+    .update({ archived: true })
+    .eq("id", ruleId)
+    .eq("user_id", ownerId)
+    .select("id, title")
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: "repeating task not found" };
+  return { ok: true, value: { rule: data } };
 }
 
 async function executeCompleteTask(
@@ -420,6 +567,8 @@ export const EXECUTORS: Record<
   ) => Promise<Result<Record<string, unknown>>>
 > = {
   create_task: executeCreateTask,
+  create_recurring_task: executeCreateRecurringTask,
+  archive_recurring_task: executeArchiveRecurringTask,
   complete_task: executeCompleteTask,
   log_spend: executeLogSpend,
   update_stock: executeUpdateStock,

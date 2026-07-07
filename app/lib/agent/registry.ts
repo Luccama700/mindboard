@@ -120,6 +120,48 @@ export const toolRegistry: ToolDescriptor[] = [
     confirm: true,
   },
   {
+    name: "tasks.recurring.list",
+    kind: "read",
+    description:
+      "List repeating-task rules (schedule, time, group). Occurrences generate automatically.",
+    inputSchema: EMPTY_INPUT,
+    mapsTo: "app/lib/mcp/reads#listRecurringTasks",
+  },
+  {
+    name: "tasks.recurring.create",
+    kind: "write",
+    description:
+      "Create a repeating task rule (daily / weekly with multiple weekdays / monthly / every N days), optionally time-blocked.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Rule title, e.g. \"gym\"." },
+        frequency: { type: "string", description: "daily | weekly | monthly | custom." },
+        weekdays: { type: "array", description: "Weekly: 0 (sun) – 6 (sat)." },
+        dayOfMonth: { type: "number", description: "Monthly: 1–31." },
+        intervalDays: { type: "number", description: "Custom: every N days." },
+        dueTime: { type: "string", description: "HH:MM, makes it a calendar block." },
+        durationMin: { type: "number" },
+        groupId: { type: "string" },
+      },
+      required: ["title", "frequency"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeCreateRecurringTask",
+    confirm: true,
+  },
+  {
+    name: "tasks.recurring.archive",
+    kind: "write",
+    description: "Stop a repeating task rule (archives it; completion history is kept).",
+    inputSchema: {
+      type: "object",
+      properties: { ruleId: { type: "string", description: "Rule id." } },
+      required: ["ruleId"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeArchiveRecurringTask",
+    confirm: true,
+  },
+  {
     name: "finance.recordSpend",
     kind: "write",
     description:

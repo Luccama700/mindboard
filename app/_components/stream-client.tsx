@@ -8,6 +8,7 @@ import {
   updateTask,
 } from "@/app/actions/tasks";
 import { updateInventoryItem } from "@/app/actions/inventory";
+import { completeRecurringOccurrence } from "@/app/actions/recurring-tasks";
 import type { FreeGap } from "@/app/lib/snapshots/schedule";
 import type {
   StreamCard,
@@ -84,7 +85,7 @@ function CardRow({
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const today = todayISO();
 
-  const isTask = card.entity.kind === "task";
+  const isTask = card.entity.kind === "task" || card.entity.kind === "rtask";
 
   function onTouchStart(e: React.TouchEvent) {
     if (!isTask) return;
@@ -105,7 +106,7 @@ function CardRow({
   function onTouchEnd() {
     if (!isTask) return;
     if (dx > 80) onDone(card);
-    else if (dx < -80) setSnoozeOpen(true);
+    else if (dx < -80 && card.entity.kind === "task") setSnoozeOpen(true);
     setDx(0);
     touchStart.current = null;
   }
@@ -191,6 +192,19 @@ function CardRow({
           </div>
         )}
       </div>,
+    );
+  } else if (card.entity.kind === "rtask") {
+    // Recurring occurrences: done only — no snooze/schedule, tomorrow's
+    // occurrence regenerates itself.
+    actions.push(
+      <button
+        key="done"
+        type="button"
+        onClick={() => onDone(card)}
+        className="min-h-11 px-3 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors"
+      >
+        done
+      </button>,
     );
   } else if (card.entity.kind === "bill") {
     actions.push(
@@ -381,6 +395,14 @@ export function StreamClient({
 
   function onDone(section: SectionKey) {
     return (card: StreamCard) => {
+      if (card.entity.kind === "rtask") {
+        const { ruleId, dateKey } = card.entity;
+        resolve(section, card.id);
+        startTransition(async () => {
+          await completeRecurringOccurrence(ruleId, dateKey);
+        });
+        return;
+      }
       if (card.entity.kind !== "task") return;
       const task = card.entity.task;
       resolve(section, card.id);

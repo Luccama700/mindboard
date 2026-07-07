@@ -4,7 +4,10 @@ import { createClient } from "@/utils/supabase/server";
 import { DashboardCalendar } from "@/app/_components/dashboard-calendar";
 import { getDashboardData, normalizeMonth } from "@/app/lib/data/dashboard";
 import { getUserPreferences } from "@/app/lib/data/settings";
+import { occurrenceBusyEvents } from "@/app/lib/recurrence";
 import { scheduleSnapshot } from "@/app/lib/snapshots/schedule";
+import { todayISO } from "@/app/_components/date-utils";
+import { addDaysKey } from "@/app/lib/snapshots/stream";
 
 export default async function WeekPage({
   searchParams,
@@ -21,15 +24,27 @@ export default async function WeekPage({
   if (!user) redirect("/login");
 
   const [
-    { calendarTasks, events, finance, calendarStatus, calendarLinks },
+    {
+      calendarTasks,
+      events,
+      finance,
+      calendarStatus,
+      calendarLinks,
+      recurringTasks,
+      recurringCompletions,
+    },
     prefs,
   ] = await Promise.all([
     getDashboardData(user.id, month),
     getUserPreferences(user.id),
   ]);
 
+  const today = todayISO();
   const schedule = scheduleSnapshot({
-    events,
+    events: [
+      ...events,
+      ...occurrenceBusyEvents(recurringTasks, [today, addDaysKey(today, 1)]),
+    ],
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,
     wakeEndHour: prefs.wake_end_hour,
@@ -53,6 +68,8 @@ export default async function WeekPage({
         wakeEndHour={prefs.wake_end_hour}
         scheduleVitals={schedule}
         basePath="/week"
+        recurringTasks={recurringTasks}
+        recurringCompletions={recurringCompletions}
       />
     </main>
   );

@@ -36,6 +36,8 @@ function base(over: Partial<StreamInput> = {}): StreamInput {
     tasks: [],
     events: [],
     bills: [],
+    recurringTasks: [],
+    completedRecurringToday: new Set(),
     items: [],
     usagesByItem: {},
     goals: [],
@@ -220,6 +222,80 @@ describe("NOW membership (objective facts only)", () => {
     expect(ids(snap.now)).toEqual(["item:tp"]);
     expect(ids(snap.next)).toEqual(["item:soap"]);
     expect(ids(snap.later)).toEqual(["item:coffee", "item:rice"]);
+  });
+});
+
+describe("recurring tasks", () => {
+  const rule = (
+    over: Partial<import("@/app/lib/snapshots/stream").StreamRecurringTaskInput> & {
+      id: string;
+    },
+  ) => ({
+    title: over.id,
+    frequency: "daily" as const,
+    weekdays: null,
+    day_of_month: null,
+    interval_days: null,
+    start_date: null,
+    due_time: null,
+    duration_min: null,
+    priority: "med" as const,
+    group_name: null,
+    ...over,
+  });
+
+  test("today's occurrences interleave into NEXT by time; non-landing rules are absent", () => {
+    const snap = streamSnapshot(
+      base({
+        tasks: [task({ id: "t1", due_date: TODAY, due_time: "14:00:00" })],
+        recurringTasks: [
+          rule({ id: "lunch", due_time: "12:30:00" }),
+          rule({ id: "teeth" }), // untimed -> after timed
+          rule({ id: "sunday", frequency: "weekly", weekdays: [0] }), // not today (Monday)
+        ],
+      }),
+    );
+    expect(ids(snap.next)).toEqual([
+      `rtask:lunch:${TODAY}`,
+      "task:t1",
+      `rtask:teeth:${TODAY}`,
+    ]);
+    expect(snap.next[0].meta).toContain("⌚ 12:30");
+    expect(snap.next[0].meta).toContain("every day");
+    expect(snap.next[0].glyph).toBe("↻");
+  });
+
+  test("a timed occurrence whose time has passed moves to NOW after overdue tasks", () => {
+    const snap = streamSnapshot(
+      base({
+        tasks: [task({ id: "over", due_date: "2026-07-04" })],
+        recurringTasks: [rule({ id: "breakfast", due_time: "08:00:00" })],
+      }),
+    );
+    expect(ids(snap.now)).toEqual(["task:over", `rtask:breakfast:${TODAY}`]);
+  });
+
+  test("completed occurrences disappear for the rest of today", () => {
+    const snap = streamSnapshot(
+      base({
+        recurringTasks: [
+          rule({ id: "breakfast", due_time: "08:00:00" }),
+          rule({ id: "lunch", due_time: "13:00:00" }),
+        ],
+        completedRecurringToday: new Set(["breakfast"]),
+      }),
+    );
+    expect(ids(snap.now)).toEqual([]);
+    expect(ids(snap.next)).toEqual([`rtask:lunch:${TODAY}`]);
+  });
+
+  test("no recurring cards in LATER — the week view carries the forward picture", () => {
+    const snap = streamSnapshot(
+      base({
+        recurringTasks: [rule({ id: "daily-late", due_time: "20:00:00" })],
+      }),
+    );
+    expect(ids(snap.later)).toEqual([]);
   });
 });
 

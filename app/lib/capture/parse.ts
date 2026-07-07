@@ -1,6 +1,10 @@
 // Pure capture-text parsing: the three-mode grammar. Exactly three modes —
 // bare text = task, `$` = spend log, `?` = copilot handoff. Nothing else
 // parses; parser trust is a budget and it is spent on these three.
+// (extractTrailingRecurrence is an extractor within task mode — like the
+// trailing time — not a fourth mode.)
+
+import type { TaskRecurrence } from "@/app/lib/recurrence";
 
 export type ParsedCapture =
   | { mode: "task"; title: string; time: string | null }
@@ -113,4 +117,96 @@ export function extractTrailingTime(input: string): TrailingTime | null {
     time: `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`,
     matched: input.slice(match.index).trim(),
   };
+}
+
+export type TrailingRecurrence = {
+  title: string; // input with the recurrence phrase removed
+  rule: TaskRecurrence;
+  matched: string; // the raw phrase that was removed
+};
+
+const WEEKDAY_NAMES: Record<string, number> = {
+  sun: 0, sunday: 0,
+  mon: 1, monday: 1,
+  tue: 2, tues: 2, tuesday: 2,
+  wed: 3, weds: 3, wednesday: 3,
+  thu: 4, thur: 4, thurs: 4, thursday: 4,
+  fri: 5, friday: 5,
+  sat: 6, saturday: 6,
+};
+
+// Trailing forms only — conservative on purpose, like the trailing time:
+//   "lunch daily" · "gym mon/wed/fri" · "standup weekdays" ·
+//   "water plants every 3 days" · "laundry every sunday"
+// A single bare weekday ("call mom mon") is too ambiguous and does not match.
+const TRAILING_RECURRENCE_RE =
+  /(?:^|\s)(daily|everyday|every\s+day|weekdays|every\s+(\d+)\s+days?|every\s+([a-z]+)|((?:sun|mon|tue|wed|thu|fri|sat)(?:\/(?:sun|mon|tue|wed|thu|fri|sat))+))\s*$/i;
+
+export function extractTrailingRecurrence(
+  input: string,
+): TrailingRecurrence | null {
+  const match = TRAILING_RECURRENCE_RE.exec(input);
+  if (!match) return null;
+
+  const phrase = match[1].toLowerCase().replace(/\s+/g, " ");
+  let rule: TaskRecurrence | null = null;
+
+  const weekly = (weekdays: number[]): TaskRecurrence => ({
+    frequency: "weekly",
+    weekdays,
+    day_of_month: null,
+    interval_days: null,
+    start_date: null,
+  });
+
+  if (phrase === "daily" || phrase === "everyday" || phrase === "every day") {
+    rule = {
+      frequency: "daily",
+      weekdays: null,
+      day_of_month: null,
+      interval_days: null,
+      start_date: null,
+    };
+  } else if (phrase === "weekdays") {
+    rule = weekly([1, 2, 3, 4, 5]);
+  } else if (match[2]) {
+    const interval = Number(match[2]);
+    if (!Number.isFinite(interval) || interval < 1) return null;
+    rule =
+      interval === 1
+        ? {
+            frequency: "daily",
+            weekdays: null,
+            day_of_month: null,
+            interval_days: null,
+            start_date: null,
+          }
+        : {
+            frequency: "custom",
+            weekdays: null,
+            day_of_month: null,
+            interval_days: interval,
+            start_date: null, // the action anchors it to today
+          };
+  } else if (match[3]) {
+    const day = WEEKDAY_NAMES[match[3].toLowerCase()];
+    if (day === undefined) return null; // "every morning" is not a schedule
+    rule = weekly([day]);
+  } else if (match[4]) {
+    const days = [
+      ...new Set(
+        match[4]
+          .toLowerCase()
+          .split("/")
+          .map((d) => WEEKDAY_NAMES[d]),
+      ),
+    ].sort((a, b) => a - b);
+    if (days.some((d) => d === undefined)) return null;
+    rule = weekly(days);
+  }
+
+  const title = input.slice(0, match.index).trim();
+  if (!title || !rule) return null;
+
+  return { title, rule, matched: input.slice(match.index).trim() };
 }
