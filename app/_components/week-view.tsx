@@ -13,6 +13,10 @@ import {
 } from "@dnd-kit/core";
 import Link from "next/link";
 import { useRef, useState } from "react";
+import {
+  freeIntervalsForDay,
+  type ScheduleEvent,
+} from "@/app/lib/snapshots/schedule";
 import type { CalendarItem } from "./calendar-types";
 import { formatClockTime, formatHourLabel } from "./date-utils";
 import { formatSignedChange } from "./money";
@@ -23,7 +27,7 @@ const END_HOUR = 22;
 const HOUR_HEIGHT = 42;
 const SNAP_MINUTES = 15;
 const DEFAULT_TASK_MINUTES = 30;
-const GAP_MIN_MINUTES = 45;
+const LABEL_MIN_MINUTES = 45;
 
 type TaskItem = Extract<CalendarItem, { kind: "task" }>;
 type EventItem = Extract<CalendarItem, { kind: "event" }>;
@@ -276,7 +280,7 @@ function TimedEventBlock({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`absolute left-1 right-1 overflow-hidden px-1.5 py-1 text-accent-fg touch-none ${
+      className={`absolute left-1 right-1 overflow-hidden px-1.5 py-1 text-accent-fg touch-none shadow-[inset_2px_0_0_rgba(0,0,0,0.35)] ${
         isWritable ? "cursor-grab" : "cursor-default opacity-60"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{
@@ -333,65 +337,90 @@ function DragPreview({ item }: { item: CalendarItem }) {
   );
 }
 
-// Free stretches inside the wake window, drawn under the events. Each gap of
-// 45+ minutes shows its duration and a plan ◇ handoff.
+// Underlay rects need honest heights: no 32px floor, clipped to the grid.
+function underlayStyle(startMinutes: number, endMinutes: number) {
+  const start = Math.max(startMinutes, START_HOUR * 60);
+  const end = Math.min(endMinutes, END_HOUR * 60);
+  if (end <= start) return null;
+  return {
+    top: `${((start - START_HOUR * 60) / 60) * HOUR_HEIGHT}px`,
+    height: `${((end - start) / 60) * HOUR_HEIGHT}px`,
+  };
+}
+
+// All free waking time, drawn under the events. Busy = timed events plus
+// time-blocked tasks. Stretches of 45+ minutes show their duration and a
+// plan ◇ handoff; shorter slivers are silent shading.
 function FreeGapUnderlay({
   events,
-  isToday,
-  nowMinutes,
+  timedTasks,
+  dateKey,
+  now,
   wakeStartHour,
   wakeEndHour,
 }: {
   events: EventItem[];
-  isToday: boolean;
-  nowMinutes: number;
+  timedTasks: TaskItem[];
+  dateKey: string;
+  now: Date;
   wakeStartHour: number;
   wakeEndHour: number;
 }) {
-  const lo = Math.max(
-    wakeStartHour * 60,
-    START_HOUR * 60,
-    isToday ? Math.ceil(nowMinutes / SNAP_MINUTES) * SNAP_MINUTES : 0,
-  );
-  const hi = Math.min(wakeEndHour * 60, END_HOUR * 60);
-  if (hi <= lo) return null;
+  const busy: ScheduleEvent[] = [
+    ...events.map((e) => ({
+      summary: e.title,
+      start: e.start,
+      end: e.end,
+      allDay: false,
+    })),
+    ...timedTasks.flatMap((t) => {
+      const minutes = taskMinutes(t);
+      if (!minutes) return [];
+      return [
+        {
+          summary: t.title,
+          start: `${dateKey}T${minutesToTime(minutes.start)}:00`,
+          end: `${dateKey}T${minutesToTime(minutes.end)}:00`,
+          allDay: false,
+        },
+      ];
+    }),
+  ];
 
-  const busy = events
-    .map((e) => ({
-      start: Math.max(minutesIntoDay(e.start), lo),
-      end: Math.min(minutesIntoDay(e.end), hi),
-    }))
-    .filter((b) => b.end > b.start)
-    .sort((a, b) => a.start - b.start);
-
-  const gaps: { start: number; end: number }[] = [];
-  let cursor = lo;
-  for (const block of [...busy, { start: hi, end: hi }]) {
-    if (block.start - cursor >= GAP_MIN_MINUTES) {
-      gaps.push({ start: cursor, end: block.start });
-    }
-    cursor = Math.max(cursor, block.end);
-  }
+  const intervals = freeIntervalsForDay({
+    events: busy,
+    dateKey,
+    now,
+    wakeStartHour,
+    wakeEndHour,
+  });
 
   return (
     <>
-      {gaps.map((gap) => {
-        const hours = Math.round(((gap.end - gap.start) / 60) * 10) / 10;
+      {intervals.map((interval) => {
+        const style = underlayStyle(
+          interval.startMinutes,
+          interval.endMinutes,
+        );
+        if (!style) return null;
+        const hours = Math.round((interval.minutes / 60) * 10) / 10;
         return (
           <div
-            key={gap.start}
-            className="absolute left-0 right-0 bg-accent-wash pointer-events-none"
-            style={blockStyle(gap.start, gap.end)}
+            key={interval.startMinutes}
+            className="absolute left-0 right-0 bg-positive-wash pointer-events-none"
+            style={style}
           >
-            <div className="flex items-start justify-between px-1 pt-0.5">
-              <span className="text-[9px] text-muted">{hours}h</span>
-              <Link
-                href="/plan"
-                className="pointer-events-auto text-[9px] text-muted hover:text-fg transition-colors"
-              >
-                plan ◇
-              </Link>
-            </div>
+            {interval.minutes >= LABEL_MIN_MINUTES && (
+              <div className="flex items-start justify-between px-1 pt-0.5">
+                <span className="text-[9px] text-positive">{hours}h</span>
+                <Link
+                  href="/plan"
+                  className="pointer-events-auto text-[9px] text-muted hover:text-fg transition-colors"
+                >
+                  plan ◇
+                </Link>
+              </div>
+            )}
           </div>
         );
       })}
@@ -652,7 +681,9 @@ export function WeekView({
                 <div
                   key={key}
                   onClick={() => onSelect(key)}
-                  className="min-h-24 border-r border-line p-1.5 text-left last:border-r-0"
+                  className={`min-h-24 border-r border-line p-1.5 text-left last:border-r-0 ${
+                    key === today ? "bg-card" : ""
+                  }`}
                 >
                   <div className="space-y-1">
                     {allDayItems.slice(0, 2).map((item) =>
@@ -722,7 +753,9 @@ export function WeekView({
                 <div
                   key={key}
                   onClick={() => onSelect(key)}
-                  className="relative border-r border-line text-left last:border-r-0"
+                  className={`relative border-r border-line text-left last:border-r-0 ${
+                    isToday ? "bg-card" : ""
+                  }`}
                 >
                   {hourLabels.slice(0, -1).map((hour, index) => (
                     <div
@@ -734,8 +767,9 @@ export function WeekView({
 
                   <FreeGapUnderlay
                     events={timedItems}
-                    isToday={isToday}
-                    nowMinutes={nowMinutes}
+                    timedTasks={timedTasks}
+                    dateKey={key}
+                    now={now}
                     wakeStartHour={wakeStartHour}
                     wakeEndHour={wakeEndHour}
                   />

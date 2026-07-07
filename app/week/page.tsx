@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import { DashboardCalendar } from "@/app/_components/dashboard-calendar";
 import { getDashboardData, normalizeMonth } from "@/app/lib/data/dashboard";
 import { getUserPreferences } from "@/app/lib/data/settings";
+import { scheduleSnapshot } from "@/app/lib/snapshots/schedule";
 
 export default async function WeekPage({
   searchParams,
@@ -27,6 +28,13 @@ export default async function WeekPage({
     getUserPreferences(user.id),
   ]);
 
+  const schedule = scheduleSnapshot({
+    events,
+    now: new Date(),
+    wakeStartHour: prefs.wake_start_hour,
+    wakeEndHour: prefs.wake_end_hour,
+  });
+
   return (
     <main className="min-h-screen px-4 pt-6 pb-64 lg:px-8 max-w-6xl mx-auto">
       <header className="flex items-center justify-between mb-6">
@@ -43,6 +51,8 @@ export default async function WeekPage({
         initialView="week"
         wakeStartHour={prefs.wake_start_hour}
         wakeEndHour={prefs.wake_end_hour}
+        scheduleVitals={schedule}
+        basePath="/week"
       />
     </main>
   );

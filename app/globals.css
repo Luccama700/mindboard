@@ -23,6 +23,7 @@
   --color-accent-dim: var(--accent-dim);
   --color-accent-wash: var(--accent-wash);
   --color-positive: var(--positive);
+  --color-positive-wash: var(--positive-wash);
 
   /* Type scale — the six text roles. Weights 400/500 only. */
   --text-display: 28px;
@@ -70,6 +71,7 @@
   --surface-1: var(--bg-card);
   --accent-dim: color-mix(in srgb, var(--accent) 32%, transparent);
   --accent-wash: color-mix(in srgb, var(--accent) 12%, transparent);
+  --positive-wash: color-mix(in srgb, var(--positive) 10%, transparent);
 
   /* Motion durations */
   --dur-micro: 120ms;

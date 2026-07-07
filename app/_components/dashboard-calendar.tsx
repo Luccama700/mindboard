@@ -5,11 +5,13 @@ import { useMemo, useState } from "react";
 import type { CalendarEvent } from "@/utils/google/calendar";
 import { rescheduleEvent } from "@/app/actions/calendar";
 import { updateTask } from "@/app/actions/tasks";
+import type { ScheduleVitals } from "@/app/lib/snapshots/schedule";
 import type { CalendarItem } from "./calendar-types";
 import {
   formatClockTime,
   formatMonthDay,
   formatMonthYear,
+  formatRelativeToNow,
   formatWeekdayMonthDay,
 } from "./date-utils";
 import { formatSignedChange } from "./money";
@@ -130,6 +132,8 @@ export function DashboardCalendar({
   initialView = "month",
   wakeStartHour = 8,
   wakeEndHour = 22,
+  scheduleVitals,
+  basePath = "/",
 }: {
   month: string;
   tasks: TaskWithGroup[];
@@ -140,6 +144,8 @@ export function DashboardCalendar({
   initialView?: "month" | "week";
   wakeStartHour?: number;
   wakeEndHour?: number;
+  scheduleVitals?: ScheduleVitals;
+  basePath?: string;
 }) {
   const today = toDateKey(new Date());
   const grid = useMemo(() => buildGrid(month), [month]);
@@ -369,17 +375,31 @@ export function DashboardCalendar({
           <h2 className="text-xl font-bold text-fg mt-1">
             {view === "month" ? monthLabel(month) : weekLabel(selected)}
           </h2>
+          {view === "week" && scheduleVitals && (
+            <p className="mt-1 text-meta text-muted" suppressHydrationWarning>
+              {scheduleVitals.nextEvent && (
+                <>
+                  ▸ {scheduleVitals.nextEvent.summary}{" "}
+                  {formatRelativeToNow(scheduleVitals.nextEvent.start)}
+                  {" · "}
+                </>
+              )}
+              <span className="text-positive">
+                {scheduleVitals.freeHoursToday}h free
+              </span>
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Link
-            href={`/?m=${addMonths(month, -1)}`}
+            href={`${basePath}?m=${addMonths(month, -1)}`}
             className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="previous month"
           >
             ←
           </Link>
           <Link
-            href={`/?m=${addMonths(month, 1)}`}
+            href={`${basePath}?m=${addMonths(month, 1)}`}
             className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="next month"
           >

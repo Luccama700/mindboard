@@ -60,6 +60,16 @@ export function formatLongWeekdayMonthDay(date: Date) {
   });
 }
 
+// "now", "in 45m", "in 2.5h", or "in 3d" relative to the current time.
+export function formatRelativeToNow(iso: string): string {
+  const diffMs = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return "now";
+  const minutes = Math.round(diffMs / 60_000);
+  if (minutes < 60) return `in ${minutes}m`;
+  if (minutes < 24 * 60) return `in ${Math.round((minutes / 60) * 10) / 10}h`;
+  return `in ${Math.round(minutes / (60 * 24))}d`;
+}
+
 // Negative = overdue, 0 = today, positive = future.
 export function daysFromToday(iso: string): number {
   const today = new Date(todayISO() + "T00:00:00");
