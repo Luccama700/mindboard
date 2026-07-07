@@ -176,9 +176,13 @@ export function freeIntervalsForDay(input: {
       ? Math.max(wakeStart.getTime(), now.getTime())
       : wakeStart.getTime();
 
+  // Clock minutes, except a boundary on the NEXT day (a wake window ending at
+  // 24:00 is next-day midnight) reads as 1440+, not 0 — otherwise the last
+  // interval of the day would come out negative-length and vanish.
   const minutesOf = (ms: number) => {
     const t = new Date(ms);
-    return t.getHours() * 60 + t.getMinutes();
+    const clock = t.getHours() * 60 + t.getMinutes();
+    return dateKeyOf(t) === dateKey ? clock : clock + 24 * 60;
   };
 
   return freeIntervalsInWindow(

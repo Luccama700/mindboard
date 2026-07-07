@@ -139,4 +139,32 @@ describe("freeIntervalsForDay", () => {
     });
     expect(intervals).toEqual([]);
   });
+
+  test("a wake window ending at 24:00 reaches midnight instead of vanishing", () => {
+    // 24:00 is next-day midnight; the naive clock reading (0) used to make the
+    // last interval negative-length and drop the whole underlay.
+    const intervals = freeIntervalsForDay({
+      events: [],
+      dateKey: "2026-07-07",
+      now: NOON,
+      wakeStartHour: 6,
+      wakeEndHour: 24,
+    });
+    expect(intervals).toEqual([
+      { startMinutes: 6 * 60, endMinutes: 24 * 60, minutes: 18 * 60 },
+    ]);
+  });
+
+  test("an event before midnight splits a to-24:00 window correctly", () => {
+    const intervals = freeIntervalsForDay({
+      events: [event("2026-07-06T22:00:00", "2026-07-06T23:00:00")],
+      dateKey: "2026-07-06",
+      now: NOON,
+      wakeEndHour: 24,
+    });
+    expect(intervals).toEqual([
+      { startMinutes: 12 * 60, endMinutes: 22 * 60, minutes: 600 },
+      { startMinutes: 23 * 60, endMinutes: 24 * 60, minutes: 60 },
+    ]);
+  });
 });
