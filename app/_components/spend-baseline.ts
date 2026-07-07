@@ -1,19 +1,27 @@
 // Pure everyday-spend baseline for the cashflow forecast. No React, no server
 // imports — unit tested directly (__tests__/spend-baseline.test.ts).
 //
-// Model (docs/finance-automation-plan.md §4): future days get a projected
-// discretionary spend = the MEDIAN of daily spend per weekday over the last
-// ~12 weeks. Bill payments are excluded (they're already projected by the
-// recurring rules — counting them here would double-count), transfers are
-// excluded (not spending), and days with zero discretionary spend count as
-// explicit $0 samples. The median is what keeps a one-off big purchase from
-// replaying every week. Below MIN_CONFIDENT_DAYS of history the baseline
-// reports not-confident and a manual flat estimate takes over.
+// Model (docs/finance-automation-plan.md §4, revised 2026-07-07): future days
+// get a FLAT projected discretionary spend = the median WEEKLY total over the
+// trailing ~12 weeks, divided by 7. Weekly totals — not per-weekday buckets —
+// because statement imports carry *posted* dates: banks park weekend purchases
+// on Monday, so any weekday-shaped model learns the bank's posting calendar
+// instead of real habits (observed live: 120 Monday rows vs 5 Saturday rows).
+// The median across weeks also makes outlier weeks (tuition, a rent payment
+// that slipped the bill filter) 1-of-N samples the median steps over.
+//
+// Bill payments are excluded by amount + category match against the active
+// recurring rules — deliberately with NO date-proximity requirement, because
+// real payments wander (rent posted May 19 / May 28 / Jun 29). Transfers are
+// excluded (not spending). Weeks with zero discretionary spend count as $0.
+//
+// Per-day overrides (spend_overrides table, set via the selected-day slider)
+// replace the estimate for that date, including an explicit $0.
 
-import { addDaysKey, ruleLandsOn, type RecurringRule } from "./finance-projection";
+import { addDaysKey } from "./finance-projection";
 
 export const BASELINE_WEEKS = 12;
-export const MIN_CONFIDENT_DAYS = 28;
+export const MIN_CONFIDENT_WEEKS = 4;
 
 export type SpendHistoryRow = {
   occurred_at: string;
@@ -23,11 +31,14 @@ export type SpendHistoryRow = {
   is_transfer: boolean;
 };
 
-export type BillRule = RecurringRule & { category_id: string | null };
+export type BillRule = {
+  amount: number;
+  category_id: string | null;
+};
 
-export type WeekdayBaseline = {
-  byWeekday: number[]; // 7 medians, sun..sat
-  sampledDays: number;
+export type SpendRate = {
+  dailyRate: number;
+  sampledWeeks: number;
   confident: boolean;
 };
 
@@ -45,9 +56,10 @@ function median(values: number[]): number {
 }
 
 // A row looks like a bill payment when an active recurring rule with a
-// compatible category has a close amount and lands within ±3 days.
+// compatible category matches its amount within 2%. No date check: payments
+// post on whatever day the bank processed them.
 export function matchesBill(
-  row: Pick<SpendHistoryRow, "occurred_at" | "amount" | "category_id">,
+  row: Pick<SpendHistoryRow, "amount" | "category_id">,
   rules: BillRule[],
 ): boolean {
   for (const rule of rules) {
@@ -58,79 +70,73 @@ export function matchesBill(
     if (!compatibleCategory) continue;
 
     const tolerance = Math.max(rule.amount * 0.02, 0.01);
-    if (Math.abs(Number(row.amount) - rule.amount) > tolerance) continue;
-
-    for (let offset = -3; offset <= 3; offset++) {
-      const dateKey = addDaysKey(row.occurred_at, offset);
-      if (ruleLandsOn(rule, new Date(`${dateKey}T00:00:00`))) return true;
-    }
+    if (Math.abs(Number(row.amount) - rule.amount) <= tolerance) return true;
   }
   return false;
 }
 
-// Median discretionary spend per weekday over the trailing window. The window
-// is clipped to the first day any history exists so a young ledger isn't
-// dragged toward zero by pre-tracking days; today is excluded (partial day).
-export function computeWeekdayBaseline(input: {
+// Median weekly discretionary total ÷ 7 over trailing 7-day blocks ending
+// yesterday (today is a partial day). Only blocks fully covered by recorded
+// history count, so a young ledger isn't dragged toward zero.
+export function computeSpendRate(input: {
   history: SpendHistoryRow[];
   rules: BillRule[];
   today: string;
   weeks?: number;
-}): WeekdayBaseline {
+}): SpendRate {
   const { history, rules, today } = input;
   const weeks = input.weeks ?? BASELINE_WEEKS;
 
-  const empty: WeekdayBaseline = {
-    byWeekday: [0, 0, 0, 0, 0, 0, 0],
-    sampledDays: 0,
-    confident: false,
-  };
+  const empty: SpendRate = { dailyRate: 0, sampledWeeks: 0, confident: false };
   if (history.length === 0) return empty;
 
-  const windowStart = addDaysKey(today, -weeks * 7);
-  const windowEnd = addDaysKey(today, -1);
   let earliest = history[0].occurred_at;
   for (const row of history) {
     if (row.occurred_at < earliest) earliest = row.occurred_at;
   }
-  const start = earliest > windowStart ? earliest : windowStart;
-  if (start > windowEnd) return empty;
 
-  const totals = new Map<string, number>();
+  const dailyTotals = new Map<string, number>();
   for (const row of history) {
     if (row.direction !== "out" || row.is_transfer) continue;
-    if (row.occurred_at < start || row.occurred_at > windowEnd) continue;
     if (matchesBill(row, rules)) continue;
-    totals.set(
+    dailyTotals.set(
       row.occurred_at,
-      roundCents((totals.get(row.occurred_at) ?? 0) + Number(row.amount)),
+      roundCents((dailyTotals.get(row.occurred_at) ?? 0) + Number(row.amount)),
     );
   }
 
-  const samples: number[][] = [[], [], [], [], [], [], []];
-  let sampledDays = 0;
-  for (let cursor = start; cursor <= windowEnd; cursor = addDaysKey(cursor, 1)) {
-    const weekday = new Date(`${cursor}T00:00:00`).getDay();
-    samples[weekday].push(totals.get(cursor) ?? 0);
-    sampledDays++;
+  const weekTotals: number[] = [];
+  let blockEnd = addDaysKey(today, -1);
+  for (let k = 0; k < weeks; k++) {
+    const blockStart = addDaysKey(blockEnd, -6);
+    if (blockStart < earliest) break; // partial block — history doesn't cover it
+    let total = 0;
+    for (let d = 0; d < 7; d++) {
+      total += dailyTotals.get(addDaysKey(blockStart, d)) ?? 0;
+    }
+    weekTotals.push(roundCents(total));
+    blockEnd = addDaysKey(blockStart, -1);
   }
 
+  if (weekTotals.length === 0) return empty;
+
   return {
-    byWeekday: samples.map((s) => roundCents(median(s))),
-    sampledDays,
-    confident: sampledDays >= MIN_CONFIDENT_DAYS,
+    dailyRate: roundCents(median(weekTotals) / 7),
+    sampledWeeks: weekTotals.length,
+    confident: weekTotals.length >= MIN_CONFIDENT_WEEKS,
   };
 }
 
-// Per-day estimate resolution: confident history → that weekday's median;
-// otherwise the manual flat value; otherwise nothing.
+// Per-day estimate resolution: an explicit override (slider) wins — including
+// an explicit $0 — then confident history, then the manual flat value.
 export function estimatedSpendOn(
-  baseline: WeekdayBaseline,
+  rate: SpendRate,
   manual: number | null,
+  overrides: Record<string, number>,
   dateKey: string,
 ): number {
-  if (baseline.confident) {
-    return baseline.byWeekday[new Date(`${dateKey}T00:00:00`).getDay()] ?? 0;
-  }
+  const override = overrides[dateKey];
+  if (override !== undefined && override >= 0) return roundCents(override);
+  if (rate.confident) return rate.dailyRate;
   return manual !== null && manual > 0 ? roundCents(manual) : 0;
 }

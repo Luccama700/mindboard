@@ -17,7 +17,7 @@ import type {
   RecurringExpense,
   SpendingCategory,
 } from "@/app/_components/finance-types";
-import type { WeekdayBaseline } from "@/app/_components/spend-baseline";
+import type { SpendRate } from "@/app/_components/spend-baseline";
 import {
   archiveAccount,
   createAccount,
@@ -53,8 +53,9 @@ export function FinanceClient({
   financeMonth,
   hoursBySource,
   googleStatus,
-  spendBaseline,
+  spendRate,
   manualSpendEstimate,
+  spendOverrides,
 }: {
   initialAccounts: Account[];
   initialCategories: SpendingCategory[];
@@ -64,8 +65,9 @@ export function FinanceClient({
   financeMonth: string;
   hoursBySource: Record<string, Record<string, number>>;
   googleStatus: "connected" | "connect" | "error";
-  spendBaseline: WeekdayBaseline;
+  spendRate: SpendRate;
   manualSpendEstimate: number | null;
+  spendOverrides: Record<string, number>;
 }) {
   const [accounts, dispatchAccounts] = useOptimistic<Account[], AccountAction>(
     initialAccounts,
@@ -408,8 +410,9 @@ export function FinanceClient({
           incomeSources={incomeSources}
           hoursBySource={hoursBySource}
           googleStatus={googleStatus}
-          spendBaseline={spendBaseline}
+          spendRate={spendRate}
           manualSpendEstimate={manualSpendEstimate}
+          spendOverrides={spendOverrides}
         />
       </aside>
 

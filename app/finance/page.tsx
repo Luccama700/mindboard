@@ -14,8 +14,8 @@ import type {
   RecurringExpense,
   SpendingCategory,
 } from "@/app/_components/finance-types";
-import { computeWeekdayBaseline } from "@/app/_components/spend-baseline";
-import { getSpendHistory } from "@/app/lib/data/finance";
+import { computeSpendRate } from "@/app/_components/spend-baseline";
+import { getSpendHistory, getSpendOverrides } from "@/app/lib/data/finance";
 import { getDailySpendEstimate } from "@/app/lib/data/settings";
 import { FinanceClient } from "./finance-client";
 
@@ -104,6 +104,7 @@ export default async function FinancePage({
     incomeResult,
     spendHistory,
     manualSpendEstimate,
+    spendOverrides,
   ] = await Promise.all([
     supabase
       .from("accounts")
@@ -141,21 +142,18 @@ export default async function FinancePage({
       .order("created_at", { ascending: false }),
     getSpendHistory(user.id),
     getDailySpendEstimate(user.id),
+    getSpendOverrides(user.id),
   ]);
 
   const incomeSources = (incomeResult.data ?? []) as IncomeSource[];
   const expenses = (expensesResult.data ?? []) as RecurringExpense[];
 
-  // Everyday-spend baseline: weekday medians over trailing history, with bill
-  // payments excluded via the active recurring rules (see spend-baseline.ts).
-  const spendBaseline = computeWeekdayBaseline({
+  // Everyday-spend rate: median weekly discretionary total over trailing
+  // history, with bill payments excluded via the active recurring rules
+  // (see spend-baseline.ts for why it's flat, not weekday-shaped).
+  const spendRate = computeSpendRate({
     history: spendHistory,
     rules: expenses.map((e) => ({
-      frequency: e.frequency,
-      day_of_month: e.day_of_month,
-      weekday: e.weekday,
-      interval_days: e.interval_days,
-      start_date: e.start_date,
       amount: Number(e.amount),
       category_id: e.category_id,
     })),
@@ -234,8 +232,9 @@ export default async function FinancePage({
         financeMonth={financeMonth}
         hoursBySource={hoursBySource}
         googleStatus={googleStatus}
-        spendBaseline={spendBaseline}
+        spendRate={spendRate}
         manualSpendEstimate={manualSpendEstimate}
+        spendOverrides={spendOverrides}
       />
     </main>
   );

@@ -515,6 +515,51 @@ export async function deleteBalanceChange(id: string) {
   return { error: null };
 }
 
+// ---------- everyday-spend overrides ----------
+
+// Pin the expected discretionary spend for one future day (the selected-day
+// slider). amount null clears the override; 0 means "no spend expected".
+export async function setSpendOverride(input: {
+  date: string;
+  amount: number | null;
+}) {
+  if (!ISO_DATE.test(input.date)) return { error: "invalid date" };
+  if (input.date <= todayKey()) return { error: "only future days" };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  if (input.amount === null) {
+    const { error } = await supabase
+      .from("spend_overrides")
+      .delete()
+      .eq("user_id", user.id)
+      .eq("date", input.date);
+    if (error) return { error: error.message };
+  } else {
+    const amount = toCents(input.amount);
+    if (amount === null || amount < 0 || amount > 100000) {
+      return { error: "invalid amount" };
+    }
+    const { error } = await supabase.from("spend_overrides").upsert(
+      {
+        user_id: user.id,
+        date: input.date,
+        amount,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,date" },
+    );
+    if (error) return { error: error.message };
+  }
+
+  revalidatePath("/finance");
+  return { error: null };
+}
+
 // ---------- recurring expenses ----------
 
 const RECURRING_COLUMNS =

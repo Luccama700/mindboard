@@ -889,6 +889,11 @@ async function executeUpdateFinance(
           updates.category_id = category.value;
         }
         if (op.note !== null) updates.note = op.note;
+        if (op.markTransfer !== null) {
+          updates.is_transfer = op.markTransfer;
+          // transfers are never categorized spending
+          if (op.markTransfer) updates.category_id = null;
+        }
         if (op.amount !== null || op.date !== null) {
           updates.fingerprint = changeFingerprint(
             op.date ?? existing.occurred_at,

@@ -70,6 +70,7 @@ export type FinanceOp =
       category?: string;
       date?: string;
       note?: string;
+      markTransfer?: boolean;
     }
   | { op: "remove"; changeId: string };
 
@@ -142,6 +143,7 @@ export type ResolvedFinanceOp =
       pendingCategory: string | null;
       date: string | null;
       note: string | null;
+      markTransfer: boolean | null;
     }
   | { kind: "remove"; changeId: string; accountId: string; label: string }
   // receipt-only: a spend/income that matched an existing row and was dropped
@@ -374,11 +376,18 @@ export function validateFinanceOps(raw: unknown): Result<FinanceOp[]> {
           if (note === null) return { ok: false, error: at("note must be text") };
           op.note = note;
         }
+        if (entry.markTransfer !== undefined) {
+          if (typeof entry.markTransfer !== "boolean") {
+            return { ok: false, error: at("markTransfer must be a boolean") };
+          }
+          op.markTransfer = entry.markTransfer;
+        }
         if (
           op.amount === undefined &&
           op.date === undefined &&
           op.category === undefined &&
-          op.note === undefined
+          op.note === undefined &&
+          op.markTransfer === undefined
         ) {
           return { ok: false, error: at("nothing to change") };
         }
@@ -705,6 +714,7 @@ export function resolveFinanceOps(
           pendingCategory,
           date: op.date ?? null,
           note: op.note ?? null,
+          markTransfer: op.markTransfer ?? null,
         });
         break;
       }
@@ -777,6 +787,9 @@ export function financeReceiptLine(op: ResolvedFinanceOp): string {
       if (op.date !== null) edits.push(`date → ${op.date}`);
       if (op.categoryId !== null || op.pendingCategory !== null) edits.push("recategorized");
       if (op.note !== null) edits.push(`note → "${op.note}"`);
+      if (op.markTransfer !== null) {
+        edits.push(op.markTransfer ? "→ transfer (not spending)" : "→ regular spending");
+      }
       return `edit ${op.label}: ${edits.join(", ")}`;
     }
     case "remove":
@@ -945,6 +958,8 @@ export function validateResolvedFinanceOps(raw: unknown): Result<ResolvedFinance
             typeof entry.pendingCategory === "string" ? entry.pendingCategory : null,
           date,
           note: typeof entry.note === "string" ? entry.note : null,
+          markTransfer:
+            typeof entry.markTransfer === "boolean" ? entry.markTransfer : null,
         });
         break;
       }

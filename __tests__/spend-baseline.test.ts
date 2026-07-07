@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
-  computeWeekdayBaseline,
+  computeSpendRate,
   estimatedSpendOn,
   matchesBill,
-  MIN_CONFIDENT_DAYS,
+  MIN_CONFIDENT_WEEKS,
   type BillRule,
   type SpendHistoryRow,
+  type SpendRate,
 } from "@/app/_components/spend-baseline";
-import { addDaysKey, buildDayRows } from "@/app/_components/finance-projection";
+import { buildDayRows } from "@/app/_components/finance-projection";
 
-// 2026-07-07 is a tuesday; the trailing window ends 2026-07-06 (monday).
+// 2026-07-07: trailing 7-day blocks end yesterday (jul 6) — block 0 is
+// jun 30–jul 6, block 1 jun 23–29, block 2 jun 16–22, block 3 jun 9–15,
+// block 4 jun 2–8.
 const TODAY = "2026-07-07";
 
 function spend(
@@ -27,132 +30,133 @@ function spend(
   };
 }
 
-const rentRule: BillRule = {
-  frequency: "monthly",
-  day_of_month: 1,
-  weekday: null,
-  interval_days: null,
-  start_date: null,
-  amount: 1200,
-  category_id: "cat-housing",
-};
+// anchors `earliest` without adding any discretionary spend
+function income(occurred_at: string): SpendHistoryRow {
+  return {
+    occurred_at,
+    direction: "in",
+    amount: 1,
+    category_id: null,
+    is_transfer: false,
+  };
+}
+
+const rentRule: BillRule = { amount: 1400, category_id: null };
 
 describe("matchesBill", () => {
-  it("matches amount within 2% near a landing day, category-compatible", () => {
-    expect(
-      matchesBill({ occurred_at: "2026-07-02", amount: 1200, category_id: "cat-housing" }, [rentRule]),
-    ).toBe(true);
-    expect(
-      matchesBill({ occurred_at: "2026-07-02", amount: 1210, category_id: null }, [rentRule]),
-    ).toBe(true);
+  it("matches amount within 2% with a compatible category, on ANY date", () => {
+    // rent posted mid-month, nowhere near its nominal landing day — still a bill
+    expect(matchesBill({ amount: 1400, category_id: null }, [rentRule])).toBe(true);
+    expect(matchesBill({ amount: 1420, category_id: "cat-x" }, [rentRule])).toBe(true);
   });
 
-  it("rejects wrong amounts, far dates, and conflicting categories", () => {
-    expect(
-      matchesBill({ occurred_at: "2026-07-02", amount: 900, category_id: null }, [rentRule]),
-    ).toBe(false);
-    expect(
-      matchesBill({ occurred_at: "2026-07-15", amount: 1200, category_id: null }, [rentRule]),
-    ).toBe(false);
-    expect(
-      matchesBill({ occurred_at: "2026-07-02", amount: 1200, category_id: "cat-dining" }, [rentRule]),
-    ).toBe(false);
+  it("rejects wrong amounts and conflicting categories", () => {
+    expect(matchesBill({ amount: 900, category_id: null }, [rentRule])).toBe(false);
+    const categorized: BillRule = { amount: 100, category_id: "cat-housing" };
+    expect(matchesBill({ amount: 100, category_id: "cat-dining" }, [categorized])).toBe(
+      false,
+    );
+    expect(matchesBill({ amount: 100, category_id: "cat-housing" }, [categorized])).toBe(
+      true,
+    );
   });
 });
 
-describe("computeWeekdayBaseline", () => {
-  it("returns an unconfident zero baseline with no history", () => {
-    const b = computeWeekdayBaseline({ history: [], rules: [], today: TODAY });
-    expect(b.confident).toBe(false);
-    expect(b.byWeekday).toEqual([0, 0, 0, 0, 0, 0, 0]);
+describe("computeSpendRate", () => {
+  it("returns an unconfident zero rate with no history", () => {
+    const r = computeSpendRate({ history: [], rules: [], today: TODAY });
+    expect(r.confident).toBe(false);
+    expect(r.dailyRate).toBe(0);
   });
 
-  it("takes the per-weekday median with zero-days included", () => {
-    // 4-week window ending mon 2026-07-06 → mondays jun 15, 22, 29, jul 6.
-    // spends on three of them; the zero monday joins the samples:
-    // [0, 10, 20, 30] → median 15
+  it("takes the median weekly total over trailing 7-day blocks", () => {
+    // weekly totals: [70, 140, 70, 700, 0] → median 70 → $10/day
     const history = [
-      spend("2026-06-15", 10),
-      spend("2026-06-22", 20),
-      spend("2026-06-29", 30),
-      // anchor history before the window so it isn't clipped
-      spend("2026-06-01", 5),
+      income("2026-06-02"), // anchors coverage at block 4's start
+      spend("2026-07-01", 70), // block 0
+      spend("2026-06-25", 140), // block 1
+      spend("2026-06-17", 70), // block 2
+      spend("2026-06-10", 700), // block 3 — outlier week, median steps over it
+      // block 4: no spend → counts as $0
     ];
-    const b = computeWeekdayBaseline({ history, rules: [], today: TODAY, weeks: 4 });
-    expect(b.confident).toBe(true);
-    expect(b.byWeekday[1]).toBe(15);
+    const r = computeSpendRate({ history, rules: [], today: TODAY });
+    expect(r.sampledWeeks).toBe(5);
+    expect(r.confident).toBe(true);
+    expect(r.dailyRate).toBe(10);
   });
 
-  it("resists a one-off spike (median, not mean)", () => {
-    // 5-week window → fridays jun 5, 12, 19, 26, jul 3, all $25, one with a
-    // one-off $800 TV on top: [25, 25, 25, 25, 825] → median stays 25
-    const fridays = ["2026-06-05", "2026-06-12", "2026-06-19", "2026-06-26", "2026-07-03"];
+  it("spreads within-week posting clumps evenly (the Monday problem)", () => {
+    // the bank posts the whole weekend on Monday — weekly totals don't care
     const history = [
-      ...fridays.map((d) => spend(d, 25)),
-      spend("2026-06-12", 800),
-      spend("2026-06-01", 5),
+      income("2026-06-02"),
+      spend("2026-07-06", 70), // all of block 0 posted on monday
+      spend("2026-06-29", 70), // all of block 1 posted on monday
+      spend("2026-06-22", 70),
+      spend("2026-06-15", 70),
+      spend("2026-06-08", 70),
     ];
-    const b = computeWeekdayBaseline({ history, rules: [], today: TODAY, weeks: 5 });
-    expect(b.byWeekday[5]).toBe(25);
+    const r = computeSpendRate({ history, rules: [], today: TODAY });
+    expect(r.dailyRate).toBe(10); // flat $10/day, weekends included
   });
 
-  it("excludes bill payments and transfers from the totals", () => {
+  it("excludes bill payments (any date) and transfers", () => {
     const history = [
-      spend("2026-07-01", 1200, { category_id: "cat-housing" }), // rent — excluded
-      spend("2026-07-01", 18),
-      spend("2026-07-02", 250, { is_transfer: true }), // card payment — excluded
-      spend("2026-04-15", 5),
+      income("2026-06-02"),
+      spend("2026-06-19", 1400), // rent posted on a random day — excluded
+      spend("2026-06-09", 300, { is_transfer: true }), // excluded
+      spend("2026-07-01", 70),
+      spend("2026-06-25", 70),
+      spend("2026-06-17", 70),
+      spend("2026-06-10", 70),
+      spend("2026-06-03", 70),
     ];
-    const b = computeWeekdayBaseline({ history, rules: [rentRule], today: TODAY });
-    // 2026-07-01 is a wednesday: only the $18 survives; median over ~12
-    // wednesdays of mostly 0 is 0, so check via a 1-week window instead
-    const tight = computeWeekdayBaseline({
-      history,
-      rules: [rentRule],
-      today: "2026-07-03",
-      weeks: 1,
+    const r = computeSpendRate({ history, rules: [rentRule], today: TODAY });
+    expect(r.dailyRate).toBe(10);
+  });
+
+  it("only counts fully covered weeks and reports confidence", () => {
+    // history starts jul 1 — block 0 (jun 30–jul 6) is not fully covered
+    const young = computeSpendRate({
+      history: [spend("2026-07-01", 50)],
+      rules: [],
+      today: TODAY,
     });
-    expect(tight.byWeekday[3]).toBe(18);
-    expect(b.byWeekday[4]).toBe(0); // thursday transfer day contributed nothing
-  });
+    expect(young.sampledWeeks).toBe(0);
+    expect(young.confident).toBe(false);
 
-  it("clips the window to the first recorded day (young ledgers)", () => {
-    // tracking started 10 days ago — only those days are samples
-    const start = addDaysKey(TODAY, -10);
-    const history = [spend(start, 12)];
-    const b = computeWeekdayBaseline({ history, rules: [], today: TODAY });
-    expect(b.sampledDays).toBe(10);
-    expect(b.confident).toBe(false);
-    expect(MIN_CONFIDENT_DAYS).toBeGreaterThan(10);
+    // exactly 4 covered weeks → confident
+    const four = computeSpendRate({
+      history: [income("2026-06-09"), spend("2026-06-15", 70)],
+      rules: [],
+      today: TODAY,
+    });
+    expect(four.sampledWeeks).toBe(4);
+    expect(four.confident).toBe(true);
+    expect(MIN_CONFIDENT_WEEKS).toBe(4);
   });
 });
 
 describe("estimatedSpendOn", () => {
-  const confident = {
-    byWeekday: [34, 12, 15, 11, 14, 28, 61],
-    sampledDays: 84,
-    confident: true,
-  };
-  const thin = { byWeekday: [0, 0, 0, 0, 0, 0, 0], sampledDays: 10, confident: false };
+  const confident: SpendRate = { dailyRate: 31, sampledWeeks: 8, confident: true };
+  const thin: SpendRate = { dailyRate: 0, sampledWeeks: 1, confident: false };
 
-  it("uses the weekday median when confident", () => {
-    expect(estimatedSpendOn(confident, 40, "2026-07-11")).toBe(61); // saturday
+  it("prefers a per-day override, including an explicit zero", () => {
+    expect(estimatedSpendOn(confident, null, { "2026-07-11": 120 }, "2026-07-11")).toBe(
+      120,
+    );
+    expect(estimatedSpendOn(confident, null, { "2026-07-11": 0 }, "2026-07-11")).toBe(0);
   });
 
-  it("falls back to the manual value, then to zero", () => {
-    expect(estimatedSpendOn(thin, 31, "2026-07-11")).toBe(31);
-    expect(estimatedSpendOn(thin, null, "2026-07-11")).toBe(0);
+  it("falls through override → history → manual → zero", () => {
+    expect(estimatedSpendOn(confident, 99, {}, "2026-07-11")).toBe(31);
+    expect(estimatedSpendOn(thin, 22, {}, "2026-07-11")).toBe(22);
+    expect(estimatedSpendOn(thin, null, {}, "2026-07-11")).toBe(0);
   });
 });
 
 describe("buildDayRows with an estimated-spend layer", () => {
   it("subtracts estimates from future running totals but not past days", () => {
-    const gridDays = [
-      "2026-07-06",
-      "2026-07-07",
-      "2026-07-08",
-      "2026-07-09",
-    ];
+    const gridDays = ["2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09"];
     const rows = buildDayRows({
       gridDays,
       month: "2026-07",

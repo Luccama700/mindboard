@@ -341,6 +341,11 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
                 type: "string",
                 description: "Ledger row id from list_recent_ledger (adjust/remove).",
               },
+              markTransfer: {
+                type: "boolean",
+                description:
+                  "adjust only: true reclassifies the row as a transfer between own accounts (excluded from spending analytics), false back to regular spending.",
+              },
             },
             required: ["op"],
             additionalProperties: false,

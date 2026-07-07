@@ -59,8 +59,28 @@ export const getBalanceChangesOn = cache(
   },
 );
 
+// Per-day everyday-spend overrides for today onward, as a date → amount map
+// (set via the finance calendar's selected-day slider).
+export const getSpendOverrides = cache(
+  async (userId: string): Promise<Record<string, number>> => {
+    const supabase = await createClient();
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const { data } = await supabase
+      .from("spend_overrides")
+      .select("date, amount")
+      .eq("user_id", userId)
+      .gte("date", todayKey);
+    const out: Record<string, number> = {};
+    for (const row of (data ?? []) as { date: string; amount: number }[]) {
+      out[row.date] = Number(row.amount);
+    }
+    return out;
+  },
+);
+
 // Trailing transaction history feeding the everyday-spend baseline (90 days
-// comfortably covers the 12-week weekday window).
+// comfortably covers the 12-week window).
 export const getSpendHistory = cache(
   async (userId: string, days = 90): Promise<SpendHistoryRow[]> => {
     const supabase = await createClient();

@@ -16,8 +16,9 @@ import {
   incomeDetailForDay,
   ruleLandsOn,
 } from "./finance-projection";
-import { estimatedSpendOn, type WeekdayBaseline } from "./spend-baseline";
+import { estimatedSpendOn, type SpendRate } from "./spend-baseline";
 import { saveDailySpendEstimate } from "@/app/actions/settings";
+import { setSpendOverride } from "@/app/actions/finance";
 import type {
   BalanceChange,
   IncomeSource,
@@ -72,8 +73,9 @@ export function FinanceCalendar({
   incomeSources,
   hoursBySource,
   googleStatus,
-  spendBaseline,
+  spendRate,
   manualSpendEstimate,
+  spendOverrides,
 }: {
   month: string;
   currency: string;
@@ -83,11 +85,29 @@ export function FinanceCalendar({
   incomeSources: IncomeSource[];
   hoursBySource: Record<string, Record<string, number>>;
   googleStatus: GoogleStatus;
-  spendBaseline: WeekdayBaseline;
+  spendRate: SpendRate;
   manualSpendEstimate: number | null;
+  spendOverrides: Record<string, number>;
 }) {
   const today = todayISO();
   const gridDays = useMemo(() => buildGrid(month), [month]);
+
+  // Per-day overrides, edited optimistically by the selected-day slider and
+  // persisted via setSpendOverride.
+  const [overrides, setOverrides] = useState(spendOverrides);
+  const [, startOverrideSave] = useTransition();
+
+  function handleSetOverride(dateKey: string, amount: number | null) {
+    setOverrides((prev) => {
+      const next = { ...prev };
+      if (amount === null) delete next[dateKey];
+      else next[dateKey] = amount;
+      return next;
+    });
+    startOverrideSave(async () => {
+      await setSpendOverride({ date: dateKey, amount });
+    });
+  }
 
   const incomeByDate = useMemo(() => {
     const first = gridDays[0];
@@ -103,12 +123,17 @@ export function FinanceCalendar({
     const end = gridDays[gridDays.length - 1] ?? today;
     let cursor = addDaysKey(today, 1);
     while (cursor <= end) {
-      const estimate = estimatedSpendOn(spendBaseline, manualSpendEstimate, cursor);
+      const estimate = estimatedSpendOn(
+        spendRate,
+        manualSpendEstimate,
+        overrides,
+        cursor,
+      );
       if (estimate > 0) out[cursor] = estimate;
       cursor = addDaysKey(cursor, 1);
     }
     return out;
-  }, [gridDays, today, spendBaseline, manualSpendEstimate]);
+  }, [gridDays, today, spendRate, manualSpendEstimate, overrides]);
 
   const rows = useMemo(
     () =>
@@ -173,7 +198,7 @@ export function FinanceCalendar({
       </header>
 
       <EverydaySpendRow
-        baseline={spendBaseline}
+        rate={spendRate}
         manual={manualSpendEstimate}
         currency={currency}
       />
@@ -259,6 +284,14 @@ export function FinanceCalendar({
           expenses={expenses}
           incomeSources={incomeSources}
           hoursBySource={hoursBySource}
+          baselineEstimate={estimatedSpendOn(
+            spendRate,
+            manualSpendEstimate,
+            {},
+            selected,
+          )}
+          override={overrides[selected]}
+          onSetOverride={handleSetOverride}
         />
       )}
     </section>
@@ -266,23 +299,20 @@ export function FinanceCalendar({
 }
 
 // The everyday-spend line under the calendar header. With enough history the
-// weekday baseline drives the forecast and this is a read-only summary; with a
-// thin ledger it exposes the manual flat estimate (saved to user_settings).
+// weekly-median rate drives the forecast and this is a read-only summary; with
+// a thin ledger it exposes the manual flat estimate (saved to user_settings).
 function EverydaySpendRow({
-  baseline,
+  rate,
   manual,
   currency,
 }: {
-  baseline: WeekdayBaseline;
+  rate: SpendRate;
   manual: number | null;
   currency: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(manual !== null ? String(manual) : "");
   const [isPending, startTransition] = useTransition();
-
-  const weekAvg =
-    Math.round((baseline.byWeekday.reduce((sum, v) => sum + v, 0) / 7) * 100) / 100;
 
   function save(value: number | null) {
     startTransition(async () => {
@@ -291,10 +321,11 @@ function EverydaySpendRow({
     });
   }
 
-  if (baseline.confident) {
+  if (rate.confident) {
     return (
       <p className="mb-3 text-[10px] tracking-widest uppercase text-muted">
-        everyday spend · from your history · ~{formatMoney(weekAvg, currency)}/day
+        everyday spend · from your last {rate.sampledWeeks} weeks · ~
+        {formatMoney(rate.dailyRate, currency)}/day
       </p>
     );
   }
@@ -371,6 +402,75 @@ function EverydaySpendRow({
   );
 }
 
+// Slider pinning the expected everyday spend for one future day. The pinned
+// value (including an explicit $0) replaces the baseline estimate for that
+// date; reset returns to the baseline. Commits on release, not per tick.
+function FutureSpendSlider({
+  dateKey,
+  baseline,
+  override,
+  currency,
+  onSet,
+}: {
+  dateKey: string;
+  baseline: number;
+  override: number | undefined;
+  currency: string;
+  onSet: (dateKey: string, amount: number | null) => void;
+}) {
+  const effective = override ?? baseline;
+  const [draft, setDraft] = useState(effective);
+  const [max] = useState(() =>
+    Math.max(200, Math.ceil((Math.max(baseline, effective) * 3) / 10) * 10),
+  );
+  const pinned = override !== undefined;
+
+  function commit() {
+    if (draft !== effective) onSet(dateKey, draft);
+  }
+
+  return (
+    <div className="border border-line border-dashed px-3 py-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <p className="flex-1 min-w-0 truncate text-sm text-muted">
+          everyday spending
+          <span className="text-muted"> · {pinned ? "pinned" : "estimated"}</span>
+        </p>
+        {pinned && (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(baseline);
+              onSet(dateKey, null);
+            }}
+            className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors py-1"
+          >
+            reset
+          </button>
+        )}
+        <p className="text-sm font-bold tabular-nums text-muted whitespace-nowrap">
+          ~−{formatMoney(draft, currency)}
+        </p>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={max}
+        step={5}
+        value={draft}
+        onChange={(e) => setDraft(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={(e) => {
+          if (e.key.startsWith("Arrow")) commit();
+        }}
+        aria-label={`expected everyday spend on ${dateKey}`}
+        className="w-full cursor-pointer"
+        style={{ accentColor: "var(--accent)" }}
+      />
+    </div>
+  );
+}
+
 function SelectedDay({
   dateKey,
   row,
@@ -379,6 +479,9 @@ function SelectedDay({
   expenses,
   incomeSources,
   hoursBySource,
+  baselineEstimate,
+  override,
+  onSetOverride,
 }: {
   dateKey: string;
   row: ReturnType<typeof buildDayRows>[number];
@@ -387,6 +490,9 @@ function SelectedDay({
   expenses: RecurringExpense[];
   incomeSources: IncomeSource[];
   hoursBySource: Record<string, Record<string, number>>;
+  baselineEstimate: number;
+  override: number | undefined;
+  onSetOverride: (dateKey: string, amount: number | null) => void;
 }) {
   const label = formatWeekdayMonthDay(new Date(`${dateKey}T00:00:00`));
   const date = new Date(`${dateKey}T00:00:00`);
@@ -421,11 +527,12 @@ function SelectedDay({
       )
     : [];
 
+  // Future days always render the everyday-spending slider row.
   const empty =
+    row.isPast &&
     recorded.length === 0 &&
     projectedExpenses.length === 0 &&
-    projectedIncome.length === 0 &&
-    row.estimatedOutflow === 0;
+    projectedIncome.length === 0;
 
   return (
     <div className="mt-4 border-t border-line pt-4">
@@ -475,20 +582,15 @@ function SelectedDay({
             </div>
           ))}
 
-          {row.estimatedOutflow > 0 && (
-            <div className="flex items-center gap-2 border border-line border-dashed px-3 py-2">
-              <span
-                className="h-3 w-3 flex-shrink-0 border border-line-strong"
-                aria-hidden
-              />
-              <p className="flex-1 min-w-0 truncate text-sm text-muted">
-                everyday spending
-                <span className="text-muted"> · estimated</span>
-              </p>
-              <p className="text-sm font-bold tabular-nums text-muted whitespace-nowrap">
-                ~−{formatMoney(row.estimatedOutflow, currency)}
-              </p>
-            </div>
+          {!row.isPast && (
+            <FutureSpendSlider
+              key={dateKey}
+              dateKey={dateKey}
+              baseline={baselineEstimate}
+              override={override}
+              currency={currency}
+              onSet={onSetOverride}
+            />
           )}
 
           {projectedExpenses.map((expense) => (

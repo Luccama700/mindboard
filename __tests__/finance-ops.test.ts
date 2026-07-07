@@ -238,6 +238,26 @@ describe("resolveFinanceOps", () => {
     }
   });
 
+  it("supports markTransfer as the only change on an adjust", () => {
+    const parsed = validateFinanceOps({
+      operations: [{ op: "adjust", changeId: "ch-1", markTransfer: true }],
+    });
+    expect(parsed.ok).toBe(true);
+
+    const r = resolve([{ op: "adjust", changeId: "ch-1", markTransfer: true }]);
+    expect(r.ok).toBe(true);
+    if (r.ok && r.value[0].kind === "adjust") {
+      expect(r.value[0].markTransfer).toBe(true);
+      expect(renderFinanceReceipt(r.value)).toContain("transfer");
+      const stored = JSON.parse(JSON.stringify({ operations: r.value }));
+      const revalidated = validateResolvedFinanceOps(stored);
+      expect(revalidated.ok).toBe(true);
+      if (revalidated.ok && revalidated.value[0].kind === "adjust") {
+        expect(revalidated.value[0].markTransfer).toBe(true);
+      }
+    }
+  });
+
   it("resolves adjust/remove against provided rows and rejects unknown ids", () => {
     const good = resolve([
       { op: "adjust", changeId: "ch-1", amount: 21 },

@@ -15,6 +15,19 @@ future work. Implementation notes where reality refined the design:
   Writers therefore insert transactions before their anchor (§3.3).
 - The batch tool ended up with a `MAX_FINANCE_OPS` of 60 and the resolver
   enforces op ordering itself: category creates first, reconciles last.
+- **The weekday-shaped baseline (decision #2) was revised on 2026-07-07**
+  after real statement data exposed a posted-date artifact: banks post
+  weekend purchases on Monday (observed live: 120 Monday rows vs 5 Saturday
+  rows), so per-weekday medians learned "nothing on weekends, a fortune on
+  Monday". The baseline is now a FLAT rate — median *weekly* discretionary
+  total over trailing full weeks ÷ 7 — which is immune to which day the bank
+  posted and steps over outlier weeks (tuition, rent). The bill filter also
+  dropped its ±3-day landing-day requirement (real rent payments posted
+  May 19 / May 28 / Jun 29 and slipped past it); amount+category match now
+  suffices. In exchange, per-day agency moved to the user: migration 0023's
+  `spend_overrides` lets a slider on any future day pin that day's expected
+  spend (including $0). `adjust` also gained `markTransfer` for reclassifying
+  mis-imported internal transfers.
 
 Two goals, decided with the user:
 

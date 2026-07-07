@@ -354,6 +354,12 @@ const mcpHandler = createMcpHandler(
                   .string()
                   .optional()
                   .describe("Ledger row id from list_recent_ledger (adjust/remove)."),
+                markTransfer: z
+                  .boolean()
+                  .optional()
+                  .describe(
+                    "adjust only: true reclassifies the row as a transfer between own accounts (excluded from spending analytics), false back to regular spending.",
+                  ),
               }),
             )
             .min(1)
