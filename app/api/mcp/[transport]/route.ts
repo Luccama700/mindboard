@@ -214,16 +214,26 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: update inventory stock",
         description:
-          "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Returns a receipt preview + proposalId; call confirm_action to apply. Batch a whole grocery haul into ONE call.",
+          "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again), set_priority (how loudly it nags: high surfaces on home when merely low, med only when out, low never). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Returns a receipt preview + proposalId; call confirm_action to apply. Batch a whole grocery haul into ONE call.",
         inputSchema: {
           operations: z
             .array(
               z.object({
-                op: z.enum(["add", "remove", "set", "create", "archive", "restore"]),
+                op: z.enum([
+                  "add",
+                  "remove",
+                  "set",
+                  "create",
+                  "archive",
+                  "restore",
+                  "set_priority",
+                ]),
                 item: z
                   .string()
                   .optional()
-                  .describe("Item id or name (for add/remove/set/archive/restore)."),
+                  .describe(
+                    "Item id or name (for add/remove/set/archive/restore/set_priority).",
+                  ),
                 amount: z
                   .number()
                   .positive()
@@ -240,6 +250,10 @@ const mcpHandler = createMcpHandler(
                   .string()
                   .optional()
                   .describe("Optional inventory group id or name (for create)."),
+                priority: z
+                  .enum(["low", "med", "high"])
+                  .optional()
+                  .describe("Attention priority (for set_priority)."),
               }),
             )
             .min(1)
@@ -347,3 +361,4 @@ function verifyToken(_req: Request, bearer?: string) {
 const handler = withMcpAuth(mcpHandler, verifyToken, { required: true });
 
 export { handler as GET, handler as POST };
+ 

@@ -155,7 +155,7 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
   let itemQuery = supabase
     .from("inventory_items")
     .select(
-      "id, name, quantity, unit, reorder_threshold, archived, archived_at, inventory_group_id, created_at",
+      "id, name, quantity, unit, reorder_threshold, priority, archived, archived_at, inventory_group_id, created_at",
     )
     .eq("user_id", ownerId)
     .order("name", { ascending: true });
@@ -179,6 +179,7 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
     quantity: number;
     unit: string;
     reorder_threshold: number | null;
+    priority: "low" | "med" | "high";
     archived: boolean;
     archived_at: string | null;
     inventory_group_id: string | null;
@@ -192,6 +193,7 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
       quantity: Number(row.quantity),
       unit: row.unit,
       reorderThreshold: row.reorder_threshold,
+      priority: row.priority,
       archived: row.archived,
       group: row.inventory_group_id
         ? (groupNames.get(row.inventory_group_id) ?? null)

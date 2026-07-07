@@ -149,6 +149,7 @@ const getStreamData = cache(
         quantity: Number(item.quantity),
         unit: item.unit,
         reorder_threshold: item.reorder_threshold,
+        priority: item.priority,
       })),
       usagesByItem,
       goals: (goalsResult.data ?? []) as {

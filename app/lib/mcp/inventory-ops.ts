@@ -24,7 +24,8 @@ export type StockOp =
       group?: string;
     }
   | { op: "archive"; item: string }
-  | { op: "restore"; item: string };
+  | { op: "restore"; item: string }
+  | { op: "set_priority"; item: string; priority: "low" | "med" | "high" };
 
 // What gets stored on the proposal and executed on confirm.
 export type ResolvedStockOp =
@@ -32,7 +33,15 @@ export type ResolvedStockOp =
   | { kind: "recount"; itemId: string; name: string; unit: string; quantity: number; before: number }
   | { kind: "create"; name: string; quantity: number; unit: string; groupId: string | null; groupName: string | null }
   | { kind: "archive"; itemId: string; name: string }
-  | { kind: "restore"; itemId: string; name: string };
+  | { kind: "restore"; itemId: string; name: string }
+  | {
+      kind: "priority";
+      itemId: string;
+      name: string;
+      priority: "low" | "med" | "high";
+    };
+
+const ITEM_PRIORITIES = new Set(["low", "med", "high"]);
 
 export type ResolvableItem = {
   id: string;
@@ -128,10 +137,27 @@ export function validateStockOps(raw: unknown): Result<StockOp[]> {
         ops.push({ op, item });
         break;
       }
+      case "set_priority": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (set_priority): item is required` };
+        const priority = entry.priority;
+        if (typeof priority !== "string" || !ITEM_PRIORITIES.has(priority)) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (set_priority ${item}): priority must be low, med, or high`,
+          };
+        }
+        ops.push({
+          op,
+          item,
+          priority: priority as "low" | "med" | "high",
+        });
+        break;
+      }
       default:
         return {
           ok: false,
-          error: `operation ${i + 1}: unknown op "${String(op)}" (expected add/remove/set/create/archive/restore)`,
+          error: `operation ${i + 1}: unknown op "${String(op)}" (expected add/remove/set/create/archive/restore/set_priority)`,
         };
     }
   }
@@ -289,6 +315,17 @@ export function resolveStockOps(
         resolved.push({ kind: "restore", itemId: found.value.id, name: found.value.name });
         break;
       }
+      case "set_priority": {
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) return found;
+        resolved.push({
+          kind: "priority",
+          itemId: found.value.id,
+          name: found.value.name,
+          priority: op.priority,
+        });
+        break;
+      }
     }
   }
   return { ok: true, value: resolved };
@@ -319,6 +356,8 @@ export function receiptLine(op: ResolvedStockOp): string {
       return `${op.name}  stop tracking`;
     case "restore":
       return `${op.name}  tracking again`;
+    case "priority":
+      return `${op.name}  priority → ${op.priority}${op.priority === "high" ? " (!!!)" : ""}`;
   }
 }
 
@@ -393,6 +432,22 @@ export function validateResolvedOps(raw: unknown): Result<ResolvedStockOp[]> {
           return { ok: false, error: `malformed ${entry.kind} operation` };
         }
         ops.push({ kind: entry.kind, itemId: entry.itemId, name: String(entry.name ?? "") });
+        break;
+      }
+      case "priority": {
+        if (
+          typeof entry.itemId !== "string" ||
+          typeof entry.priority !== "string" ||
+          !ITEM_PRIORITIES.has(entry.priority)
+        ) {
+          return { ok: false, error: "malformed priority operation" };
+        }
+        ops.push({
+          kind: "priority",
+          itemId: entry.itemId,
+          name: String(entry.name ?? ""),
+          priority: entry.priority as "low" | "med" | "high",
+        });
         break;
       }
       default:

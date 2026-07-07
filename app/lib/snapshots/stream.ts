@@ -31,6 +31,7 @@ export type StreamItemInput = {
   quantity: number;
   unit: string;
   reorder_threshold: number | null;
+  priority: "low" | "med" | "high";
 };
 
 export type StreamGoalInput = {
@@ -112,6 +113,7 @@ const SECTION_CAP = 5;
 const STALE_DAYS = 14;
 const SOON_WINDOW_DAYS = 7;
 const NOW_EVENT_LEAD_MS = 60 * 60 * 1000;
+const HIGH_RUNOUT_LEAD_DAYS = 2;
 
 const PRIORITY_RANK: Record<TaskWithGroup["priority"], number> = {
   high: 0,
@@ -306,7 +308,8 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
   const openTasks = tasks.filter((t) => t.status !== "done");
   const timedEvents = events.filter((e) => !e.allDay && e.start && e.end);
 
-  // Per-item run-out keys, computed once.
+  // Per-item run-out keys, computed once. Low-priority stock never enters the
+  // Stream; high-priority stock escalates to NOW while merely running low.
   const runOuts = new Map<string, string | null>();
   for (const item of items) {
     const rules = usagesByItem[item.id] ?? [];
@@ -319,6 +322,29 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       runOuts.set(item.id, null);
     }
   }
+
+  const streamItems = items.filter((item) => item.priority !== "low");
+  const itemOut = (item: StreamItemInput) => {
+    const key = runOuts.get(item.id);
+    return key !== null && key !== undefined && key <= today;
+  };
+  const itemRunningLow = (item: StreamItemInput) => {
+    if (itemOut(item)) return true;
+    if (
+      item.reorder_threshold !== null &&
+      item.quantity <= item.reorder_threshold
+    ) {
+      return true;
+    }
+    const key = runOuts.get(item.id);
+    return (
+      key !== null &&
+      key !== undefined &&
+      key <= addDaysKey(today, HIGH_RUNOUT_LEAD_DAYS)
+    );
+  };
+  const itemUrgent = (item: StreamItemInput) =>
+    item.priority === "high" && itemRunningLow(item);
 
   // ---- NOW: objective, uncapped -------------------------------------------
   const nowEvents = timedEvents
@@ -348,11 +374,35 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .filter((b) => ruleLandsOn(b, todayDate))
     .map((b) => billCard(b, today, today, currency));
 
-  const runOutNow = items
-    .filter((item) => {
-      const key = runOuts.get(item.id);
-      return key !== null && key !== undefined && key <= today;
+  const urgentStock = streamItems
+    .filter(itemUrgent)
+    .sort((a, b) => {
+      const outDiff = (itemOut(a) ? 0 : 1) - (itemOut(b) ? 0 : 1);
+      if (outDiff !== 0) return outDiff;
+      const ra = runOuts.get(a.id) ?? "9999-99-99";
+      const rb = runOuts.get(b.id) ?? "9999-99-99";
+      const r = ra.localeCompare(rb);
+      if (r !== 0) return r;
+      return a.name.localeCompare(b.name);
     })
+    .map((item) => {
+      const runOut = runOuts.get(item.id);
+      const fact =
+        item.quantity <= 0
+          ? `${item.name} is out`
+          : itemOut(item)
+            ? `${item.name} runs out today`
+            : `${item.name} is low`;
+      const detail = itemOut(item)
+        ? null
+        : runOut && runOut > today
+          ? `out ${shortDate(runOut)}`
+          : `${item.quantity} ${item.unit} left`;
+      return itemCard(item, fact, detail ? `!!! · ${detail}` : "!!!");
+    });
+
+  const runOutNow = streamItems
+    .filter((item) => item.priority === "med" && itemOut(item))
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((item) =>
       itemCard(
@@ -364,7 +414,13 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       ),
     );
 
-  const nowCards = [...nowEvents, ...overdueTasks, ...billsToday, ...runOutNow];
+  const nowCards = [
+    ...nowEvents,
+    ...urgentStock,
+    ...overdueTasks,
+    ...billsToday,
+    ...runOutNow,
+  ];
 
   // ---- NEXT: cap 5 ---------------------------------------------------------
   const laterTodayEvents = timedEvents
@@ -392,12 +448,10 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     })
     .map((t) => taskCard(t, today));
 
-  const lowItems = items
+  const lowItems = streamItems
     .filter((item) => {
-      const runOut = runOuts.get(item.id);
-      const alreadyNow = runOut !== null && runOut !== undefined && runOut <= today;
+      if (itemUrgent(item) || itemOut(item)) return false;
       return (
-        !alreadyNow &&
         item.reorder_threshold !== null &&
         item.quantity <= item.reorder_threshold
       );
@@ -442,8 +496,9 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     }
   }
 
-  const laterRunOuts = items
+  const laterRunOuts = streamItems
     .filter((item) => {
+      if (itemUrgent(item)) return false;
       const key = runOuts.get(item.id);
       return key && key > today && key <= soonLimit;
     })

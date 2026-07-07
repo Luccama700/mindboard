@@ -395,6 +395,16 @@ async function executeUpdateStock(
         applied.push(`${op.name}: ${archived ? "stopped tracking" : "tracking again"}`);
         break;
       }
+      case "priority": {
+        const { error } = await supabase
+          .from("inventory_items")
+          .update({ priority: op.priority })
+          .eq("id", op.itemId)
+          .eq("user_id", ownerId);
+        if (error) return fail(error.message);
+        applied.push(`${op.name}: priority → ${op.priority}`);
+        break;
+      }
     }
   }
 

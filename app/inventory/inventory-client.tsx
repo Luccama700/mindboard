@@ -446,6 +446,7 @@ export function InventoryClient({
       image_url: null,
       inventory_group_id: input.groupId,
       reorder_threshold: null,
+      priority: "med",
       archived: false,
       archived_at: null,
       last_restocked_at: null,
@@ -492,6 +493,7 @@ export function InventoryClient({
         groupId: patch.inventory_group_id,
         imageUrl: patch.image_url,
         reorderThreshold: patch.reorder_threshold,
+        priority: patch.priority,
       });
     });
   }
@@ -1502,6 +1504,11 @@ function ItemRow({
           )}
           <span className="flex-1 min-w-0 truncate text-fg text-sm">
             {item.name}
+            {item.priority === "high" && (
+              <span className="ml-2 text-[10px] text-danger" aria-label="high priority">
+                !!!
+              </span>
+            )}
           </span>
           {statusLabel !== null && (
             <span
@@ -2119,6 +2126,36 @@ function ItemDetail({
           groups={groups}
           onChange={(id) => onUpdate(item.id, { inventory_group_id: id })}
         />
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-[10px] tracking-widest uppercase text-muted">
+          priority
+        </p>
+        <div className="flex items-center gap-2">
+          {(["low", "med", "high"] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onUpdate(item.id, { priority: p })}
+              className={`min-h-11 text-[10px] tracking-widest uppercase px-3 border transition-colors ${
+                item.priority === p
+                  ? p === "high"
+                    ? "bg-danger text-white border-danger"
+                    : "bg-accent text-accent-fg border-accent"
+                  : p === "high"
+                    ? "border-line-strong text-danger hover:border-danger"
+                    : "border-line-strong text-muted hover:border-fg hover:text-fg"
+              }`}
+            >
+              {p === "low" ? "!" : p === "med" ? "!!" : "!!!"}
+            </button>
+          ))}
+        </div>
+        <p className="text-[10px] text-muted leading-relaxed">
+          high surfaces on home while running low · med only when out · low
+          stays here
+        </p>
       </div>
 
       <div className="space-y-2">

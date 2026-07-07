@@ -14,6 +14,7 @@ export type InventoryItem = {
   image_url: string | null;
   inventory_group_id: string | null;
   reorder_threshold: number | null;
+  priority: "low" | "med" | "high";
   archived: boolean;
   archived_at: string | null;
   last_restocked_at: string | null;

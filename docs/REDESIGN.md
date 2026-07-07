@@ -131,9 +131,13 @@ sheet). The delta uses `--text-display` — the one big number on the screen.
 
 | Section | Membership (objective facts only) | Order within |
 |---|---|---|
-| **NOW** (never capped) | task overdue · task due today with due_time past · event in progress or starting ≤60min · bill (recurring expense) landing today · inventory run-out ≤ today | events by start → tasks by priority desc, days-late desc → bills → run-outs |
-| **NEXT** (cap 5, `n more →`) | remaining due-today tasks · today's later timed events · items past reorder_threshold · tomorrow's first event | time-anchored by time; untimed tasks by priority desc |
-| **LATER** (cap 5, `n more →`) | due ≤7d tasks · next bill ≤7d · run-outs ≤7d · daily-log invite (after wake_end − 2h if today's row empty) | by date asc |
+| **NOW** (never capped) | task overdue · task due today with due_time past · event in progress or starting ≤60min · bill (recurring expense) landing today · med-priority inventory run-out ≤ today · high-priority item running low (out, past threshold, or run-out ≤2d) | events by start → high-priority stock (out first, then run-out asc) → tasks by priority desc, days-late desc → bills → med run-outs |
+| **NEXT** (cap 5, `n more →`) | remaining due-today tasks · today's later timed events · med-priority items past reorder_threshold · tomorrow's first event | time-anchored by time; untimed tasks by priority desc |
+| **LATER** (cap 5, `n more →`) | due ≤7d tasks · next bill ≤7d · run-outs ≤7d (med, or high not yet urgent) · daily-log invite (after wake_end − 2h if today's row empty) | by date asc |
+
+Stock priority (`inventory_items.priority`, low/med/high): **low** never enters
+the Stream (it lives on /inventory only), **med** is the rows above, **high**
+escalates into NOW with a `!!!` meta while merely running low.
 | **LOOSE ENDS** (renders nothing when empty) | inbox count > 0 · stale tasks (created >14d, no due date) · stale active goals (>14d) · pending assistant proposals | fixed order: inbox, stale tasks, goals, proposals |
 
 Data: a new pure `streamSnapshot()` (`app/lib/snapshots/stream.ts`) composing

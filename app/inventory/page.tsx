@@ -27,7 +27,7 @@ export default async function InventoryPage() {
     supabase
       .from("inventory_items")
       .select(
-        "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, archived, archived_at, last_restocked_at, created_at",
+        "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, created_at",
       )
       .order("created_at", { ascending: true }),
     supabase

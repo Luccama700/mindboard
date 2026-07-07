@@ -112,7 +112,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "propose_update_stock",
     description:
-      "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Batch a whole grocery haul into ONE call. User must confirm.",
+      "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again), set_priority (how loudly it nags: high surfaces on home when merely low, med only when out, low never). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Batch a whole grocery haul into ONE call. User must confirm.",
     input_schema: {
       type: "object",
       properties: {
@@ -125,11 +125,20 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
             properties: {
               op: {
                 type: "string",
-                enum: ["add", "remove", "set", "create", "archive", "restore"],
+                enum: [
+                  "add",
+                  "remove",
+                  "set",
+                  "create",
+                  "archive",
+                  "restore",
+                  "set_priority",
+                ],
               },
               item: {
                 type: "string",
-                description: "Item id or name (for add/remove/set/archive/restore).",
+                description:
+                  "Item id or name (for add/remove/set/archive/restore/set_priority).",
               },
               amount: {
                 type: "number",
@@ -146,6 +155,11 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
               group: {
                 type: "string",
                 description: "Optional inventory group id or name (for create).",
+              },
+              priority: {
+                type: "string",
+                enum: ["low", "med", "high"],
+                description: "Attention priority (for set_priority).",
               },
             },
             required: ["op"],
@@ -476,7 +490,7 @@ export async function runAssistantTool(
         let itemQuery = supabase
           .from("inventory_items")
           .select(
-            "id, name, quantity, unit, reorder_threshold, archived, inventory_group_id",
+            "id, name, quantity, unit, reorder_threshold, priority, archived, inventory_group_id",
           )
           .order("name", { ascending: true });
         if (!includeArchived) itemQuery = itemQuery.eq("archived", false);
@@ -495,6 +509,7 @@ export async function runAssistantTool(
           quantity: number;
           unit: string;
           reorder_threshold: number | null;
+          priority: "low" | "med" | "high";
           archived: boolean;
           inventory_group_id: string | null;
         };
@@ -507,6 +522,7 @@ export async function runAssistantTool(
               quantity: Number(row.quantity),
               unit: row.unit,
               reorderThreshold: row.reorder_threshold,
+              priority: row.priority,
               archived: row.archived,
               group: row.inventory_group_id
                 ? (groupNames.get(row.inventory_group_id) ?? null)

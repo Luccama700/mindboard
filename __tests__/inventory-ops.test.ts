@@ -57,6 +57,20 @@ describe("validateStockOps", () => {
     expect(validateStockOps({ operations: [{ op: "eat", item: "eggs" }] }).ok).toBe(false);
     expect(validateStockOps({ operations: [{ op: "create", quantity: 1 }] }).ok).toBe(false);
   });
+
+  it("accepts set_priority and rejects bad priorities", () => {
+    const ok = validateStockOps({
+      operations: [{ op: "set_priority", item: "eggs", priority: "high" }],
+    });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.value[0]).toEqual({ op: "set_priority", item: "eggs", priority: "high" });
+    expect(
+      validateStockOps({ operations: [{ op: "set_priority", item: "eggs", priority: "urgent" }] }).ok,
+    ).toBe(false);
+    expect(
+      validateStockOps({ operations: [{ op: "set_priority", priority: "high" }] }).ok,
+    ).toBe(false);
+  });
 });
 
 describe("resolveStockOps", () => {
@@ -151,6 +165,7 @@ describe("renderStockReceipt", () => {
       { op: "create", name: "paper towels", quantity: 3, unit: "rolls", group: "household" },
       { op: "archive", item: "dish soap" },
       { op: "restore", item: "sunscreen" },
+      { op: "set_priority", item: "eggs", priority: "high" },
     ]);
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) return;
@@ -161,6 +176,7 @@ describe("renderStockReceipt", () => {
     expect(receipt).toContain("paper towels  new · 3 rolls · Household");
     expect(receipt).toContain("Dish soap  stop tracking");
     expect(receipt).toContain("Sunscreen  tracking again");
+    expect(receipt).toContain("Eggs  priority → high (!!!)");
   });
 });
 
@@ -170,6 +186,7 @@ describe("validateResolvedOps", () => {
       { op: "add", item: "eggs", amount: 12 },
       { op: "create", name: "paper towels", quantity: 3, unit: "rolls" },
       { op: "archive", item: "dish soap" },
+      { op: "set_priority", item: "milk", priority: "low" },
     ]);
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) return;
@@ -184,6 +201,11 @@ describe("validateResolvedOps", () => {
     expect(validateResolvedOps({ operations: [{ kind: "adjust", delta: 1 }] }).ok).toBe(false);
     expect(
       validateResolvedOps({ operations: [{ kind: "adjust", itemId: "x", delta: 0 }] }).ok,
+    ).toBe(false);
+    expect(
+      validateResolvedOps({
+        operations: [{ kind: "priority", itemId: "x", priority: "urgent" }],
+      }).ok,
     ).toBe(false);
   });
 });

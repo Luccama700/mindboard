@@ -181,6 +181,7 @@ describe("NOW membership (objective facts only)", () => {
             quantity: 1,
             unit: "bag",
             reorder_threshold: null,
+            priority: "med" as const,
           },
           {
             id: "tp",
@@ -188,6 +189,7 @@ describe("NOW membership (objective facts only)", () => {
             quantity: 0,
             unit: "rolls",
             reorder_threshold: null,
+            priority: "med" as const,
           },
           {
             id: "soap",
@@ -195,6 +197,7 @@ describe("NOW membership (objective facts only)", () => {
             quantity: 2,
             unit: "bars",
             reorder_threshold: 3,
+            priority: "med" as const,
           },
           {
             id: "rice",
@@ -202,6 +205,7 @@ describe("NOW membership (objective facts only)", () => {
             quantity: 3,
             unit: "kg",
             reorder_threshold: null,
+            priority: "med" as const,
           },
         ],
         usagesByItem: {
@@ -216,6 +220,95 @@ describe("NOW membership (objective facts only)", () => {
     expect(ids(snap.now)).toEqual(["item:tp"]);
     expect(ids(snap.next)).toEqual(["item:soap"]);
     expect(ids(snap.later)).toEqual(["item:coffee", "item:rice"]);
+  });
+});
+
+describe("stock priority", () => {
+  const stockItem = (
+    over: Partial<import("@/app/lib/snapshots/stream").StreamItemInput> & {
+      id: string;
+    },
+  ) => ({
+    name: over.id,
+    quantity: 5,
+    unit: "",
+    reorder_threshold: null,
+    priority: "med" as const,
+    ...over,
+  });
+
+  test("high-priority stock escalates to NOW while merely running low, above tasks", () => {
+    const snap = streamSnapshot(
+      base({
+        tasks: [task({ id: "over", due_date: "2026-07-04" })],
+        items: [
+          stockItem({ id: "meds", quantity: 2, reorder_threshold: 3, priority: "high" }),
+          stockItem({ id: "soon", quantity: 2, priority: "high" }),
+        ],
+        usagesByItem: {
+          soon: [{ amount: 1, period: "day", interval_days: null }],
+        },
+      }),
+    );
+    // meds: below threshold; soon: runs out in 2 days (within the lead window).
+    expect(ids(snap.now)).toEqual(["item:soon", "item:meds", "task:over"]);
+    expect(snap.now[0].meta).toContain("!!!");
+    expect(snap.now[1].meta).toContain("!!!");
+    expect(snap.pulse.toClear).toBe(3);
+  });
+
+  test("high-priority out sits before high-priority low; med out stays after tasks", () => {
+    const snap = streamSnapshot(
+      base({
+        tasks: [task({ id: "over", due_date: "2026-07-04" })],
+        items: [
+          stockItem({ id: "low-high", quantity: 1, reorder_threshold: 2, priority: "high" }),
+          stockItem({ id: "out-high", quantity: 0, priority: "high" }),
+          stockItem({ id: "out-med", quantity: 0 }),
+        ],
+      }),
+    );
+    expect(ids(snap.now)).toEqual([
+      "item:out-high",
+      "item:low-high",
+      "task:over",
+      "item:out-med",
+    ]);
+  });
+
+  test("low-priority stock never enters the Stream", () => {
+    const snap = streamSnapshot(
+      base({
+        items: [
+          stockItem({ id: "batteries", quantity: 0, priority: "low" }),
+          stockItem({ id: "twine", quantity: 1, reorder_threshold: 5, priority: "low" }),
+          stockItem({ id: "glue", quantity: 2, priority: "low" }),
+        ],
+        usagesByItem: {
+          glue: [{ amount: 1, period: "day", interval_days: null }],
+        },
+      }),
+    );
+    const all = [...snap.now, ...snap.next, ...snap.later].map((c) => c.id);
+    expect(all.filter((id) => id.startsWith("item:"))).toEqual([]);
+    expect(snap.pulse.toClear).toBe(0);
+  });
+
+  test("high-priority stock that is not near running out stays out of NOW", () => {
+    const snap = streamSnapshot(
+      base({
+        items: [
+          stockItem({ id: "coffee", quantity: 10, priority: "high" }),
+          stockItem({ id: "rice", quantity: 5, priority: "high" }),
+        ],
+        usagesByItem: {
+          rice: [{ amount: 1, period: "day", interval_days: null }],
+        },
+      }),
+    );
+    // rice runs out in 5 days: beyond the 2-day lead -> LATER, not NOW.
+    expect(ids(snap.now)).toEqual([]);
+    expect(ids(snap.later)).toEqual(["item:rice"]);
   });
 });
 
@@ -263,6 +356,7 @@ describe("ordering within sections", () => {
             quantity: 0,
             unit: "rolls",
             reorder_threshold: null,
+            priority: "med" as const,
           },
         ],
       }),

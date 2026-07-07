@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 
 const ITEM_COLUMNS =
-  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, archived, archived_at, last_restocked_at, created_at";
+  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, created_at";
+
+const PRIORITIES = new Set(["low", "med", "high"]);
 const GROUP_COLUMNS = "id, name, color, created_at";
 const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
@@ -149,6 +151,7 @@ export async function updateInventoryItem(input: {
   notes?: string | null;
   imageUrl?: string | null;
   reorderThreshold?: number | null;
+  priority?: "low" | "med" | "high";
 }) {
   const supabase = await createClient();
   const {
@@ -189,6 +192,10 @@ export async function updateInventoryItem(input: {
       if (t === null) return { error: "invalid threshold" };
       updates.reorder_threshold = t;
     }
+  }
+  if (input.priority !== undefined) {
+    if (!PRIORITIES.has(input.priority)) return { error: "invalid priority" };
+    updates.priority = input.priority;
   }
 
   if (Object.keys(updates).length === 0) return { error: null };
