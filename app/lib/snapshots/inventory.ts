@@ -40,7 +40,9 @@ export function inventorySnapshot(input: {
   usages: InventoryUsage[];
   today: string;
 }): InventoryVitals {
-  const { items, usages, today } = input;
+  const { usages, today } = input;
+  // Archived ("stop tracking") items never generate attention.
+  const items = input.items.filter((item) => !item.archived);
   const rulesByItem = usageRulesByItem(usages);
 
   let lowCount = 0;

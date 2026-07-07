@@ -12,6 +12,14 @@ import {
   type Result,
 } from "./validate";
 import { loadProposal, recordProposal, resolveProposal } from "./audit";
+import {
+  renderStockReceipt,
+  resolveStockOps,
+  validateResolvedOps,
+  validateStockOps,
+  type ResolvableGroup,
+  type ResolvableItem,
+} from "./inventory-ops";
 
 // The MCP write layer. Each write is two steps (the plan's locked
 // write-with-confirmation rule):
@@ -142,6 +150,52 @@ export async function proposeLogSpend(raw: unknown): Promise<Result<Proposal>> {
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
+// Shared with the in-app assistant (session client + RLS) and the MCP server
+// (service client + owner scoping): resolve the batch against live rows, store
+// the RESOLVED ops (ids, not names) on the proposal, return the receipt.
+export async function proposeUpdateStockFor(
+  supabase: SupabaseClient,
+  userId: string,
+  raw: unknown,
+  options?: { source?: "mcp" | "assistant"; conversationId?: string | null },
+): Promise<Result<Proposal>> {
+  const parsed = validateStockOps(raw);
+  if (!parsed.ok) return parsed;
+
+  const [itemsRes, groupsRes] = await Promise.all([
+    supabase
+      .from("inventory_items")
+      .select("id, name, quantity, unit, archived")
+      .eq("user_id", userId),
+    supabase
+      .from("inventory_groups")
+      .select("id, name")
+      .eq("user_id", userId),
+  ]);
+
+  const resolved = resolveStockOps(
+    parsed.value,
+    (itemsRes.data ?? []) as ResolvableItem[],
+    (groupsRes.data ?? []) as ResolvableGroup[],
+  );
+  if (!resolved.ok) return resolved;
+
+  const preview = renderStockReceipt(resolved.value);
+  const proposalId = await recordProposal(
+    supabase,
+    userId,
+    "update_stock",
+    { operations: resolved.value } as unknown as Record<string, unknown>,
+    preview,
+    options,
+  );
+  return { ok: true, value: { proposalId, preview } };
+}
+
+export async function proposeUpdateStock(raw: unknown): Promise<Result<Proposal>> {
+  return proposeUpdateStockFor(createServiceClient(), ownerUserId(), raw);
+}
+
 // ---------- execute (called by confirm, scoped to the owner) ----------
 
 async function executeCreateTask(
@@ -245,6 +299,108 @@ async function executeLogSpend(
   return { ok: true, value: { change, newBalance } };
 }
 
+// Applies a confirmed stock batch. Quantities are re-read at execute time:
+// deltas re-apply on top of the live value (clamped at 0), recounts overwrite —
+// same spirit as log_spend recomputing the balance. Ops apply sequentially and
+// the first failure aborts the rest (already-applied ops stand; the error says
+// how far it got).
+async function executeUpdateStock(
+  supabase: SupabaseClient,
+  ownerId: string,
+  input: Record<string, unknown>,
+): Promise<Result<Record<string, unknown>>> {
+  const parsed = validateResolvedOps(input);
+  if (!parsed.ok) return parsed;
+  const ops = parsed.value;
+
+  const itemIds = [
+    ...new Set(
+      ops.flatMap((op) => (op.kind === "create" ? [] : [op.itemId])),
+    ),
+  ];
+  const running = new Map<string, number>();
+  if (itemIds.length > 0) {
+    const { data, error } = await supabase
+      .from("inventory_items")
+      .select("id, quantity")
+      .eq("user_id", ownerId)
+      .in("id", itemIds);
+    if (error) return { ok: false, error: error.message };
+    for (const row of (data ?? []) as { id: string; quantity: number }[]) {
+      running.set(row.id, Number(row.quantity) || 0);
+    }
+    const missing = itemIds.filter((id) => !running.has(id));
+    if (missing.length > 0) {
+      return { ok: false, error: "an item in this proposal no longer exists" };
+    }
+  }
+
+  const applied: string[] = [];
+  const now = new Date().toISOString();
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    const fail = (message: string): Result<Record<string, unknown>> => ({
+      ok: false,
+      error: `${message} (applied ${i} of ${ops.length} operations)`,
+    });
+
+    switch (op.kind) {
+      case "adjust":
+      case "recount": {
+        const before = running.get(op.itemId) ?? 0;
+        const next =
+          op.kind === "adjust"
+            ? Math.max(0, Math.round((before + op.delta) * 1000) / 1000)
+            : op.quantity;
+        const updates: Record<string, unknown> = { quantity: next };
+        if (next > before) updates.last_restocked_at = now;
+        const { error } = await supabase
+          .from("inventory_items")
+          .update(updates)
+          .eq("id", op.itemId)
+          .eq("user_id", ownerId);
+        if (error) return fail(error.message);
+        running.set(op.itemId, next);
+        applied.push(`${op.name}: ${before} → ${next}`);
+        break;
+      }
+      case "create": {
+        if (
+          op.groupId &&
+          !(await ownsRow(supabase, "inventory_groups", op.groupId, ownerId))
+        ) {
+          return fail(`group for "${op.name}" not found`);
+        }
+        const { error } = await supabase.from("inventory_items").insert({
+          user_id: ownerId,
+          inventory_group_id: op.groupId,
+          name: op.name,
+          quantity: op.quantity,
+          unit: op.unit,
+          last_restocked_at: op.quantity > 0 ? now : null,
+        });
+        if (error) return fail(error.message);
+        applied.push(`${op.name}: created (${op.quantity}${op.unit ? ` ${op.unit}` : ""})`);
+        break;
+      }
+      case "archive":
+      case "restore": {
+        const archived = op.kind === "archive";
+        const { error } = await supabase
+          .from("inventory_items")
+          .update({ archived, archived_at: archived ? now : null })
+          .eq("id", op.itemId)
+          .eq("user_id", ownerId);
+        if (error) return fail(error.message);
+        applied.push(`${op.name}: ${archived ? "stopped tracking" : "tracking again"}`);
+        break;
+      }
+    }
+  }
+
+  return { ok: true, value: { applied } };
+}
+
 export const EXECUTORS: Record<
   string,
   (
@@ -256,6 +412,7 @@ export const EXECUTORS: Record<
   create_task: executeCreateTask,
   complete_task: executeCompleteTask,
   log_spend: executeLogSpend,
+  update_stock: executeUpdateStock,
 };
 
 // ---------- confirm / cancel ----------

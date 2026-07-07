@@ -79,6 +79,9 @@ function item(partial: Partial<InventoryItem>): InventoryItem {
     image_url: null,
     inventory_group_id: null,
     reorder_threshold: null,
+    archived: false,
+    archived_at: null,
+    last_restocked_at: null,
     created_at: "2026-01-01T00:00:00Z",
     ...partial,
   };

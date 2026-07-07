@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 
 const ITEM_COLUMNS =
-  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, created_at";
+  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, archived, archived_at, last_restocked_at, created_at";
 const GROUP_COLUMNS = "id, name, color, created_at";
 const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
@@ -193,10 +193,45 @@ export async function updateInventoryItem(input: {
 
   if (Object.keys(updates).length === 0) return { error: null };
 
+  if (updates.quantity !== undefined) {
+    const { data: current } = await supabase
+      .from("inventory_items")
+      .select("quantity")
+      .eq("id", input.id)
+      .single();
+    if (
+      current &&
+      Number(updates.quantity) > Number((current as { quantity: number }).quantity)
+    ) {
+      updates.last_restocked_at = new Date().toISOString();
+    }
+  }
+
   const { error } = await supabase
     .from("inventory_items")
     .update(updates)
     .eq("id", input.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/inventory");
+  return { error: null };
+}
+
+export async function setInventoryItemArchived(id: string, archived: boolean) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase
+    .from("inventory_items")
+    .update({
+      archived,
+      archived_at: archived ? new Date().toISOString() : null,
+    })
+    .eq("id", id);
 
   if (error) return { error: error.message };
 

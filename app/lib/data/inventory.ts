@@ -11,7 +11,7 @@ import type {
 // future consumer share one query per request. userId is the cache key.
 
 const ITEM_COLUMNS =
-  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, created_at";
+  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, archived, archived_at, last_restocked_at, created_at";
 const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
 
@@ -22,6 +22,7 @@ export const getInventoryItems = cache(
       .from("inventory_items")
       .select(ITEM_COLUMNS)
       .eq("user_id", userId)
+      .eq("archived", false)
       .order("created_at", { ascending: true });
     return (data ?? []) as InventoryItem[];
   },

@@ -30,7 +30,7 @@ const RECURRING_COLUMNS =
 const CHANGE_COLUMNS =
   "id, account_id, category_id, direction, amount, balance_after, note, occurred_at, created_at";
 const ITEM_COLUMNS =
-  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, created_at";
+  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, archived, archived_at, last_restocked_at, created_at";
 const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
 const TASK_COLUMNS =
@@ -92,6 +92,7 @@ export async function getInventorySnapshot(): Promise<InventoryVitals> {
       .from("inventory_items")
       .select(ITEM_COLUMNS)
       .eq("user_id", ownerId)
+      .eq("archived", false)
       .order("created_at", { ascending: true }),
     supabase
       .from("inventory_usages")
@@ -144,6 +145,60 @@ export async function listTasks(filter: {
       group_color: group?.color ?? null,
     };
   });
+}
+
+// Items + groups in one payload: the ids feed update_stock, the group list lets
+// a create op target a group by name.
+export async function listInventory(filter?: { includeArchived?: boolean }) {
+  const { supabase, ownerId } = scoped();
+
+  let itemQuery = supabase
+    .from("inventory_items")
+    .select(
+      "id, name, quantity, unit, reorder_threshold, archived, archived_at, inventory_group_id, created_at",
+    )
+    .eq("user_id", ownerId)
+    .order("name", { ascending: true });
+  if (!filter?.includeArchived) itemQuery = itemQuery.eq("archived", false);
+
+  const [itemsRes, groupsRes] = await Promise.all([
+    itemQuery,
+    supabase
+      .from("inventory_groups")
+      .select("id, name, color")
+      .eq("user_id", ownerId)
+      .order("name", { ascending: true }),
+  ]);
+
+  const groups = (groupsRes.data ?? []) as { id: string; name: string; color: string }[];
+  const groupNames = new Map(groups.map((g) => [g.id, g.name]));
+
+  type ItemRow = {
+    id: string;
+    name: string;
+    quantity: number;
+    unit: string;
+    reorder_threshold: number | null;
+    archived: boolean;
+    archived_at: string | null;
+    inventory_group_id: string | null;
+    created_at: string;
+  };
+
+  return {
+    items: ((itemsRes.data ?? []) as ItemRow[]).map((row) => ({
+      id: row.id,
+      name: row.name,
+      quantity: Number(row.quantity),
+      unit: row.unit,
+      reorderThreshold: row.reorder_threshold,
+      archived: row.archived,
+      group: row.inventory_group_id
+        ? (groupNames.get(row.inventory_group_id) ?? null)
+        : null,
+    })),
+    groups: groups.map((g) => ({ id: g.id, name: g.name })),
+  };
 }
 
 export async function listGroups() {

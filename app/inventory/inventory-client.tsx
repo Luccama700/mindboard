@@ -1,5 +1,13 @@
 "use client";
 
+// The shelf: a calm picture of what you HAVE. Active stock renders grouped and
+// alphabetical; items that hit zero exit into a quiet "ran out" footer
+// (restock… / stop tracking) instead of alarming at the top; "stop tracking"
+// archives (reversible, in "not tracking") and hard delete only lives there.
+// The omnibox on top is search + capture in one field: plain text filters,
+// "12 eggs" / "+2 milk" apply instantly on enter, and anything else goes to
+// Claude and comes back as a propose → confirm receipt (ProposalCard).
+
 import {
   useEffect,
   useMemo,
@@ -9,6 +17,7 @@ import {
   useSyncExternalStore,
   useTransition,
 } from "react";
+import { useRouter } from "next/navigation";
 import { ColorPicker, PALETTE } from "@/app/_components/color-picker";
 import { UnitPicker } from "@/app/_components/unit-picker";
 import {
@@ -23,11 +32,17 @@ import {
   deleteInventoryGroup,
   deleteInventoryItem,
   deleteInventoryUsage,
+  setInventoryItemArchived,
   updateInventoryGroup,
   updateInventoryItem,
   updateInventoryUsage,
 } from "@/app/actions/inventory";
 import { generateItemIcon } from "@/app/actions/inventory-icon";
+import {
+  proposeStockFromText,
+  proposeStockOps,
+} from "@/app/actions/stock-capture";
+import { cancelProposal, confirmProposal } from "@/app/actions/assistant";
 import type {
   InventoryGroup,
   InventoryItem,
@@ -35,6 +50,7 @@ import type {
 } from "@/app/_components/inventory-types";
 import { InventoryCalendar } from "@/app/_components/inventory-calendar";
 import {
+  daysBetween,
   effectiveDailyRate,
   runOutDateKey,
   stockStatus,
@@ -42,6 +58,13 @@ import {
   type UsagePeriod,
   type UsageRule,
 } from "@/app/_components/inventory-projection";
+import { parseStockText } from "@/app/_components/stock-capture-parse";
+import {
+  resolveItemRef,
+  type ResolvableItem,
+  type StockOp,
+} from "@/app/lib/mcp/inventory-ops";
+import { ProposalCard } from "@/app/_components/proposal-card";
 import { todayISO } from "@/app/_components/date-utils";
 import { createClient } from "@/utils/supabase/client";
 
@@ -62,6 +85,7 @@ type UsageAction =
   | { kind: "remove"; id: string };
 
 const ICON_BUCKET = "inventory-icons";
+const ARCHIVE_SUGGEST_DAYS = 14;
 
 type ViewMode = "list" | "grid";
 const VIEW_KEY = "inventory-view";
@@ -160,6 +184,14 @@ function summarizeByUnit(items: InventoryItem[]): string {
     .join(", ");
 }
 
+// The date an item has been sitting at zero since, best-effort: the last
+// restock if we saw one, else creation.
+function zeroSinceKey(item: InventoryItem): string {
+  return (item.last_restocked_at ?? item.created_at).slice(0, 10);
+}
+
+type StockProposalState = { proposalId: string; preview: string };
+
 export function InventoryClient({
   userId,
   initialGroups,
@@ -171,6 +203,8 @@ export function InventoryClient({
   initialItems: InventoryItem[];
   initialUsages: InventoryUsage[];
 }) {
+  const router = useRouter();
+
   const [groups, dispatchGroups] = useOptimistic<
     InventoryGroup[],
     GroupAction
@@ -229,15 +263,35 @@ export function InventoryClient({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [groupFormOpen, setGroupFormOpen] = useState(false);
+
+  const [query, setQuery] = useState("");
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [proposal, setProposal] = useState<StockProposalState | null>(null);
+  const [proposalPending, setProposalPending] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+
+  const [selectMode, setSelectMode] = useState(false);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(
+    new Set(),
+  );
+
   const asideRef = useRef<HTMLDivElement>(null);
   const view = useViewMode();
   const countMode = useCountMode();
 
-  const groupColors = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const g of groups) map.set(g.id, g.color);
-    return map;
-  }, [groups]);
+  const activeItems = useMemo(
+    () => items.filter((it) => !it.archived),
+    [items],
+  );
+  const archivedItems = useMemo(
+    () =>
+      items
+        .filter((it) => it.archived)
+        .sort((a, b) => (b.archived_at ?? "").localeCompare(a.archived_at ?? "")),
+    [items],
+  );
 
   const groupNames = useMemo(() => {
     const map = new Map<string, string>();
@@ -245,10 +299,16 @@ export function InventoryClient({
     return map;
   }, [groups]);
 
+  const groupColors = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const g of groups) map.set(g.id, g.color);
+    return map;
+  }, [groups]);
+
   const recentUnits = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const it of items) {
+    for (const it of activeItems) {
       const u = it.unit.trim();
       if (u && !seen.has(u.toLowerCase())) {
         seen.add(u.toLowerCase());
@@ -256,10 +316,11 @@ export function InventoryClient({
       }
     }
     return out;
-  }, [items]);
+  }, [activeItems]);
 
-  // Attention order: out (0) → soonest projected run-out (1) → low (2) → fine (3).
-  const rankedItems = useMemo(() => {
+  // Quiet, opt-in attention: a hint only exists when the user set a usage rule
+  // (projected run-out date) or a reorder threshold ("low").
+  const hints = useMemo(() => {
     const today = todayISO();
     const rulesByItem = new Map<string, UsageRule[]>();
     for (const u of usages) {
@@ -272,31 +333,82 @@ export function InventoryClient({
       if (bucket) bucket.push(rule);
       else rulesByItem.set(u.inventory_item_id, [rule]);
     }
-    return items
-      .map((item) => {
-        const qty = Number(item.quantity);
-        const status = stockStatus(qty, item.reorder_threshold);
-        const runOut =
-          status === "out"
-            ? null
-            : runOutDateKey(
-                today,
-                qty,
-                effectiveDailyRate(rulesByItem.get(item.id) ?? []),
-              );
-        const rank =
-          status === "out" ? 0 : runOut !== null ? 1 : status === "low" ? 2 : 3;
-        return { item, status, runOut, rank };
-      })
-      .sort(
-        (a, b) =>
-          a.rank - b.rank ||
-          (a.runOut ?? "").localeCompare(b.runOut ?? "") ||
-          a.item.name.localeCompare(b.item.name),
-      );
-  }, [items, usages]);
+    const map = new Map<string, { status: StockStatus; runOut: string | null }>();
+    for (const item of activeItems) {
+      const qty = Number(item.quantity);
+      const status = stockStatus(qty, item.reorder_threshold);
+      const rate = effectiveDailyRate(rulesByItem.get(item.id) ?? []);
+      const runOut = qty > 0 && rate > 0 ? runOutDateKey(today, qty, rate) : null;
+      map.set(item.id, { status, runOut });
+    }
+    return map;
+  }, [activeItems, usages]);
 
-  const selectedItem = items.find((it) => it.id === selectedId) ?? null;
+  // Omnibox doubles as search: when the text parses as a stock command, filter
+  // by the item reference it names, not the raw "+2 milk".
+  const needle = useMemo(() => {
+    const parsed = parseStockText(query);
+    const raw = parsed ? (parsed[parsed.length - 1]?.ref ?? query) : query;
+    return raw.trim().toLowerCase();
+  }, [query]);
+
+  const matchesNeedle = (it: InventoryItem) =>
+    !needle || it.name.toLowerCase().includes(needle);
+
+  const shelfSections = useMemo(() => {
+    const shelf = activeItems
+      .filter((it) => Number(it.quantity) > 0)
+      .filter(matchesNeedle)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const byGroup = new Map<string | null, InventoryItem[]>();
+    for (const it of shelf) {
+      const key = it.inventory_group_id;
+      const bucket = byGroup.get(key);
+      if (bucket) bucket.push(it);
+      else byGroup.set(key, [it]);
+    }
+    const sections: { group: InventoryGroup | null; items: InventoryItem[] }[] =
+      [];
+    for (const g of groups) {
+      const bucket = byGroup.get(g.id);
+      if (bucket) sections.push({ group: g, items: bucket });
+    }
+    const ungrouped = byGroup.get(null);
+    if (ungrouped) sections.push({ group: null, items: ungrouped });
+    return sections;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeItems, groups, needle]);
+
+  const shelfItems = useMemo(
+    () => shelfSections.flatMap((s) => s.items),
+    [shelfSections],
+  );
+
+  const ranOutAll = useMemo(
+    () =>
+      activeItems
+        .filter((it) => Number(it.quantity) <= 0)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [activeItems],
+  );
+  const ranOut = ranOutAll.filter(matchesNeedle);
+  const archivedFiltered = archivedItems.filter(matchesNeedle);
+
+  // At most one gentle nudge, and only when an item has sat at zero for weeks:
+  // the question is "stop tracking?", never "go buy this".
+  const suggestion = useMemo(() => {
+    if (needle) return null;
+    const today = todayISO();
+    for (const item of ranOutAll) {
+      if (dismissedSuggestions.has(item.id)) continue;
+      const days = daysBetween(zeroSinceKey(item), today);
+      if (days >= ARCHIVE_SUGGEST_DAYS) return { item, days };
+    }
+    return null;
+  }, [ranOutAll, dismissedSuggestions, needle]);
+
+  const selectedItem =
+    activeItems.find((it) => it.id === selectedId) ?? null;
 
   function scrollDetailIntoView() {
     if (typeof window === "undefined") return;
@@ -334,6 +446,9 @@ export function InventoryClient({
       image_url: null,
       inventory_group_id: input.groupId,
       reorder_threshold: null,
+      archived: false,
+      archived_at: null,
+      last_restocked_at: null,
       created_at: new Date().toISOString(),
     };
     setAdding(false);
@@ -378,6 +493,21 @@ export function InventoryClient({
         imageUrl: patch.image_url,
         reorderThreshold: patch.reorder_threshold,
       });
+    });
+  }
+
+  function onSetArchived(id: string, archived: boolean) {
+    startTransition(async () => {
+      if (archived && selectedId === id) setSelectedId(null);
+      dispatchItems({
+        kind: "update",
+        id,
+        patch: {
+          archived,
+          archived_at: archived ? new Date().toISOString() : null,
+        },
+      });
+      await setInventoryItemArchived(id, archived);
     });
   }
 
@@ -482,13 +612,254 @@ export function InventoryClient({
     return createInventoryGroup(input);
   }
 
-  const hasItems = items.length > 0;
+  // ---------- select mode ----------
+
+  function toggleChecked(id: string) {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setCheckedIds(new Set());
+  }
+
+  function bulkArchive() {
+    const ids = [...checkedIds];
+    exitSelectMode();
+    startTransition(async () => {
+      const now = new Date().toISOString();
+      for (const id of ids) {
+        if (selectedId === id) setSelectedId(null);
+        dispatchItems({
+          kind: "update",
+          id,
+          patch: { archived: true, archived_at: now },
+        });
+      }
+      for (const id of ids) await setInventoryItemArchived(id, true);
+    });
+  }
+
+  function bulkMove(groupId: string | null) {
+    const ids = [...checkedIds];
+    exitSelectMode();
+    startTransition(async () => {
+      for (const id of ids) {
+        dispatchItems({
+          kind: "update",
+          id,
+          patch: { inventory_group_id: groupId },
+        });
+      }
+      for (const id of ids) {
+        await updateInventoryItem({ id, groupId });
+      }
+    });
+  }
+
+  function bulkDelete() {
+    const ids = [...checkedIds];
+    if (
+      !window.confirm(
+        `delete ${ids.length} item${ids.length === 1 ? "" : "s"} forever? "stop tracking" keeps them recoverable.`,
+      )
+    ) {
+      return;
+    }
+    exitSelectMode();
+    startTransition(async () => {
+      for (const id of ids) {
+        if (selectedId === id) setSelectedId(null);
+        dispatchItems({ kind: "remove", id });
+      }
+      for (const id of ids) await deleteInventoryItem(id);
+    });
+  }
+
+  // ---------- omnibox capture ----------
+
+  async function runPropose(fn: () => Promise<{
+    error: string | null;
+    proposalId?: string;
+    preview?: string;
+  }>) {
+    setCaptureBusy(true);
+    setCaptureError(null);
+    try {
+      const result = await fn();
+      if (result.error || !result.proposalId || !result.preview) {
+        setCaptureError(result.error ?? "could not build a stock update");
+        return;
+      }
+      setProposal({ proposalId: result.proposalId, preview: result.preview });
+      setProposalError(null);
+      setQuery("");
+    } finally {
+      setCaptureBusy(false);
+    }
+  }
+
+  function onOmniSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const text = query.trim();
+    if (!text || captureBusy) return;
+    setCaptureError(null);
+
+    const segments = parseStockText(text);
+    if (!segments) {
+      // Free-form: one Claude call → proposal receipt. Never applies silently.
+      void runPropose(() => proposeStockFromText({ text }));
+      return;
+    }
+
+    const pool: ResolvableItem[] = activeItems.map((it) => ({
+      id: it.id,
+      name: it.name,
+      quantity: Number(it.quantity),
+      unit: it.unit,
+      archived: false,
+    }));
+
+    const running = new Map<string, number>();
+    const ops: StockOp[] = [];
+    let hasCreate = false;
+    for (const seg of segments) {
+      const found = resolveItemRef(seg.ref, pool);
+      if (found.ok) {
+        const it = found.value;
+        const before = running.get(it.id) ?? it.quantity;
+        const next =
+          seg.sign === "+"
+            ? before + seg.value
+            : seg.sign === "-"
+              ? Math.max(0, before - seg.value)
+              : seg.value;
+        running.set(it.id, Math.round(next * 1000) / 1000);
+        ops.push(
+          seg.sign === "+"
+            ? { op: "add", item: it.id, amount: seg.value }
+            : seg.sign === "-"
+              ? { op: "remove", item: it.id, amount: seg.value }
+              : { op: "set", item: it.id, quantity: seg.value },
+        );
+      } else if (seg.sign === null && found.error.startsWith("no item matching")) {
+        // A bare recount of something we don't track yet = a new item, which
+        // deserves a receipt (typo guard) instead of a silent create.
+        hasCreate = true;
+        ops.push({ op: "create", name: seg.ref, quantity: seg.value });
+      } else {
+        setCaptureError(found.error);
+        return;
+      }
+    }
+
+    if (hasCreate) {
+      void runPropose(() => proposeStockOps({ operations: ops }));
+      return;
+    }
+
+    // Every ref resolved to an existing item: the user typed the exact edit,
+    // apply it instantly (same trust level as tapping the steppers).
+    for (const [id, next] of running) {
+      const current = items.find((it) => it.id === id);
+      if (!current || Number(current.quantity) === next) continue;
+      onUpdateItem(id, { quantity: next });
+    }
+    setQuery("");
+  }
+
+  function onConfirmProposal() {
+    if (!proposal) return;
+    setProposalPending(true);
+    setProposalError(null);
+    startTransition(async () => {
+      const result = await confirmProposal(proposal.proposalId);
+      setProposalPending(false);
+      if (result.error) {
+        setProposalError(result.error);
+        return;
+      }
+      setProposal(null);
+      router.refresh();
+    });
+  }
+
+  function onSkipProposal() {
+    if (!proposal) return;
+    const id = proposal.proposalId;
+    setProposal(null);
+    setProposalError(null);
+    startTransition(async () => {
+      await cancelProposal(id);
+    });
+  }
+
+  const hasActiveItems = activeItems.length > 0;
 
   return (
     <div className="grid gap-8 lg:grid-cols-2 lg:gap-24 lg:items-start">
       <section className="min-w-0 space-y-6">
-        {hasItems && (
+        <form onSubmit={onOmniSubmit} className="space-y-1">
+          <div className="flex items-stretch border border-line-strong bg-card focus-within:border-accent transition-colors">
+            <input
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                if (captureError) setCaptureError(null);
+              }}
+              type="text"
+              placeholder='search · "12 eggs" · "+2 milk" · or say what you got'
+              autoComplete="off"
+              aria-label="search or update stock"
+              className="min-h-11 flex-1 min-w-0 bg-transparent px-3 text-sm text-fg placeholder-muted focus:outline-none"
+            />
+            {query.trim() && (
+              <button
+                type="submit"
+                disabled={captureBusy}
+                className="px-4 text-action lowercase border-l border-line-strong text-muted hover:text-fg hover:bg-card-hover transition-colors disabled:opacity-50"
+              >
+                {captureBusy ? "…" : "apply"}
+              </button>
+            )}
+          </div>
+          {captureError && <p className="text-danger text-xs">{captureError}</p>}
+        </form>
+
+        {proposal && (
+          <ProposalCard
+            title="stock update"
+            confirmLabel="apply"
+            onConfirm={onConfirmProposal}
+            onSkip={onSkipProposal}
+            pending={proposalPending}
+            error={proposalError}
+          >
+            <pre className="whitespace-pre-wrap text-sm text-fg leading-relaxed">
+              {proposal.preview}
+            </pre>
+          </ProposalCard>
+        )}
+
+        {hasActiveItems && (
           <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+              aria-pressed={selectMode}
+              className={`min-h-9 px-3 text-[10px] tracking-widest uppercase border transition-colors ${
+                selectMode
+                  ? "border-accent bg-accent text-accent-fg"
+                  : "border-line bg-page text-muted hover:text-fg"
+              }`}
+            >
+              select
+            </button>
             {view === "list" && (
               <div className="flex gap-px border border-line bg-line">
                 {(["items", "totals"] as CountMode[]).map((m) => (
@@ -528,13 +899,17 @@ export function InventoryClient({
           </div>
         )}
 
-        {!hasItems ? (
+        {!hasActiveItems ? (
           <p className="border border-dashed border-line-strong text-muted text-sm px-4 py-10 text-center">
-            no items yet. add your first one.
+            nothing on the shelf yet. add your first item.
+          </p>
+        ) : shelfItems.length === 0 && ranOut.length === 0 ? (
+          <p className="border border-dashed border-line-strong text-muted text-sm px-4 py-10 text-center">
+            no matches.
           </p>
         ) : view === "grid" ? (
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
-            {rankedItems.map(({ item: it }) => (
+            {shelfItems.map((it) => (
               <ItemTile
                 key={it.id}
                 item={it}
@@ -550,19 +925,60 @@ export function InventoryClient({
             ))}
           </div>
         ) : (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-label uppercase text-muted select-none">
-              <span>stock</span>
-              <span className="flex-1 border-t border-hairline" aria-hidden />
-              <span className="tabular-nums">
-                {countMode === "items"
-                  ? rankedItems.length
-                  : summarizeByUnit(items)}
-              </span>
-            </div>
-            <ul className="border-y border-hairline divide-y divide-hairline">
-              {rankedItems.map(({ item: it, status, runOut }) => (
-                <ItemRow
+          <div className="space-y-6">
+            {shelfSections.map((section) => (
+              <div key={section.group?.id ?? "ungrouped"} className="space-y-2">
+                <div className="flex items-center gap-2 text-label uppercase text-muted select-none">
+                  {section.group && (
+                    <span
+                      className="w-2 h-2 flex-shrink-0"
+                      style={{ backgroundColor: section.group.color }}
+                      aria-hidden
+                    />
+                  )}
+                  <span>{section.group?.name ?? "ungrouped"}</span>
+                  <span className="flex-1 border-t border-hairline" aria-hidden />
+                  <span className="tabular-nums">
+                    {countMode === "items"
+                      ? section.items.length
+                      : summarizeByUnit(section.items)}
+                  </span>
+                </div>
+                <ul className="border-y border-hairline divide-y divide-hairline">
+                  {section.items.map((it) => {
+                    const hint = hints.get(it.id) ?? {
+                      status: "ok" as StockStatus,
+                      runOut: null,
+                    };
+                    return (
+                      <ItemRow
+                        key={it.id}
+                        item={it}
+                        hint={hint}
+                        selected={it.id === selectedId}
+                        selectMode={selectMode}
+                        checked={checkedIds.has(it.id)}
+                        onToggleCheck={toggleChecked}
+                        onSelect={onSelect}
+                        onAdjust={onAdjustQuantity}
+                        onArchive={(id) => onSetArchived(id, true)}
+                      />
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {ranOut.length > 0 && (
+          <details className="border border-hairline px-3 py-2">
+            <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center gap-2 list-none [&::-webkit-details-marker]:hidden">
+              <span>ran out · {ranOut.length} ▸</span>
+            </summary>
+            <ul className="divide-y divide-hairline border-t border-hairline pb-1">
+              {ranOut.map((it) => (
+                <RanOutRow
                   key={it.id}
                   item={it}
                   groupName={
@@ -570,14 +986,44 @@ export function InventoryClient({
                       ? (groupNames.get(it.inventory_group_id) ?? null)
                       : null
                   }
-                  status={status}
-                  runOut={runOut}
-                  selected={it.id === selectedId}
-                  onSelect={onSelect}
-                  onAdjust={onAdjustQuantity}
+                  selectMode={selectMode}
+                  checked={checkedIds.has(it.id)}
+                  onToggleCheck={toggleChecked}
+                  onRestock={(id, quantity) => onUpdateItem(id, { quantity })}
+                  onArchive={(id) => onSetArchived(id, true)}
                 />
               ))}
             </ul>
+          </details>
+        )}
+
+        {suggestion && (
+          <div className="flex flex-wrap items-center gap-2 border border-dashed border-hairline px-3 py-2 text-xs text-muted">
+            <span className="flex-1 min-w-0">
+              {suggestion.item.name} has been out for{" "}
+              {suggestion.days >= 21
+                ? `${Math.floor(suggestion.days / 7)} weeks`
+                : `${suggestion.days} days`}{" "}
+              — stop tracking?
+            </span>
+            <button
+              type="button"
+              onClick={() => onSetArchived(suggestion.item.id, true)}
+              className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+            >
+              stop tracking
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setDismissedSuggestions((prev) =>
+                  new Set(prev).add(suggestion.item.id),
+                )
+              }
+              className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+            >
+              keep
+            </button>
           </div>
         )}
 
@@ -588,6 +1034,30 @@ export function InventoryClient({
         >
           + add item
         </button>
+
+        {archivedItems.length > 0 && (
+          <details className="border border-hairline px-3 py-2">
+            <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center list-none [&::-webkit-details-marker]:hidden">
+              not tracking · {archivedItems.length} ▸
+            </summary>
+            <ul className="divide-y divide-hairline border-t border-hairline pb-1">
+              {archivedFiltered.map((it) => (
+                <ArchivedRow
+                  key={it.id}
+                  item={it}
+                  onRestore={(id) => onSetArchived(id, false)}
+                  onDelete={(id) => {
+                    if (
+                      window.confirm(`delete "${it.name}" forever? this cannot be undone.`)
+                    ) {
+                      onDeleteItem(id);
+                    }
+                  }}
+                />
+              ))}
+            </ul>
+          </details>
+        )}
 
         <details className="border border-hairline px-3 py-2">
           <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center list-none [&::-webkit-details-marker]:hidden">
@@ -618,6 +1088,55 @@ export function InventoryClient({
             )}
           </div>
         </details>
+
+        {selectMode && (
+          <div className="sticky bottom-28 z-30 flex flex-wrap items-center gap-2 border border-line-strong bg-card px-3 py-2 shadow-lg">
+            <span className="text-label uppercase text-muted tabular-nums">
+              {checkedIds.size} selected
+            </span>
+            <button
+              type="button"
+              onClick={bulkArchive}
+              disabled={checkedIds.size === 0}
+              className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
+            >
+              stop tracking
+            </button>
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value === "") return;
+                bulkMove(e.target.value === "__none" ? null : e.target.value);
+              }}
+              disabled={checkedIds.size === 0}
+              aria-label="move selected to group"
+              className="min-h-9 bg-card border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
+            >
+              <option value="">move to…</option>
+              <option value="__none">ungrouped</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={bulkDelete}
+              disabled={checkedIds.size === 0}
+              className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors disabled:opacity-40"
+            >
+              delete
+            </button>
+            <button
+              type="button"
+              onClick={exitSelectMode}
+              className="ml-auto min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+            >
+              done
+            </button>
+          </div>
+        )}
       </section>
 
       <aside ref={asideRef} className="min-w-0 lg:sticky lg:top-8">
@@ -640,6 +1159,7 @@ export function InventoryClient({
               (u) => u.inventory_item_id === selectedItem.id,
             )}
             onUpdate={onUpdateItem}
+            onArchive={(id) => onSetArchived(id, true)}
             onDelete={onDeleteItem}
             onCreateUsage={onCreateUsage}
             onUpdateUsage={onUpdateUsage}
@@ -833,92 +1353,350 @@ function GroupEditPanel({
   );
 }
 
+// A shelf row: tap to open details, steppers on the right, swipe left (touch)
+// or hover (desktop) to reveal "stop tracking" without opening anything.
 function ItemRow({
   item,
-  groupName,
-  status,
-  runOut,
+  hint,
   selected,
+  selectMode,
+  checked,
+  onToggleCheck,
   onSelect,
   onAdjust,
+  onArchive,
 }: {
   item: InventoryItem;
-  groupName: string | null;
-  status: StockStatus;
-  runOut: string | null;
+  hint: { status: StockStatus; runOut: string | null };
   selected: boolean;
+  selectMode: boolean;
+  checked: boolean;
+  onToggleCheck: (id: string) => void;
   onSelect: (id: string) => void;
   onAdjust: (id: string, delta: number) => void;
+  onArchive: (id: string) => void;
 }) {
+  const [offset, setOffset] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{
+    x: number;
+    y: number;
+    base: number;
+    decided: boolean;
+  } | null>(null);
+  const suppressClick = useRef(false);
+
+  function onPointerDown(e: React.PointerEvent) {
+    if (selectMode) return;
+    drag.current = { x: e.clientX, y: e.clientY, base: offset, decided: false };
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (!d.decided) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dx) <= Math.abs(dy)) {
+        drag.current = null;
+        return;
+      }
+      d.decided = true;
+      setDragging(true);
+      suppressClick.current = true;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    }
+    setOffset(Math.min(0, Math.max(-96, d.base + dx)));
+  }
+
+  function onPointerEnd() {
+    if (drag.current?.decided) {
+      setOffset((o) => (o < -48 ? -96 : 0));
+    }
+    drag.current = null;
+    setDragging(false);
+  }
+
+  function onClickCapture(e: React.MouseEvent) {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+
   const statusLabel =
-    status === "out"
-      ? "out"
-      : runOut !== null
-        ? `≈ ${formatRunOut(runOut)}`
-        : status === "low"
-          ? "low"
-          : null;
+    hint.status === "low"
+      ? "low"
+      : hint.runOut !== null
+        ? `≈ ${formatRunOut(hint.runOut)}`
+        : null;
 
   return (
     <li
-      className={`flex items-stretch transition-colors ${
+      className={`relative overflow-hidden group/row transition-colors ${
         selected ? "bg-card-hover" : ""
       }`}
     >
-      <button
-        onClick={() => onSelect(item.id)}
-        className="flex-1 min-w-0 text-left flex items-center gap-3 px-3 min-h-11 py-2 hover:bg-card-hover transition-colors"
+      {offset < 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            setOffset(0);
+            onArchive(item.id);
+          }}
+          className="absolute inset-y-0 right-0 w-24 flex items-center justify-center bg-line text-[10px] tracking-widest uppercase text-fg"
+        >
+          stop
+        </button>
+      )}
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
+        onClickCapture={onClickCapture}
+        style={{
+          transform: `translateX(${offset}px)`,
+          touchAction: "pan-y",
+        }}
+        className={`flex items-stretch bg-page ${dragging ? "" : "transition-transform duration-150"} ${
+          selected ? "bg-card-hover" : ""
+        }`}
       >
-        {item.image_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={item.image_url}
-            alt=""
-            className="w-8 h-8 flex-shrink-0 object-cover border border-line bg-page"
-          />
-        ) : (
+        {selectMode && (
+          <button
+            type="button"
+            onClick={() => onToggleCheck(item.id)}
+            aria-label={`select ${item.name}`}
+            aria-pressed={checked}
+            className="w-11 flex items-center justify-center flex-shrink-0"
+          >
+            <span
+              className={`w-4 h-4 border transition-colors ${
+                checked ? "bg-accent border-accent" : "border-line-strong"
+              }`}
+              aria-hidden
+            />
+          </button>
+        )}
+        <button
+          onClick={() =>
+            selectMode ? onToggleCheck(item.id) : onSelect(item.id)
+          }
+          className="flex-1 min-w-0 text-left flex items-center gap-3 px-3 min-h-11 py-2 hover:bg-card-hover transition-colors"
+        >
+          {item.image_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={item.image_url}
+              alt=""
+              className="w-8 h-8 flex-shrink-0 object-cover border border-line bg-page"
+            />
+          ) : (
+            <span
+              className="w-8 h-8 flex-shrink-0 border border-dashed border-line-subtle"
+              aria-hidden
+            />
+          )}
+          <span className="flex-1 min-w-0 truncate text-fg text-sm">
+            {item.name}
+          </span>
+          {statusLabel !== null && (
+            <span
+              className={`flex-shrink-0 max-w-[45%] truncate text-meta ${
+                hint.status === "low" ? "text-danger" : "text-muted"
+              }`}
+            >
+              {statusLabel}
+            </span>
+          )}
+        </button>
+        {!selectMode && (
+          <button
+            type="button"
+            onClick={() => onArchive(item.id)}
+            aria-label={`stop tracking ${item.name}`}
+            title="stop tracking"
+            className="hidden lg:flex w-11 items-center justify-center border-l border-line text-muted text-[10px] tracking-widest uppercase opacity-0 group-hover/row:opacity-100 focus:opacity-100 hover:text-fg hover:bg-card-hover transition-all"
+          >
+            ⏏
+          </button>
+        )}
+        <div className="flex items-stretch flex-shrink-0 border-l border-line">
+          <button
+            type="button"
+            onClick={() => onAdjust(item.id, -1)}
+            aria-label={`decrease ${item.name}`}
+            className="w-11 flex items-center justify-center text-muted text-lg leading-none hover:text-fg hover:bg-card-hover transition-colors"
+          >
+            −
+          </button>
+          <span className="flex w-16 items-center justify-center text-fg text-xs tabular-nums text-center px-1">
+            {formatQty(item.quantity)}
+            {item.unit ? ` ${item.unit}` : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => onAdjust(item.id, 1)}
+            aria-label={`increase ${item.name}`}
+            className="w-11 flex items-center justify-center border-l border-line text-muted text-lg leading-none hover:text-fg hover:bg-card-hover transition-colors"
+          >
+            +
+          </button>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+// An item at zero: quiet, one question — restock, or stop tracking?
+function RanOutRow({
+  item,
+  groupName,
+  selectMode,
+  checked,
+  onToggleCheck,
+  onRestock,
+  onArchive,
+}: {
+  item: InventoryItem;
+  groupName: string | null;
+  selectMode: boolean;
+  checked: boolean;
+  onToggleCheck: (id: string) => void;
+  onRestock: (id: string, quantity: number) => void;
+  onArchive: (id: string) => void;
+}) {
+  const [restocking, setRestocking] = useState(false);
+  const [draft, setDraft] = useState("1");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (restocking) inputRef.current?.focus();
+  }, [restocking]);
+
+  function commitRestock() {
+    const n = Number(draft);
+    if (!Number.isFinite(n) || n <= 0) {
+      setRestocking(false);
+      return;
+    }
+    onRestock(item.id, Math.round(n * 1000) / 1000);
+    setRestocking(false);
+  }
+
+  return (
+    <li className="flex items-center gap-2 min-h-11 py-1">
+      {selectMode && (
+        <button
+          type="button"
+          onClick={() => onToggleCheck(item.id)}
+          aria-label={`select ${item.name}`}
+          aria-pressed={checked}
+          className="w-11 self-stretch flex items-center justify-center flex-shrink-0"
+        >
           <span
-            className="w-8 h-8 flex-shrink-0 border border-dashed border-line-subtle"
+            className={`w-4 h-4 border transition-colors ${
+              checked ? "bg-accent border-accent" : "border-line-strong"
+            }`}
             aria-hidden
           />
+        </button>
+      )}
+      <span className="flex-1 min-w-0 truncate text-sm text-muted">
+        {item.name}
+        {groupName && (
+          <span className="text-meta text-muted"> · {groupName}</span>
         )}
-        <span className="flex-1 min-w-0 truncate text-fg text-sm">
-          {item.name}
+      </span>
+      {restocking ? (
+        <span className="flex items-center gap-1">
+          <input
+            ref={inputRef}
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="any"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitRestock();
+              }
+              if (e.key === "Escape") setRestocking(false);
+            }}
+            aria-label={`restock quantity for ${item.name}`}
+            className="w-20 min-h-9 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center focus:outline-none transition-colors"
+          />
+          {item.unit && <span className="text-meta text-muted">{item.unit}</span>}
+          <button
+            type="button"
+            onClick={commitRestock}
+            className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-accent bg-accent text-accent-fg hover:opacity-90 transition-opacity"
+          >
+            ok
+          </button>
         </span>
-        {(groupName !== null || statusLabel !== null) && (
-          <span className="flex-shrink-0 max-w-[45%] truncate text-meta text-muted">
-            {groupName}
-            {groupName !== null && statusLabel !== null ? " · " : ""}
-            {statusLabel !== null && (
-              <span className={status === "ok" ? "" : "text-danger"}>
-                {statusLabel}
-              </span>
-            )}
-          </span>
-        )}
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => setRestocking(true)}
+            className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+          >
+            restock…
+          </button>
+          <button
+            type="button"
+            onClick={() => onArchive(item.id)}
+            className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+          >
+            stop tracking
+          </button>
+        </>
+      )}
+    </li>
+  );
+}
+
+function ArchivedRow({
+  item,
+  onRestore,
+  onDelete,
+}: {
+  item: InventoryItem;
+  onRestore: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const since = item.archived_at
+    ? new Date(item.archived_at)
+        .toLocaleDateString("en-US", { month: "short", day: "numeric" })
+        .toLowerCase()
+    : null;
+
+  return (
+    <li className="flex items-center gap-2 min-h-11 py-1">
+      <span className="flex-1 min-w-0 truncate text-sm text-muted">
+        {item.name}
+        {since && <span className="text-meta"> · since {since}</span>}
+      </span>
+      <button
+        type="button"
+        onClick={() => onRestore(item.id)}
+        className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+      >
+        restore
       </button>
-      <div className="flex items-stretch flex-shrink-0 border-l border-line">
-        <button
-          type="button"
-          onClick={() => onAdjust(item.id, -1)}
-          aria-label={`decrease ${item.name}`}
-          className="w-11 flex items-center justify-center text-muted text-lg leading-none hover:text-fg hover:bg-card-hover transition-colors"
-        >
-          −
-        </button>
-        <span className="flex w-16 items-center justify-center text-fg text-xs tabular-nums text-center px-1">
-          {formatQty(item.quantity)}
-          {item.unit ? ` ${item.unit}` : ""}
-        </span>
-        <button
-          type="button"
-          onClick={() => onAdjust(item.id, 1)}
-          aria-label={`increase ${item.name}`}
-          className="w-11 flex items-center justify-center border-l border-line text-muted text-lg leading-none hover:text-fg hover:bg-card-hover transition-colors"
-        >
-          +
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={() => onDelete(item.id)}
+        className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
+      >
+        delete forever
+      </button>
     </li>
   );
 }
@@ -1197,6 +1975,7 @@ function ItemDetail({
   recentUnits,
   usages,
   onUpdate,
+  onArchive,
   onDelete,
   onCreateUsage,
   onUpdateUsage,
@@ -1208,6 +1987,7 @@ function ItemDetail({
   recentUnits: string[];
   usages: InventoryUsage[];
   onUpdate: (id: string, patch: Partial<InventoryItem>) => void;
+  onArchive: (id: string) => void;
   onDelete: (id: string) => void;
   onCreateUsage: (
     itemId: string,
@@ -1460,17 +2240,33 @@ function ItemDetail({
               className="sr-only"
             />
           </div>
-
-          <div className="flex justify-end">
-            <button
-              onClick={() => onDelete(item.id)}
-              className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-1.5 px-3"
-            >
-              delete
-            </button>
-          </div>
         </div>
       </details>
+
+      <div className="flex items-center justify-between border-t border-hairline pt-3">
+        <button
+          type="button"
+          onClick={() => onArchive(item.id)}
+          className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+        >
+          stop tracking
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (
+              window.confirm(
+                `delete "${item.name}" forever? "stop tracking" keeps it recoverable.`,
+              )
+            ) {
+              onDelete(item.id);
+            }
+          }}
+          className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
+        >
+          delete forever
+        </button>
+      </div>
     </div>
   );
 }

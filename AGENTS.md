@@ -111,6 +111,8 @@ Migrations live in `supabase/migrations`.
 
 `0010_inventory_usages.sql` creates `inventory_usages` (recurring consumption rules) and adds `inventory_items.reorder_threshold`.
 
+`0019_inventory_archive.sql` adds `inventory_items.archived`/`archived_at` ("stop tracking" archives instead of deleting; archived items are hidden from the page shelf, vitals, and MCP reads) and `last_restocked_at` (stamped on any quantity increase; powers the "sitting at zero since…" archive suggestion).
+
 Every table has RLS enabled and user-scoped policies. Never disable RLS as a debugging shortcut.
 
 **Scope note.** Mindboard has grown well past the original task app, with the user's explicit approval. Finance and inventory are full features, and their recurring tables (`recurring_expenses`, `income_sources`, `inventory_usages`) are intentional — not violations of the rule below. The AI second-brain direction (see that section) further authorizes future tables for notes/wikilinks, goals, pgvector embeddings, and AI conversation/audit logs. Outside those approved expansions, still do not add tables for subtasks, tags, attachments, reminders, dependencies, or two-way sync unless the user reopens scope.
@@ -232,14 +234,18 @@ Files: `app/finance/page.tsx`, `app/finance/finance-client.tsx`, `app/_component
 
 ## Inventory
 
-`/inventory` tracks stock with a per-item depletion forecast.
+`/inventory` is "the shelf": a calm picture of what the user HAS, with a per-item depletion forecast. The design rule is have-first — attention is opt-in (an item only shows a "low"/run-out hint when the user set a `reorder_threshold` or usage rule), and running out is an exit, not an alarm. Full design rationale in `docs/inventory-redesign-plan.md`.
 
-- `inventory_items` (quantity, unit, notes, `image_url`, `reorder_threshold`) are grouped by `inventory_groups`. Inline −/＋ steppers adjust an item's count in place; item creation is via the explicit add form.
+- Active items with quantity > 0 render grouped by `inventory_groups` and alphabetical, with inline −/＋ steppers. Items at zero drop into a collapsed "ran out" footer whose only actions are `restock…` and `stop tracking`.
+- **Lifecycle**: `stop tracking` archives (swipe-left on mobile, hover ⏏ on desktop, the detail panel, or select-mode bulk bar). Archived items live in a collapsed "not tracking" section with `restore` and `delete forever`; hard delete only exists there and behind a confirm in the detail panel. An item at zero for 14+ days gets at most one quiet "stop tracking?" suggestion row, never a modal.
+- **Omnibox**: the single field on top is search + capture. Plain text filters; `12 eggs` (recount), `+2 milk` (add), `-1 rice` (remove) apply instantly on enter when every ref resolves to an existing item. Batches that create new items, and free-form text (parsed by one forced-tool Claude call using the user's stored API key), come back as a propose → confirm receipt in the universal `ProposalCard`. Grammar: `app/_components/stock-capture-parse.ts`; server actions: `app/actions/stock-capture.ts`. The Dock's three-mode capture grammar is untouched — stock capture is page-local by design.
+- **Agent editing**: `update_stock` is a batched propose → confirm write (add/remove/set/create/archive/restore; items referenced by id or fuzzy name — exact → unique substring, ambiguity fails with candidates) exposed on both the MCP server and the in-app assistant, with `list_inventory` as the id-source read. Pure batch logic (validation, resolution, receipt rendering) is unit-tested in `app/lib/mcp/inventory-ops.ts`; the shared executor lives in `EXECUTORS` in `app/lib/mcp/writes.ts`, so MCP `confirm_action` and the in-app `confirmProposal` both apply it.
+- Select mode (toggle next to list/grid) turns rows into checkboxes with a sticky bulk bar: stop tracking · move to group · delete.
 - `inventory_usages` are recurring consumption rules (`day`/`week`/`custom`) spread to an effective daily rate (day = amount, week = amount/7, custom = amount/interval_days). All usages sum to one smooth declining projection — weekly usage does NOT land on a specific weekday.
 - Each item's detail panel shows an `InventoryCalendar` with projected remaining quantity per day, the run-out day, and the reorder-by day when `reorder_threshold` is set. Projection math is pure and unit-tested in `app/_components/inventory-projection.ts`.
 - Item icons are uploaded or generated and served from the public `inventory-icons` storage bucket (migration `0005`).
 
-Files: `app/inventory/page.tsx`, `app/inventory/inventory-client.tsx`, `app/_components/inventory-calendar.tsx`, `app/_components/inventory-projection.ts`, `app/_components/inventory-types.ts`, `app/_components/inventory-units.ts`, `app/_components/unit-picker.tsx`, `app/actions/inventory.ts`, `app/actions/inventory-icon.ts`.
+Files: `app/inventory/page.tsx`, `app/inventory/inventory-client.tsx`, `app/_components/inventory-calendar.tsx`, `app/_components/inventory-projection.ts`, `app/_components/inventory-types.ts`, `app/_components/inventory-units.ts`, `app/_components/unit-picker.tsx`, `app/_components/stock-capture-parse.ts`, `app/actions/inventory.ts`, `app/actions/inventory-icon.ts`, `app/actions/stock-capture.ts`, `app/lib/mcp/inventory-ops.ts`.
 
 ## Command Center (dashboard vitals)
 

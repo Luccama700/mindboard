@@ -16,6 +16,7 @@ import { inventorySnapshot } from "@/app/lib/snapshots/inventory";
 import { tasksSnapshot } from "@/app/lib/snapshots/tasks";
 import { freeGaps, scheduleSnapshot } from "@/app/lib/snapshots/schedule";
 import { recordProposal } from "@/app/lib/mcp/audit";
+import { proposeUpdateStockFor } from "@/app/lib/mcp/writes";
 import { captureToBrainFor } from "@/app/lib/mcp/brain";
 import {
   summarizeCreateTask,
@@ -95,6 +96,64 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
         pushToCalendar: { type: "boolean" },
       },
       required: ["taskId", "dueDate", "dueTime"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_inventory",
+    description:
+      "List stock items (id, name, quantity, unit, group, archived) plus inventory groups. Use it to find item ids/names before propose_update_stock. Pass includeArchived to also see untracked items (needed before a restore op).",
+    input_schema: {
+      type: "object",
+      properties: { includeArchived: { type: "boolean" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_update_stock",
+    description:
+      "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Batch a whole grocery haul into ONE call. User must confirm.",
+    input_schema: {
+      type: "object",
+      properties: {
+        operations: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            properties: {
+              op: {
+                type: "string",
+                enum: ["add", "remove", "set", "create", "archive", "restore"],
+              },
+              item: {
+                type: "string",
+                description: "Item id or name (for add/remove/set/archive/restore).",
+              },
+              amount: {
+                type: "number",
+                exclusiveMinimum: 0,
+                description: "How much was gained/used (for add/remove).",
+              },
+              quantity: {
+                type: "number",
+                minimum: 0,
+                description: "Absolute count (for set/create).",
+              },
+              name: { type: "string", description: "New item name (for create)." },
+              unit: { type: "string", description: 'Optional unit for create, e.g. "rolls".' },
+              group: {
+                type: "string",
+                description: "Optional inventory group id or name (for create).",
+              },
+            },
+            required: ["op"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["operations"],
       additionalProperties: false,
     },
   },
@@ -409,6 +468,59 @@ export async function runAssistantTool(
       }
       case "propose_schedule_task": {
         const outcome = await proposeScheduleTask(supabase, userId, conversationId, input);
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "proposal", ...outcome.value };
+      }
+      case "list_inventory": {
+        const includeArchived = input.includeArchived === true;
+        let itemQuery = supabase
+          .from("inventory_items")
+          .select(
+            "id, name, quantity, unit, reorder_threshold, archived, inventory_group_id",
+          )
+          .order("name", { ascending: true });
+        if (!includeArchived) itemQuery = itemQuery.eq("archived", false);
+        const [itemsRes, groupsRes] = await Promise.all([
+          itemQuery,
+          supabase
+            .from("inventory_groups")
+            .select("id, name")
+            .order("name", { ascending: true }),
+        ]);
+        const groups = (groupsRes.data ?? []) as { id: string; name: string }[];
+        const groupNames = new Map(groups.map((g) => [g.id, g.name]));
+        type ItemRow = {
+          id: string;
+          name: string;
+          quantity: number;
+          unit: string;
+          reorder_threshold: number | null;
+          archived: boolean;
+          inventory_group_id: string | null;
+        };
+        return {
+          type: "result",
+          content: {
+            items: ((itemsRes.data ?? []) as ItemRow[]).map((row) => ({
+              id: row.id,
+              name: row.name,
+              quantity: Number(row.quantity),
+              unit: row.unit,
+              reorderThreshold: row.reorder_threshold,
+              archived: row.archived,
+              group: row.inventory_group_id
+                ? (groupNames.get(row.inventory_group_id) ?? null)
+                : null,
+            })),
+            groups,
+          },
+        };
+      }
+      case "propose_update_stock": {
+        const outcome = await proposeUpdateStockFor(supabase, userId, input, {
+          source: "assistant",
+          conversationId,
+        });
         if (!outcome.ok) return { type: "error", error: outcome.error };
         return { type: "proposal", ...outcome.value };
       }

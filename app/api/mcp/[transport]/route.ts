@@ -9,6 +9,7 @@ import {
   listAccounts,
   listCategories,
   listGroups,
+  listInventory,
   listRecentLedger,
   listTasks,
 } from "@/app/lib/mcp/reads";
@@ -18,7 +19,9 @@ import {
   proposeCompleteTask,
   proposeCreateTask,
   proposeLogSpend,
+  proposeUpdateStock,
 } from "@/app/lib/mcp/writes";
+import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
 import { captureToBrain } from "@/app/lib/mcp/brain";
 import { CAPTURE_SUMMARY_MAX, CAPTURE_TITLE_MAX } from "@/app/lib/mcp/capture";
 
@@ -127,6 +130,17 @@ const mcpHandler = createMcpHandler(
     );
 
     server.registerTool(
+      "list_inventory",
+      {
+        title: "List inventory",
+        description:
+          "List stock items (id, name, quantity, unit, group, archived) plus inventory groups. Use it to find item ids/names before update_stock. Pass includeArchived to also see untracked items (needed before a restore op).",
+        inputSchema: { includeArchived: z.boolean().optional() },
+      },
+      (args) => guard(async () => ok(await listInventory(args))),
+    );
+
+    server.registerTool(
       "list_recent_ledger",
       {
         title: "List recent ledger rows",
@@ -195,6 +209,50 @@ const mcpHandler = createMcpHandler(
         }),
     );
 
+    server.registerTool(
+      "update_stock",
+      {
+        title: "Propose: update inventory stock",
+        description:
+          "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Returns a receipt preview + proposalId; call confirm_action to apply. Batch a whole grocery haul into ONE call.",
+        inputSchema: {
+          operations: z
+            .array(
+              z.object({
+                op: z.enum(["add", "remove", "set", "create", "archive", "restore"]),
+                item: z
+                  .string()
+                  .optional()
+                  .describe("Item id or name (for add/remove/set/archive/restore)."),
+                amount: z
+                  .number()
+                  .positive()
+                  .optional()
+                  .describe("How much was gained/used (for add/remove)."),
+                quantity: z
+                  .number()
+                  .min(0)
+                  .optional()
+                  .describe("Absolute count (for set/create)."),
+                name: z.string().optional().describe("New item name (for create)."),
+                unit: z.string().optional().describe('Optional unit for create, e.g. "rolls".'),
+                group: z
+                  .string()
+                  .optional()
+                  .describe("Optional inventory group id or name (for create)."),
+              }),
+            )
+            .min(1)
+            .max(MAX_STOCK_OPS),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeUpdateStock(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
     // ---------- direct write (fenced: create-only, vault Inbox/ only) ----------
     // No propose → confirm step: this cannot touch Mindboard data at all, and
     // the vault's review-and-file flow is the confirmation.
@@ -224,7 +282,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Confirm a proposed write",
         description:
-          "Execute a previously proposed write (create_task / complete_task / log_spend) by its proposalId. Only call after the user has approved the preview.",
+          "Execute a previously proposed write (create_task / complete_task / log_spend / update_stock) by its proposalId. Only call after the user has approved the preview.",
         inputSchema: { proposalId: z.string() },
       },
       (args) =>
