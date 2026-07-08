@@ -157,30 +157,28 @@ function encodeGitHubPath(path: string): string {
 
 export type CaptureOutcome = { path: string; message: string };
 
-async function createCaptureFile(
+// Generic create-only vault write with collision retry, shared by
+// capture_to_brain (Inbox/) and the course-source writer (Courses/). The
+// payload never carries a `sha`, so GitHub can only ever create the path —
+// never update it. An existing path comes back 422 (409 on a ref race) and we
+// retry with the caller's next " -N" suffixed path.
+export async function createVaultFileWithRetry(
   credentials: VaultWriteCredentials,
-  input: CaptureInput,
-  safeTitle: string,
-  now: Date,
-  fetchImpl: typeof fetch,
-): Promise<Result<CaptureOutcome>> {
-  const stamp = vancouverStamp(now);
-  const commitMessage = `Capture: ${input.title} (via MCP)`;
+  pathForAttempt: (attempt: number) => string,
+  content: string,
+  commitMessage: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Result<{ path: string }>> {
   const payload = {
     message: commitMessage,
-    content: Buffer.from(buildCaptureDocument(input, stamp.created), "utf8").toString(
-      "base64",
-    ),
+    content: Buffer.from(content, "utf8").toString("base64"),
     // No committer override: GitHub attributes the commit to the owner of the
     // vault token (the user), matching their normal commits.
     branch: credentials.branch,
   };
 
-  // Create-only invariant: the payload never carries a `sha`, so GitHub can
-  // only ever create the path — never update it. An existing path comes back
-  // 422 (409 on a ref race) and we retry with the next " -N" suffix.
   for (let attempt = 1; attempt <= CAPTURE_MAX_ATTEMPTS; attempt++) {
-    const path = captureFilePath(stamp, safeTitle, attempt);
+    const path = pathForAttempt(attempt);
     let response: Response;
     try {
       response = await fetchImpl(
@@ -200,12 +198,7 @@ async function createCaptureFile(
       return { ok: false, error: "could not reach GitHub" };
     }
 
-    if (response.ok) {
-      return {
-        ok: true,
-        value: { path, message: `Captured "${input.title}" to ${path} for review.` },
-      };
-    }
+    if (response.ok) return { ok: true, value: { path } };
     if (response.status === 409 || response.status === 422) continue;
     if (response.status === 401) {
       return { ok: false, error: "vault token was rejected by GitHub" };
@@ -229,6 +222,31 @@ async function createCaptureFile(
   return {
     ok: false,
     error: "could not find a free filename for this capture (too many collisions)",
+  };
+}
+
+async function createCaptureFile(
+  credentials: VaultWriteCredentials,
+  input: CaptureInput,
+  safeTitle: string,
+  now: Date,
+  fetchImpl: typeof fetch,
+): Promise<Result<CaptureOutcome>> {
+  const stamp = vancouverStamp(now);
+  const written = await createVaultFileWithRetry(
+    credentials,
+    (attempt) => captureFilePath(stamp, safeTitle, attempt),
+    buildCaptureDocument(input, stamp.created),
+    `Capture: ${input.title} (via MCP)`,
+    fetchImpl,
+  );
+  if (!written.ok) return written;
+  return {
+    ok: true,
+    value: {
+      path: written.value.path,
+      message: `Captured "${input.title}" to ${written.value.path} for review.`,
+    },
   };
 }
 

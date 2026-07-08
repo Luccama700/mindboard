@@ -1,7 +1,7 @@
 import { Suspense, cache } from "react";
 import { createClient } from "@/utils/supabase/server";
 import { DashboardCalendar } from "./_components/dashboard-calendar";
-import { GetStartedScreen } from "./_components/get-started-screen";
+import { Landing } from "./_components/landing/landing";
 import { StreamClient } from "./_components/stream-client";
 import {
   formatClock12,
@@ -53,6 +53,7 @@ const getStreamData = cache(
     accounts: SpendAccount[];
     categories: SpendCategory[];
     gaps: FreeGap[];
+    groups: { id: string; name: string; color: string }[];
   }> => {
     const prefs = await getUserPreferences(userId);
     const timeZone = safeTimeZone(prefs.timezone);
@@ -203,15 +204,14 @@ const getStreamData = cache(
       })),
       categories: (categoriesResult.data ?? []) as SpendCategory[],
       gaps,
+      groups: dash.groups,
     };
   },
 );
 
 async function StreamSection({ userId }: { userId: string }) {
-  const [{ snapshot, accounts, categories, gaps }, prefs] = await Promise.all([
-    getStreamData(userId),
-    getUserPreferences(userId),
-  ]);
+  const [{ snapshot, accounts, categories, gaps, groups }, prefs] =
+    await Promise.all([getStreamData(userId), getUserPreferences(userId)]);
   const timeZone = safeTimeZone(prefs.timezone);
   const now = new Date();
 
@@ -221,6 +221,7 @@ async function StreamSection({ userId }: { userId: string }) {
       accounts={accounts}
       categories={categories}
       gaps={gaps}
+      groups={groups}
       todayLabel={formatLongWeekdayMonthDay(now, timeZone).toLowerCase()}
       clockLabel={formatClock12(now, timeZone)}
     />
@@ -332,7 +333,7 @@ export default async function Home({
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return <GetStartedScreen />;
+    return <Landing />;
   }
 
   return (
@@ -343,7 +344,7 @@ export default async function Home({
             <StreamSection userId={user.id} />
           </Suspense>
         </div>
-        <div className="hidden lg:block min-w-0">
+        <div className="hidden lg:block min-w-0" data-tour="calendar-pane">
           <Suspense fallback={<WeekPaneSkeleton />}>
             <WeekPaneSection userId={user.id} month={month} />
           </Suspense>

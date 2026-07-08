@@ -5,6 +5,140 @@ in the linked plan docs; this file records exactly what changed and where.
 
 ---
 
+## v0.4.0 — landing page + Football-Manager onboarding (2026-07-08)
+
+The logged-out `/` and the first-run experience, rebuilt together. Plan and
+rationale: [onboarding-landing-plan.md](onboarding-landing-plan.md). Shipped
+in the same tree (and the same push) as v0.3.0 below — two concurrent
+sessions, merged and verified as one set.
+
+### Track L — the landing page
+
+`GetStartedScreen` is deleted; `app/page.tsx` renders the new
+`app/_components/landing/landing.tsx` when logged out. One long, scroll-driven,
+self-contained page in the board's voice (casual, lowercase, first person):
+
+- **Boot hero** (`boot-hero.tsx`): terminal-style typed boot sequence
+  (*"where did i put my life?"* → the board answers) resolving into the
+  headline and `get started →` / `continue with google` CTAs.
+- **A day with the board** (`day-scene.tsx` + `day-script.ts`): a
+  scroll-progress-driven scene that walks five chapters of one day through a
+  stylized mini-dashboard. The chapter/segment math (`chapterAt`, `seg`,
+  `lerp`, `typedCount`, chapter fades) is pure and unit-tested in
+  `__tests__/landing-day.test.ts`.
+- **Grammar doors** (`grammar-doors.tsx`): the capture bar's three modes
+  (task / `$` spend / `?` question) demonstrated, not described.
+- **MCP bridge panel** (`mcp-bridge.tsx`): the claude.ai connector pitch.
+- **Theme split** (`theme-split.tsx`): the dark/cream "pick a side" moment
+  survives — tapping a side re-themes the whole landing page live and
+  persists the choice for `/login`.
+- **Close CTA** (`close-cta.tsx`), hooks `use-in-view.ts` /
+  `use-scroll-progress.ts` (both respect `prefers-reduced-motion`), and a
+  `/* landing */` keyframe block in `app/globals.css` using theme tokens.
+- No new dependencies, no images, no network calls while logged out.
+
+### Track O — onboarding (the Football Manager model)
+
+One overview up front, then an in-depth tour of each section the first time
+you walk in. Finish or skip once → never again; a fixed `?` button replays.
+
+- **Migration `0025_onboarding.sql`** (applied live):
+  `user_settings.completed_tours jsonb` — tour key → completed-at timestamp.
+  Server actions `completeTour`/`resetTours` in `app/actions/onboarding.ts`;
+  the migration leaves the map empty so the owner sees everything once too.
+- **Engine** (`app/_components/onboarding/`): `TourMount` server shell mounted
+  in `app/layout.tsx` next to `DockMount`; `onboarding-controller.tsx` maps
+  route → tour key and auto-starts incomplete tours; `tour-overlay.tsx`
+  renders the spotlight via the box-shadow-cutout trick with a mobile
+  bottom-sheet / desktop popover card; `intro-carousel.tsx` is the first-run
+  full-screen overview; `tours.ts` is the pure copy catalog. Spotlight/
+  placement math is pure and unit-tested (`tour-geometry.ts`,
+  `__tests__/tour-geometry.test.ts`).
+- **Anchors**: inert `data-tour="…"` stamps on the Dock, vitals, stream,
+  calendar pane, week grid, plan input, finance sections, inventory omnibox,
+  tasks page, and brain — all chrome or empty-states, so tours work on a
+  zero-data account. A missing anchor degrades to a centered card.
+- **Replay**: `replay-tours-button.tsx` (the `?`), plus a "replay all tours"
+  row in `/settings`.
+
+### Dashboard stream polish (same push)
+
+- **Task cards lead the "next" section** (`app/lib/snapshots/stream.ts`):
+  due-today tasks now sort before later-today events, so a full calendar day
+  can't push actionable tasks past the section cap.
+- **Inline group picker on stream task cards** (`stream-client.tsx` +
+  `page.tsx` passing `groups`): re-group a task from the dashboard; group and
+  reschedule edits apply optimistically in place (card re-labels instead of
+  vanishing) until the next server snapshot confirms. Render behavior covered
+  by the new `__tests__/stream-client-render.test.tsx`.
+- **`/week` rail tab is mobile-only** (`dock.tsx`): desktop's dashboard
+  already shows the week pane, so the tab was redundant there.
+
+---
+
+## v0.3.0 — `/learn`: courses, study engine, audio overviews (2026-07-08)
+
+The education section, L0–L5 in one session. Plan, rationale, and the full
+implementation log: [education-plan.md](education-plan.md). Migrations
+0024/0026/0027/0028/0029 applied to the live DB.
+
+- **Courses** (`/learn`, migration 0024): course CRUD, per-course sources,
+  browser→storage direct PDF upload into the private `course-files` bucket.
+  Converted markdown lands in the GitHub vault under `Courses/<course>/` (a
+  second fenced create-only writer alongside `capture_to_brain`'s `Inbox/`);
+  Postgres holds only operational metadata.
+- **Ingestion, three paths, one contract**: chat-AI transcription over MCP
+  (`begin_source_upload` → `append_source_markdown` → `finalize_source`),
+  the home worker (MinerU/Marker, free), or Claude-API conversion on the
+  stored key (`app/lib/learn/convert.ts`: `unpdf` probe → `pdf-lib` ~20-page
+  slices with 1-page overlap → per-slice document-block calls →
+  anchor-trimmed stitch). Pure logic unit-tested (`course-ops`,
+  `convert-plan`).
+- **Audio overviews** (migrations 0026 + 0029): Claude writes a typed
+  two-host script (flavors deep-dive/brief/debate, plus **solo**
+  single-narrator lectures); rendered via Gemini Flash TTS (one multi-speaker
+  request, PCM→WAV in pure JS) or VibeVoice on the home worker ($0, queued,
+  owner's cloned voice as default host). Episodes in `audio_episodes` +
+  private `course-audio`, played via signed URLs. MCP
+  `generate_audio_overview` is propose → confirm (it spends money).
+- **Home worker** (migration 0027, `worker/`): pull-based Python worker with
+  no inbound ports and no DB key — polls `POST /api/worker` (bearer =
+  `MCP_BEARER_TOKEN`) for claim/heartbeat/complete/fail; atomic
+  `claim_next_job()` (SKIP LOCKED, stale-heartbeat reclaim, 3-attempt
+  dead-letter); files travel by signed URLs; all finalization stays in the
+  app. Installed and verified end-to-end on the PC (Marker OCR + ComfyUI
+  VibeVoice via `render_vibevoice.py`).
+- **Grounded chat** (`/learn/[id]/chat` + `/api/course-chat`): selected
+  sources attach as citation-enabled documents; SSE streaming answers end in
+  numbered citation chips with quoted passages and `/brain` deep links.
+- **Study** (`/learn/[id]/study`, migration 0028): study guide / FAQ /
+  briefing / timeline generate as vault notes; flashcards persist in
+  `course_cards` with got/miss progress, retest-missed, and a weak-cards
+  deck.
+- **Connections redesign** (`/settings`): every provider key in one section,
+  one `ConnectionCard` recipe (status dot, last-4 hint, "powers" line,
+  verify-on-save), all encrypted server-side (`app/actions/connections.ts` +
+  `app/lib/connections/keys.ts`). Icon-generation keys moved out of
+  localStorage (one-time re-paste; `legacy-image-key-migration.tsx` cleans
+  up); only provider/model prefs stay client-side. The settings worker card
+  shows online/queue state from `worker_status`.
+- New MCP + assistant tools: `list_courses`, `begin_source_upload`,
+  `append_source_markdown`, `finalize_source`, `generate_audio_overview`.
+  The Dock's ≡ sheet gains `learn`.
+- New deps: `pdf-lib`, `unpdf`.
+
+### Verification (both versions, one tree)
+
+- `npm run lint` clean, `npm run test` 435 passing (31 files), `npm run
+  build` green with `/learn`, `/learn/[id]/chat`, `/learn/[id]/study`,
+  `/api/course-chat`, and `/api/worker` registered.
+- Migrations 0024–0029 applied to the live Supabase project.
+- Owner-gated follow-ups: paste the Google AI key (and re-paste the OpenAI
+  key if wanted) in settings → connections; toggle the claude.ai Mindboard
+  connector off/on so it re-fetches the new tools.
+
+---
+
 ## v0.2.1 — timezone-correct dashboard clock + daily-log invite (2026-07-08)
 
 Two fixes on `/` with one root cause: the page renders on Vercel where the

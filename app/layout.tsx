@@ -3,6 +3,7 @@ import { Suspense } from "react";
 import { Geist_Mono } from "next/font/google";
 import { cookies } from "next/headers";
 import { DockMount } from "./_components/dock-mount";
+import { TourMount } from "./_components/onboarding/tour-mount";
 import { ThemeInitializer } from "./_components/theme-initializer";
 import { getTheme, isThemeName, type ThemeName } from "./_components/themes";
 import "./globals.css";
@@ -60,6 +61,9 @@ export default async function RootLayout({
         {children}
         <Suspense fallback={null}>
           <DockMount />
+        </Suspense>
+        <Suspense fallback={null}>
+          <TourMount />
         </Suspense>
       </body>
     </html>

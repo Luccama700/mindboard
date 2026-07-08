@@ -213,7 +213,7 @@ export default async function FinancePage({
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-64 lg:px-12">
-      <header className="mb-8 flex items-center justify-between">
+      <header className="mb-8 flex items-center justify-between pr-10 lg:pr-0">
         <Link
           href="/"
           className="flex min-h-11 items-center text-label uppercase text-muted hover:text-fg transition-colors"

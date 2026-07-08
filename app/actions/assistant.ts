@@ -3,67 +3,13 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
-import { encryptSecret } from "@/app/lib/assistant/crypto";
 import { loadProposal, resolveProposal } from "@/app/lib/mcp/audit";
 import { EXECUTORS } from "@/app/lib/mcp/writes";
 import type { Result } from "@/app/lib/mcp/validate";
 import { pushTaskToCalendar, updateTask } from "@/app/actions/tasks";
 
-const KEY_RE = /^sk-ant-[A-Za-z0-9_-]{20,}$/;
-
-export async function saveAssistantKey(input: {
-  key: string;
-}): Promise<{ error: string | null }> {
-  const key = input.key?.trim() ?? "";
-  if (!KEY_RE.test(key)) {
-    return { error: "that does not look like an anthropic api key" };
-  }
-
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "not authenticated" };
-
-  let encrypted: string;
-  try {
-    encrypted = encryptSecret(key);
-  } catch {
-    return { error: "server key storage is not configured (ASSISTANT_KEY_SECRET)" };
-  }
-
-  const { error } = await supabase.from("user_settings").upsert(
-    {
-      user_id: user.id,
-      anthropic_api_key: encrypted,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id" },
-  );
-  if (error) return { error: error.message };
-
-  revalidatePath("/plan");
-  revalidatePath("/settings");
-  return { error: null };
-}
-
-export async function clearAssistantKey(): Promise<{ error: string | null }> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "not authenticated" };
-
-  const { error } = await supabase
-    .from("user_settings")
-    .update({ anthropic_api_key: null, updated_at: new Date().toISOString() })
-    .eq("user_id", user.id);
-  if (error) return { error: error.message };
-
-  revalidatePath("/plan");
-  revalidatePath("/settings");
-  return { error: null };
-}
+// Key save/clear moved to app/actions/connections.ts (the unified provider-key
+// path shared by every connection card).
 
 // ---- confirm / cancel: the only paths on which an assistant write executes.
 

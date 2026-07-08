@@ -87,7 +87,7 @@ export default async function TasksPage({
     <main className="min-h-screen px-5 pt-6 pb-64 max-w-2xl mx-auto">
       <header className="mb-6">
         <h1 className="text-label uppercase text-muted mb-4">tasks</h1>
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="flex gap-2 overflow-x-auto pb-1" data-tour="task-groups">
           <Link
             href="/tasks"
             className={`${chipBase} ${filter === "all" ? chipOn : chipOff}`}
@@ -96,6 +96,7 @@ export default async function TasksPage({
           </Link>
           <Link
             href="/tasks?group=inbox"
+            data-tour="task-inbox"
             className={`${chipBase} ${filter === null ? chipOn : chipOff}`}
           >
             <span
@@ -142,7 +143,10 @@ export default async function TasksPage({
         </div>
       </details>
 
-      <details className="mt-4 border-t border-hairline pt-4">
+      <details
+        className="mt-4 border-t border-hairline pt-4"
+        data-tour="task-manage"
+      >
         <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center hover:text-fg transition-colors">
           manage groups
         </summary>

@@ -19,13 +19,20 @@ import { formatDue, todayISO } from "./date-utils";
 import type { GroupOption } from "./task-row";
 import type { Task } from "./types";
 
-const RAIL_TABS = [
+const RAIL_TABS: {
+  href: string;
+  glyph: string;
+  label: string;
+  mobileOnly?: boolean;
+}[] = [
   { href: "/", glyph: "◆", label: "now" },
-  { href: "/week", glyph: "▦", label: "week" },
+  // Desktop's dashboard already shows the week calendar in its right pane,
+  // so the tab is redundant there — mobile keeps it.
+  { href: "/week", glyph: "▦", label: "week", mobileOnly: true },
   { href: "/plan", glyph: "◇", label: "plan" },
   { href: "/finance", glyph: "$", label: "money" },
   { href: "/inventory", glyph: "▤", label: "stock" },
-] as const;
+];
 
 function isActive(pathname: string, href: string) {
   if (href === "/") return pathname === "/";
@@ -353,6 +360,7 @@ export function Dock({
         <nav className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
           {[
             { href: "/tasks", label: "tasks", badge: inboxCount },
+            { href: "/learn", label: "learn", badge: 0 },
             { href: "/brain", label: "brain", badge: 0 },
             { href: "/settings", label: "settings", badge: 0 },
           ].map((item) => (
@@ -376,7 +384,7 @@ export function Dock({
           railCollapsed ? "max-h-0 opacity-0 mb-0" : "max-h-14 opacity-100 mb-2"
         }`}
       >
-        <div className="flex items-stretch">
+        <div className="flex items-stretch" data-tour="dock-rail">
           {RAIL_TABS.map((tab) => {
             const active = isActive(pathname, tab.href);
             return (
@@ -384,7 +392,7 @@ export function Dock({
                 key={tab.href}
                 href={tab.href}
                 aria-current={active ? "page" : undefined}
-                className={`flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 transition-colors ${
+                className={`${tab.mobileOnly ? "lg:hidden " : ""}flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 transition-colors ${
                   active
                     ? "border-accent text-fg"
                     : "border-transparent text-muted hover:text-fg"
@@ -804,7 +812,7 @@ export function Dock({
           />
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" data-tour="capture-input">
           <input
             ref={inputRef}
             type="text"

@@ -1,9 +1,10 @@
 export type ImageProvider = "openai" | "google";
 
+// Provider + model are browser preferences; the API keys themselves moved to
+// encrypted user_settings columns (settings → connections) so server-side
+// features can use them too.
 export type ImageGenSettings = {
   provider: ImageProvider;
-  openaiKey: string;
-  googleKey: string;
   openaiModel: string;
   googleModel: string;
 };
@@ -12,8 +13,6 @@ const STORAGE_KEY = "image-gen-settings";
 
 export const DEFAULT_IMAGE_GEN_SETTINGS: ImageGenSettings = {
   provider: "openai",
-  openaiKey: "",
-  googleKey: "",
   openaiModel: "gpt-image-2",
   googleModel: "gemini-3-pro-image-preview",
 };
@@ -40,12 +39,6 @@ export function readImageGenSettings(): ImageGenSettings {
 export function writeImageGenSettings(settings: ImageGenSettings): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-}
-
-export function activeKeyFor(settings: ImageGenSettings): string {
-  return settings.provider === "openai"
-    ? settings.openaiKey
-    : settings.googleKey;
 }
 
 export function activeModelFor(settings: ImageGenSettings): string {

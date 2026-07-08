@@ -281,7 +281,7 @@ export function PlanClient({
         </details>
       )}
 
-      <div className="space-y-3 min-h-[30vh]">
+      <div className="space-y-3 min-h-[30vh]" data-tour="plan-thread">
         {items.length === 0 && (
           <p className="text-muted text-body pt-8 text-center">
             ask for a plan — “plan my evening”, “what should i do next?”,
@@ -372,7 +372,7 @@ export function PlanClient({
         }}
         className="space-y-2"
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" data-tour="plan-input">
           <input
             type="text"
             value={input}

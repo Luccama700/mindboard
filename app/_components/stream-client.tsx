@@ -52,14 +52,18 @@ function snoozeOptions(today: string): { label: string; dateKey: string }[] {
   ];
 }
 
+export type StreamGroup = { id: string; name: string; color: string };
+
 function CardRow({
   card,
   section,
   leaving,
   gaps,
+  groups,
   onDone,
   onSnooze,
   onSchedule,
+  onGroup,
   onLogBill,
   onBuyTask,
   onAdjust,
@@ -70,9 +74,11 @@ function CardRow({
   section: SectionKey;
   leaving: boolean;
   gaps: FreeGap[];
+  groups: StreamGroup[];
   onDone: (card: StreamCard) => void;
   onSnooze: (card: StreamCard, dateKey: string) => void;
   onSchedule: (card: StreamCard, gap: FreeGap) => void;
+  onGroup: (card: StreamCard, group: StreamGroup | null) => void;
   onLogBill: (card: StreamCard) => void;
   onBuyTask: (card: StreamCard) => void;
   onAdjust: (card: StreamCard, delta: number) => void;
@@ -81,6 +87,7 @@ function CardRow({
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [groupOpen, setGroupOpen] = useState(false);
   const [dx, setDx] = useState(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const today = todayISO();
@@ -116,6 +123,8 @@ function CardRow({
 
   const actions: React.ReactNode[] = [];
   if (card.entity.kind === "task") {
+    const taskGroupName = card.entity.task.group_name;
+    const taskGroupColor = card.entity.task.group_color;
     actions.push(
       <button
         key="done"
@@ -189,6 +198,59 @@ function CardRow({
             >
               pick on week →
             </Link>
+          </div>
+        )}
+      </div>,
+      <div key="group" className="relative">
+        <button
+          type="button"
+          onClick={() => setGroupOpen((v) => !v)}
+          aria-expanded={groupOpen}
+          className="flex min-h-11 max-w-40 items-center gap-2 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors"
+        >
+          <span
+            className={`h-2.5 w-2.5 flex-shrink-0 ${
+              taskGroupName ? "" : "border border-muted border-dashed"
+            }`}
+            style={{ backgroundColor: taskGroupColor ?? "transparent" }}
+            aria-hidden
+          />
+          <span className="truncate">{taskGroupName ?? "inbox"} ▾</span>
+        </button>
+        {groupOpen && (
+          <div className="absolute left-0 top-full mt-1 z-30 max-h-56 overflow-y-auto border border-line bg-popover shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+            <button
+              type="button"
+              onClick={() => {
+                setGroupOpen(false);
+                onGroup(card, null);
+              }}
+              className="flex w-full min-h-11 items-center gap-2 px-4 text-action lowercase text-fg hover:bg-card transition-colors whitespace-nowrap"
+            >
+              <span
+                className="h-2.5 w-2.5 flex-shrink-0 border border-muted border-dashed"
+                aria-hidden
+              />
+              inbox
+            </button>
+            {groups.map((group) => (
+              <button
+                key={group.id}
+                type="button"
+                onClick={() => {
+                  setGroupOpen(false);
+                  onGroup(card, group);
+                }}
+                className="flex w-full min-h-11 items-center gap-2 px-4 text-action lowercase text-fg hover:bg-card transition-colors whitespace-nowrap"
+              >
+                <span
+                  className="h-2.5 w-2.5 flex-shrink-0"
+                  style={{ backgroundColor: group.color }}
+                  aria-hidden
+                />
+                <span className="truncate">{group.name}</span>
+              </button>
+            ))}
           </div>
         )}
       </div>,
@@ -283,9 +345,11 @@ function CardRow({
 
   return (
     <div
-      className={`overflow-hidden transition-all ease-signal ${
+      // overflow-hidden only while collapsing: at rest it would clip the
+      // later/schedule dropdowns, which open past the card's bottom edge.
+      className={`transition-all ease-signal ${
         leaving
-          ? "max-h-0 opacity-0 -translate-x-1 duration-[280ms]"
+          ? "overflow-hidden max-h-0 opacity-0 -translate-x-1 duration-[280ms]"
           : "max-h-40 opacity-100 duration-[120ms]"
       }`}
     >
@@ -322,6 +386,7 @@ export function StreamClient({
   accounts,
   categories,
   gaps,
+  groups,
   todayLabel,
   clockLabel,
 }: {
@@ -329,6 +394,7 @@ export function StreamClient({
   accounts: SpendAccount[];
   categories: SpendCategory[];
   gaps: FreeGap[];
+  groups: StreamGroup[];
   todayLabel: string;
   clockLabel: string;
 }) {
@@ -340,7 +406,28 @@ export function StreamClient({
   const [logOpen, setLogOpen] = useState(false);
   const [mood, setMood] = useState<number | null>(snapshot.pulse.mood);
   const [spendCard, setSpendCard] = useState<{ card: StreamCard; section: SectionKey } | null>(null);
+  // Optimistic meta overrides (schedule + group changes): the card stays in
+  // place with its new label instead of vanishing (these edits usually
+  // re-bucket into the same section, so hiding would keep the card hidden
+  // forever). Cleared when the next server snapshot arrives.
+  const [retimed, setRetimed] = useState<Record<string, string>>({});
+  // Optimistic group override: the group button re-labels/recolors the
+  // moment a new group is picked, before the server snapshot lands.
+  const [regrouped, setRegrouped] = useState<
+    Record<string, { name: string; color: string } | null>
+  >({});
   const [, startTransition] = useTransition();
+
+  // A fresh server snapshot carries the committed reschedule — drop the
+  // overrides so the server meta is the single source again. Render-time
+  // state adjustment, per the React "adjusting state when a prop changes"
+  // pattern.
+  const [prevSnapshot, setPrevSnapshot] = useState(snapshot);
+  if (prevSnapshot !== snapshot) {
+    setPrevSnapshot(snapshot);
+    if (Object.keys(retimed).length > 0) setRetimed({});
+    if (Object.keys(regrouped).length > 0) setRegrouped({});
+  }
 
   // Optimistically surface tasks captured from the Dock.
   useEffect(
@@ -423,11 +510,15 @@ export function StreamClient({
     };
   }
 
-  function onSchedule(section: SectionKey) {
+  function onSchedule() {
     return (card: StreamCard, gap: FreeGap) => {
       if (card.entity.kind !== "task") return;
       const task = card.entity.task;
-      resolve(section, card.id);
+      const day = gap.dateKey === todayISO() ? "today" : "tomorrow";
+      setRetimed((prev) => ({
+        ...prev,
+        [card.id]: `${day} ⌚ ${gap.start}`,
+      }));
       startTransition(async () => {
         await updateTask({
           id: task.id,
@@ -436,6 +527,26 @@ export function StreamClient({
         });
       });
     };
+  }
+
+  function onGroup(card: StreamCard, group: StreamGroup | null) {
+    if (card.entity.kind !== "task") return;
+    const task = card.entity.task;
+    // Optimistic meta: strip any part that is a group name, then append the
+    // new group's name — the card stays in place and re-labels immediately.
+    const groupNames = new Set(groups.map((g) => g.name));
+    const parts = (card.meta ?? "")
+      .split(" · ")
+      .filter((part) => part && !groupNames.has(part));
+    if (group) parts.push(group.name);
+    setRetimed((prev) => ({ ...prev, [card.id]: parts.join(" · ") }));
+    setRegrouped((prev) => ({
+      ...prev,
+      [card.id]: group ? { name: group.name, color: group.color } : null,
+    }));
+    startTransition(async () => {
+      await updateTask({ id: task.id, groupId: group?.id ?? null });
+    });
   }
 
   function onBuyTask(card: StreamCard) {
@@ -466,7 +577,26 @@ export function StreamClient({
   }
 
   const visible = (section: SectionKey, cards: StreamCard[]) =>
-    cards.filter((c) => !hidden.has(`${section}:${c.id}`));
+    cards
+      .filter((c) => !hidden.has(`${section}:${c.id}`))
+      .map((c) => {
+        let card = retimed[c.id] ? { ...c, meta: retimed[c.id] } : c;
+        const override = regrouped[c.id];
+        if (override !== undefined && card.entity.kind === "task") {
+          card = {
+            ...card,
+            entity: {
+              ...card.entity,
+              task: {
+                ...card.entity.task,
+                group_name: override?.name ?? null,
+                group_color: override?.color ?? null,
+              },
+            },
+          };
+        }
+        return card;
+      });
 
   const nowCards = visible("now", snapshot.now);
   const nextCards = visible("next", [...extraNext, ...snapshot.next]);
@@ -501,9 +631,11 @@ export function StreamClient({
               section={key}
               leaving={leaving.has(`${key}:${card.id}`)}
               gaps={gaps}
+              groups={groups}
               onDone={onDone(key)}
               onSnooze={onSnooze(key)}
-              onSchedule={onSchedule(key)}
+              onSchedule={onSchedule()}
+              onGroup={onGroup}
               onLogBill={(card) => setSpendCard({ card, section: key })}
               onBuyTask={onBuyTask}
               onAdjust={onAdjust}
@@ -526,11 +658,14 @@ export function StreamClient({
 
   return (
     <div>
-      <div className="flex items-baseline justify-between flex-wrap gap-x-4 gap-y-1 mb-8">
+      <div className="flex items-baseline justify-between flex-wrap gap-x-4 gap-y-1 mb-8 pr-10 lg:pr-0">
         <p className="text-body text-fg">
           {todayLabel} <span className="text-muted">· {clockLabel}</span>
         </p>
-        <p className="flex items-baseline gap-3 text-meta text-muted">
+        <p
+          className="flex items-baseline gap-3 text-meta text-muted"
+          data-tour="vitals"
+        >
           {delta !== 0 && (
             <Link
               href="/finance"
@@ -556,7 +691,10 @@ export function StreamClient({
       </div>
 
       {empty ? (
-        <div className="border border-hairline px-4 py-10 text-center mb-8">
+        <div
+          className="border border-hairline px-4 py-10 text-center mb-8"
+          data-tour="stream"
+        >
           <p className="text-label uppercase text-muted mb-3">— clear —</p>
           <p className="text-body text-fg mb-6">
             nothing needs you right now.
@@ -582,11 +720,11 @@ export function StreamClient({
           )}
         </div>
       ) : (
-        <>
+        <div data-tour="stream">
           {renderSection("now", "now", nowCards, 0, "/tasks")}
           {renderSection("next", "next", nextCards, snapshot.nextOverflow, "/tasks")}
           {renderSection("later", "later", laterCards, snapshot.laterOverflow, "/week")}
-        </>
+        </div>
       )}
 
       {renderSection("loose", "loose ends", looseCards, 0, "/tasks")}

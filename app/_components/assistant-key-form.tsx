@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { clearAssistantKey, saveAssistantKey } from "@/app/actions/assistant";
+import { clearProviderKey, saveProviderKey } from "@/app/actions/connections";
 import { Button } from "./ui";
 
 export function AssistantKeyForm({ connected }: { connected: boolean }) {
@@ -15,7 +15,7 @@ export function AssistantKeyForm({ connected }: { connected: boolean }) {
     setError(null);
     setSaved(false);
     startTransition(async () => {
-      const result = await saveAssistantKey({ key });
+      const result = await saveProviderKey({ provider: "anthropic", key });
       if (result.error) setError(result.error);
       else {
         setKey("");
@@ -69,7 +69,9 @@ export function AssistantKeyForm({ connected }: { connected: boolean }) {
             onClick={() =>
               startTransition(async () => {
                 setError(null);
-                const result = await clearAssistantKey();
+                const result = await clearProviderKey({
+                  provider: "anthropic",
+                });
                 if (result.error) setError(result.error);
               })
             }

@@ -34,6 +34,7 @@ Shipped routes:
 - `/inbox`: tasks with no group.
 - `/finance`: accounts + ledger + recurring expenses + income sources + spending categories on the left, a cashflow-forecast calendar on the right. See the Finance section.
 - `/inventory`: stock items grouped, with a per-item depletion-forecast calendar. See the Inventory section.
+- `/learn`: courses + sources + audio overviews (NotebookLM-style study engine); `/learn/[id]/chat` (grounded chat with citations) and `/learn/[id]/study` (flashcards + study-document generators). See the Learn section and `docs/education-plan.md`.
 
 PWA support is shipped:
 
@@ -72,7 +73,7 @@ The active theme palette lives in `app/globals.css` via `@theme inline` tokens s
 
 Palette customization is per theme. Overrides persist in `localStorage` under `palette-${theme}` and are applied by setting CSS variables at runtime.
 
-`app/_components/get-started-screen.tsx` lets first-time users choose dark or cream before login. `app/_components/settings-panel.tsx` is the dashboard popover that combines the full theme switcher with the shared `ColorPicker` for palette customization. `app/_components/theme-initializer.tsx` applies the saved theme class and palette variables after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
+`app/_components/get-started-screen.tsx` lets first-time users choose dark or cream before login. `app/_components/settings-panel.tsx` renders the appearance section inline on `/settings`: a theme dropdown plus a collapsed "customize colors" disclosure wrapping the shared `ColorPicker` palette editor. Legacy plaintext image-gen keys in `localStorage` migrate to encrypted provider columns via `app/_components/legacy-image-key-migration.tsx` on the next `/settings` visit. `app/_components/theme-initializer.tsx` applies the saved theme class and palette variables after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
 
 `app/_components/color-picker.tsx` is the shared 12-swatch palette + custom RGB picker, used by both the group edit panel and the settings panel.
 
@@ -116,6 +117,8 @@ Migrations live in `supabase/migrations`.
 `0022_finance_transactions.sql` is the transactions-first finance restructure (docs/finance-automation-plan.md): `balance_changes` gains `source` ('manual'/'import'/'assistant'), `is_transfer`, and a dedup `fingerprint` (`date|direction|cents`); `balance_after` becomes nullable/deprecated. New `account_reconciliations` table anchors each account's derived balance ("held X at end of day D"), seeded per account at migration time. `user_settings.daily_spend_estimate` is the manual everyday-spend fallback for the forecast.
 
 `0023_spend_overrides.sql` creates `spend_overrides` (one row per user+future date): a pinned expected everyday spend for a specific day, set via the slider in the finance calendar's selected-day panel; it replaces the baseline estimate for that date (0 = no spend expected).
+
+`0024_education.sql` creates `courses`, `course_sources`, `course_source_parts` (chunked-MCP-upload staging), adds encrypted `user_settings.google_ai_api_key`/`openai_api_key`, and the private `course-files` bucket. `0026_audio_episodes.sql` creates `audio_episodes` + the private `course-audio` bucket. `0027_worker_jobs.sql` creates `jobs`/`worker_status` + the `claim_next_job()` SKIP-LOCKED claim RPC (service-role only). `0028_course_cards.sql` creates `course_cards` (flashcards with got/miss progress). (`0025` belongs to the onboarding feature.)
 
 Every table has RLS enabled and user-scoped policies. Never disable RLS as a debugging shortcut.
 
@@ -251,6 +254,19 @@ Files: `app/finance/page.tsx`, `app/finance/finance-client.tsx`, `app/finance/ac
 - Item icons are uploaded or generated and served from the public `inventory-icons` storage bucket (migration `0005`).
 
 Files: `app/inventory/page.tsx`, `app/inventory/inventory-client.tsx`, `app/_components/inventory-calendar.tsx`, `app/_components/inventory-projection.ts`, `app/_components/inventory-types.ts`, `app/_components/inventory-units.ts`, `app/_components/unit-picker.tsx`, `app/_components/stock-capture-parse.ts`, `app/actions/inventory.ts`, `app/actions/inventory-icon.ts`, `app/actions/stock-capture.ts`, `app/lib/mcp/inventory-ops.ts`.
+
+## Learn
+
+`/learn` is the education section (design record: `docs/education-plan.md`): a **course** is a NotebookLM-style container whose files become vault knowledge, podcasts, and study material. The vault stays the knowledge layer — converted markdown and generated study documents land in the GitHub vault under `Courses/<course>/`; Postgres holds only operational metadata.
+
+- **Ingestion, three paths, one contract** (markdown → vault via the create-only `Courses/` writer, a second fenced direct-write exception alongside `capture_to_brain`'s `Inbox/`): (1) chat-AI transcription over MCP — `begin_source_upload` → `append_source_markdown` (contiguous 1-based parts ≤20k chars) → `finalize_source`, on subscription tokens; (2) the home worker (MinerU, free); (3) Claude-API conversion on the stored key (`app/lib/learn/convert.ts`: `unpdf` probe → `pdf-lib` ~20-page slices with 1-page overlap → per-slice document-block calls → anchor-trimmed stitch). Original PDFs upload browser→storage directly (private `course-files`, `{user}/{source}/` folders).
+- **Audio overviews** (`app/lib/learn/episodes.ts` + `podcast-script.ts`): Claude writes a typed script — two hosts (flavors deep-dive/brief/debate) or a single narrator (flavor solo) — from the sources' vault markdown; voices render via **Gemini Flash TTS** (one multi-speaker request; PCM→WAV in pure JS — no ffmpeg on Vercel) or **VibeVoice on the home worker** ($0, queued). Episodes live in `audio_episodes` + the private `course-audio` bucket, played via signed URLs. MCP `generate_audio_overview` is propose → confirm (it spends money); the in-app tap executes directly.
+- **Home worker** (`worker/worker.py` + `worker/README.md`): pull-based, no inbound ports, no DB key on the PC — it polls `POST /api/worker` (bearer = `MCP_BEARER_TOKEN`) for claim/heartbeat/complete/fail; claims are atomic (`claim_next_job()`, stale-heartbeat reclaim, 3-attempt dead-letter); PDFs travel via signed download URLs and audio via signed upload URLs; all vault/Postgres finalization stays in the app. The settings connections card shows online/queue state from `worker_status`.
+- **Grounded chat** (`/api/course-chat` + `/learn/[id]/chat`): selected sources attach as citation-enabled text documents; answers stream over SSE and end with numbered citation chips (quoted passage + `noteHref` deep link into `/brain`). Source-subset toggling is the context strategy — no pgvector, honoring the cancelled Phase 3.
+- **Study** (`/learn/[id]/study` + `app/lib/learn/artifacts.ts`): study guide/FAQ/briefing/timeline generate as vault notes (`type: course-artifact`); flashcards persist in `course_cards` with got/miss progress (reveal → grade, retest-missed, weak-cards deck).
+- **Connections** (settings): every provider key lives in one section, one `ConnectionCard` recipe (status dot, last-4 hint, plain-language "powers" line, verify-on-save), all encrypted server-side via `app/actions/connections.ts` + `app/lib/connections/keys.ts`. Icon-generation keys moved here from localStorage; only provider/model prefs stay client-side.
+
+Files: `app/learn/*`, `app/actions/learn.ts`, `app/actions/connections.ts`, `app/lib/learn/*`, `app/lib/connections/*`, `app/lib/mcp/course-ops.ts`, `app/lib/mcp/courses.ts`, `app/api/course-chat/route.ts`, `app/api/worker/route.ts`, `app/_components/learn-types.ts`, `app/_components/connection-card.tsx`, `worker/*`.
 
 ## Command Center (dashboard vitals)
 

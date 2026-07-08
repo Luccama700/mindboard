@@ -574,7 +574,7 @@ export function DashboardCalendar({
         />
       )}
 
-      <div className="mt-4 border-t border-line pt-4">
+      <div className="mt-4 border-t border-line pt-4" data-tour="week-day-list">
         <p className="text-[10px] tracking-widest uppercase text-muted mb-2">
           {selectedLabel}
           {selectedItems.length > 0 && ` · ${selectedItems.length}`}

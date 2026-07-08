@@ -593,10 +593,13 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       );
     });
 
+  // Tasks lead: they are the actionable items, while events are ambient
+  // schedule context — a full calendar day must never push due-today tasks
+  // past the section cap into the overflow link.
   const nextAll = [
+    ...dueTodayTasks,
     ...laterTodayEvents,
     ...tomorrowFirst,
-    ...dueTodayTasks,
     ...lowItems,
   ];
   const nextCards = nextAll.slice(0, SECTION_CAP);

@@ -27,6 +27,13 @@ import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
 import { formatRecurrence } from "@/app/lib/recurrence";
 import { captureToBrainFor } from "@/app/lib/mcp/brain";
 import {
+  appendSourcePartFor,
+  beginSourceUploadFor,
+  finalizeSourceFor,
+  listCoursesFor,
+} from "@/app/lib/mcp/courses";
+import { proposeGenerateAudioOverviewFor } from "@/app/lib/learn/episodes";
+import {
   summarizeCreateTask,
   summarizeLogSpend,
   validateCreateTask,
@@ -377,6 +384,75 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["title", "summary_markdown", "source"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_courses",
+    description:
+      "List the user's courses (/learn) with their sources and conversion status. Use before uploading course markdown.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "begin_source_upload",
+    description:
+      "Start uploading a course document's markdown into the second brain. Pass course (name or id) + title for a new source, OR source_id to fill an existing uploaded PDF's markdown. Executes immediately (no confirm): the vault write is create-only under Courses/. Follow with append_source_markdown parts, then finalize_source.",
+    input_schema: {
+      type: "object",
+      properties: {
+        course: { type: "string", description: "Course name or id (new source)." },
+        source_id: {
+          type: "string",
+          description: "Existing source id to transcribe into.",
+        },
+        title: { type: "string", maxLength: 200 },
+        page_count: { type: "integer", minimum: 1 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "append_source_markdown",
+    description:
+      "Append one sequential part (part_index 1, 2, …; ≤20000 chars) of the verbatim markdown transcription: GitHub-flavored markdown, $…$/$$…$$ LaTeX, markdown tables, <!-- p.N --> before each page. Never summarize or skip content.",
+    input_schema: {
+      type: "object",
+      properties: {
+        source_id: { type: "string" },
+        part_index: { type: "integer", minimum: 1, maximum: 60 },
+        markdown: { type: "string", maxLength: 20000 },
+      },
+      required: ["source_id", "part_index", "markdown"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "finalize_source",
+    description:
+      "Assemble the uploaded parts and commit the markdown to the vault under Courses/<course>/Sources/. Fails if parts are non-contiguous. Returns the vault path.",
+    input_schema: {
+      type: "object",
+      properties: { source_id: { type: "string" } },
+      required: ["source_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_generate_audio_overview",
+    description:
+      "Propose generating a podcast episode (audio overview) from a course's converted sources. Spends API credits, so the user must confirm; generation takes a couple of minutes. flavor: deep-dive (default, two hosts), brief, debate, or solo (single narrator).",
+    input_schema: {
+      type: "object",
+      properties: {
+        course: { type: "string", description: "Course name or id." },
+        source_ids: { type: "array", items: { type: "string" } },
+        flavor: {
+          type: "string",
+          enum: ["deep-dive", "brief", "debate", "solo"],
+        },
+        engine: { type: "string", enum: ["gemini", "vibevoice"] },
+      },
+      required: ["course"],
       additionalProperties: false,
     },
   },
@@ -797,6 +873,41 @@ export async function runAssistantTool(
         const outcome = await captureToBrainFor(supabase, userId, input);
         if (!outcome.ok) return { type: "error", error: outcome.error };
         return { type: "result", content: outcome.value };
+      }
+      case "list_courses": {
+        const outcome = await listCoursesFor(supabase, userId);
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "result", content: outcome.value };
+      }
+      case "begin_source_upload": {
+        const outcome = await beginSourceUploadFor(supabase, userId, input);
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "result", content: outcome.value };
+      }
+      case "append_source_markdown": {
+        const outcome = await appendSourcePartFor(supabase, userId, input);
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "result", content: outcome.value };
+      }
+      case "finalize_source": {
+        const outcome = await finalizeSourceFor(
+          supabase,
+          userId,
+          input,
+          "assistant",
+        );
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "result", content: outcome.value };
+      }
+      case "propose_generate_audio_overview": {
+        const outcome = await proposeGenerateAudioOverviewFor(
+          supabase,
+          userId,
+          input,
+          { source: "assistant", conversationId },
+        );
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "proposal", ...outcome.value };
       }
       default:
         return { type: "error", error: `unknown tool ${name}` };

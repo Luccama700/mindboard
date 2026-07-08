@@ -46,3 +46,6 @@ next-env.d.ts
 # graphify generated knowledge graph
 /graphify-out/
 .graphify_version
+
+# local voice reference sample (lives in ComfyUI input, not the repo)
+Exurb1a Voice.mp3

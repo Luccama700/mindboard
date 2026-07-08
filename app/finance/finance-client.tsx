@@ -334,7 +334,7 @@ export function FinanceClient({
 
   return (
     <div className="grid gap-8 lg:grid-cols-2 lg:gap-16 lg:items-start">
-      <div className="min-w-0">
+      <div className="min-w-0" data-tour="accounts">
         <section>
           <p className="text-label uppercase text-muted">net worth</p>
           <p className="mt-1 text-display tabular-nums text-fg">
@@ -364,7 +364,7 @@ export function FinanceClient({
           </p>
         </section>
 
-        <ul className="mt-8">
+        <ul className="mt-8" data-tour="ledger">
           {accounts.map((account) => (
             <AccountRow
               key={account.id}
@@ -400,7 +400,7 @@ export function FinanceClient({
         )}
       </div>
 
-      <aside className="min-w-0 lg:sticky lg:top-8">
+      <aside className="min-w-0 lg:sticky lg:top-8" data-tour="finance-calendar">
         <FinanceCalendar
           month={financeMonth}
           currency={baseCurrency}
@@ -418,6 +418,7 @@ export function FinanceClient({
 
       <Link
         href="/finance/setup"
+        data-tour="recurring"
         className="flex min-h-11 items-center justify-between gap-3 border-t border-b border-hairline text-action lowercase text-fg hover:bg-card-hover transition-colors lg:col-start-1"
       >
         <span className="whitespace-nowrap">configure ▸</span>

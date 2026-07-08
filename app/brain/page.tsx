@@ -34,7 +34,7 @@ function FolderListing({ corpus }: { corpus: VaultCorpus }) {
   ];
 
   return (
-    <section className="mt-12">
+    <section className="mt-12" data-tour="brain-notes">
       <h2 className="text-xs tracking-widest uppercase text-muted mb-4">
         vault
       </h2>
@@ -122,7 +122,7 @@ export default async function BrainPage() {
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto">
-      <header className="flex items-center justify-between mb-10">
+      <header className="flex items-center justify-between mb-10 pr-10 lg:pr-0">
         <Link
           href="/"
           className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
@@ -135,6 +135,7 @@ export default async function BrainPage() {
           </h1>
           <Link
             href="/brain/graph"
+            data-tour="brain-graph-link"
             className="text-xs tracking-widest uppercase text-muted hover:text-fg transition-colors min-h-11 flex items-center"
           >
             graph →

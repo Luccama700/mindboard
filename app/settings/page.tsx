@@ -2,13 +2,33 @@ import { redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
 import { signOut } from "@/app/actions/auth";
-import { AssistantKeyForm } from "@/app/_components/assistant-key-form";
+import {
+  ConnectionShell,
+  KeyConnectionCard,
+} from "@/app/_components/connection-card";
+import { LegacyImageKeyMigration } from "@/app/_components/legacy-image-key-migration";
+import { ReplayToursButton } from "@/app/_components/onboarding/replay-tours-button";
 import { SettingsSections } from "@/app/_components/settings-panel";
 import { SectionRuler } from "@/app/_components/ui";
 import { VaultSettingsForm } from "@/app/brain/_components/vault-settings-form";
+import { decryptSecret } from "@/app/lib/assistant/crypto";
+import { KEY_COLUMNS, keyHint } from "@/app/lib/connections/keys";
+import type { KeyProvider } from "@/app/lib/connections/types";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { getVaultSettings } from "@/app/lib/brain/vault";
 import { PreferencesForm } from "./preferences-form";
+
+// Key saves make one live verification call to the provider.
+export const maxDuration = 30;
+
+function hintFor(encrypted: string | null | undefined): string | null {
+  if (!encrypted) return null;
+  try {
+    return keyHint(decryptSecret(encrypted));
+  } catch {
+    return null;
+  }
+}
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -17,19 +37,73 @@ export default async function SettingsPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const [prefs, vault, settingsRow] = await Promise.all([
+  const [prefs, vault, settingsRow, workerRow, jobCounts] = await Promise.all([
     getUserPreferences(user.id),
     getVaultSettings(user.id),
     supabase
       .from("user_settings")
-      .select("anthropic_api_key")
+      .select("anthropic_api_key, google_ai_api_key, openai_api_key")
       .eq("user_id", user.id)
       .maybeSingle(),
+    supabase
+      .from("worker_status")
+      .select("last_seen_at")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("jobs")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .in("status", ["queued", "processing"]),
   ]);
-  const hasAssistantKey = Boolean(settingsRow.data?.anthropic_api_key);
+
+  const lastSeen = workerRow.data?.last_seen_at
+    ? new Date(workerRow.data.last_seen_at as string)
+    : null;
+  // Server component: one clock read per request, not per client render, so
+  // the purity rule's re-render concern doesn't apply.
+  const nowMs = Date.now(); // eslint-disable-line react-hooks/purity
+  const workerOnline =
+    lastSeen !== null && nowMs - lastSeen.getTime() < 2 * 60 * 1000;
+  const pendingJobs = jobCounts.count ?? 0;
+  const row = settingsRow.data as
+    | Record<string, string | null>
+    | null
+    | undefined;
+
+  const keyCards: {
+    provider: KeyProvider;
+    title: string;
+    powers: string;
+    placeholder: string;
+  }[] = [
+    {
+      provider: "anthropic",
+      title: "anthropic",
+      powers:
+        "planning copilot · pdf → vault conversion · podcast scripts · stock capture parsing.",
+      placeholder: "paste anthropic api key (sk-ant-…)",
+    },
+    {
+      provider: "google",
+      title: "google ai",
+      powers: "podcast voices (gemini tts) · icon generation.",
+      placeholder: "paste google ai api key (AIza…)",
+    },
+    {
+      provider: "openai",
+      title: "openai",
+      powers: "icon generation.",
+      placeholder: "paste openai api key (sk-…)",
+    },
+  ];
 
   return (
     <main className="min-h-screen px-5 pt-6 pb-64 max-w-2xl mx-auto space-y-10">
+      <LegacyImageKeyMigration
+        openaiConnected={Boolean(row?.[KEY_COLUMNS.openai])}
+        googleConnected={Boolean(row?.[KEY_COLUMNS.google])}
+      />
       <header>
         <h1 className="text-label uppercase text-muted">settings</h1>
       </header>
@@ -48,18 +122,65 @@ export default async function SettingsPage() {
         />
       </section>
 
-      <section className="space-y-4">
-        <SectionRuler label="copilot" />
-        <AssistantKeyForm connected={hasAssistantKey} />
+      <section className="space-y-3">
+        <SectionRuler label="connections" />
+        <p className="text-meta text-muted leading-relaxed">
+          every key and credential the app can use, in one place. each card
+          says what the connection powers.
+        </p>
+
+        {keyCards.map((card) => (
+          <KeyConnectionCard
+            key={card.provider}
+            provider={card.provider}
+            title={card.title}
+            powers={card.powers}
+            placeholder={card.placeholder}
+            connected={Boolean(row?.[KEY_COLUMNS[card.provider]])}
+            hint={hintFor(row?.[KEY_COLUMNS[card.provider]])}
+          />
+        ))}
+
+        <ConnectionShell
+          title="brain vault"
+          status={vault ? "connected" : "not set"}
+          hint={vault ? vault.repo : null}
+          powers="brain notes (/brain) · conversation captures · course notes."
+          storageNote="github fine-grained pat, stored per user, used server-side only."
+        >
+          <VaultSettingsForm
+            initialRepo={vault?.repo ?? ""}
+            initialBranch={vault?.branch ?? "main"}
+            connected={Boolean(vault)}
+          />
+        </ConnectionShell>
+
+        <ConnectionShell
+          title="home worker"
+          status={workerOnline ? "connected" : "offline"}
+          hint={
+            workerOnline
+              ? pendingJobs > 0
+                ? `${pendingJobs} job${pendingJobs === 1 ? "" : "s"} pending`
+                : "idle"
+              : lastSeen
+                ? `last seen ${lastSeen.toISOString().slice(0, 16).replace("T", " ")} utc`
+                : null
+          }
+          powers="free pdf conversion (mineru) · free podcast voices (vibevoice)."
+          storageNote={
+            workerOnline
+              ? "the pc polls /api/worker with a bearer token — no database key leaves the server."
+              : pendingJobs > 0
+                ? `${pendingJobs} job${pendingJobs === 1 ? "" : "s"} waiting — jobs run when the pc comes online. setup: worker/README.md.`
+                : "the always-on pc pulls jobs from a queue — no key is stored here. setup: worker/README.md."
+          }
+        />
       </section>
 
       <section className="space-y-4">
-        <SectionRuler label="brain vault" />
-        <VaultSettingsForm
-          initialRepo={vault?.repo ?? ""}
-          initialBranch={vault?.branch ?? "main"}
-          connected={Boolean(vault)}
-        />
+        <SectionRuler label="help" />
+        <ReplayToursButton />
       </section>
 
       <section className="space-y-4">

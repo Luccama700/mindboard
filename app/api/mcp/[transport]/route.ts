@@ -53,10 +53,23 @@ import { MAX_FINANCE_OPS } from "@/app/lib/mcp/finance-ops";
 import { MAX_ADMIN_OPS } from "@/app/lib/mcp/finance-admin-ops";
 import { captureToBrain } from "@/app/lib/mcp/brain";
 import { CAPTURE_SUMMARY_MAX, CAPTURE_TITLE_MAX } from "@/app/lib/mcp/capture";
+import {
+  appendSourcePart,
+  beginSourceUpload,
+  finalizeSource,
+  listCourses,
+} from "@/app/lib/mcp/courses";
+import {
+  SOURCE_MAX_PARTS,
+  SOURCE_PART_MAX_CHARS,
+  SOURCE_TITLE_MAX,
+} from "@/app/lib/mcp/course-ops";
+import { proposeGenerateAudioOverview } from "@/app/lib/learn/episodes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// generate_audio_overview's confirm runs script generation + TTS in one call.
+export const maxDuration = 300;
 
 // Remote MCP server exposing Mindboard's data to external Claude clients.
 // Reads are safe; writes go through propose → confirm with an ai_audit_log row
@@ -915,6 +928,115 @@ const mcpHandler = createMcpHandler(
         }),
     );
 
+    // ---------- courses: chunked source ingestion (fenced direct write) ----------
+    // Same structural fence as capture_to_brain: the vault write is create-only
+    // under Courses/, the metadata rows are low-stakes operational state, and
+    // the vault review flow is the confirmation.
+    server.registerTool(
+      "list_courses",
+      {
+        title: "List courses",
+        description:
+          "List the user's courses (/learn) with their sources and conversion status. Use this to find a course or source id before uploading markdown.",
+        inputSchema: {},
+      },
+      () =>
+        guard(async () => {
+          const r = await listCourses();
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "begin_source_upload",
+      {
+        title: "Begin course-source upload",
+        description:
+          "Start uploading a course document's markdown transcription into the user's second brain. Pass course (name or id from list_courses) + title for a new source, OR source_id to fill in an existing uploaded PDF's markdown. Returns the source_id and transcription instructions. Follow with sequential append_source_markdown calls, then finalize_source.",
+        inputSchema: {
+          course: z
+            .string()
+            .optional()
+            .describe("Course name or id (new source)."),
+          source_id: z
+            .string()
+            .optional()
+            .describe("Existing source id to transcribe into (from list_courses)."),
+          title: z
+            .string()
+            .max(SOURCE_TITLE_MAX)
+            .optional()
+            .describe("Document title, e.g. 'Lecture 12 — Eigenvalues'."),
+          page_count: z.number().int().positive().optional(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await beginSourceUpload(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "append_source_markdown",
+      {
+        title: "Append source markdown part",
+        description:
+          `Append one sequential part of the verbatim markdown transcription (part_index 1, 2, …; ≤${SOURCE_PART_MAX_CHARS} chars per part, ≤${SOURCE_MAX_PARTS} parts). Transcribe faithfully — GitHub-flavored markdown, $…$/$$…$$ LaTeX for math, markdown tables, an <!-- p.N --> comment before each page. Never summarize or skip content.`,
+        inputSchema: {
+          source_id: z.string(),
+          part_index: z.number().int().min(1).max(SOURCE_MAX_PARTS),
+          markdown: z.string().max(SOURCE_PART_MAX_CHARS),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await appendSourcePart(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "finalize_source",
+      {
+        title: "Finalize course source",
+        description:
+          "Assemble the uploaded parts and commit the markdown to the vault under Courses/<course>/Sources/. Fails if parts are missing or non-contiguous. Returns the vault path.",
+        inputSchema: { source_id: z.string() },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await finalizeSource(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "generate_audio_overview",
+      {
+        title: "Generate an audio overview",
+        description:
+          "Propose generating a podcast episode from a course's converted sources (NotebookLM-style audio overview). Spends the user's API credits, so it needs confirm_action. flavor: deep-dive (default, two hosts, ~13 min), brief (~5 min), debate, or solo (single narrator lecture, ~10 min). Confirming runs script + voices and can take a couple of minutes.",
+        inputSchema: {
+          course: z.string().describe("Course name or id (see list_courses)."),
+          source_ids: z
+            .array(z.string())
+            .optional()
+            .describe("Converted source ids to cover; omit for all."),
+          flavor: z.enum(["deep-dive", "brief", "debate", "solo"]).optional(),
+          engine: z
+            .enum(["gemini", "vibevoice"])
+            .optional()
+            .describe("gemini = instant hosted voices (default); vibevoice = free home-pc render."),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeGenerateAudioOverview(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
     // ---------- confirm / cancel ----------
     server.registerTool(
       "confirm_action",
@@ -946,7 +1068,7 @@ const mcpHandler = createMcpHandler(
     );
   },
   { serverInfo: { name: "mindboard", version: "1.0.0" } },
-  { basePath: "/api/mcp", maxDuration: 60, disableSse: true, verboseLogs: false },
+  { basePath: "/api/mcp", maxDuration: 300, disableSse: true, verboseLogs: false },
 );
 
 // ---------- auth: OAuth access token OR static bearer ----------

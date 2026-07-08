@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/utils/supabase/server";
+import { readProviderKey } from "@/app/lib/connections/keys";
 
 const BUCKET = "inventory-icons";
 
@@ -93,14 +94,10 @@ export async function generateItemIcon(input: {
   id: string;
   prompt: string;
   provider: "openai" | "google";
-  apiKey: string;
   model: string;
 }): Promise<GenResult> {
   const prompt = input.prompt?.trim();
   if (!prompt) return { error: "prompt required" };
-
-  const apiKey = input.apiKey?.trim();
-  if (!apiKey) return { error: "missing api key" };
 
   if (input.provider !== "openai" && input.provider !== "google") {
     return { error: "invalid provider" };
@@ -113,6 +110,13 @@ export async function generateItemIcon(input: {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
+
+  const apiKey = await readProviderKey(supabase, user.id, input.provider);
+  if (!apiKey) {
+    return {
+      error: `no ${input.provider === "google" ? "google ai" : "openai"} key connected — add it in settings → connections`,
+    };
+  }
 
   const full = buildPrompt(prompt);
   const generated =

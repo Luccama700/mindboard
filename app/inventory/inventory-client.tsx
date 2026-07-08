@@ -21,7 +21,6 @@ import { useRouter } from "next/navigation";
 import { ColorPicker, PALETTE } from "@/app/_components/color-picker";
 import { UnitPicker } from "@/app/_components/unit-picker";
 import {
-  activeKeyFor,
   activeModelFor,
   readImageGenSettings,
 } from "@/app/_components/image-gen-settings";
@@ -807,7 +806,10 @@ export function InventoryClient({
     <div className="grid gap-8 lg:grid-cols-2 lg:gap-24 lg:items-start">
       <section className="min-w-0 space-y-6">
         <form onSubmit={onOmniSubmit} className="space-y-1">
-          <div className="flex items-stretch border border-line-strong bg-card focus-within:border-accent transition-colors">
+          <div
+            className="flex items-stretch border border-line-strong bg-card focus-within:border-accent transition-colors"
+            data-tour="omnibox"
+          >
             <input
               value={query}
               onChange={(e) => {
@@ -902,7 +904,10 @@ export function InventoryClient({
         )}
 
         {!hasActiveItems ? (
-          <p className="border border-dashed border-line-strong text-muted text-sm px-4 py-10 text-center">
+          <p
+            className="border border-dashed border-line-strong text-muted text-sm px-4 py-10 text-center"
+            data-tour="shelf"
+          >
             nothing on the shelf yet. add your first item.
           </p>
         ) : shelfItems.length === 0 && ranOut.length === 0 ? (
@@ -910,7 +915,10 @@ export function InventoryClient({
             no matches.
           </p>
         ) : view === "grid" ? (
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8">
+          <div
+            className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8"
+            data-tour="shelf"
+          >
             {shelfItems.map((it) => (
               <ItemTile
                 key={it.id}
@@ -927,7 +935,7 @@ export function InventoryClient({
             ))}
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-6" data-tour="shelf">
             {shelfSections.map((section) => (
               <div key={section.group?.id ?? "ungrouped"} className="space-y-2">
                 <div className="flex items-center gap-2 text-label uppercase text-muted select-none">
@@ -2056,11 +2064,6 @@ function ItemDetail({
 
   async function onGenerate() {
     const settings = readImageGenSettings();
-    const apiKey = activeKeyFor(settings);
-    if (!apiKey) {
-      setIconError(`add your ${settings.provider} api key in settings`);
-      return;
-    }
     const p = genPrompt.trim() || item.name;
     setBusy(true);
     setIconError(null);
@@ -2069,7 +2072,6 @@ function ItemDetail({
         id: item.id,
         prompt: p,
         provider: settings.provider,
-        apiKey,
         model: activeModelFor(settings),
       });
       if (result.error || !result.url) {

@@ -29,6 +29,7 @@ import {
   type ResolvableRef,
 } from "./finance-admin-ops";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
+import { executeGenerateAudioOverview } from "@/app/lib/learn/episodes";
 import { changeFingerprint } from "@/app/lib/finance/derive";
 import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 import { formatRecurrence } from "@/app/lib/recurrence";
@@ -2178,6 +2179,7 @@ export const EXECUTORS: Record<
   update_stock: executeUpdateStock,
   update_finance: executeUpdateFinance,
   manage_finance: executeManageFinance,
+  generate_audio_overview: executeGenerateAudioOverview,
 };
 
 // ---------- confirm / cancel ----------

@@ -72,7 +72,7 @@ export default async function PlanPage({
 
   return (
     <main className="min-h-screen px-5 pt-6 pb-64 max-w-2xl mx-auto">
-      <header className="flex items-center justify-between mb-6">
+      <header className="flex items-center justify-between mb-6 pr-10 lg:pr-0">
         <h1 className="text-label uppercase text-muted">plan</h1>
         {conversationId && (
           <Link

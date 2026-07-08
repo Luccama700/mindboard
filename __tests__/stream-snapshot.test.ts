@@ -456,7 +456,7 @@ describe("ordering within sections", () => {
     expect(snap.now).toHaveLength(9);
   });
 
-  test("NEXT caps at 5 with overflow count; time-anchored first", () => {
+  test("NEXT caps at 5 with overflow count; due-today tasks lead events", () => {
     const tasks = Array.from({ length: 6 }, (_, i) =>
       task({ id: `t${i}`, due_date: TODAY }),
     );
@@ -475,8 +475,32 @@ describe("ordering within sections", () => {
       }),
     );
     expect(snap.next).toHaveLength(5);
-    expect(snap.next[0].id).toBe("event:tonight");
+    // Tasks are the actionable items — a full calendar day must never push
+    // them past the cap into the overflow link.
+    expect(snap.next[0].id).toBe("task:t0");
+    expect(snap.next.every((c) => c.id.startsWith("task:"))).toBe(true);
     expect(snap.nextOverflow).toBe(2);
+  });
+
+  test("a busy event day never crowds due-today tasks out of NEXT", () => {
+    const events = Array.from({ length: 6 }, (_, i) => ({
+      id: `e${i}`,
+      summary: `event ${i}`,
+      start: `2026-07-06T1${i + 2}:00:00`,
+      end: `2026-07-06T1${i + 3}:00:00`,
+      allDay: false,
+    }));
+    const snap = streamSnapshot(
+      base({
+        tasks: [
+          task({ id: "t1", due_date: TODAY }),
+          task({ id: "t2", due_date: TODAY }),
+        ],
+        events,
+      }),
+    );
+    expect(snap.next[0].id).toBe("task:t1");
+    expect(snap.next[1].id).toBe("task:t2");
   });
 
   test("tomorrow's first event (only) appears in NEXT", () => {

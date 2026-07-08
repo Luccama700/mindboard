@@ -669,6 +669,10 @@ export function WeekView({
 
   return (
     <DndContext
+      // Stable id: dnd-kit's auto-incremented context id drifts between the
+      // server and client render passes, which breaks hydration on the
+      // aria-describedby it stamps on every draggable.
+      id="week-grid-dnd"
       sensors={sensors}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}

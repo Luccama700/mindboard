@@ -55,22 +55,24 @@ export default async function WeekPage({
       <header className="flex items-center justify-between mb-6">
         <h1 className="text-label uppercase text-muted">schedule</h1>
       </header>
-      <DashboardCalendar
-        key={month}
-        month={month}
-        tasks={calendarTasks}
-        events={events}
-        finance={finance}
-        status={calendarStatus}
-        calendarLinks={calendarLinks}
-        initialView="week"
-        wakeStartHour={prefs.wake_start_hour}
-        wakeEndHour={prefs.wake_end_hour}
-        scheduleVitals={schedule}
-        basePath="/week"
-        recurringTasks={recurringTasks}
-        recurringCompletions={recurringCompletions}
-      />
+      <div data-tour="week-grid">
+        <DashboardCalendar
+          key={month}
+          month={month}
+          tasks={calendarTasks}
+          events={events}
+          finance={finance}
+          status={calendarStatus}
+          calendarLinks={calendarLinks}
+          initialView="week"
+          wakeStartHour={prefs.wake_start_hour}
+          wakeEndHour={prefs.wake_end_hour}
+          scheduleVitals={schedule}
+          basePath="/week"
+          recurringTasks={recurringTasks}
+          recurringCompletions={recurringCompletions}
+        />
+      </div>
     </main>
   );
 }
