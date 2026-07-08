@@ -136,7 +136,7 @@ export default async function FinancePage({
     supabase
       .from("income_sources")
       .select(
-        "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, archived, created_at",
+        "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, fixed_amount, fixed_day, archived, created_at",
       )
       .eq("archived", false)
       .order("created_at", { ascending: false }),
@@ -163,8 +163,11 @@ export default async function FinancePage({
 
   // Worked hours per income source for the visible window, read from each
   // source's linked Google Calendar. Income = hours * wage * (1 - tax%).
+  // Fixed-monthly sources keep their calendar link dormant, so skip the fetch.
   const { timeMin, timeMax } = eventRange(financeMonth);
-  const sourcesWithCalendar = incomeSources.filter((s) => s.calendar_id);
+  const sourcesWithCalendar = incomeSources.filter(
+    (s) => s.calendar_id && s.fixed_amount == null,
+  );
 
   function statusFor(error: unknown): GoogleStatus {
     return error instanceof GoogleCalendarConnectionError ? "connect" : "error";

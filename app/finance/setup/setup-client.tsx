@@ -173,6 +173,8 @@ export function FinanceSetupClient({
     anchorPayday: string | null;
     periodStart: string | null;
     periodEnd: string | null;
+    fixedAmount: number | null;
+    fixedDay: number | null;
   }): Promise<boolean> {
     const result = await createIncomeSource(input);
     if (result.error || !result.source) return false;
@@ -197,6 +199,8 @@ export function FinanceSetupClient({
         anchorPayday: patch.anchor_payday,
         periodStart: patch.period_start,
         periodEnd: patch.period_end,
+        fixedAmount: patch.fixed_amount,
+        fixedDay: patch.fixed_day,
       });
     });
   }

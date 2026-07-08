@@ -200,6 +200,8 @@ export function IncomeManager({
     anchorPayday: string | null;
     periodStart: string | null;
     periodEnd: string | null;
+    fixedAmount: number | null;
+    fixedDay: number | null;
   }) => Promise<boolean>;
   onUpdate: (id: string, patch: Partial<IncomeSource>) => void;
   onArchive: (id: string) => void;
@@ -211,7 +213,8 @@ export function IncomeManager({
       <p className="text-[11px] text-muted leading-relaxed">
         each job reads worked hours from a linked Google Calendar. pay = hours ×
         wage × (1 − tax%). with a pay schedule, it lands as a lump on each payday
-        for that period&apos;s shifts; otherwise it lands on the day worked.
+        for that period&apos;s shifts; otherwise it lands on the day worked. or
+        check fixed monthly for a set amount on one day each month.
       </p>
 
       <ul className="space-y-2">
@@ -261,12 +264,16 @@ function IncomeForm({
     anchorPayday: string | null;
     periodStart: string | null;
     periodEnd: string | null;
+    fixedAmount: number | null;
+    fixedDay: number | null;
   }) => Promise<boolean>;
   onClose: () => void;
 }) {
   const [name, setName] = useState("");
   const [wage, setWage] = useState("");
   const [tax, setTax] = useState("0");
+  const [fixed, setFixed] = useState(false);
+  const [fixedDay, setFixedDay] = useState("1");
   const [calendarId, setCalendarId] = useState<string | null>(null);
   const [color, setColor] = useState<string>(PALETTE[1]);
   const [schedule, setSchedule] = useState<PaySchedule>(defaultSchedule());
@@ -282,26 +289,49 @@ function IncomeForm({
     }
     const w = Number(wage);
     if (!Number.isFinite(w) || w < 0) {
-      setError("enter an hourly wage");
+      setError(fixed ? "enter an amount" : "enter an hourly wage");
       return;
     }
     const t = Number(tax);
-    if (!Number.isFinite(t) || t < 0 || t > 100) {
+    if (!fixed && (!Number.isFinite(t) || t < 0 || t > 100)) {
       setError("tax must be 0–100");
       return;
     }
+    const day = Number(fixedDay);
+    if (fixed && (!Number.isInteger(day) || day < 1 || day > 31)) {
+      setError("day must be 1–31");
+      return;
+    }
     startTransition(async () => {
-      const ok = await onCreate({
-        name: n,
-        hourlyWage: w,
-        taxRate: t,
-        calendarId,
-        color,
-        payFrequency: schedule.payFrequency,
-        anchorPayday: schedule.payFrequency ? schedule.anchorPayday : null,
-        periodStart: schedule.payFrequency ? schedule.periodStart : null,
-        periodEnd: schedule.payFrequency ? schedule.periodEnd : null,
-      });
+      const ok = await onCreate(
+        fixed
+          ? {
+              name: n,
+              hourlyWage: 0,
+              taxRate: 0,
+              calendarId: null,
+              color,
+              payFrequency: null,
+              anchorPayday: null,
+              periodStart: null,
+              periodEnd: null,
+              fixedAmount: w,
+              fixedDay: day,
+            }
+          : {
+              name: n,
+              hourlyWage: w,
+              taxRate: t,
+              calendarId,
+              color,
+              payFrequency: schedule.payFrequency,
+              anchorPayday: schedule.payFrequency ? schedule.anchorPayday : null,
+              periodStart: schedule.payFrequency ? schedule.periodStart : null,
+              periodEnd: schedule.payFrequency ? schedule.periodEnd : null,
+              fixedAmount: null,
+              fixedDay: null,
+            },
+      );
       if (!ok) {
         setError("could not save income source");
         return;
@@ -323,10 +353,20 @@ function IncomeForm({
         className="w-full bg-transparent text-fg placeholder-muted text-base font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
       />
 
+      <label className="flex min-h-9 items-center gap-2 text-[10px] tracking-widest uppercase text-muted cursor-pointer">
+        <input
+          type="checkbox"
+          checked={fixed}
+          onChange={(e) => setFixed(e.target.checked)}
+          className="accent-accent"
+        />
+        fixed monthly amount
+      </label>
+
       <div className="flex gap-3">
         <div className="flex-1 space-y-2">
           <p className="text-[10px] tracking-widest uppercase text-muted">
-            hourly wage
+            {fixed ? "amount" : "hourly wage"}
           </p>
           <input
             value={wage}
@@ -339,30 +379,52 @@ function IncomeForm({
             className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
           />
         </div>
-        <div className="w-24 space-y-2">
-          <p className="text-[10px] tracking-widest uppercase text-muted">
-            tax %
-          </p>
-          <input
-            value={tax}
-            onChange={(e) => setTax(e.target.value)}
-            type="number"
-            inputMode="decimal"
-            step="any"
-            min={0}
-            max={100}
-            className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
-          />
-        </div>
+        {fixed ? (
+          <div className="w-24 space-y-2">
+            <p className="text-[10px] tracking-widest uppercase text-muted">
+              on day
+            </p>
+            <input
+              value={fixedDay}
+              onChange={(e) => setFixedDay(e.target.value)}
+              type="number"
+              inputMode="numeric"
+              step={1}
+              min={1}
+              max={31}
+              className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
+            />
+          </div>
+        ) : (
+          <div className="w-24 space-y-2">
+            <p className="text-[10px] tracking-widest uppercase text-muted">
+              tax %
+            </p>
+            <input
+              value={tax}
+              onChange={(e) => setTax(e.target.value)}
+              type="number"
+              inputMode="decimal"
+              step="any"
+              min={0}
+              max={100}
+              className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
+            />
+          </div>
+        )}
       </div>
 
-      <CalendarSelect
-        value={calendarId}
-        calendars={calendars}
-        onChange={setCalendarId}
-      />
+      {!fixed && (
+        <>
+          <CalendarSelect
+            value={calendarId}
+            calendars={calendars}
+            onChange={setCalendarId}
+          />
 
-      <PaySchedulePicker value={schedule} onChange={setSchedule} />
+          <PaySchedulePicker value={schedule} onChange={setSchedule} />
+        </>
+      )}
 
       <ColorPicker value={color} onChange={setColor} />
 
@@ -403,8 +465,13 @@ function IncomeRow({
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState(source.name);
-  const [wageDraft, setWageDraft] = useState(String(Number(source.hourly_wage)));
+  const isFixed = source.fixed_amount != null && source.fixed_day != null;
+  // One amount field: it edits fixed_amount in fixed mode, hourly_wage otherwise.
+  const [wageDraft, setWageDraft] = useState(
+    String(Number(isFixed ? source.fixed_amount : source.hourly_wage)),
+  );
   const [taxDraft, setTaxDraft] = useState(String(Number(source.tax_rate)));
+  const [dayDraft, setDayDraft] = useState(String(source.fixed_day ?? 1));
   const linkedCalendar = source.calendar_id
     ? (calendars.find((c) => c.id === source.calendar_id) ?? null)
     : null;
@@ -421,11 +488,17 @@ function IncomeRow({
   function commitWage() {
     const next = Number(wageDraft);
     if (!Number.isFinite(next) || next < 0) {
-      setWageDraft(String(Number(source.hourly_wage)));
+      setWageDraft(
+        String(Number(isFixed ? source.fixed_amount : source.hourly_wage)),
+      );
       return;
     }
     const rounded = Math.round(next * 100) / 100;
-    if (rounded !== Number(source.hourly_wage)) {
+    if (isFixed) {
+      if (rounded !== Number(source.fixed_amount)) {
+        onUpdate(source.id, { fixed_amount: rounded, fixed_day: source.fixed_day });
+      }
+    } else if (rounded !== Number(source.hourly_wage)) {
       onUpdate(source.id, { hourly_wage: rounded });
     }
     setWageDraft(String(rounded));
@@ -444,6 +517,37 @@ function IncomeRow({
     setTaxDraft(String(rounded));
   }
 
+  function commitDay() {
+    const next = Number(dayDraft);
+    if (!Number.isInteger(next) || next < 1 || next > 31) {
+      setDayDraft(String(source.fixed_day ?? 1));
+      return;
+    }
+    if (next !== source.fixed_day) {
+      onUpdate(source.id, { fixed_amount: source.fixed_amount, fixed_day: next });
+    }
+  }
+
+  // Toggling on seeds the amount from whatever the field shows; toggling off
+  // restores the preserved hourly setup (wage, tax, calendar, schedule).
+  function toggleFixed(next: boolean) {
+    if (next) {
+      const amount = Number(wageDraft);
+      const seeded =
+        Number.isFinite(amount) && amount >= 0
+          ? Math.round(amount * 100) / 100
+          : 0;
+      const day = Number(dayDraft);
+      const seededDay = Number.isInteger(day) && day >= 1 && day <= 31 ? day : 1;
+      setWageDraft(String(seeded));
+      setDayDraft(String(seededDay));
+      onUpdate(source.id, { fixed_amount: seeded, fixed_day: seededDay });
+    } else {
+      setWageDraft(String(Number(source.hourly_wage)));
+      onUpdate(source.id, { fixed_amount: null, fixed_day: null });
+    }
+  }
+
   return (
     <li className="border border-line bg-card">
       <div className="flex items-stretch">
@@ -456,16 +560,27 @@ function IncomeRow({
           <div className="flex-1 min-w-0">
             <p className="text-fg text-sm font-bold truncate">{source.name}</p>
             <p className="text-muted text-[10px] tracking-widest uppercase mt-0.5 truncate">
-              {formatMoney(Number(source.hourly_wage), currency)}/h
-              {Number(source.tax_rate) > 0 ? ` · ${Number(source.tax_rate)}% tax` : ""}
-              {linkedCalendar
-                ? ` · ${linkedCalendar.summary}`
-                : source.calendar_id
-                  ? " · linked"
-                  : " · no calendar"}
-              {source.pay_frequency && source.anchor_payday
-                ? ` · ${source.pay_frequency} · pays ${formatDue(source.anchor_payday)}`
-                : " · each shift"}
+              {isFixed ? (
+                <>
+                  {formatMoney(Number(source.fixed_amount), currency)}/mo · day{" "}
+                  {source.fixed_day}
+                </>
+              ) : (
+                <>
+                  {formatMoney(Number(source.hourly_wage), currency)}/h
+                  {Number(source.tax_rate) > 0
+                    ? ` · ${Number(source.tax_rate)}% tax`
+                    : ""}
+                  {linkedCalendar
+                    ? ` · ${linkedCalendar.summary}`
+                    : source.calendar_id
+                      ? " · linked"
+                      : " · no calendar"}
+                  {source.pay_frequency && source.anchor_payday
+                    ? ` · ${source.pay_frequency} · pays ${formatDue(source.anchor_payday)}`
+                    : " · each shift"}
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -496,10 +611,20 @@ function IncomeRow({
             className="w-full bg-transparent text-fg text-base font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
           />
 
+          <label className="flex min-h-9 items-center gap-2 text-[10px] tracking-widest uppercase text-muted cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isFixed}
+              onChange={(e) => toggleFixed(e.target.checked)}
+              className="accent-accent"
+            />
+            fixed monthly amount
+          </label>
+
           <div className="flex gap-3">
             <div className="flex-1 space-y-2">
               <p className="text-[10px] tracking-widest uppercase text-muted">
-                hourly wage
+                {isFixed ? "amount" : "hourly wage"}
               </p>
               <input
                 type="number"
@@ -512,34 +637,57 @@ function IncomeRow({
                 className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
               />
             </div>
-            <div className="w-24 space-y-2">
-              <p className="text-[10px] tracking-widest uppercase text-muted">
-                tax %
-              </p>
-              <input
-                type="number"
-                inputMode="decimal"
-                step="any"
-                min={0}
-                max={100}
-                value={taxDraft}
-                onChange={(e) => setTaxDraft(e.target.value)}
-                onBlur={commitTax}
-                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
-              />
-            </div>
+            {isFixed ? (
+              <div className="w-24 space-y-2">
+                <p className="text-[10px] tracking-widest uppercase text-muted">
+                  on day
+                </p>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  min={1}
+                  max={31}
+                  value={dayDraft}
+                  onChange={(e) => setDayDraft(e.target.value)}
+                  onBlur={commitDay}
+                  className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
+                />
+              </div>
+            ) : (
+              <div className="w-24 space-y-2">
+                <p className="text-[10px] tracking-widest uppercase text-muted">
+                  tax %
+                </p>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="any"
+                  min={0}
+                  max={100}
+                  value={taxDraft}
+                  onChange={(e) => setTaxDraft(e.target.value)}
+                  onBlur={commitTax}
+                  className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
+                />
+              </div>
+            )}
           </div>
 
-          <CalendarSelect
-            value={source.calendar_id}
-            calendars={calendars}
-            onChange={(id) => onUpdate(source.id, { calendar_id: id })}
-          />
+          {!isFixed && (
+            <>
+              <CalendarSelect
+                value={source.calendar_id}
+                calendars={calendars}
+                onChange={(id) => onUpdate(source.id, { calendar_id: id })}
+              />
 
-          <PaySchedulePicker
-            value={defaultSchedule(source)}
-            onChange={(next) => onUpdate(source.id, scheduleToPatch(next))}
-          />
+              <PaySchedulePicker
+                value={defaultSchedule(source)}
+                onChange={(next) => onUpdate(source.id, scheduleToPatch(next))}
+              />
+            </>
+          )}
 
           <ColorPicker
             value={source.color}

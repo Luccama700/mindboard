@@ -584,7 +584,7 @@ function SelectedDay({
         </p>
       ) : (
         <div className="space-y-2">
-          {projectedIncome.map(({ source, hours, net, periodStart, periodEnd }) => (
+          {projectedIncome.map(({ source, hours, net, periodStart, periodEnd, fixed }) => (
             <div
               key={`income-${source.id}`}
               className="flex items-center gap-2 border border-line px-3 py-2"
@@ -599,13 +599,15 @@ function SelectedDay({
                 <span className="text-muted">
                   {" "}
                   ·{" "}
-                  {periodStart && periodEnd
-                    ? `payday · ${hours}h, ${formatMonthDay(
-                        new Date(`${periodStart}T00:00:00`),
-                      )}–${formatMonthDay(
-                        new Date(`${periodEnd}T00:00:00`),
-                      )}`
-                    : `${hours}h @ ${formatMoney(source.hourly_wage, currency)}`}
+                  {fixed
+                    ? "fixed monthly"
+                    : periodStart && periodEnd
+                      ? `payday · ${hours}h, ${formatMonthDay(
+                          new Date(`${periodStart}T00:00:00`),
+                        )}–${formatMonthDay(
+                          new Date(`${periodEnd}T00:00:00`),
+                        )}`
+                      : `${hours}h @ ${formatMoney(source.hourly_wage, currency)}`}
                 </span>
               </p>
               <p className="text-sm font-bold tabular-nums text-accent whitespace-nowrap">

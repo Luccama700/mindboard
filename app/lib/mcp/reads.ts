@@ -536,7 +536,7 @@ export async function listIncomeSources() {
   const { data } = await supabase
     .from("income_sources")
     .select(
-      "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, archived, created_at",
+      "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, fixed_amount, fixed_day, archived, created_at",
     )
     .eq("user_id", ownerId)
     .eq("archived", false)
@@ -552,6 +552,8 @@ export async function listIncomeSources() {
     anchor_payday: string | null;
     period_start: string | null;
     period_end: string | null;
+    fixed_amount: number | null;
+    fixed_day: number | null;
   };
 
   return ((data ?? []) as Row[]).map((row) => ({
@@ -569,6 +571,12 @@ export async function listIncomeSources() {
           periodEnd: row.period_end,
         }
       : null,
+    // Set = a fixed amount lands on that day each month; the hourly fields
+    // above are dormant while this is set.
+    fixedMonthly:
+      row.fixed_amount !== null && row.fixed_day !== null
+        ? { amount: Number(row.fixed_amount), dayOfMonth: row.fixed_day }
+        : null,
   }));
 }
 
@@ -655,7 +663,7 @@ export async function getFinanceForecast(days = 30) {
       supabase
         .from("income_sources")
         .select(
-          "id, name, hourly_wage, tax_rate, calendar_id, pay_frequency, anchor_payday, period_start, period_end",
+          "id, name, hourly_wage, tax_rate, calendar_id, pay_frequency, anchor_payday, period_start, period_end, fixed_amount, fixed_day",
         )
         .eq("user_id", ownerId)
         .eq("archived", false),
@@ -709,6 +717,7 @@ export async function getFinanceForecast(days = 30) {
     ...row,
     hourly_wage: Number(row.hourly_wage),
     tax_rate: Number(row.tax_rate),
+    fixed_amount: row.fixed_amount == null ? null : Number(row.fixed_amount),
   }));
 
   // Reach back ~2 months so a payday inside the window covers its full period.
@@ -718,7 +727,7 @@ export async function getFinanceForecast(days = 30) {
   const hoursBySource: Record<string, Record<string, number>> = {};
   await Promise.all(
     incomeSources
-      .filter((s) => s.calendar_id)
+      .filter((s) => s.calendar_id && s.fixed_amount == null)
       .map((source) =>
         listEventsForCalendar(ownerId, source.calendar_id as string, {
           timeMin: shiftStart.toISOString(),

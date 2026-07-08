@@ -136,6 +136,56 @@ describe("wage income", () => {
     expect(detail[0].periodEnd).toBe("2026-05-30");
     expect(detail[0].hours).toBe(16);
   });
+
+  test("fixed monthly income lands its amount on the same day each month", () => {
+    const salary = source({ id: "salary", fixed_amount: 2000, fixed_day: 15 });
+    const income = computeIncomeByDate([salary], {}, {
+      start: "2026-06-01",
+      end: "2026-07-31",
+    });
+    expect(income["2026-06-15"]).toBe(2000);
+    expect(income["2026-07-15"]).toBe(2000);
+    expect(Object.keys(income)).toHaveLength(2);
+
+    const detail = incomeDetailForDay([salary], {}, "2026-06-15");
+    expect(detail).toHaveLength(1);
+    expect(detail[0].net).toBe(2000);
+    expect(detail[0].fixed).toBe(true);
+    expect(incomeDetailForDay([salary], {}, "2026-06-14")).toHaveLength(0);
+  });
+
+  test("fixed day clamps to short months", () => {
+    const salary = source({ id: "salary", fixed_amount: 900, fixed_day: 31 });
+    const income = computeIncomeByDate([salary], {}, {
+      start: "2026-02-01",
+      end: "2026-03-31",
+    });
+    // February 2026 has 28 days, so the 31st lands on the 28th.
+    expect(income["2026-02-28"]).toBe(900);
+    expect(income["2026-03-31"]).toBe(900);
+    expect(Object.keys(income)).toHaveLength(2);
+  });
+
+  test("fixed mode wins over a dormant wage setup", () => {
+    // Hourly fields and shift hours linger from before the toggle — ignored.
+    const salary = source({
+      id: "salary",
+      hourly_wage: 20,
+      tax_rate: 25,
+      pay_frequency: "biweekly",
+      anchor_payday: "2026-06-05",
+      period_start: "2026-05-17",
+      period_end: "2026-05-30",
+      fixed_amount: 1500,
+      fixed_day: 1,
+    });
+    const hours = { salary: { "2026-06-10": 8 } };
+    const income = computeIncomeByDate([salary], hours, {
+      start: "2026-06-01",
+      end: "2026-06-30",
+    });
+    expect(income).toEqual({ "2026-06-01": 1500 });
+  });
 });
 
 describe("running total projection", () => {

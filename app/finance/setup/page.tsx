@@ -44,7 +44,7 @@ export default async function FinanceSetupPage() {
       supabase
         .from("income_sources")
         .select(
-          "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, archived, created_at",
+          "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, fixed_amount, fixed_day, archived, created_at",
         )
         .eq("archived", false)
         .order("created_at", { ascending: false }),

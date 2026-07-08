@@ -31,6 +31,10 @@ export type IncomeSourceRate = {
   anchor_payday: string | null;
   period_start: string | null;
   period_end: string | null;
+  // Both set = fixed monthly income; takes precedence over the hourly fields
+  // (which are preserved for toggling back but ignored while fixed).
+  fixed_amount?: number | null;
+  fixed_day?: number | null;
 };
 
 export type PayCycle = {
@@ -45,6 +49,7 @@ export type IncomeDetail = {
   hours: number;
   periodStart: string | null;
   periodEnd: string | null;
+  fixed?: boolean;
 };
 
 export type DayRow = {
@@ -196,10 +201,23 @@ function netPay(source: IncomeSourceRate, hours: number): number {
   return hours * source.hourly_wage * (1 - source.tax_rate / 100);
 }
 
-// Net projected wage income keyed by the day money is received, within
-// [window.start, window.end]. Scheduled sources pay a lump on each payday equal
-// to the net pay for shift hours in that payday's period; unscheduled sources
-// pay on the day worked.
+function isFixedMonthly(source: IncomeSourceRate): boolean {
+  return source.fixed_amount != null && source.fixed_day != null;
+}
+
+// A fixed monthly income lands on its day-of-month, clamped to short months
+// (the 31st lands on Feb 28/29) — same rule as monthly recurring expenses.
+function fixedLandsOn(source: IncomeSourceRate, dateKey: string): boolean {
+  const date = parseKey(dateKey);
+  const target = Math.min(source.fixed_day as number, daysInMonthOf(date));
+  return date.getDate() === target;
+}
+
+// Net projected income keyed by the day money is received, within
+// [window.start, window.end]. Fixed monthly sources land their amount on
+// their day each month. Scheduled wage sources pay a lump on each payday
+// equal to the net pay for shift hours in that payday's period; unscheduled
+// sources pay on the day worked.
 export function computeIncomeByDate(
   sources: IncomeSourceRate[],
   hoursBySource: Record<string, Record<string, number>>,
@@ -207,6 +225,14 @@ export function computeIncomeByDate(
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const source of sources) {
+    if (isFixedMonthly(source)) {
+      const amount = Number(source.fixed_amount);
+      for (let day = window.start; day <= window.end; day = addDaysKey(day, 1)) {
+        if (fixedLandsOn(source, day)) out[day] = (out[day] ?? 0) + amount;
+      }
+      continue;
+    }
+
     const hours = hoursBySource[source.id];
     if (!hours) continue;
 
@@ -241,6 +267,20 @@ export function incomeDetailForDay(
 ): IncomeDetail[] {
   const out: IncomeDetail[] = [];
   for (const source of sources) {
+    if (isFixedMonthly(source)) {
+      if (fixedLandsOn(source, dateKey)) {
+        out.push({
+          sourceId: source.id,
+          net: Number(source.fixed_amount),
+          hours: 0,
+          periodStart: null,
+          periodEnd: null,
+          fixed: true,
+        });
+      }
+      continue;
+    }
+
     const hours = hoursBySource[source.id];
     if (!hours) continue;
 

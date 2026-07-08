@@ -749,7 +749,7 @@ export async function archiveRecurringExpense(id: string) {
 // ---------- income sources ----------
 
 const INCOME_COLUMNS =
-  "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, archived, created_at";
+  "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, fixed_amount, fixed_day, archived, created_at";
 
 const PAY_FREQUENCIES = ["weekly", "biweekly", "monthly"] as const;
 type PayFrequency = (typeof PAY_FREQUENCIES)[number];
@@ -770,6 +770,8 @@ export async function createIncomeSource(input: {
   anchorPayday?: string | null;
   periodStart?: string | null;
   periodEnd?: string | null;
+  fixedAmount?: number | null;
+  fixedDay?: number | null;
 }) {
   const name = input.name?.trim();
   if (!name) return { error: "name required" };
@@ -785,6 +787,9 @@ export async function createIncomeSource(input: {
 
   const schedule = normalizeSchedule(input);
   if ("error" in schedule) return { error: schedule.error };
+
+  const fixed = normalizeFixed(input);
+  if ("error" in fixed) return { error: fixed.error };
 
   const supabase = await createClient();
   const {
@@ -805,6 +810,8 @@ export async function createIncomeSource(input: {
       anchor_payday: schedule.anchor_payday,
       period_start: schedule.period_start,
       period_end: schedule.period_end,
+      fixed_amount: fixed.fixed_amount,
+      fixed_day: fixed.fixed_day,
     })
     .select(INCOME_COLUMNS)
     .single();
@@ -813,6 +820,26 @@ export async function createIncomeSource(input: {
 
   revalidatePath("/finance");
   return { error: null, source: data };
+}
+
+// Fixed monthly mode is either fully set (amount + day) or fully off.
+function normalizeFixed(input: {
+  fixedAmount?: number | null;
+  fixedDay?: number | null;
+}):
+  | { fixed_amount: number | null; fixed_day: number | null }
+  | { error: string } {
+  const amount = input.fixedAmount ?? null;
+  const day = input.fixedDay ?? null;
+  if (amount === null && day === null) {
+    return { fixed_amount: null, fixed_day: null };
+  }
+  const cents = amount === null ? null : toCents(amount);
+  if (cents === null || cents < 0) return { error: "invalid fixed amount" };
+  if (day === null || !Number.isInteger(day) || day < 1 || day > 31) {
+    return { error: "invalid fixed day" };
+  }
+  return { fixed_amount: cents, fixed_day: day };
 }
 
 // A schedule is either fully set (frequency + the three dates) or fully off.
@@ -862,6 +889,8 @@ export async function updateIncomeSource(input: {
   anchorPayday?: string | null;
   periodStart?: string | null;
   periodEnd?: string | null;
+  fixedAmount?: number | null;
+  fixedDay?: number | null;
 }) {
   const supabase = await createClient();
   const {
@@ -912,6 +941,13 @@ export async function updateIncomeSource(input: {
     updates.anchor_payday = schedule.anchor_payday;
     updates.period_start = schedule.period_start;
     updates.period_end = schedule.period_end;
+  }
+  // Fixed monthly mode is also set as a unit.
+  if (input.fixedAmount !== undefined || input.fixedDay !== undefined) {
+    const fixed = normalizeFixed(input);
+    if ("error" in fixed) return { error: fixed.error };
+    updates.fixed_amount = fixed.fixed_amount;
+    updates.fixed_day = fixed.fixed_day;
   }
 
   if (Object.keys(updates).length === 0) return { error: null };

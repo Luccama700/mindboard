@@ -70,6 +70,11 @@ export type IncomeSource = {
   anchor_payday: string | null;
   period_start: string | null;
   period_end: string | null;
+  // Both set = fixed monthly income (a set amount landing on fixed_day each
+  // month, clamped to short months); both null = hourly wage job. The hourly
+  // fields are preserved while fixed so unchecking restores them.
+  fixed_amount: number | null;
+  fixed_day: number | null;
   archived: boolean;
   created_at: string;
 };
