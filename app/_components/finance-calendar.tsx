@@ -403,9 +403,14 @@ function EverydaySpendRow({
   );
 }
 
+// Quick-pin multiples of the day's baseline (the predicted-minimum estimate).
+const SPEND_MULTIPLIERS = [0.5, 1, 1.5, 2, 3] as const;
+
 // Slider pinning the expected everyday spend for one future day. The pinned
 // value (including an explicit $0) replaces the baseline estimate for that
 // date; reset returns to the baseline. Commits on release, not per tick.
+// Above the slider, quick-select buttons pin common multiples of the
+// baseline in one tap (1× pins today's baseline so it survives rate drift).
 function FutureSpendSlider({
   dateKey,
   baseline,
@@ -453,6 +458,32 @@ function FutureSpendSlider({
           ~−{formatMoney(draft, currency)}
         </p>
       </div>
+      {baseline > 0 && (
+        <div className="flex gap-1">
+          {SPEND_MULTIPLIERS.map((multiplier) => {
+            const value = Math.round(baseline * multiplier * 100) / 100;
+            const active = draft === value;
+            return (
+              <button
+                key={multiplier}
+                type="button"
+                onClick={() => {
+                  setDraft(value);
+                  if (override !== value) onSet(dateKey, value);
+                }}
+                aria-label={`pin expected spend on ${dateKey} at ${multiplier}× the estimate`}
+                className={`min-h-9 flex-1 border px-1 text-[10px] tabular-nums transition-colors ${
+                  active
+                    ? "border-accent text-accent"
+                    : "border-line-strong text-muted hover:border-fg hover:text-fg"
+                }`}
+              >
+                {multiplier}×
+              </button>
+            );
+          })}
+        </div>
+      )}
       <input
         type="range"
         min={0}
