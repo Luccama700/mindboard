@@ -228,6 +228,36 @@ export const getVaultCorpus = cache(
   },
 );
 
+// Session-less vault reads for the MCP server: list note paths, or fetch one
+// note's raw markdown by path (case-insensitive). Both go through the same
+// tree fetch as getVaultCorpus but skip the full-corpus blob download.
+export async function listVaultNotePaths(
+  credentials: VaultCredentials,
+  tag: string,
+): Promise<{ path: string; folder: string; title: string }[]> {
+  const entries = await fetchTree(credentials, tag);
+  return entries.map((entry) => ({
+    path: entry.path,
+    folder: noteFolder(entry.path),
+    title: noteTitle(entry.path),
+  }));
+}
+
+export async function readVaultNoteRaw(
+  credentials: VaultCredentials,
+  tag: string,
+  path: string,
+): Promise<{ path: string; markdown: string } | null> {
+  const entries = await fetchTree(credentials, tag);
+  const lowered = path.toLowerCase();
+  const entry =
+    entries.find((e) => e.path === path) ??
+    entries.find((e) => e.path.toLowerCase() === lowered) ??
+    entries.find((e) => e.path.toLowerCase() === `${lowered}.md`);
+  if (!entry) return null;
+  return { path: entry.path, markdown: await fetchBlob(credentials, entry.sha) };
+}
+
 export function findNote(
   corpus: VaultCorpus,
   path: string,

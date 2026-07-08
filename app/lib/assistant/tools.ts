@@ -21,6 +21,7 @@ import {
   proposeCreateRecurringTaskFor,
   proposeUpdateFinanceFor,
   proposeUpdateStockFor,
+  proposeUpsertGoalFor,
 } from "@/app/lib/mcp/writes";
 import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
 import { formatRecurrence } from "@/app/lib/recurrence";
@@ -455,59 +456,6 @@ async function proposeScheduleTask(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-async function proposeUpsertGoal(
-  supabase: SupabaseClient,
-  userId: string,
-  conversationId: string | null,
-  input: Record<string, unknown>,
-): Promise<Result<{ proposalId: string; preview: string }>> {
-  const goalId = typeof input.goalId === "string" && input.goalId ? input.goalId : null;
-  const title = typeof input.title === "string" ? input.title.trim() : "";
-  if (!goalId && !title) return { ok: false, error: "title is required for a new goal" };
-  if (input.horizon !== undefined && !["week", "month", "quarter", "year", "life"].includes(String(input.horizon))) {
-    return { ok: false, error: "invalid horizon" };
-  }
-  if (input.status !== undefined && !["active", "done", "paused", "archived"].includes(String(input.status))) {
-    return { ok: false, error: "invalid status" };
-  }
-  if (input.targetDate !== undefined && !DATE_RE.test(String(input.targetDate))) {
-    return { ok: false, error: "targetDate must be YYYY-MM-DD" };
-  }
-
-  let existingTitle: string | null = null;
-  if (goalId) {
-    const { data } = await supabase
-      .from("goals")
-      .select("id, title")
-      .eq("id", goalId)
-      .eq("user_id", userId)
-      .maybeSingle();
-    if (!data) return { ok: false, error: "goal not found" };
-    existingTitle = (data as { title: string }).title;
-  }
-
-  const summary = goalId
-    ? `Update goal "${existingTitle}"${input.status ? ` → ${input.status}` : ""}${title ? ` (retitle: "${title}")` : ""}.`
-    : `Create goal "${title}"${input.horizon ? ` (${input.horizon})` : ""}${input.targetDate ? ` targeting ${input.targetDate}` : ""}.`;
-
-  const proposalId = await recordProposal(
-    supabase,
-    userId,
-    "upsert_goal",
-    {
-      goalId,
-      title: title || undefined,
-      why: typeof input.why === "string" ? input.why : undefined,
-      horizon: input.horizon,
-      status: input.status,
-      targetDate: input.targetDate,
-    } as Record<string, unknown>,
-    summary,
-    { source: "assistant", conversationId },
-  );
-  return { ok: true, value: { proposalId, preview: summary } };
-}
-
 export async function runAssistantTool(
   supabase: SupabaseClient,
   userId: string,
@@ -838,7 +786,10 @@ export async function runAssistantTool(
         return { type: "proposal", proposalId, preview: summary };
       }
       case "propose_upsert_goal": {
-        const outcome = await proposeUpsertGoal(supabase, userId, conversationId, input);
+        const outcome = await proposeUpsertGoalFor(supabase, userId, input, {
+          source: "assistant",
+          conversationId,
+        });
         if (!outcome.ok) return { type: "error", error: outcome.error };
         return { type: "proposal", ...outcome.value };
       }

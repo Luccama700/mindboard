@@ -210,3 +210,92 @@ describe("summarizeLogSpend", () => {
     ).toBe('Log $12.00 spent from "Checking".');
   });
 });
+
+describe("validateUpdateTask", () => {
+  test("requires a taskId and at least one change", async () => {
+    const { validateUpdateTask } = await import("@/app/lib/mcp/validate");
+    expect(validateUpdateTask({}).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1" }).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1", title: "new" }).ok).toBe(true);
+  });
+
+  test("validates dates, times, and durations; null clears", async () => {
+    const { validateUpdateTask } = await import("@/app/lib/mcp/validate");
+    expect(validateUpdateTask({ taskId: "t1", dueDate: "tomorrow" }).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1", dueDate: null }).ok).toBe(true);
+    expect(validateUpdateTask({ taskId: "t1", dueTime: "25:00" }).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1", dueTime: "09:30" }).ok).toBe(true);
+    expect(validateUpdateTask({ taskId: "t1", durationMin: 5 }).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1", title: "  " }).ok).toBe(false);
+  });
+});
+
+describe("validateManageGroup", () => {
+  test("routes the three actions", async () => {
+    const { validateManageGroup } = await import("@/app/lib/mcp/validate");
+    expect(
+      validateManageGroup({ action: "create", name: "School", type: "course" }).ok,
+    ).toBe(true);
+    expect(validateManageGroup({ action: "create", name: "", type: "course" }).ok).toBe(false);
+    expect(validateManageGroup({ action: "create", name: "X", type: "blob" }).ok).toBe(false);
+    expect(validateManageGroup({ action: "update", groupId: "g1" }).ok).toBe(false);
+    expect(
+      validateManageGroup({ action: "update", groupId: "g1", googleCalendarId: null }).ok,
+    ).toBe(true);
+    expect(validateManageGroup({ action: "archive", groupId: "g1" }).ok).toBe(true);
+    expect(validateManageGroup({ action: "delete", groupId: "g1" }).ok).toBe(false);
+  });
+});
+
+describe("validateRescheduleEvent / validateCreateEvent", () => {
+  test("checks timed vs all-day shapes", async () => {
+    const { validateRescheduleEvent } = await import("@/app/lib/mcp/validate");
+    expect(
+      validateRescheduleEvent({
+        calendarId: "c",
+        eventId: "e",
+        start: "2026-07-09T10:00:00",
+        end: "2026-07-09T09:00:00",
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateRescheduleEvent({
+        calendarId: "c",
+        eventId: "e",
+        allDay: true,
+        start: "2026-07-09",
+        end: "2026-07-10",
+      }).ok,
+    ).toBe(true);
+  });
+
+  test("createEvent defaults duration and calendar, and ties duration to a time", async () => {
+    const { validateCreateEvent } = await import("@/app/lib/mcp/validate");
+    const timed = validateCreateEvent({ summary: "Dentist", date: "2026-07-09", startTime: "14:00" });
+    expect(timed.ok).toBe(true);
+    if (timed.ok) {
+      expect(timed.value.durationMin).toBe(60);
+      expect(timed.value.calendarId).toBe("primary");
+    }
+    expect(
+      validateCreateEvent({ summary: "X", date: "2026-07-09", durationMin: 30 }).ok,
+    ).toBe(false);
+  });
+});
+
+describe("validateDailyLog / validateUpdateSettings", () => {
+  test("bounds mood/energy/sleep", async () => {
+    const { validateDailyLog } = await import("@/app/lib/mcp/validate");
+    expect(validateDailyLog({ mood: 3, energy: 4 }).ok).toBe(true);
+    expect(validateDailyLog({ mood: 0, energy: 4 }).ok).toBe(false);
+    expect(validateDailyLog({ mood: 3, energy: 4, sleepHours: 30 }).ok).toBe(false);
+  });
+
+  test("bounds the wake window when both edges are present", async () => {
+    const { validateUpdateSettings } = await import("@/app/lib/mcp/validate");
+    expect(validateUpdateSettings({}).ok).toBe(false);
+    expect(validateUpdateSettings({ timezone: "America/New_York" }).ok).toBe(true);
+    expect(validateUpdateSettings({ wakeStartHour: 9, wakeEndHour: 8 }).ok).toBe(false);
+    expect(validateUpdateSettings({ wakeStartHour: 7, wakeEndHour: 23 }).ok).toBe(true);
+  });
+});

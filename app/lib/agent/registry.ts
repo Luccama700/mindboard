@@ -89,19 +89,36 @@ export const toolRegistry: ToolDescriptor[] = [
   {
     name: "tasks.update",
     kind: "write",
-    description: "Edit a task's title, due date, group, or notes.",
+    description:
+      "Edit a task: title, due date/time-block, duration, group, notes, priority; optionally push it to Google Calendar.",
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "Task id." },
+        taskId: { type: "string", description: "Task id." },
         title: { type: "string" },
         dueDate: { type: "string" },
+        dueTime: { type: "string" },
+        durationMin: { type: "number" },
         groupId: { type: "string" },
         notes: { type: "string" },
+        priority: { type: "string" },
+        pushToCalendar: { type: "boolean" },
       },
-      required: ["id"],
+      required: ["taskId"],
     },
-    mapsTo: "app/actions/tasks#updateTask",
+    mapsTo: "app/lib/mcp/writes#proposeUpdateTask",
+    confirm: true,
+  },
+  {
+    name: "tasks.delete",
+    kind: "write",
+    description: "Permanently delete a task (for mistakes/duplicates — completion is tasks.complete).",
+    inputSchema: {
+      type: "object",
+      properties: { taskId: { type: "string", description: "Task id." } },
+      required: ["taskId"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeDeleteTask",
     confirm: true,
   },
   {
@@ -205,6 +222,268 @@ export const toolRegistry: ToolDescriptor[] = [
     },
     mapsTo: "app/lib/mcp/writes#proposeUpdateFinance",
     confirm: true,
+  },
+  {
+    name: "finance.manage",
+    kind: "write",
+    description:
+      "Batched finance CONFIGURATION edits in one confirmable receipt: accounts (create/update/archive), categories, recurring-expense rules, income sources, per-day spend overrides, and the manual daily-spend estimate.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operations: {
+          type: "array",
+          description:
+            "create_account / update_account / update_category / update_recurring / create_income / update_income / set_spend_override / set_daily_spend_estimate ops; references by id or name.",
+        },
+      },
+      required: ["operations"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeManageFinance",
+    confirm: true,
+  },
+  {
+    name: "finance.forecast",
+    kind: "read",
+    description:
+      "Projected end-of-day net worth for the next N days: wage income, recurring bills, and the everyday-spend estimate layer.",
+    inputSchema: {
+      type: "object",
+      properties: { days: { type: "number", description: "1-90, default 30." } },
+    },
+    mapsTo: "app/lib/mcp/reads#getFinanceForecast",
+  },
+  {
+    name: "finance.income.list",
+    kind: "read",
+    description: "List wage income sources (rate, tax, linked shift calendar, pay schedule).",
+    inputSchema: EMPTY_INPUT,
+    mapsTo: "app/lib/mcp/reads#listIncomeSources",
+  },
+  {
+    name: "calendar.listEvents",
+    kind: "read",
+    description:
+      "Google Calendar events in a date range across every readable calendar, with writability and linked Mindboard group.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "YYYY-MM-DD, default today." },
+        to: { type: "string", description: "YYYY-MM-DD inclusive, default from+7." },
+      },
+    },
+    mapsTo: "app/lib/mcp/reads#listCalendarEvents",
+  },
+  {
+    name: "calendar.rescheduleEvent",
+    kind: "write",
+    description: "Move a Google Calendar event to a new start/end (timed or all-day).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        calendarId: { type: "string" },
+        eventId: { type: "string" },
+        allDay: { type: "boolean" },
+        start: { type: "string" },
+        end: { type: "string" },
+        timeZone: { type: "string" },
+      },
+      required: ["calendarId", "eventId", "start", "end"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeRescheduleEvent",
+    confirm: true,
+  },
+  {
+    name: "calendar.createEvent",
+    kind: "write",
+    description: "Create a Google Calendar event (timed via startTime+durationMin, else all-day).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: { type: "string" },
+        date: { type: "string", description: "YYYY-MM-DD." },
+        startTime: { type: "string", description: "HH:MM; omit for all-day." },
+        durationMin: { type: "number" },
+        calendarId: { type: "string" },
+        description: { type: "string" },
+      },
+      required: ["summary", "date"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeCreateEvent",
+    confirm: true,
+  },
+  {
+    name: "tasks.recurring.update",
+    kind: "write",
+    description: "Edit a repeating-task rule: title, schedule, time-block, group, notes, priority.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ruleId: { type: "string" },
+        title: { type: "string" },
+        frequency: { type: "string" },
+        weekdays: { type: "array" },
+        dayOfMonth: { type: "number" },
+        intervalDays: { type: "number" },
+        dueTime: { type: "string" },
+        durationMin: { type: "number" },
+        groupId: { type: "string" },
+        notes: { type: "string" },
+        priority: { type: "string" },
+      },
+      required: ["ruleId"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeUpdateRecurringTask",
+    confirm: true,
+  },
+  {
+    name: "tasks.recurring.complete",
+    kind: "write",
+    description: "Check off (or un-check with undo) today's occurrence of a repeating task.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ruleId: { type: "string" },
+        undo: { type: "boolean" },
+      },
+      required: ["ruleId"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeCompleteRecurring",
+    confirm: true,
+  },
+  {
+    name: "groups.manage",
+    kind: "write",
+    description: "Create, edit (rename/type/color/calendar link), or archive a task group.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", description: "create | update | archive." },
+        groupId: { type: "string" },
+        name: { type: "string" },
+        type: { type: "string" },
+        color: { type: "string" },
+        googleCalendarId: { type: "string" },
+      },
+      required: ["action"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeManageGroup",
+    confirm: true,
+  },
+  {
+    name: "goals.list",
+    kind: "read",
+    description: "List goals (title, why, horizon, status, target date).",
+    inputSchema: {
+      type: "object",
+      properties: { includeClosed: { type: "boolean" } },
+    },
+    mapsTo: "app/lib/mcp/reads#listGoals",
+  },
+  {
+    name: "goals.upsert",
+    kind: "write",
+    description: "Create a goal, or update/close an existing one by id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        goalId: { type: "string" },
+        title: { type: "string" },
+        why: { type: "string" },
+        horizon: { type: "string" },
+        status: { type: "string" },
+        targetDate: { type: "string" },
+      },
+    },
+    mapsTo: "app/lib/mcp/writes#proposeUpsertGoal",
+    confirm: true,
+  },
+  {
+    name: "inventory.forecast",
+    kind: "read",
+    description:
+      "Per-item depletion forecast: daily rate, days left, run-out date, reorder-by date.",
+    inputSchema: EMPTY_INPUT,
+    mapsTo: "app/lib/mcp/reads#getInventoryForecast",
+  },
+  {
+    name: "logs.daily.list",
+    kind: "read",
+    description: "Recent daily mood/energy/sleep check-ins.",
+    inputSchema: {
+      type: "object",
+      properties: { limit: { type: "number" } },
+    },
+    mapsTo: "app/lib/mcp/reads#listDailyLogs",
+  },
+  {
+    name: "logs.daily.upsert",
+    kind: "write",
+    description: "Record today's mood/energy/sleep check-in (overwrites the same day).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mood: { type: "number" },
+        energy: { type: "number" },
+        sleepHours: { type: "number" },
+      },
+      required: ["mood", "energy"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeLogDaily",
+    confirm: true,
+  },
+  {
+    name: "settings.get",
+    kind: "read",
+    description: "Read preferences: timezone, wake window, manual daily-spend estimate.",
+    inputSchema: EMPTY_INPUT,
+    mapsTo: "app/lib/mcp/reads#getPreferences",
+  },
+  {
+    name: "settings.update",
+    kind: "write",
+    description: "Change timezone and/or the wake window.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        timezone: { type: "string" },
+        wakeStartHour: { type: "number" },
+        wakeEndHour: { type: "number" },
+      },
+    },
+    mapsTo: "app/lib/mcp/writes#proposeUpdateSettings",
+    confirm: true,
+  },
+  {
+    name: "ai.proposals.list",
+    kind: "read",
+    description: "Recent AI write proposals and their outcomes (the ai_audit_log).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", description: "proposed | executed | rejected | error." },
+        limit: { type: "number" },
+      },
+    },
+    mapsTo: "app/lib/mcp/reads#listProposals",
+  },
+  {
+    name: "brain.notes.list",
+    kind: "read",
+    description: "List every note in the second-brain vault (path, folder, title).",
+    inputSchema: EMPTY_INPUT,
+    mapsTo: "app/lib/mcp/reads#listBrainNotes",
+  },
+  {
+    name: "brain.notes.read",
+    kind: "read",
+    description: "Read one vault note's raw markdown by path.",
+    inputSchema: {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+    },
+    mapsTo: "app/lib/mcp/reads#readBrainNote",
   },
 ];
 

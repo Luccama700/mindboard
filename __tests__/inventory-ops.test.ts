@@ -209,3 +209,126 @@ describe("validateResolvedOps", () => {
     ).toBe(false);
   });
 });
+
+describe("care ops (threshold / usage / rename / move / groups)", () => {
+  it("validates and resolves set_threshold, including a clear", () => {
+    const result = resolve([
+      { op: "set_threshold", item: "eggs", threshold: 4 },
+      { op: "set_threshold", item: "milk", threshold: null },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0]).toMatchObject({ kind: "threshold", itemId: "i-eggs", threshold: 4 });
+    expect(result.value[1]).toMatchObject({ kind: "threshold", itemId: "i-milk", threshold: null });
+  });
+
+  it("rejects a non-positive threshold", () => {
+    expect(
+      validateStockOps({ operations: [{ op: "set_threshold", item: "eggs", threshold: 0 }] }).ok,
+    ).toBe(false);
+  });
+
+  it("validates set_usage cadences and requires intervalDays for custom", () => {
+    const ok = resolve([
+      { op: "set_usage", item: "eggs", amount: 2, period: "day" },
+      { op: "set_usage", item: "milk", amount: 1, period: "week" },
+      { op: "set_usage", item: "rice", amount: 1, period: "custom", intervalDays: 10 },
+    ]);
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.value[0]).toMatchObject({ kind: "usage", period: "day", intervalDays: null });
+      expect(ok.value[2]).toMatchObject({ kind: "usage", period: "custom", intervalDays: 10 });
+    }
+    expect(
+      validateStockOps({
+        operations: [{ op: "set_usage", item: "rice", amount: 1, period: "custom" }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateStockOps({
+        operations: [{ op: "set_usage", item: "rice", amount: 1, period: "monthly" }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("resolves clear_usage and rename, and blocks rename collisions", () => {
+    const ok = resolve([
+      { op: "clear_usage", item: "eggs" },
+      { op: "rename", item: "rice", name: "Basmati rice" },
+    ]);
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.value[0]).toMatchObject({ kind: "clear_usage", itemId: "i-eggs" });
+      expect(ok.value[1]).toMatchObject({ kind: "rename", from: "Rice", to: "Basmati rice" });
+    }
+    const collision = resolve([{ op: "rename", item: "rice", name: "milk" }]);
+    expect(collision.ok).toBe(false);
+  });
+
+  it("moves items to a group by name, or to none when group is omitted", () => {
+    const result = resolve([
+      { op: "move", item: "rice", group: "food" },
+      { op: "move", item: "milk" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0]).toMatchObject({ kind: "move", groupId: "g-food", groupName: "Food" });
+    expect(result.value[1]).toMatchObject({ kind: "move", groupId: null, groupName: null });
+  });
+
+  it("create_group is usable by later ops in the same batch (pendingGroup)", () => {
+    const result = resolve([
+      { op: "create_group", name: "Pantry" },
+      { op: "move", item: "rice", group: "pantry" },
+      { op: "create", name: "flour", quantity: 1, unit: "kg", group: "Pantry" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0]).toEqual({ kind: "create_group", name: "Pantry" });
+    expect(result.value[1]).toMatchObject({ kind: "move", groupId: null, pendingGroup: "Pantry" });
+    expect(result.value[2]).toMatchObject({ kind: "create", pendingGroup: "Pantry" });
+  });
+
+  it("blocks duplicate group creates", () => {
+    expect(resolve([{ op: "create_group", name: "Household" }]).ok).toBe(false);
+    expect(
+      resolve([
+        { op: "create_group", name: "Pantry" },
+        { op: "create_group", name: "pantry" },
+      ]).ok,
+    ).toBe(false);
+  });
+
+  it("renders receipts for the new ops", () => {
+    const result = resolve([
+      { op: "set_threshold", item: "eggs", threshold: 4 },
+      { op: "set_usage", item: "milk", amount: 1, period: "week" },
+      { op: "rename", item: "rice", name: "Basmati rice" },
+      { op: "create_group", name: "Pantry" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const receipt = renderStockReceipt(result.value);
+    expect(receipt).toContain("reorder at 4");
+    expect(receipt).toContain("usage → 1 L per week");
+    expect(receipt).toContain("renamed \"Basmati rice\"");
+    expect(receipt).toContain("Pantry  new group");
+  });
+
+  it("round-trips the new resolved kinds through JSON", () => {
+    const resolved = resolve([
+      { op: "set_threshold", item: "eggs", threshold: 4 },
+      { op: "set_usage", item: "rice", amount: 1, period: "custom", intervalDays: 10 },
+      { op: "clear_usage", item: "milk" },
+      { op: "rename", item: "rice", name: "Basmati rice" },
+      { op: "create_group", name: "Pantry" },
+      { op: "move", item: "milk", group: "Pantry" },
+    ]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const stored = JSON.parse(JSON.stringify({ operations: resolved.value }));
+    const back = validateResolvedOps(stored);
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.value).toEqual(resolved.value);
+  });
+});

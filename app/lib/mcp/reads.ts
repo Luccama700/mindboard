@@ -8,6 +8,41 @@ import {
   inventorySnapshot,
   type InventoryVitals,
 } from "@/app/lib/snapshots/inventory";
+import {
+  freeGaps,
+  scheduleSnapshot,
+} from "@/app/lib/snapshots/schedule";
+import {
+  listEvents,
+  listEventsForCalendar,
+  type CalendarEvent,
+} from "@/utils/google/calendar";
+import {
+  buildDayRows,
+  computeIncomeByDate,
+  addDaysKey,
+  type IncomeSourceRate,
+  type RecurringRule,
+} from "@/app/_components/finance-projection";
+import {
+  computeSpendRate,
+  estimatedSpendOn,
+  type SpendHistoryRow,
+} from "@/app/_components/spend-baseline";
+import {
+  effectiveDailyRate,
+  daysUntilEmpty,
+  runOutDateKey,
+  reorderDateKey,
+  stockStatus,
+  type UsageRule,
+} from "@/app/_components/inventory-projection";
+import {
+  listVaultNotePaths,
+  readVaultCredentials,
+  readVaultNoteRaw,
+  vaultTag,
+} from "@/app/lib/brain/vault";
 import type {
   Account,
   BalanceChange,
@@ -317,16 +352,31 @@ export async function listRecurringExpenses() {
   }));
 }
 
-export async function listRecentLedger(limit = 20) {
+export async function listRecentLedger(
+  limit = 20,
+  filter?: {
+    accountId?: string;
+    categoryId?: string;
+    direction?: "in" | "out";
+    from?: string;
+    to?: string;
+  },
+) {
   const { supabase, ownerId } = scoped();
   const capped = Math.min(Math.max(1, limit), 100);
-  const { data } = await supabase
+  let query = supabase
     .from("balance_changes")
     .select(
       `id, direction, amount, note, occurred_at, is_transfer,
        accounts(name, currency), spending_categories(name)`,
     )
-    .eq("user_id", ownerId)
+    .eq("user_id", ownerId);
+  if (filter?.accountId) query = query.eq("account_id", filter.accountId);
+  if (filter?.categoryId) query = query.eq("category_id", filter.categoryId);
+  if (filter?.direction) query = query.eq("direction", filter.direction);
+  if (filter?.from) query = query.gte("occurred_at", filter.from);
+  if (filter?.to) query = query.lte("occurred_at", filter.to);
+  const { data } = await query
     .order("occurred_at", { ascending: false })
     .order("created_at", { ascending: false })
     .limit(capped);
@@ -357,4 +407,484 @@ export async function listRecentLedger(limit = 20) {
       category: row.direction === "out" ? (category?.name ?? "uncategorized") : null,
     };
   });
+}
+
+// ---------- schedule + calendar reads ----------
+
+async function readPreferencesRow() {
+  const { supabase, ownerId } = scoped();
+  const { data } = await supabase
+    .from("user_settings")
+    .select("timezone, wake_start_hour, wake_end_hour, daily_spend_estimate")
+    .eq("user_id", ownerId)
+    .maybeSingle();
+  return {
+    timezone: (data?.timezone as string | null) ?? null,
+    wakeStartHour: typeof data?.wake_start_hour === "number" ? data.wake_start_hour : 8,
+    wakeEndHour: typeof data?.wake_end_hour === "number" ? data.wake_end_hour : 22,
+    dailySpendEstimate:
+      data?.daily_spend_estimate === null || data?.daily_spend_estimate === undefined
+        ? null
+        : Number(data.daily_spend_estimate),
+  };
+}
+
+export async function getPreferences() {
+  return readPreferencesRow();
+}
+
+export async function getScheduleSnapshot() {
+  const ownerId = ownerUserId();
+  const prefs = await readPreferencesRow();
+  const now = new Date();
+  const dayStart = new Date(now);
+  dayStart.setHours(0, 0, 0, 0);
+  const horizon = new Date(dayStart);
+  horizon.setDate(horizon.getDate() + 3);
+
+  const events = await listEvents(ownerId, {
+    timeMin: dayStart.toISOString(),
+    timeMax: horizon.toISOString(),
+  });
+
+  return {
+    ...scheduleSnapshot({
+      events,
+      now,
+      wakeStartHour: prefs.wakeStartHour,
+      wakeEndHour: prefs.wakeEndHour,
+    }),
+    freeGaps: freeGaps({
+      events,
+      now,
+      wakeStartHour: prefs.wakeStartHour,
+      wakeEndHour: prefs.wakeEndHour,
+      days: 3,
+      limit: 6,
+    }),
+  };
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_EVENT_RANGE_DAYS = 62;
+
+export async function listCalendarEvents(filter?: { from?: string; to?: string }) {
+  const { supabase, ownerId } = scoped();
+  const today = todayKey();
+  const from = filter?.from && ISO_DATE_RE.test(filter.from) ? filter.from : today;
+  const defaultTo = addDaysKey(from, 7);
+  let to = filter?.to && ISO_DATE_RE.test(filter.to) ? filter.to : defaultTo;
+  if (to < from) to = from;
+
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T00:00:00`);
+  end.setDate(end.getDate() + 1); // inclusive `to`
+  const spanDays = (end.getTime() - start.getTime()) / 86_400_000;
+  if (spanDays > MAX_EVENT_RANGE_DAYS) {
+    throw new Error(`date range too large (max ${MAX_EVENT_RANGE_DAYS} days)`);
+  }
+
+  const [events, groupsRes] = await Promise.all([
+    listEvents(ownerId, {
+      timeMin: start.toISOString(),
+      timeMax: end.toISOString(),
+    }),
+    supabase
+      .from("groups")
+      .select("name, google_calendar_id")
+      .eq("user_id", ownerId)
+      .eq("archived", false)
+      .not("google_calendar_id", "is", null),
+  ]);
+
+  const linkedGroups = new Map(
+    ((groupsRes.data ?? []) as { name: string; google_calendar_id: string }[]).map(
+      (g) => [g.google_calendar_id, g.name],
+    ),
+  );
+
+  return events.map((event: CalendarEvent) => ({
+    eventId: event.eventId,
+    calendarId: event.calendarId,
+    calendar: event.calendarSummary,
+    linkedGroup: linkedGroups.get(event.calendarId) ?? null,
+    summary: event.summary,
+    start: event.start,
+    end: event.end,
+    allDay: event.allDay,
+    timeZone: event.startTimeZone,
+    writable: event.writable,
+  }));
+}
+
+// ---------- goals / income / logs / audit ----------
+
+export async function listGoals(filter?: { includeClosed?: boolean }) {
+  const { supabase, ownerId } = scoped();
+  let query = supabase
+    .from("goals")
+    .select("id, title, why, horizon, status, target_date, created_at, completed_at")
+    .eq("user_id", ownerId)
+    .order("created_at", { ascending: false });
+  if (!filter?.includeClosed) query = query.in("status", ["active", "paused"]);
+  const { data } = await query;
+  return data ?? [];
+}
+
+export async function listIncomeSources() {
+  const { supabase, ownerId } = scoped();
+  const { data } = await supabase
+    .from("income_sources")
+    .select(
+      "id, name, hourly_wage, tax_rate, calendar_id, color, pay_frequency, anchor_payday, period_start, period_end, archived, created_at",
+    )
+    .eq("user_id", ownerId)
+    .eq("archived", false)
+    .order("created_at", { ascending: true });
+
+  type Row = {
+    id: string;
+    name: string;
+    hourly_wage: number;
+    tax_rate: number;
+    calendar_id: string | null;
+    pay_frequency: "weekly" | "biweekly" | "monthly" | null;
+    anchor_payday: string | null;
+    period_start: string | null;
+    period_end: string | null;
+  };
+
+  return ((data ?? []) as Row[]).map((row) => ({
+    id: row.id,
+    name: row.name,
+    hourlyWage: Number(row.hourly_wage),
+    taxRatePct: Number(row.tax_rate),
+    calendarLinked: row.calendar_id !== null,
+    calendarId: row.calendar_id,
+    paySchedule: row.pay_frequency
+      ? {
+          frequency: row.pay_frequency,
+          anchorPayday: row.anchor_payday,
+          periodStart: row.period_start,
+          periodEnd: row.period_end,
+        }
+      : null,
+  }));
+}
+
+export async function listDailyLogs(limit = 14) {
+  const { supabase, ownerId } = scoped();
+  const capped = Math.min(Math.max(1, limit), 60);
+  const { data } = await supabase
+    .from("daily_logs")
+    .select("log_date, mood, energy, sleep_hours")
+    .eq("user_id", ownerId)
+    .order("log_date", { ascending: false })
+    .limit(capped);
+  return (data ?? []).map((row) => ({
+    date: row.log_date as string,
+    mood: row.mood as number | null,
+    energy: row.energy as number | null,
+    sleepHours: row.sleep_hours === null ? null : Number(row.sleep_hours),
+  }));
+}
+
+export async function listProposals(filter?: {
+  status?: "proposed" | "executed" | "rejected" | "error";
+  limit?: number;
+}) {
+  const { supabase, ownerId } = scoped();
+  const capped = Math.min(Math.max(1, filter?.limit ?? 20), 100);
+  let query = supabase
+    .from("ai_audit_log")
+    .select("id, tool_name, summary, status, source, created_at, resolved_at")
+    .eq("user_id", ownerId)
+    .order("created_at", { ascending: false })
+    .limit(capped);
+  if (filter?.status) query = query.eq("status", filter.status);
+  const { data } = await query;
+  return data ?? [];
+}
+
+// ---------- forecasts ----------
+
+// Mirror of app/finance/page.tsx hoursByDay: timed-event durations per local day.
+function eventHoursByDay(
+  events: { start: string; end: string; allDay: boolean }[],
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const event of events) {
+    if (event.allDay) continue;
+    const start = new Date(event.start);
+    const end = new Date(event.end);
+    const hours = (end.getTime() - start.getTime()) / 3_600_000;
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    const month = String(start.getMonth() + 1).padStart(2, "0");
+    const day = String(start.getDate()).padStart(2, "0");
+    const key = `${start.getFullYear()}-${month}-${day}`;
+    out[key] = (out[key] ?? 0) + hours;
+  }
+  return out;
+}
+
+// Projected end-of-day net worth for the next N days: the finance calendar's
+// forecast math (buildDayRows + the flat everyday-spend baseline), assembled
+// session-less. Income sources with a linked Google Calendar contribute worked
+// shifts; a calendar that fails to load simply contributes no hours.
+export async function getFinanceForecast(days = 30) {
+  const { supabase, ownerId } = scoped();
+  const today = todayKey();
+  const horizon = Math.min(Math.max(1, Math.trunc(days)), 90);
+  const endKey = addDaysKey(today, horizon);
+
+  const historyStart = addDaysKey(today, -90);
+  const [accountsRes, expensesRes, incomeRes, historyRes, overridesRes, prefs] =
+    await Promise.all([
+      supabase
+        .from("accounts")
+        .select("id, balance")
+        .eq("user_id", ownerId)
+        .eq("archived", false),
+      supabase
+        .from("recurring_expenses")
+        .select(
+          "id, name, amount, category_id, frequency, day_of_month, weekday, interval_days, start_date",
+        )
+        .eq("user_id", ownerId)
+        .eq("archived", false),
+      supabase
+        .from("income_sources")
+        .select(
+          "id, name, hourly_wage, tax_rate, calendar_id, pay_frequency, anchor_payday, period_start, period_end",
+        )
+        .eq("user_id", ownerId)
+        .eq("archived", false),
+      supabase
+        .from("balance_changes")
+        .select("occurred_at, direction, amount, category_id, is_transfer")
+        .eq("user_id", ownerId)
+        .gte("occurred_at", historyStart)
+        .limit(2000),
+      supabase
+        .from("spend_overrides")
+        .select("date, amount")
+        .eq("user_id", ownerId)
+        .gte("date", today),
+      readPreferencesRow(),
+    ]);
+
+  const netWorthToday = ((accountsRes.data ?? []) as { balance: number }[]).reduce(
+    (sum, a) => sum + Number(a.balance),
+    0,
+  );
+
+  type ExpenseRow = RecurringRule & {
+    id: string;
+    name: string;
+    category_id: string | null;
+  };
+  const expenses = ((expensesRes.data ?? []) as ExpenseRow[]).map((row) => ({
+    ...row,
+    amount: Number(row.amount),
+  }));
+
+  const history = ((historyRes.data ?? []) as SpendHistoryRow[]).map((row) => ({
+    ...row,
+    amount: Number(row.amount),
+  }));
+
+  const spendRate = computeSpendRate({
+    history,
+    rules: expenses.map((e) => ({ amount: e.amount, category_id: e.category_id })),
+    today,
+  });
+
+  const overrides: Record<string, number> = {};
+  for (const row of (overridesRes.data ?? []) as { date: string; amount: number }[]) {
+    overrides[row.date] = Number(row.amount);
+  }
+
+  type IncomeRow = IncomeSourceRate & { name: string; calendar_id: string | null };
+  const incomeSources = ((incomeRes.data ?? []) as IncomeRow[]).map((row) => ({
+    ...row,
+    hourly_wage: Number(row.hourly_wage),
+    tax_rate: Number(row.tax_rate),
+  }));
+
+  // Reach back ~2 months so a payday inside the window covers its full period.
+  const shiftStart = new Date(`${addDaysKey(today, -62)}T00:00:00`);
+  const shiftEnd = new Date(`${endKey}T00:00:00`);
+  shiftEnd.setDate(shiftEnd.getDate() + 1);
+  const hoursBySource: Record<string, Record<string, number>> = {};
+  await Promise.all(
+    incomeSources
+      .filter((s) => s.calendar_id)
+      .map((source) =>
+        listEventsForCalendar(ownerId, source.calendar_id as string, {
+          timeMin: shiftStart.toISOString(),
+          timeMax: shiftEnd.toISOString(),
+        })
+          .then((events) => {
+            hoursBySource[source.id] = eventHoursByDay(events);
+          })
+          .catch(() => {
+            hoursBySource[source.id] = {};
+          }),
+      ),
+  );
+
+  const incomeByDate = computeIncomeByDate(incomeSources, hoursBySource, {
+    start: addDaysKey(today, 1),
+    end: endKey,
+  });
+
+  const estimatedSpendByDate: Record<string, number> = {};
+  for (let d = addDaysKey(today, 1); d <= endKey; d = addDaysKey(d, 1)) {
+    estimatedSpendByDate[d] = estimatedSpendOn(
+      spendRate,
+      prefs.dailySpendEstimate,
+      overrides,
+      d,
+    );
+  }
+
+  const gridDays: string[] = [];
+  for (let d = today; d <= endKey; d = addDaysKey(d, 1)) gridDays.push(d);
+
+  const todayChanges = history
+    .filter((row) => row.occurred_at === today)
+    .map((row) => ({
+      occurred_at: row.occurred_at,
+      direction: row.direction,
+      amount: row.amount,
+    }));
+
+  const rows = buildDayRows({
+    gridDays,
+    month: today.slice(0, 7),
+    today,
+    netWorthToday,
+    changes: todayChanges,
+    expenses,
+    incomeByDate,
+    estimatedSpendByDate,
+  });
+
+  return {
+    today,
+    netWorthToday,
+    everydaySpend: {
+      dailyRate: spendRate.dailyRate,
+      sampledWeeks: spendRate.sampledWeeks,
+      confident: spendRate.confident,
+      manualFallback: prefs.dailySpendEstimate,
+    },
+    days: rows.map((row) => ({
+      date: row.dateKey,
+      inflow: row.inflow,
+      outflow: row.outflow,
+      estimatedEverydaySpend: row.estimatedOutflow,
+      projectedNetWorth: Math.round(row.runningTotal * 100) / 100,
+    })),
+  };
+}
+
+// Per-item depletion forecast: effective daily rate from the usage rules, the
+// projected run-out day, and the reorder-by day when a threshold is set.
+export async function getInventoryForecast() {
+  const { supabase, ownerId } = scoped();
+  const today = todayKey();
+
+  const [itemsRes, usagesRes] = await Promise.all([
+    supabase
+      .from("inventory_items")
+      .select("id, name, quantity, unit, reorder_threshold, inventory_group_id")
+      .eq("user_id", ownerId)
+      .eq("archived", false)
+      .order("name", { ascending: true }),
+    supabase
+      .from("inventory_usages")
+      .select("inventory_item_id, amount, period, interval_days")
+      .eq("user_id", ownerId),
+  ]);
+
+  const usagesByItem = new Map<string, UsageRule[]>();
+  for (const row of (usagesRes.data ?? []) as {
+    inventory_item_id: string;
+    amount: number;
+    period: "day" | "week" | "custom";
+    interval_days: number | null;
+  }[]) {
+    const rules = usagesByItem.get(row.inventory_item_id) ?? [];
+    rules.push({
+      amount: Number(row.amount),
+      period: row.period,
+      interval_days: row.interval_days,
+    });
+    usagesByItem.set(row.inventory_item_id, rules);
+  }
+
+  type ItemRow = {
+    id: string;
+    name: string;
+    quantity: number;
+    unit: string;
+    reorder_threshold: number | null;
+  };
+
+  const items = ((itemsRes.data ?? []) as ItemRow[]).map((row) => {
+    const quantity = Number(row.quantity);
+    const threshold =
+      row.reorder_threshold === null ? null : Number(row.reorder_threshold);
+    const rate = effectiveDailyRate(usagesByItem.get(row.id) ?? []);
+    return {
+      id: row.id,
+      name: row.name,
+      quantity,
+      unit: row.unit,
+      status: stockStatus(quantity, threshold),
+      reorderThreshold: threshold,
+      dailyRate: Math.round(rate * 1000) / 1000,
+      daysLeft: daysUntilEmpty(quantity, rate),
+      runOutDate: runOutDateKey(today, quantity, rate),
+      reorderBy: reorderDateKey(today, quantity, rate, threshold),
+    };
+  });
+
+  items.sort((a, b) => {
+    if (a.runOutDate === null && b.runOutDate === null) {
+      return a.name.localeCompare(b.name);
+    }
+    if (a.runOutDate === null) return 1;
+    if (b.runOutDate === null) return -1;
+    return a.runOutDate.localeCompare(b.runOutDate);
+  });
+
+  return { today, items };
+}
+
+// ---------- second-brain reads ----------
+
+export async function listBrainNotes() {
+  const { supabase, ownerId } = scoped();
+  const credentials = await readVaultCredentials(supabase, ownerId);
+  if (!credentials) {
+    throw new Error("vault not connected — set it up on /brain first");
+  }
+  const notes = await listVaultNotePaths(credentials, vaultTag(ownerId));
+  return { count: notes.length, notes };
+}
+
+export async function readBrainNote(path: string) {
+  if (typeof path !== "string" || !path.trim()) throw new Error("path is required");
+  const { supabase, ownerId } = scoped();
+  const credentials = await readVaultCredentials(supabase, ownerId);
+  if (!credentials) {
+    throw new Error("vault not connected — set it up on /brain first");
+  }
+  const note = await readVaultNoteRaw(credentials, vaultTag(ownerId), path.trim());
+  if (!note) {
+    throw new Error(`no note at "${path}" — check list_brain_notes for paths`);
+  }
+  return note;
 }

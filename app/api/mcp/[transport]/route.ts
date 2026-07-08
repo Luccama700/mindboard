@@ -3,31 +3,54 @@ import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { z } from "zod";
 import { verifyAccessToken } from "@/app/lib/mcp/oauth";
 import {
+  getFinanceForecast,
   getFinanceSnapshot,
+  getInventoryForecast,
   getInventorySnapshot,
+  getPreferences,
+  getScheduleSnapshot,
   getTasksSnapshot,
   listAccounts,
+  listBrainNotes,
+  listCalendarEvents,
   listCategories,
+  listDailyLogs,
+  listGoals,
   listGroups,
+  listIncomeSources,
   listInventory,
+  listProposals,
   listRecentLedger,
   listRecurringExpenses,
   listRecurringTasks,
   listTasks,
+  readBrainNote,
 } from "@/app/lib/mcp/reads";
 import {
   cancelAction,
   confirmAction,
   proposeArchiveRecurringTask,
+  proposeCompleteRecurring,
   proposeCompleteTask,
+  proposeCreateEvent,
   proposeCreateRecurringTask,
   proposeCreateTask,
+  proposeDeleteTask,
+  proposeLogDaily,
   proposeLogSpend,
+  proposeManageFinance,
+  proposeManageGroup,
+  proposeRescheduleEvent,
   proposeUpdateFinance,
+  proposeUpdateRecurringTask,
+  proposeUpdateSettings,
   proposeUpdateStock,
+  proposeUpdateTask,
+  proposeUpsertGoal,
 } from "@/app/lib/mcp/writes";
 import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
 import { MAX_FINANCE_OPS } from "@/app/lib/mcp/finance-ops";
+import { MAX_ADMIN_OPS } from "@/app/lib/mcp/finance-admin-ops";
 import { captureToBrain } from "@/app/lib/mcp/brain";
 import { CAPTURE_SUMMARY_MAX, CAPTURE_TITLE_MAX } from "@/app/lib/mcp/capture";
 
@@ -162,10 +185,21 @@ const mcpHandler = createMcpHandler(
       {
         title: "List recent ledger rows",
         description:
-          "The most recent transactions (spending, income, transfers), newest first, with row ids. Before a statement import, read a window covering the statement period: the ids feed update_finance's adjust/remove ops and the notes let you judge whether a flagged duplicate is really the same purchase.",
-        inputSchema: { limit: z.number().int().positive().max(100).optional() },
+          "The most recent transactions (spending, income, transfers), newest first, with row ids. Optional filters: accountId, categoryId, direction, and a from/to date range. Before a statement import, read a window covering the statement period: the ids feed update_finance's adjust/remove ops and the notes let you judge whether a flagged duplicate is really the same purchase.",
+        inputSchema: {
+          limit: z.number().int().positive().max(100).optional(),
+          accountId: z.string().optional(),
+          categoryId: z.string().optional(),
+          direction: z.enum(["in", "out"]).optional(),
+          from: z.string().optional().describe("YYYY-MM-DD inclusive lower bound."),
+          to: z.string().optional().describe("YYYY-MM-DD inclusive upper bound."),
+        },
       },
-      (args) => guard(async () => ok(await listRecentLedger(args.limit))),
+      (args) =>
+        guard(async () => {
+          const { limit, ...filter } = args;
+          return ok(await listRecentLedger(limit, filter));
+        }),
     );
 
     server.registerTool(
@@ -177,6 +211,135 @@ const mcpHandler = createMcpHandler(
         inputSchema: {},
       },
       () => guard(async () => ok(await listRecurringExpenses())),
+    );
+
+    server.registerTool(
+      "schedule_snapshot",
+      {
+        title: "Schedule snapshot",
+        description:
+          "The next timed Google Calendar event, free waking hours left today, and the next free time gaps over the coming 3 days.",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await getScheduleSnapshot())),
+    );
+
+    server.registerTool(
+      "list_events",
+      {
+        title: "List calendar events",
+        description:
+          "Google Calendar events in a date range (default: today through +7 days, max span 62 days), across every readable calendar. Each event carries its calendarId/eventId (needed for reschedule_event), whether it is writable, and the Mindboard group its calendar is linked to, if any.",
+        inputSchema: {
+          from: z.string().optional().describe("YYYY-MM-DD start (default today)."),
+          to: z.string().optional().describe("YYYY-MM-DD end, inclusive (default from+7)."),
+        },
+      },
+      (args) => guard(async () => ok(await listCalendarEvents(args))),
+    );
+
+    server.registerTool(
+      "finance_forecast",
+      {
+        title: "Finance forecast",
+        description:
+          "Projected end-of-day net worth for the next N days (default 30, max 90): wage income from calendar-linked income sources, recurring bills, and the estimated everyday-spend layer (median-weekly baseline, per-day overrides, manual fallback) — the same math as the finance calendar.",
+        inputSchema: {
+          days: z.number().int().min(1).max(90).optional(),
+        },
+      },
+      (args) => guard(async () => ok(await getFinanceForecast(args.days ?? 30))),
+    );
+
+    server.registerTool(
+      "inventory_forecast",
+      {
+        title: "Inventory forecast",
+        description:
+          "Per-item depletion forecast: effective daily consumption rate from the usage rules, days left, the projected run-out date, and the reorder-by date where a threshold is set. Sorted soonest-out first.",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await getInventoryForecast())),
+    );
+
+    server.registerTool(
+      "list_goals",
+      {
+        title: "List goals",
+        description:
+          "The user's goals (id, title, why, horizon, status, target date). Active and paused by default; includeClosed adds done/archived. Ids feed upsert_goal.",
+        inputSchema: { includeClosed: z.boolean().optional() },
+      },
+      (args) => guard(async () => ok(await listGoals(args))),
+    );
+
+    server.registerTool(
+      "list_income_sources",
+      {
+        title: "List income sources",
+        description:
+          "Wage jobs (id, name, hourly wage, tax rate, linked calendar, pay schedule). Worked shifts come from the linked Google Calendar. Ids feed manage_finance's update_income op.",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await listIncomeSources())),
+    );
+
+    server.registerTool(
+      "list_daily_logs",
+      {
+        title: "List daily logs",
+        description:
+          "Recent mood/energy/sleep check-ins, newest first (default 14, max 60). Today's entry can be written with log_daily.",
+        inputSchema: { limit: z.number().int().positive().max(60).optional() },
+      },
+      (args) => guard(async () => ok(await listDailyLogs(args.limit ?? 14))),
+    );
+
+    server.registerTool(
+      "get_preferences",
+      {
+        title: "Get preferences",
+        description:
+          "The user's settings: timezone, wake window (start/end hour, drives free-time math), and the manual daily-spend estimate fallback.",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await getPreferences())),
+    );
+
+    server.registerTool(
+      "list_proposals",
+      {
+        title: "List AI proposals / audit log",
+        description:
+          "Recent ai_audit_log rows (id, tool, summary, status, source, timestamps), newest first. status='proposed' shows writes still awaiting confirm_action; executed/rejected/error show history.",
+        inputSchema: {
+          status: z.enum(["proposed", "executed", "rejected", "error"]).optional(),
+          limit: z.number().int().positive().max(100).optional(),
+        },
+      },
+      (args) => guard(async () => ok(await listProposals(args))),
+    );
+
+    server.registerTool(
+      "list_brain_notes",
+      {
+        title: "List second-brain notes",
+        description:
+          "Every markdown note in the vault (path, folder, title). Use a path with read_brain_note to read one.",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await listBrainNotes())),
+    );
+
+    server.registerTool(
+      "read_brain_note",
+      {
+        title: "Read a second-brain note",
+        description:
+          "One vault note's raw markdown by path (case-insensitive; '.md' optional). Paths come from list_brain_notes.",
+        inputSchema: { path: z.string() },
+      },
+      (args) => guard(async () => ok(await readBrainNote(args.path))),
     );
 
     // ---------- writes (propose step) ----------
@@ -214,6 +377,280 @@ const mcpHandler = createMcpHandler(
       (args) =>
         guard(async () => {
           const r = await proposeCompleteTask(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "update_task",
+      {
+        title: "Propose: edit a task",
+        description:
+          "Propose editing a task: rename, set/clear due date (null clears), set/clear a time-block (dueTime HH:MM + durationMin), move between groups (groupId null → inbox), notes, priority — and optionally push a dated+timed task out as a real Google Calendar event (pushToCalendar). Scheduling a task IS this tool (set dueDate + dueTime). Find the taskId via list_tasks. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          taskId: z.string(),
+          title: z.string().optional(),
+          dueDate: z.string().nullish().describe("YYYY-MM-DD, or null to clear."),
+          dueTime: z.string().nullish().describe("HH:MM 24h, or null to clear the block."),
+          durationMin: z.number().int().min(15).nullish(),
+          groupId: z.string().nullish().describe("Target group id, or null for inbox."),
+          notes: z.string().nullish(),
+          priority: z.enum(["low", "med", "high"]).optional(),
+          pushToCalendar: z.boolean().optional(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeUpdateTask(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "delete_task",
+      {
+        title: "Propose: delete a task",
+        description:
+          "Propose permanently deleting a task (prefer complete_task for finished work — deletion is for mistakes/duplicates). Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: { taskId: z.string() },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeDeleteTask(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "update_recurring_task",
+      {
+        title: "Propose: edit a repeating task",
+        description:
+          "Propose editing a repeating-task rule: rename, reschedule (pass frequency plus its fields — weekly needs weekdays, monthly dayOfMonth, custom intervalDays), change/clear the time block (dueTime null clears), group, notes, priority. Find the ruleId via list_recurring_tasks. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          ruleId: z.string(),
+          title: z.string().optional(),
+          groupId: z.string().nullish(),
+          notes: z.string().nullish(),
+          priority: z.enum(["low", "med", "high"]).optional(),
+          frequency: z.enum(["daily", "weekly", "monthly", "custom"]).optional(),
+          weekdays: z.array(z.number().int().min(0).max(6)).optional(),
+          dayOfMonth: z.number().int().min(1).max(31).optional(),
+          intervalDays: z.number().int().min(1).optional(),
+          startDate: z.string().nullish(),
+          dueTime: z.string().nullish(),
+          durationMin: z.number().int().min(15).nullish(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeUpdateRecurringTask(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "complete_recurring_task",
+      {
+        title: "Propose: check off today's habit",
+        description:
+          "Propose checking off TODAY's occurrence of a repeating task (or un-checking it with undo:true). Only today is completable — missed days skip silently. Find the ruleId via list_recurring_tasks. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: { ruleId: z.string(), undo: z.boolean().optional() },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeCompleteRecurring(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "manage_group",
+      {
+        title: "Propose: create/edit/archive a task group",
+        description:
+          "Propose a task-group change. action=create needs name + type (course/project/work/personal; color optional #rrggbb). action=update edits name/type/color and can link a Google Calendar (googleCalendarId; null unlinks) so its events render as that group. action=archive hides the group (its tasks stay). Find groupId via list_groups. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          action: z.enum(["create", "update", "archive"]),
+          groupId: z.string().optional().describe("Required for update/archive."),
+          name: z.string().optional(),
+          type: z.enum(["course", "project", "work", "personal"]).optional(),
+          color: z.string().optional().describe("#rrggbb"),
+          googleCalendarId: z.string().nullish(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeManageGroup(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "upsert_goal",
+      {
+        title: "Propose: create or update a goal",
+        description:
+          "Propose creating a goal, or updating/closing an existing one (pass goalId to update; status done/paused/archived closes or pauses it). Find goalId via list_goals. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          goalId: z.string().optional(),
+          title: z.string().optional(),
+          why: z.string().optional(),
+          horizon: z.enum(["week", "month", "quarter", "year", "life"]).optional(),
+          status: z.enum(["active", "done", "paused", "archived"]).optional(),
+          targetDate: z.string().optional().describe("YYYY-MM-DD"),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeUpsertGoal(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "reschedule_event",
+      {
+        title: "Propose: move a Google Calendar event",
+        description:
+          "Propose moving an existing Google Calendar event to a new start/end. Timed events take ISO datetimes (end after start); all-day events (allDay:true) take YYYY-MM-DD dates with an EXCLUSIVE end. Get calendarId/eventId (and writability) from list_events — read-only calendars cannot be edited. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          calendarId: z.string(),
+          eventId: z.string(),
+          allDay: z.boolean().optional(),
+          start: z.string(),
+          end: z.string(),
+          timeZone: z.string().optional().describe("IANA zone for timed events."),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeRescheduleEvent(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "create_event",
+      {
+        title: "Propose: create a Google Calendar event",
+        description:
+          "Propose creating a Google Calendar event: summary + date, plus startTime (HH:MM) and durationMin (default 60) for a timed block — omit startTime for all-day. calendarId defaults to the primary calendar (list_events shows other writable calendar ids). Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          summary: z.string(),
+          date: z.string().describe("YYYY-MM-DD"),
+          startTime: z.string().optional().describe("HH:MM 24h; omit for all-day."),
+          durationMin: z.number().int().min(15).optional(),
+          calendarId: z.string().optional(),
+          description: z.string().optional(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeCreateEvent(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "log_daily",
+      {
+        title: "Propose: log today's check-in",
+        description:
+          "Propose recording today's daily log: mood 1-5, energy 1-5, optional sleep hours. Re-logging the same day overwrites it. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          mood: z.number().int().min(1).max(5),
+          energy: z.number().int().min(1).max(5),
+          sleepHours: z.number().min(0).max(24).nullish(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeLogDaily(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "update_settings",
+      {
+        title: "Propose: update preferences",
+        description:
+          "Propose changing user preferences: timezone (IANA name) and/or the wake window (wakeStartHour 0-23, wakeEndHour 1-24 — drives free-time math). The daily-spend estimate lives in manage_finance instead. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          timezone: z.string().optional(),
+          wakeStartHour: z.number().int().min(0).max(23).optional(),
+          wakeEndHour: z.number().int().min(1).max(24).optional(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeUpdateSettings(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "manage_finance",
+      {
+        title: "Propose: finance configuration changes",
+        description:
+          "Propose a batch of finance CONFIGURATION edits in one confirmable receipt (ledger rows belong in update_finance / log_spend instead). Ops: create_account (name, type, balance — negative for credit debt; seeds an opening ledger row + anchor), update_account (rename/type/color/archive by id or name), update_category (rename/color/archive), update_recurring (rename/amount/category/schedule/archive a bill rule — frequency needs its fields: monthly→dayOfMonth, weekly→weekday, custom→intervalDays+startDate), create_income / update_income (wage jobs: hourlyWage, taxRate 0-100, calendarId links worked-shift calendar, payFrequency weekly/biweekly/monthly + anchorPayday + periodStart/periodEnd — payFrequency null clears the schedule), set_spend_override (pin expected everyday spend for a FUTURE date; amount null clears, 0 means no spend), set_daily_spend_estimate (the manual flat fallback; null clears). References accept an id or a unique name. Read list_accounts / list_categories / list_recurring_expenses / list_income_sources first. Returns a receipt preview + proposalId; call confirm_action after the user approves.",
+        inputSchema: {
+          operations: z
+            .array(
+              z.object({
+                op: z.enum([
+                  "create_account",
+                  "update_account",
+                  "update_category",
+                  "update_recurring",
+                  "create_income",
+                  "update_income",
+                  "set_spend_override",
+                  "set_daily_spend_estimate",
+                ]),
+                name: z.string().optional(),
+                type: z
+                  .enum(["checking", "savings", "cash", "credit", "investment", "other"])
+                  .optional(),
+                color: z.string().optional().describe("#rrggbb"),
+                currency: z.string().optional(),
+                balance: z.number().optional().describe("Opening balance (create_account)."),
+                account: z.string().optional().describe("Account id or name (update_account)."),
+                category: z
+                  .string()
+                  .nullish()
+                  .describe("Category id or name (update_category target, or update_recurring's category; null clears)."),
+                rule: z.string().optional().describe("Recurring-expense id or name (update_recurring)."),
+                source: z.string().optional().describe("Income-source id or name (update_income)."),
+                archived: z.boolean().optional(),
+                amount: z
+                  .number()
+                  .nullish()
+                  .describe("update_recurring amount, or set_spend_override / set_daily_spend_estimate value (null clears)."),
+                frequency: z.enum(["monthly", "weekly", "daily", "custom"]).optional(),
+                dayOfMonth: z.number().int().min(1).max(31).optional(),
+                weekday: z.number().int().min(0).max(6).optional(),
+                intervalDays: z.number().int().min(1).max(366).optional(),
+                startDate: z.string().optional(),
+                hourlyWage: z.number().optional(),
+                taxRate: z.number().min(0).max(100).optional(),
+                calendarId: z.string().nullish(),
+                payFrequency: z.enum(["weekly", "biweekly", "monthly"]).nullish(),
+                anchorPayday: z.string().optional(),
+                periodStart: z.string().optional(),
+                periodEnd: z.string().optional(),
+                date: z.string().optional().describe("YYYY-MM-DD (set_spend_override)."),
+              }),
+            )
+            .min(1)
+            .max(MAX_ADMIN_OPS),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeManageFinance(args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -378,7 +815,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: update inventory stock",
         description:
-          "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again), set_priority (how loudly it nags: high surfaces on home when merely low, med only when out, low never). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Returns a receipt preview + proposalId; call confirm_action to apply. Batch a whole grocery haul into ONE call.",
+          "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again), set_priority (how loudly it nags: high surfaces on home when merely low, med only when out, low never), set_threshold (reorder level; null clears), set_usage (consumption rate driving the depletion forecast — replaces the item's existing usage rules; period day/week/custom, custom needs intervalDays), clear_usage, rename, move (to a group; omit group for none), create_group (new inventory group, usable by later ops in the same batch). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Returns a receipt preview + proposalId; call confirm_action to apply. Batch a whole grocery haul into ONE call.",
         inputSchema: {
           operations: z
             .array(
@@ -391,33 +828,57 @@ const mcpHandler = createMcpHandler(
                   "archive",
                   "restore",
                   "set_priority",
+                  "set_threshold",
+                  "set_usage",
+                  "clear_usage",
+                  "rename",
+                  "move",
+                  "create_group",
                 ]),
                 item: z
                   .string()
                   .optional()
                   .describe(
-                    "Item id or name (for add/remove/set/archive/restore/set_priority).",
+                    "Item id or name (every op except create/create_group).",
                   ),
                 amount: z
                   .number()
                   .positive()
                   .optional()
-                  .describe("How much was gained/used (for add/remove)."),
+                  .describe("How much was gained/used (add/remove), or consumed per period (set_usage)."),
                 quantity: z
                   .number()
                   .min(0)
                   .optional()
                   .describe("Absolute count (for set/create)."),
-                name: z.string().optional().describe("New item name (for create)."),
+                name: z
+                  .string()
+                  .optional()
+                  .describe("New name (create/create_group), or the new item name (rename)."),
                 unit: z.string().optional().describe('Optional unit for create, e.g. "rolls".'),
                 group: z
                   .string()
                   .optional()
-                  .describe("Optional inventory group id or name (for create)."),
+                  .describe("Inventory group id or name (create/move; omit on move to ungroup)."),
                 priority: z
                   .enum(["low", "med", "high"])
                   .optional()
                   .describe("Attention priority (for set_priority)."),
+                threshold: z
+                  .number()
+                  .positive()
+                  .nullish()
+                  .describe("Reorder level (set_threshold); null clears it."),
+                period: z
+                  .enum(["day", "week", "custom"])
+                  .optional()
+                  .describe("Usage cadence (set_usage)."),
+                intervalDays: z
+                  .number()
+                  .int()
+                  .min(1)
+                  .optional()
+                  .describe("Every N days, for period=custom (set_usage)."),
               }),
             )
             .min(1)
@@ -460,7 +921,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Confirm a proposed write",
         description:
-          "Execute a previously proposed write (create_task / complete_task / create_recurring_task / archive_recurring_task / log_spend / update_stock / update_finance) by its proposalId. Only call after the user has approved the preview.",
+          "Execute a previously proposed write (any propose-tool: tasks, repeating tasks, groups, goals, calendar events, daily log, settings, stock, finance) by its proposalId. Only call after the user has approved the preview. Pending proposals are visible via list_proposals (status=proposed).",
         inputSchema: { proposalId: z.string() },
       },
       (args) =>

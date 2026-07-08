@@ -1,5 +1,7 @@
 import "server-only";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
+import { createServiceClient } from "@/utils/supabase/service";
 
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
@@ -125,17 +127,36 @@ export class GoogleCalendarConnectionError extends Error {
   }
 }
 
-async function getValidAccessToken(userId: string): Promise<string> {
+// Load the token row on the session client first (the dashboard path, RLS
+// scoped). In session-less contexts (the MCP server) that read comes back
+// empty, so fall back to the service client — still explicitly user-filtered,
+// matching the app/lib/mcp/* scoping invariant.
+async function loadTokenRow(
+  userId: string,
+): Promise<{ row: TokenRow; client: SupabaseClient }> {
   const supabase = await createClient();
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from("google_tokens")
     .select("access_token, refresh_token, expires_at, scopes")
     .eq("user_id", userId)
     .maybeSingle();
+  if (data) return { row: data as TokenRow, client: supabase };
 
-  if (error || !data) throw new GoogleCalendarConnectionError();
+  if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    const service = createServiceClient();
+    const { data: serviceData } = await service
+      .from("google_tokens")
+      .select("access_token, refresh_token, expires_at, scopes")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (serviceData) return { row: serviceData as TokenRow, client: service };
+  }
 
-  const row = data as TokenRow;
+  throw new GoogleCalendarConnectionError();
+}
+
+async function getValidAccessToken(userId: string): Promise<string> {
+  const { row, client: supabase } = await loadTokenRow(userId);
   const expiresAt = new Date(row.expires_at).getTime();
   if (expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) {
     return row.access_token;
@@ -302,8 +323,8 @@ export async function createEvent(
   calendarId: string,
   body: {
     summary: string;
-    start: { dateTime: string; timeZone: string };
-    end: { dateTime: string; timeZone: string };
+    start: { date?: string; dateTime?: string; timeZone?: string };
+    end: { date?: string; dateTime?: string; timeZone?: string };
     description?: string;
   },
 ): Promise<string> {

@@ -12,6 +12,8 @@ import type { Result } from "./validate";
 
 export const MAX_STOCK_OPS = 50;
 
+export type UsagePeriod = "day" | "week" | "custom";
+
 export type StockOp =
   | { op: "add"; item: string; amount: number }
   | { op: "remove"; item: string; amount: number }
@@ -25,13 +27,35 @@ export type StockOp =
     }
   | { op: "archive"; item: string }
   | { op: "restore"; item: string }
-  | { op: "set_priority"; item: string; priority: "low" | "med" | "high" };
+  | { op: "set_priority"; item: string; priority: "low" | "med" | "high" }
+  | { op: "set_threshold"; item: string; threshold: number | null }
+  | {
+      op: "set_usage";
+      item: string;
+      amount: number;
+      period: UsagePeriod;
+      intervalDays?: number;
+    }
+  | { op: "clear_usage"; item: string }
+  | { op: "rename"; item: string; name: string }
+  | { op: "move"; item: string; group?: string }
+  | { op: "create_group"; name: string };
 
-// What gets stored on the proposal and executed on confirm.
+// What gets stored on the proposal and executed on confirm. groupId null +
+// pendingGroup set means the group is created by a create_group op earlier in
+// the same batch; the executor resolves it after that insert.
 export type ResolvedStockOp =
   | { kind: "adjust"; itemId: string; name: string; unit: string; delta: number; before: number; after: number }
   | { kind: "recount"; itemId: string; name: string; unit: string; quantity: number; before: number }
-  | { kind: "create"; name: string; quantity: number; unit: string; groupId: string | null; groupName: string | null }
+  | {
+      kind: "create";
+      name: string;
+      quantity: number;
+      unit: string;
+      groupId: string | null;
+      groupName: string | null;
+      pendingGroup?: string | null;
+    }
   | { kind: "archive"; itemId: string; name: string }
   | { kind: "restore"; itemId: string; name: string }
   | {
@@ -39,7 +63,28 @@ export type ResolvedStockOp =
       itemId: string;
       name: string;
       priority: "low" | "med" | "high";
-    };
+    }
+  | { kind: "threshold"; itemId: string; name: string; unit: string; threshold: number | null }
+  | {
+      kind: "usage";
+      itemId: string;
+      name: string;
+      unit: string;
+      amount: number;
+      period: UsagePeriod;
+      intervalDays: number | null;
+    }
+  | { kind: "clear_usage"; itemId: string; name: string }
+  | { kind: "rename"; itemId: string; from: string; to: string }
+  | {
+      kind: "move";
+      itemId: string;
+      name: string;
+      groupId: string | null;
+      groupName: string | null;
+      pendingGroup?: string | null;
+    }
+  | { kind: "create_group"; name: string };
 
 const ITEM_PRIORITIES = new Set(["low", "med", "high"]);
 
@@ -154,10 +199,76 @@ export function validateStockOps(raw: unknown): Result<StockOp[]> {
         });
         break;
       }
+      case "set_threshold": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (set_threshold): item is required` };
+        let threshold: number | null = null;
+        if (entry.threshold !== undefined && entry.threshold !== null) {
+          threshold = positiveNumber(entry.threshold);
+          if (threshold === null) {
+            return { ok: false, error: `operation ${i + 1} (set_threshold ${item}): threshold must be a positive number or null` };
+          }
+        }
+        ops.push({ op, item, threshold });
+        break;
+      }
+      case "set_usage": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (set_usage): item is required` };
+        const amount = positiveNumber(entry.amount);
+        if (amount === null) {
+          return { ok: false, error: `operation ${i + 1} (set_usage ${item}): amount must be a positive number` };
+        }
+        const period = entry.period;
+        if (period !== "day" && period !== "week" && period !== "custom") {
+          return { ok: false, error: `operation ${i + 1} (set_usage ${item}): period must be day, week, or custom` };
+        }
+        let intervalDays: number | undefined;
+        if (period === "custom") {
+          const n = Math.trunc(Number(entry.intervalDays));
+          if (!Number.isInteger(n) || n < 1) {
+            return { ok: false, error: `operation ${i + 1} (set_usage ${item}): custom period needs intervalDays of 1+` };
+          }
+          intervalDays = n;
+        }
+        ops.push({ op, item, amount, period, intervalDays });
+        break;
+      }
+      case "clear_usage": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (clear_usage): item is required` };
+        ops.push({ op, item });
+        break;
+      }
+      case "rename": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (rename): item is required` };
+        const name = refString(entry.name);
+        if (!name || name.length > 120) {
+          return { ok: false, error: `operation ${i + 1} (rename ${item}): name is required (max 120 chars)` };
+        }
+        ops.push({ op, item, name });
+        break;
+      }
+      case "move": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (move): item is required` };
+        const group = refString(entry.group) ?? undefined;
+        ops.push({ op, item, group });
+        break;
+      }
+      case "create_group": {
+        const name = refString(entry.name);
+        if (!name || name.length > 120) {
+          return { ok: false, error: `operation ${i + 1} (create_group): name is required (max 120 chars)` };
+        }
+        ops.push({ op, name });
+        break;
+      }
       default:
         return {
           ok: false,
-          error: `operation ${i + 1}: unknown op "${String(op)}" (expected add/remove/set/create/archive/restore/set_priority)`,
+          error: `operation ${i + 1}: unknown op "${String(op)}" (expected add/remove/set/create/archive/restore/set_priority/set_threshold/set_usage/clear_usage/rename/move/create_group)`,
         };
     }
   }
@@ -223,6 +334,19 @@ export function resolveStockOps(
   for (const it of items) running.set(it.id, Number(it.quantity) || 0);
   // Names created earlier in the same batch, so duplicate creates fail fast.
   const createdNames = new Set<string>();
+  // Groups created earlier in the same batch (name, no id yet); later ops
+  // referencing one resolve to pendingGroup and the executor fills the id in.
+  const createdGroups = new Map<string, string>(); // lowercased → display name
+
+  const groupRef = (
+    ref: string,
+  ): Result<{ groupId: string | null; groupName: string | null; pendingGroup: string | null }> => {
+    const pending = createdGroups.get(ref.toLowerCase());
+    if (pending) return { ok: true, value: { groupId: null, groupName: pending, pendingGroup: pending } };
+    const g = matchGroup(ref, groups);
+    if (!g.ok) return g;
+    return { ok: true, value: { groupId: g.value.id, groupName: g.value.name, pendingGroup: null } };
+  };
 
   const resolved: ResolvedStockOp[] = [];
   for (const op of ops) {
@@ -286,11 +410,13 @@ export function resolveStockOps(
         }
         let groupId: string | null = null;
         let groupName: string | null = null;
+        let pendingGroup: string | null = null;
         if (op.group) {
-          const g = matchGroup(op.group, groups);
+          const g = groupRef(op.group);
           if (!g.ok) return g;
-          groupId = g.value.id;
-          groupName = g.value.name;
+          groupId = g.value.groupId;
+          groupName = g.value.groupName;
+          pendingGroup = g.value.pendingGroup;
         }
         createdNames.add(needle);
         resolved.push({
@@ -300,6 +426,7 @@ export function resolveStockOps(
           unit: op.unit ?? "",
           groupId,
           groupName,
+          pendingGroup,
         });
         break;
       }
@@ -324,6 +451,97 @@ export function resolveStockOps(
           name: found.value.name,
           priority: op.priority,
         });
+        break;
+      }
+      case "set_threshold": {
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) return found;
+        resolved.push({
+          kind: "threshold",
+          itemId: found.value.id,
+          name: found.value.name,
+          unit: found.value.unit,
+          threshold: op.threshold,
+        });
+        break;
+      }
+      case "set_usage": {
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) return found;
+        resolved.push({
+          kind: "usage",
+          itemId: found.value.id,
+          name: found.value.name,
+          unit: found.value.unit,
+          amount: op.amount,
+          period: op.period,
+          intervalDays: op.period === "custom" ? (op.intervalDays ?? null) : null,
+        });
+        break;
+      }
+      case "clear_usage": {
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) return found;
+        resolved.push({
+          kind: "clear_usage",
+          itemId: found.value.id,
+          name: found.value.name,
+        });
+        break;
+      }
+      case "rename": {
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) return found;
+        const taken = active.find(
+          (it) =>
+            it.id !== found.value.id &&
+            it.name.toLowerCase() === op.name.toLowerCase(),
+        );
+        if (taken) {
+          return { ok: false, error: `an item named "${taken.name}" already exists` };
+        }
+        resolved.push({
+          kind: "rename",
+          itemId: found.value.id,
+          from: found.value.name,
+          to: op.name,
+        });
+        break;
+      }
+      case "move": {
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) return found;
+        let groupId: string | null = null;
+        let groupName: string | null = null;
+        let pendingGroup: string | null = null;
+        if (op.group) {
+          const g = groupRef(op.group);
+          if (!g.ok) return g;
+          groupId = g.value.groupId;
+          groupName = g.value.groupName;
+          pendingGroup = g.value.pendingGroup;
+        }
+        resolved.push({
+          kind: "move",
+          itemId: found.value.id,
+          name: found.value.name,
+          groupId,
+          groupName,
+          pendingGroup,
+        });
+        break;
+      }
+      case "create_group": {
+        const needle = op.name.toLowerCase();
+        const existing = groups.find((g) => g.name.toLowerCase() === needle);
+        if (existing) {
+          return { ok: false, error: `group "${existing.name}" already exists` };
+        }
+        if (createdGroups.has(needle)) {
+          return { ok: false, error: `duplicate create_group for "${op.name}"` };
+        }
+        createdGroups.set(needle, op.name);
+        resolved.push({ kind: "create_group", name: op.name });
         break;
       }
     }
@@ -358,6 +576,27 @@ export function receiptLine(op: ResolvedStockOp): string {
       return `${op.name}  tracking again`;
     case "priority":
       return `${op.name}  priority → ${op.priority}${op.priority === "high" ? " (!!!)" : ""}`;
+    case "threshold":
+      return op.threshold === null
+        ? `${op.name}  reorder threshold cleared`
+        : `${op.name}  reorder at ${withUnit(op.threshold, op.unit)}`;
+    case "usage": {
+      const cadence =
+        op.period === "day"
+          ? "per day"
+          : op.period === "week"
+            ? "per week"
+            : `every ${op.intervalDays} days`;
+      return `${op.name}  usage → ${withUnit(op.amount, op.unit)} ${cadence}`;
+    }
+    case "clear_usage":
+      return `${op.name}  usage tracking cleared`;
+    case "rename":
+      return `${op.from} → renamed "${op.to}"`;
+    case "move":
+      return `${op.name}  moved to ${op.groupName ?? op.pendingGroup ?? "no group"}`;
+    case "create_group":
+      return `${op.name}  new group`;
   }
 }
 
@@ -423,6 +662,8 @@ export function validateResolvedOps(raw: unknown): Result<ResolvedStockOp[]> {
           unit: String(entry.unit ?? ""),
           groupId: typeof entry.groupId === "string" ? entry.groupId : null,
           groupName: typeof entry.groupName === "string" ? entry.groupName : null,
+          pendingGroup:
+            typeof entry.pendingGroup === "string" ? entry.pendingGroup : null,
         });
         break;
       }
@@ -448,6 +689,100 @@ export function validateResolvedOps(raw: unknown): Result<ResolvedStockOp[]> {
           name: String(entry.name ?? ""),
           priority: entry.priority as "low" | "med" | "high",
         });
+        break;
+      }
+      case "threshold": {
+        let threshold: number | null = null;
+        if (entry.threshold !== null && entry.threshold !== undefined) {
+          threshold = positiveNumber(entry.threshold);
+          if (threshold === null) {
+            return { ok: false, error: "malformed threshold operation" };
+          }
+        }
+        if (typeof entry.itemId !== "string") {
+          return { ok: false, error: "malformed threshold operation" };
+        }
+        ops.push({
+          kind: "threshold",
+          itemId: entry.itemId,
+          name: String(entry.name ?? ""),
+          unit: String(entry.unit ?? ""),
+          threshold,
+        });
+        break;
+      }
+      case "usage": {
+        const amount = positiveNumber(entry.amount);
+        const period = entry.period;
+        if (
+          typeof entry.itemId !== "string" ||
+          amount === null ||
+          (period !== "day" && period !== "week" && period !== "custom")
+        ) {
+          return { ok: false, error: "malformed usage operation" };
+        }
+        let intervalDays: number | null = null;
+        if (period === "custom") {
+          const n = Math.trunc(Number(entry.intervalDays));
+          if (!Number.isInteger(n) || n < 1) {
+            return { ok: false, error: "malformed usage operation" };
+          }
+          intervalDays = n;
+        }
+        ops.push({
+          kind: "usage",
+          itemId: entry.itemId,
+          name: String(entry.name ?? ""),
+          unit: String(entry.unit ?? ""),
+          amount,
+          period,
+          intervalDays,
+        });
+        break;
+      }
+      case "clear_usage": {
+        if (typeof entry.itemId !== "string") {
+          return { ok: false, error: "malformed clear_usage operation" };
+        }
+        ops.push({
+          kind: "clear_usage",
+          itemId: entry.itemId,
+          name: String(entry.name ?? ""),
+        });
+        break;
+      }
+      case "rename": {
+        const to = refString(entry.to);
+        if (typeof entry.itemId !== "string" || !to) {
+          return { ok: false, error: "malformed rename operation" };
+        }
+        ops.push({
+          kind: "rename",
+          itemId: entry.itemId,
+          from: String(entry.from ?? ""),
+          to,
+        });
+        break;
+      }
+      case "move": {
+        if (typeof entry.itemId !== "string") {
+          return { ok: false, error: "malformed move operation" };
+        }
+        ops.push({
+          kind: "move",
+          itemId: entry.itemId,
+          name: String(entry.name ?? ""),
+          groupId: typeof entry.groupId === "string" ? entry.groupId : null,
+          groupName: typeof entry.groupName === "string" ? entry.groupName : null,
+          pendingGroup:
+            typeof entry.pendingGroup === "string" ? entry.pendingGroup : null,
+        });
+        break;
+      }
+      case "create_group": {
+        const name = refString(entry.name);
+        if (!name) return { ok: false, error: "malformed create_group operation" };
+        ops.push({ kind: "create_group", name });
         break;
       }
       default:
