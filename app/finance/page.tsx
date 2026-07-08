@@ -148,9 +148,10 @@ export default async function FinancePage({
   const incomeSources = (incomeResult.data ?? []) as IncomeSource[];
   const expenses = (expensesResult.data ?? []) as RecurringExpense[];
 
-  // Everyday-spend rate: median weekly discretionary total over trailing
-  // history, with bill payments excluded via the active recurring rules
-  // (see spend-baseline.ts for why it's flat, not weekday-shaped).
+  // Everyday-spend rate: a predicted minimum — half the median weekly
+  // discretionary total over trailing history, with bill payments excluded
+  // via the active recurring rules (see spend-baseline.ts for why it's flat
+  // and why it's halved).
   const spendRate = computeSpendRate({
     history: spendHistory,
     rules: expenses.map((e) => ({

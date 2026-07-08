@@ -299,8 +299,9 @@ export function FinanceCalendar({
 }
 
 // The everyday-spend line under the calendar header. With enough history the
-// weekly-median rate drives the forecast and this is a read-only summary; with
-// a thin ledger it exposes the manual flat estimate (saved to user_settings).
+// predicted-minimum rate (half the median week) drives the forecast and this
+// is a read-only summary; with a thin ledger it exposes the manual flat
+// estimate (saved to user_settings).
 function EverydaySpendRow({
   rate,
   manual,
@@ -324,7 +325,7 @@ function EverydaySpendRow({
   if (rate.confident) {
     return (
       <p className="mb-3 text-[10px] tracking-widest uppercase text-muted">
-        everyday spend · from your last {rate.sampledWeeks} weeks · ~
+        everyday spend · from your last {rate.sampledWeeks} weeks · at least ~
         {formatMoney(rate.dailyRate, currency)}/day
       </p>
     );

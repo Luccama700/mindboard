@@ -256,7 +256,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Finance forecast",
         description:
-          "Projected end-of-day net worth for the next N days (default 30, max 90): wage income from calendar-linked income sources, recurring bills, and the estimated everyday-spend layer (median-weekly baseline, per-day overrides, manual fallback) — the same math as the finance calendar.",
+          "Projected end-of-day net worth for the next N days (default 30, max 90): wage income from calendar-linked income sources, recurring bills, and the estimated everyday-spend layer (predicted-minimum baseline of half the median week, per-day overrides, manual fallback) — the same math as the finance calendar.",
         inputSchema: {
           days: z.number().int().min(1).max(90).optional(),
         },

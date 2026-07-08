@@ -212,7 +212,7 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       anchor: "finance-calendar",
       title: "the forecast",
-      body: "each day is your projected end-of-day worth. firm numbers are real history; ~ numbers are me estimating your everyday spend.",
+      body: "each day is your projected end-of-day worth. firm numbers are real history; ~ numbers are my floor estimate of your everyday spend.",
     },
     {
       anchor: "finance-calendar",

@@ -4,6 +4,7 @@ import {
   estimatedSpendOn,
   matchesBill,
   MIN_CONFIDENT_WEEKS,
+  MIN_SPEND_FACTOR,
   type BillRule,
   type SpendHistoryRow,
   type SpendRate,
@@ -69,8 +70,8 @@ describe("computeSpendRate", () => {
     expect(r.dailyRate).toBe(0);
   });
 
-  it("takes the median weekly total over trailing 7-day blocks", () => {
-    // weekly totals: [70, 140, 70, 700, 0] → median 70 → $10/day
+  it("halves the median weekly total over trailing 7-day blocks (predicted minimum)", () => {
+    // weekly totals: [70, 140, 70, 700, 0] → median 70 → × 0.5 ÷ 7 = $5/day
     const history = [
       income("2026-06-02"), // anchors coverage at block 4's start
       spend("2026-07-01", 70), // block 0
@@ -82,7 +83,15 @@ describe("computeSpendRate", () => {
     const r = computeSpendRate({ history, rules: [], today: TODAY });
     expect(r.sampledWeeks).toBe(5);
     expect(r.confident).toBe(true);
-    expect(r.dailyRate).toBe(10);
+    expect(r.dailyRate).toBe(5);
+  });
+
+  it("projects a floor at half the median week, rounded to cents", () => {
+    // one fully covered $75 week → 75 × 0.5 ÷ 7 = 5.357… → $5.36/day
+    const history = [income("2026-06-30"), spend("2026-07-02", 75)];
+    const r = computeSpendRate({ history, rules: [], today: TODAY });
+    expect(MIN_SPEND_FACTOR).toBe(0.5);
+    expect(r.dailyRate).toBe(5.36);
   });
 
   it("spreads within-week posting clumps evenly (the Monday problem)", () => {
@@ -96,7 +105,7 @@ describe("computeSpendRate", () => {
       spend("2026-06-08", 70),
     ];
     const r = computeSpendRate({ history, rules: [], today: TODAY });
-    expect(r.dailyRate).toBe(10); // flat $10/day, weekends included
+    expect(r.dailyRate).toBe(5); // flat $5/day floor, weekends included
   });
 
   it("excludes bill payments (any date) and transfers", () => {
@@ -111,7 +120,7 @@ describe("computeSpendRate", () => {
       spend("2026-06-03", 70),
     ];
     const r = computeSpendRate({ history, rules: [rentRule], today: TODAY });
-    expect(r.dailyRate).toBe(10);
+    expect(r.dailyRate).toBe(5);
   });
 
   it("only counts fully covered weeks and reports confidence", () => {

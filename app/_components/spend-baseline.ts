@@ -1,14 +1,25 @@
 // Pure everyday-spend baseline for the cashflow forecast. No React, no server
 // imports — unit tested directly (__tests__/spend-baseline.test.ts).
 //
-// Model (docs/finance-automation-plan.md §4, revised 2026-07-07): future days
-// get a FLAT projected discretionary spend = the median WEEKLY total over the
-// trailing ~12 weeks, divided by 7. Weekly totals — not per-weekday buckets —
-// because statement imports carry *posted* dates: banks park weekend purchases
-// on Monday, so any weekday-shaped model learns the bank's posting calendar
+// Model (docs/finance-automation-plan.md §4, revised 2026-07-07, calibrated
+// 2026-07-08): future days get a FLAT projected everyday spend read as a
+// predicted MINIMUM: half the median WEEKLY total over the trailing ~12
+// weeks, divided by 7. Weekly totals — not per-weekday buckets — because
+// statement imports carry *posted* dates: banks park weekend purchases on
+// Monday, so any weekday-shaped model learns the bank's posting calendar
 // instead of real habits (observed live: 120 Monday rows vs 5 Saturday rows).
 // The median across weeks also makes outlier weeks (tuition, a rent payment
 // that slipped the bill filter) 1-of-N samples the median steps over.
+//
+// The half factor (MIN_SPEND_FACTOR) exists because the raw median is a
+// *typical* week — half of real weeks come in under it — and its error
+// profile is one-sided: bill payments that drift past the 2% amount
+// tolerance and one-off purchases inside otherwise-normal weeks can only
+// inflate the pool, never deflate it. Read live, the raw median tracked
+// noticeably above lived spending, so the forecast now projects a floor
+// rather than a midpoint. The factor applies only to this history-derived
+// rate; explicit user inputs (spend_overrides pins, the manual
+// daily_spend_estimate) are taken at face value.
 //
 // Bill payments are excluded by amount + category match against the active
 // recurring rules — deliberately with NO date-proximity requirement, because
@@ -22,6 +33,7 @@ import { addDaysKey } from "./finance-projection";
 
 export const BASELINE_WEEKS = 12;
 export const MIN_CONFIDENT_WEEKS = 4;
+export const MIN_SPEND_FACTOR = 0.5;
 
 export type SpendHistoryRow = {
   occurred_at: string;
@@ -75,9 +87,10 @@ export function matchesBill(
   return false;
 }
 
-// Median weekly discretionary total ÷ 7 over trailing 7-day blocks ending
-// yesterday (today is a partial day). Only blocks fully covered by recorded
-// history count, so a young ledger isn't dragged toward zero.
+// Predicted-minimum rate: MIN_SPEND_FACTOR × the median weekly discretionary
+// total ÷ 7, over trailing 7-day blocks ending yesterday (today is a partial
+// day). Only blocks fully covered by recorded history count, so a young
+// ledger isn't dragged toward zero.
 export function computeSpendRate(input: {
   history: SpendHistoryRow[];
   rules: BillRule[];
@@ -121,7 +134,7 @@ export function computeSpendRate(input: {
   if (weekTotals.length === 0) return empty;
 
   return {
-    dailyRate: roundCents(median(weekTotals) / 7),
+    dailyRate: roundCents((median(weekTotals) * MIN_SPEND_FACTOR) / 7),
     sampledWeeks: weekTotals.length,
     confident: weekTotals.length >= MIN_CONFIDENT_WEEKS,
   };

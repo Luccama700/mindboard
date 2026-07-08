@@ -28,6 +28,15 @@ future work. Implementation notes where reality refined the design:
   `spend_overrides` lets a slider on any future day pin that day's expected
   spend (including $0). `adjust` also gained `markTransfer` for reclassifying
   mis-imported internal transfers.
+- **The flat baseline was calibrated down on 2026-07-08**: the everyday layer
+  now projects a predicted *minimum* — half the median weekly total
+  (`MIN_SPEND_FACTOR = 0.5` in `spend-baseline.ts`). The raw median is a
+  typical week (half of real weeks come in under it), and its error profile
+  is one-sided — bill payments drifting past the 2% amount tolerance and
+  one-off purchases inside otherwise-normal weeks can only inflate it — so it
+  read consistently high against lived spending. The factor applies only to
+  the history-derived rate; `spend_overrides` pins and the manual
+  `daily_spend_estimate` stay face-value.
 
 Two goals, decided with the user:
 
