@@ -5,6 +5,41 @@ in the linked plan docs; this file records exactly what changed and where.
 
 ---
 
+## v0.2.1 — timezone-correct dashboard clock + daily-log invite (2026-07-08)
+
+Two fixes on `/` with one root cause: the page renders on Vercel where the
+process clock is UTC, and `user_settings.timezone` was stored but never
+consulted by the dashboard. At 11:38pm in Vancouver the header clock read
+`06:38`, and the evening energy/mood log row never appeared (its gate
+`getHours() >= wakeEndHour - 2` saw UTC hour 6).
+
+- **Header clock** is now 12-hour in the user's saved timezone (`11:38pm`) via
+  new `formatClock12` in `app/_components/date-utils.ts`; the date label next
+  to it no longer flips to tomorrow after 5pm local.
+- **`streamSnapshot` takes `timeZone`** (`app/lib/snapshots/stream.ts`) and
+  evaluates all wall-clock facts in it: the daily-log invite gate, due-time
+  "time past" checks, event times on cards, and today/tomorrow event
+  bucketing. Omitted/null falls back to the process clock, so the pure module
+  stays deterministic and the existing tests unchanged.
+- **The stream's `today`** (daily-log lookup, today's spend delta, recurring
+  completions) is computed in the user's zone — `todayISO()` gained an
+  optional `timeZone` argument.
+- **`saveDailyLog`** stamps `log_date` in the user's zone, so logging at 11pm
+  dismisses *today's* invite instead of writing tomorrow's row.
+- **`safeTimeZone`** guards the free-text timezone setting — a typo'd zone
+  falls back to the server clock instead of throwing in `Intl` and 500ing
+  the page.
+- Regression tests: 12-hour formatting, `safeTimeZone`, and the log-invite
+  gate at 11:38pm Vancouver (`__tests__/date-utils.test.ts`,
+  `__tests__/stream-snapshot.test.ts`).
+
+Remaining timezone debt (unchanged, tracked in
+[second-brain-plan.md](second-brain-plan.md)): the free-hours math
+(`app/lib/snapshots/schedule.ts`), the week grid, and MCP `todayKey()` still
+use the process clock.
+
+---
+
 ## v0.2.0 — "The Shelf" (2026-07-06)
 
 Full redesign of `/inventory` plus agent-editable stock levels via MCP and the

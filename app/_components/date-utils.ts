@@ -1,9 +1,41 @@
-export function todayISO() {
+export function todayISO(timeZone?: string | null) {
   const d = new Date();
+  if (timeZone) {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  }
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+// The stored timezone is free text; a typo would make every Intl call throw.
+// Null means "fall back to the process clock".
+export function safeTimeZone(timeZone: string | null | undefined): string | null {
+  if (!timeZone) return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return timeZone;
+  } catch {
+    return null;
+  }
+}
+
+export function formatClock12(date: Date, timeZone?: string | null) {
+  return date
+    .toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: timeZone ?? undefined,
+    })
+    .toLowerCase()
+    .replace(" ", "");
 }
 
 export function formatDue(iso: string) {
@@ -52,11 +84,12 @@ export function formatWeekdayMonthDay(date: Date) {
   });
 }
 
-export function formatLongWeekdayMonthDay(date: Date) {
+export function formatLongWeekdayMonthDay(date: Date, timeZone?: string | null) {
   return date.toLocaleDateString("en-US", {
     weekday: "long",
     month: "short",
     day: "numeric",
+    timeZone: timeZone ?? undefined,
   });
 }
 

@@ -128,6 +128,9 @@ export type StreamInput = {
   moodToday: number | null;
   pendingProposals: number;
   wakeEndHour: number;
+  // IANA zone for wall-clock facts (the log-invite hour gate, due-time
+  // comparisons, event day bucketing). Omitted/null = process-local clock.
+  timeZone?: string | null;
   freeHoursToday: number;
   todayDelta: number;
   currency: string;
@@ -164,11 +167,24 @@ function daysLate(dueKey: string, today: string): number {
   );
 }
 
-function clock(iso: string): string {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
+// Wall-clock HH:MM of an instant, in the user's zone when one is set. The
+// process clock is UTC on Vercel, so bare getHours() is not the user's hour.
+function wallClock(d: Date, timeZone: string | null | undefined): string {
+  if (!timeZone) {
+    return `${String(d.getHours()).padStart(2, "0")}:${String(
+      d.getMinutes(),
+    ).padStart(2, "0")}`;
+  }
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(d);
+}
+
+function clock(iso: string, timeZone: string | null | undefined): string {
+  return wallClock(new Date(iso), timeZone);
 }
 
 function relative(iso: string, now: Date): string {
@@ -189,8 +205,16 @@ function shortDate(key: string): string {
   return `${months[d.getMonth()]} ${d.getDate()}`;
 }
 
-function dateKeyOf(iso: string): string {
+function dateKeyOf(iso: string, timeZone: string | null | undefined): string {
   const d = new Date(iso);
+  if (timeZone) {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+  }
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
@@ -260,14 +284,15 @@ function rtaskCard(
 function eventCard(
   e: StreamEventInput,
   now: Date,
+  timeZone: string | null | undefined,
   opts?: { tomorrow?: boolean },
 ): StreamCard {
   const started = new Date(e.start).getTime() <= now.getTime();
   const meta = opts?.tomorrow
-    ? `tomorrow · ${clock(e.start)}`
+    ? `tomorrow · ${clock(e.start, timeZone)}`
     : started
-      ? `${clock(e.start)} · now`
-      : `${clock(e.start)} · ${relative(e.start, now)}`;
+      ? `${clock(e.start, timeZone)} · now`
+      : `${clock(e.start, timeZone)} · ${relative(e.start, now)}`;
   return {
     id: `event:${e.id}`,
     domain: "event",
@@ -349,6 +374,7 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     moodToday,
     pendingProposals,
     wakeEndHour,
+    timeZone,
     freeHoursToday,
     todayDelta,
     currency,
@@ -407,11 +433,9 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       return end > nowMs && start <= nowMs + NOW_EVENT_LEAD_MS;
     })
     .sort((a, b) => a.start.localeCompare(b.start))
-    .map((e) => eventCard(e, now));
+    .map((e) => eventCard(e, now, timeZone));
 
-  const nowClock = `${String(now.getHours()).padStart(2, "0")}:${String(
-    now.getMinutes(),
-  ).padStart(2, "0")}`;
+  const nowClock = wallClock(now, timeZone);
   const timePast = (t: TaskWithGroup) =>
     t.due_date === today &&
     t.due_time !== null &&
@@ -494,16 +518,19 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
   const laterTodayEvents = timedEvents
     .filter((e) => {
       const start = new Date(e.start).getTime();
-      return dateKeyOf(e.start) === today && start > nowMs + NOW_EVENT_LEAD_MS;
+      return (
+        dateKeyOf(e.start, timeZone) === today &&
+        start > nowMs + NOW_EVENT_LEAD_MS
+      );
     })
     .sort((a, b) => a.start.localeCompare(b.start))
-    .map((e) => eventCard(e, now));
+    .map((e) => eventCard(e, now, timeZone));
 
   const tomorrowFirst = timedEvents
-    .filter((e) => dateKeyOf(e.start) === tomorrow)
+    .filter((e) => dateKeyOf(e.start, timeZone) === tomorrow)
     .sort((a, b) => a.start.localeCompare(b.start))
     .slice(0, 1)
-    .map((e) => eventCard(e, now, { tomorrow: true }));
+    .map((e) => eventCard(e, now, timeZone, { tomorrow: true }));
 
   // Due-today tasks and today's upcoming recurring occurrences interleave:
   // time-anchored first by time, untimed after by priority.
@@ -608,7 +635,7 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     });
 
   const logInvite =
-    !hasDailyLogToday && now.getHours() >= wakeEndHour - 2
+    !hasDailyLogToday && Number(nowClock.slice(0, 2)) >= wakeEndHour - 2
       ? [
           {
             dateKey: today,
@@ -708,10 +735,10 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .sort((a, b) => a.start.localeCompare(b.start))[0];
   let nextUp: string | null = null;
   if (upcoming) {
-    const key = dateKeyOf(upcoming.start);
+    const key = dateKeyOf(upcoming.start, timeZone);
     const day =
       key === today ? "" : key === tomorrow ? "tomorrow " : `${shortDate(key)} `;
-    nextUp = `${upcoming.summary}, ${day}${clock(upcoming.start)}`;
+    nextUp = `${upcoming.summary}, ${day}${clock(upcoming.start, timeZone)}`;
   }
 
   return {

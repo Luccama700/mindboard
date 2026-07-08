@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
-import { todayISO } from "@/app/_components/date-utils";
+import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
+import { getUserPreferences } from "@/app/lib/data/settings";
 
 function inRange(v: number, lo: number, hi: number): boolean {
   return Number.isFinite(v) && v >= lo && v <= hi;
@@ -30,10 +31,12 @@ export async function saveDailyLog(input: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
+  const prefs = await getUserPreferences(user.id);
+
   const { error } = await supabase.from("daily_logs").upsert(
     {
       user_id: user.id,
-      log_date: todayISO(),
+      log_date: todayISO(safeTimeZone(prefs.timezone)),
       mood,
       energy,
       sleep_hours: sleepHours,

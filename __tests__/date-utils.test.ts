@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   daysFromToday,
+  formatClock12,
   formatClockTime,
   formatDue,
   formatHourLabel,
@@ -9,6 +10,7 @@ import {
   formatMonthYear,
   formatWeekdayMonthDay,
   priorityRank,
+  safeTimeZone,
   todayISO,
 } from "@/app/_components/date-utils";
 
@@ -39,6 +41,27 @@ describe("date utilities", () => {
     expect(formatMonthDay(date, false)).toBe("23");
     expect(formatWeekdayMonthDay(date)).toBe("Sat, May 23");
     expect(formatLongWeekdayMonthDay(date)).toBe("Saturday, May 23");
+  });
+
+  test("timezone-aware helpers use the given zone's wall clock, not the process clock", () => {
+    // 2026-07-07T06:38Z is 11:38pm on July 6 in Vancouver.
+    const lateEvening = new Date("2026-07-07T06:38:00Z");
+
+    expect(formatClock12(lateEvening, "America/Vancouver")).toBe("11:38pm");
+    expect(
+      formatLongWeekdayMonthDay(lateEvening, "America/Vancouver"),
+    ).toBe("Monday, Jul 6");
+
+    vi.useFakeTimers();
+    vi.setSystemTime(lateEvening);
+    expect(todayISO("America/Vancouver")).toBe("2026-07-06");
+  });
+
+  test("safeTimeZone rejects zones Intl cannot use", () => {
+    expect(safeTimeZone("America/Vancouver")).toBe("America/Vancouver");
+    expect(safeTimeZone("America/Vancuver")).toBeNull();
+    expect(safeTimeZone(null)).toBeNull();
+    expect(safeTimeZone("")).toBeNull();
   });
 
   test("orders known task priorities and defaults unknown values to medium", () => {

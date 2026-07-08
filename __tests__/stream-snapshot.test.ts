@@ -545,6 +545,23 @@ describe("LATER daily-log invite", () => {
     );
     expect(ids(logged.later)).toEqual([]);
   });
+
+  test("with a timeZone, the gate reads the user's wall clock, not the process clock", () => {
+    // 2026-07-07T06:38Z is 11:38pm on July 6 in Vancouver — invite time,
+    // even though the process (UTC) clock says 06:38 the next morning.
+    const lateEveningVancouver = new Date("2026-07-07T06:38:00Z");
+    const snap = streamSnapshot(
+      base({ now: lateEveningVancouver, timeZone: "America/Vancouver" }),
+    );
+    expect(ids(snap.later)).toEqual(["log:today"]);
+
+    // 9am Vancouver the same day is far too early.
+    const morning = new Date("2026-07-06T16:00:00Z");
+    const early = streamSnapshot(
+      base({ now: morning, timeZone: "America/Vancouver" }),
+    );
+    expect(ids(early.later)).toEqual([]);
+  });
 });
 
 describe("LOOSE ENDS", () => {

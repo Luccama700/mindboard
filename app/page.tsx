@@ -3,7 +3,12 @@ import { createClient } from "@/utils/supabase/server";
 import { DashboardCalendar } from "./_components/dashboard-calendar";
 import { GetStartedScreen } from "./_components/get-started-screen";
 import { StreamClient } from "./_components/stream-client";
-import { formatLongWeekdayMonthDay, todayISO } from "./_components/date-utils";
+import {
+  formatClock12,
+  formatLongWeekdayMonthDay,
+  safeTimeZone,
+  todayISO,
+} from "./_components/date-utils";
 import type {
   SpendAccount,
   SpendCategory,
@@ -49,7 +54,9 @@ const getStreamData = cache(
     categories: SpendCategory[];
     gaps: FreeGap[];
   }> => {
-    const today = todayISO();
+    const prefs = await getUserPreferences(userId);
+    const timeZone = safeTimeZone(prefs.timezone);
+    const today = todayISO(timeZone);
     const now = new Date();
     const supabase = await createClient();
 
@@ -63,7 +70,6 @@ const getStreamData = cache(
       items,
       usages,
       todayChanges,
-      prefs,
       goalsResult,
       logResult,
       proposalsResult,
@@ -78,7 +84,6 @@ const getStreamData = cache(
       getInventoryItems(userId),
       getInventoryUsages(userId),
       getBalanceChangesOn(userId, today),
-      getUserPreferences(userId),
       supabase
         .from("goals")
         .select("id, title, status, created_at")
@@ -182,6 +187,7 @@ const getStreamData = cache(
       moodToday: log?.mood ?? null,
       pendingProposals: proposalsResult.count ?? 0,
       wakeEndHour: prefs.wake_end_hour,
+      timeZone,
       freeHoursToday: schedule.freeHoursToday,
       todayDelta: finance.todayDelta,
       currency: finance.currency,
@@ -202,11 +208,12 @@ const getStreamData = cache(
 );
 
 async function StreamSection({ userId }: { userId: string }) {
-  const { snapshot, accounts, categories, gaps } = await getStreamData(userId);
+  const [{ snapshot, accounts, categories, gaps }, prefs] = await Promise.all([
+    getStreamData(userId),
+    getUserPreferences(userId),
+  ]);
+  const timeZone = safeTimeZone(prefs.timezone);
   const now = new Date();
-  const clockLabel = `${String(now.getHours()).padStart(2, "0")}:${String(
-    now.getMinutes(),
-  ).padStart(2, "0")}`;
 
   return (
     <StreamClient
@@ -214,8 +221,8 @@ async function StreamSection({ userId }: { userId: string }) {
       accounts={accounts}
       categories={categories}
       gaps={gaps}
-      todayLabel={formatLongWeekdayMonthDay(now).toLowerCase()}
-      clockLabel={clockLabel}
+      todayLabel={formatLongWeekdayMonthDay(now, timeZone).toLowerCase()}
+      clockLabel={formatClock12(now, timeZone)}
     />
   );
 }
