@@ -26,8 +26,9 @@ const RAIL_TABS: {
   mobileOnly?: boolean;
 }[] = [
   { href: "/", glyph: "◆", label: "now" },
-  // Desktop's dashboard already shows the week calendar in its right pane,
-  // so the tab is redundant there — mobile keeps it.
+  // Desktop's dashboard already shows the week calendar in its right pane, so
+  // the rail tab is redundant there — mobile keeps it (no dual view), and the
+  // "more" menu carries week for desktop.
   { href: "/week", glyph: "▦", label: "week", mobileOnly: true },
   { href: "/plan", glyph: "◇", label: "plan" },
   { href: "/finance", glyph: "$", label: "money" },
@@ -359,6 +360,7 @@ export function Dock({
       {moreOpen && (
         <nav className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
           {[
+            { href: "/week", label: "week", badge: 0 },
             { href: "/tasks", label: "tasks", badge: inboxCount },
             { href: "/learn", label: "learn", badge: 0 },
             { href: "/brain", label: "brain", badge: 0 },

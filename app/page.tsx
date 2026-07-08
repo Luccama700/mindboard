@@ -17,6 +17,7 @@ import {
   currentMonth,
   getDashboardData,
   getOpenTasks,
+  normalizeDay,
   normalizeMonth,
 } from "./lib/data/dashboard";
 import {
@@ -234,9 +235,11 @@ async function StreamSection({ userId }: { userId: string }) {
 async function WeekPaneSection({
   userId,
   month,
+  selectedDay,
 }: {
   userId: string;
   month: string;
+  selectedDay: string | null;
 }) {
   const [
     {
@@ -267,7 +270,7 @@ async function WeekPaneSection({
 
   return (
     <DashboardCalendar
-      key={month}
+      key={`${month}:${selectedDay ?? ""}`}
       month={month}
       tasks={calendarTasks}
       events={events}
@@ -275,6 +278,7 @@ async function WeekPaneSection({
       status={calendarStatus}
       calendarLinks={calendarLinks}
       initialView="week"
+      selectedDay={selectedDay}
       wakeStartHour={prefs.wake_start_hour}
       wakeEndHour={prefs.wake_end_hour}
       scheduleVitals={schedule}
@@ -322,10 +326,15 @@ function StreamSkeleton() {
 export default async function Home({
   searchParams,
 }: {
-  searchParams: Promise<{ m?: string | string[] | undefined }>;
+  searchParams: Promise<{
+    m?: string | string[] | undefined;
+    d?: string | string[] | undefined;
+  }>;
 }) {
   const query = await searchParams;
-  const month = normalizeMonth(query.m);
+  const selectedDay = normalizeDay(query.d);
+  // The selected day owns the month it lives in, so its week's data loads.
+  const month = selectedDay ? selectedDay.slice(0, 7) : normalizeMonth(query.m);
 
   const supabase = await createClient();
   const {
@@ -346,7 +355,11 @@ export default async function Home({
         </div>
         <div className="hidden lg:block min-w-0" data-tour="calendar-pane">
           <Suspense fallback={<WeekPaneSkeleton />}>
-            <WeekPaneSection userId={user.id} month={month} />
+            <WeekPaneSection
+              userId={user.id}
+              month={month}
+              selectedDay={selectedDay}
+            />
           </Suspense>
         </div>
       </div>

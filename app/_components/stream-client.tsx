@@ -418,6 +418,27 @@ export function StreamClient({
   >({});
   const [, startTransition] = useTransition();
 
+  // Latest groups for the capture subscription, which stays mounted with []
+  // deps — read through the ref so an optimistic card shows its real group.
+  const groupsRef = useRef(groups);
+  useEffect(() => {
+    groupsRef.current = groups;
+  }, [groups]);
+
+  // Every card id the current server snapshot already owns, across sections.
+  const snapshotIds = useMemo(
+    () =>
+      new Set(
+        [
+          ...snapshot.now,
+          ...snapshot.next,
+          ...snapshot.later,
+          ...snapshot.loose,
+        ].map((c) => c.id),
+      ),
+    [snapshot],
+  );
+
   // A fresh server snapshot carries the committed reschedule — drop the
   // overrides so the server meta is the single source again. Render-time
   // state adjustment, per the React "adjusting state when a prop changes"
@@ -427,48 +448,55 @@ export function StreamClient({
     setPrevSnapshot(snapshot);
     if (Object.keys(retimed).length > 0) setRetimed({});
     if (Object.keys(regrouped).length > 0) setRegrouped({});
+    // Drop optimistic captures the server snapshot now owns, so the temporary
+    // card doesn't linger beside the real one.
+    if (extraNext.some((c) => snapshotIds.has(c.id))) {
+      setExtraNext((cards) => cards.filter((c) => !snapshotIds.has(c.id)));
+    }
   }
 
-  // Optimistically surface tasks captured from the Dock.
-  useEffect(
-    () =>
-      subscribeCapture({
-        onOptimisticAdd: (task: Task) => {
-          const today = todayISO();
-          if (task.due_date !== today) return;
-          setExtraNext((cards) => [
-            {
-              id: `task:${task.id}`,
-              domain: "task",
-              glyph: "○",
-              fact: task.title,
-              meta: "today",
-              entity: {
-                kind: "task",
-                task: { ...task, group_name: null, group_color: null },
-              },
-            },
-            ...cards,
-          ]);
-        },
-        onReplace: (tempId, task) =>
-          setExtraNext((cards) =>
-            cards.map((c) =>
-              c.id === `task:${tempId}`
-                ? {
-                    ...c,
-                    id: `task:${task.id}`,
-                    entity: {
-                      kind: "task",
-                      task: { ...task, group_name: null, group_color: null },
-                    },
-                  }
-                : c,
-            ),
+  // Optimistically surface tasks captured from the Dock. The captured Task
+  // carries only group_id, so resolve the group's name/color for display.
+  useEffect(() => {
+    const withGroup = (task: Task) => {
+      const group = task.group_id
+        ? groupsRef.current.find((g) => g.id === task.group_id)
+        : null;
+      return {
+        ...task,
+        group_name: group?.name ?? null,
+        group_color: group?.color ?? null,
+      };
+    };
+    return subscribeCapture({
+      onOptimisticAdd: (task: Task) => {
+        if (task.due_date !== todayISO()) return;
+        setExtraNext((cards) => [
+          {
+            id: `task:${task.id}`,
+            domain: "task",
+            glyph: "○",
+            fact: task.title,
+            meta: "today",
+            entity: { kind: "task", task: withGroup(task) },
+          },
+          ...cards,
+        ]);
+      },
+      onReplace: (tempId, task) =>
+        setExtraNext((cards) =>
+          cards.map((c) =>
+            c.id === `task:${tempId}`
+              ? {
+                  ...c,
+                  id: `task:${task.id}`,
+                  entity: { kind: "task", task: withGroup(task) },
+                }
+              : c,
           ),
-      }),
-    [],
-  );
+        ),
+    });
+  }, []);
 
   // Resolution is scoped to the section a card left from, so the same entity
   // legitimately reappearing in another section (snooze -> LATER) still shows.
@@ -598,8 +626,11 @@ export function StreamClient({
         return card;
       });
 
+  // Hide any optimistic card the snapshot already includes — covers the race
+  // where the real task lands in the snapshot before emitTaskReplace swaps ids.
+  const liveExtra = extraNext.filter((c) => !snapshotIds.has(c.id));
   const nowCards = visible("now", snapshot.now);
-  const nextCards = visible("next", [...extraNext, ...snapshot.next]);
+  const nextCards = visible("next", [...liveExtra, ...snapshot.next]);
   const laterCards = visible("later", snapshot.later);
   const looseCards = visible("loose", snapshot.loose);
   const empty =

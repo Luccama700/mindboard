@@ -2,7 +2,11 @@ import { redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
 import { DashboardCalendar } from "@/app/_components/dashboard-calendar";
-import { getDashboardData, normalizeMonth } from "@/app/lib/data/dashboard";
+import {
+  getDashboardData,
+  normalizeDay,
+  normalizeMonth,
+} from "@/app/lib/data/dashboard";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { occurrenceBusyEvents } from "@/app/lib/recurrence";
 import { scheduleSnapshot } from "@/app/lib/snapshots/schedule";
@@ -12,10 +16,14 @@ import { addDaysKey } from "@/app/lib/snapshots/stream";
 export default async function WeekPage({
   searchParams,
 }: {
-  searchParams: Promise<{ m?: string | string[] | undefined }>;
+  searchParams: Promise<{
+    m?: string | string[] | undefined;
+    d?: string | string[] | undefined;
+  }>;
 }) {
   const query = await searchParams;
-  const month = normalizeMonth(query.m);
+  const selectedDay = normalizeDay(query.d);
+  const month = selectedDay ? selectedDay.slice(0, 7) : normalizeMonth(query.m);
 
   const supabase = await createClient();
   const {
@@ -57,7 +65,7 @@ export default async function WeekPage({
       </header>
       <div data-tour="week-grid">
         <DashboardCalendar
-          key={month}
+          key={`${month}:${selectedDay ?? ""}`}
           month={month}
           tasks={calendarTasks}
           events={events}
@@ -65,6 +73,7 @@ export default async function WeekPage({
           status={calendarStatus}
           calendarLinks={calendarLinks}
           initialView="week"
+          selectedDay={selectedDay}
           wakeStartHour={prefs.wake_start_hour}
           wakeEndHour={prefs.wake_end_hour}
           scheduleVitals={schedule}

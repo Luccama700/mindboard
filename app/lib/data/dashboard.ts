@@ -115,6 +115,22 @@ export function normalizeMonth(value: string | string[] | undefined) {
   return month;
 }
 
+// The calendar's `?d=` selected-day param (YYYY-MM-DD) that anchors the week
+// view; null when absent or malformed.
+export function normalizeDay(
+  value: string | string[] | undefined,
+): string | null {
+  const day = Array.isArray(value) ? value[0] : value;
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+
+  const [year, monthNumber, dayNumber] = day.split("-").map(Number);
+  if (monthNumber < 1 || monthNumber > 12) return null;
+  if (dayNumber < 1 || dayNumber > 31) return null;
+  if (year < 1970 || year > 2100) return null;
+
+  return day;
+}
+
 function calendarRange(month: string) {
   const [year, monthNumber] = month.split("-").map(Number);
   const first = new Date(year, monthNumber - 1, 1);

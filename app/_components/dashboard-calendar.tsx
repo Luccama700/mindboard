@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import type { CalendarEvent } from "@/utils/google/calendar";
 import { rescheduleEvent } from "@/app/actions/calendar";
@@ -96,6 +97,12 @@ function addMonths(month: string, count: number) {
   return monthKey(date);
 }
 
+function addDaysToKey(dateKey: string, days: number) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  date.setDate(date.getDate() + days);
+  return toDateKey(date);
+}
+
 function eventDateKey(start: string, allDay: boolean) {
   if (allDay) return start.slice(0, 10);
   return toDateKey(new Date(start));
@@ -132,6 +139,7 @@ export function DashboardCalendar({
   status,
   calendarLinks = {},
   initialView = "month",
+  selectedDay = null,
   wakeStartHour = 8,
   wakeEndHour = 22,
   scheduleVitals,
@@ -146,6 +154,7 @@ export function DashboardCalendar({
   status: CalendarStatus;
   calendarLinks?: Record<string, CalendarLink>;
   initialView?: "month" | "week";
+  selectedDay?: string | null;
   wakeStartHour?: number;
   wakeEndHour?: number;
   scheduleVitals?: ScheduleVitals;
@@ -153,12 +162,18 @@ export function DashboardCalendar({
   recurringTasks?: CalendarRecurringTask[];
   recurringCompletions?: { rule_id: string; occurred_on: string }[];
 }) {
+  const router = useRouter();
   const today = toDateKey(new Date());
   const grid = useMemo(() => buildGrid(month), [month]);
   const firstInMonth = `${month}-01`;
-  const initialSelected = grid.some((date) => toDateKey(date) === today)
-    ? today
-    : firstInMonth;
+  // A ?d= param (week arrows) anchors the selection; otherwise land on today
+  // when it's in view, else the first of the month.
+  const initialSelected =
+    selectedDay && /^\d{4}-\d{2}-\d{2}$/.test(selectedDay)
+      ? selectedDay
+      : grid.some((date) => toDateKey(date) === today)
+        ? today
+        : firstInMonth;
   const [selected, setSelected] = useState(initialSelected);
   const [view, setView] = useState<"month" | "week">(initialView);
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
@@ -406,6 +421,25 @@ export function DashboardCalendar({
     new Date(`${selected}T00:00:00`),
   );
 
+  // The loaded data spans the 42-day grid (6 full weeks, Sunday-aligned), so a
+  // week step that stays inside it needs no server round-trip — just move the
+  // selection. Only crossing the window fetches a new month (which reloads
+  // Google Calendar), the slow path we avoid for adjacent weeks.
+  const gridStart = toDateKey(grid[0]);
+  const gridEnd = toDateKey(grid[grid.length - 1]);
+
+  function stepWeek(days: number) {
+    const target = addDaysToKey(selected, days);
+    if (target >= gridStart && target <= gridEnd) {
+      setSelected(target);
+    } else {
+      router.push(`${basePath}?m=${target.slice(0, 7)}&d=${target}`);
+    }
+  }
+
+  const navArrowClass =
+    "flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg";
+
   return (
     <section className="border border-line bg-popover p-3 lg:min-h-[calc(100vh-4rem)]">
       <header className="flex items-center justify-between gap-3 mb-3">
@@ -432,20 +466,43 @@ export function DashboardCalendar({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Link
-            href={`${basePath}?m=${addMonths(month, -1)}`}
-            className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
-            aria-label="previous month"
-          >
-            ←
-          </Link>
-          <Link
-            href={`${basePath}?m=${addMonths(month, 1)}`}
-            className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
-            aria-label="next month"
-          >
-            →
-          </Link>
+          {view === "week" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => stepWeek(-7)}
+                className={navArrowClass}
+                aria-label="previous week"
+              >
+                ←
+              </button>
+              <button
+                type="button"
+                onClick={() => stepWeek(7)}
+                className={navArrowClass}
+                aria-label="next week"
+              >
+                →
+              </button>
+            </>
+          ) : (
+            <>
+              <Link
+                href={`${basePath}?m=${addMonths(month, -1)}`}
+                className={navArrowClass}
+                aria-label="previous month"
+              >
+                ←
+              </Link>
+              <Link
+                href={`${basePath}?m=${addMonths(month, 1)}`}
+                className={navArrowClass}
+                aria-label="next month"
+              >
+                →
+              </Link>
+            </>
+          )}
         </div>
       </header>
 

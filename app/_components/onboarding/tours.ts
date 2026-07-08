@@ -126,7 +126,7 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       anchor: "calendar-pane",
       title: "the wide view",
-      body: "on a big screen the calendar lives here on the right. on your phone it's ▦ week in the rail — same thing, more room.",
+      body: "on a big screen the calendar lives here on the right. on your phone it's ▦ week under ≡ more — same thing, more room.",
     },
     {
       anchor: "capture-input",
