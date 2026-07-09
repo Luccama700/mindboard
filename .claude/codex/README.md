@@ -66,7 +66,7 @@ Codex is excellent at *agentic* work — driving a terminal, editing code, runni
 
 ## Safety
 
-- The reviewer runs `-s read-only`: it can read the repo and run read-only git commands, but cannot modify files or reach outside the sandbox — so it can't touch secrets or your `.env`. (Observed: in this sandbox Codex also can't run `graphify` or chained commands — expected; it falls back to plain reads and the review still completes.)
+- The reviewer runs `-s read-only`, which blocks **writes**: Codex cannot modify files, commit, or reach outside the sandbox. Read-only does **not** block reads — Codex can read any file in the workspace, including gitignored secrets like `.env.local`. The review prompt therefore explicitly instructs it to review only the diff and never open or echo secret/credential files. If you want a hard guarantee rather than an instruction, run the review from a copy of the repo with `.env*` removed. (Observed: in this sandbox Codex also can't run `graphify` or chained commands — expected; it falls back to plain reads and the review still completes.)
 - All code changes stay authored by the Visionary. Codex only ever proposes.
 
 ## Sourcing note

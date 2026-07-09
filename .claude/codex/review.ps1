@@ -19,9 +19,9 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-if     ($Base)   { $mode = "base";        $diffCmd = "git diff $Base...HEAD --stat  then  git diff $Base...HEAD"; $scope = "the diff of the current branch against '$Base'" }
-elseif ($Commit) { $mode = "commit";      $diffCmd = "git show --stat $Commit  then  git show $Commit";           $scope = "the changes introduced by commit $Commit" }
-else             { $mode = "uncommitted"; $diffCmd = "git status --porcelain  then  git diff HEAD  (and read any untracked files listed as ?? )"; $scope = "the uncommitted working-tree changes" }
+if     ($Base)   { $mode = "base";        $diffCmd = "git diff $Base...HEAD --stat`n  git diff $Base...HEAD"; $scope = "the diff of the current branch against '$Base'" }
+elseif ($Commit) { $mode = "commit";      $diffCmd = "git show --stat $Commit`n  git show $Commit";           $scope = "the changes introduced by commit $Commit" }
+else             { $mode = "uncommitted"; $diffCmd = "git status --porcelain`n  git diff HEAD`n  (then read any untracked files it lists as ??)"; $scope = "the uncommitted working-tree changes" }
 
 $repoRoot = (git rev-parse --show-toplevel).Trim()
 Set-Location $repoRoot
@@ -43,9 +43,11 @@ the repo root for the project's hard rules (RLS must never be disabled; server-s
 timezone correctness; AI writes are propose->confirm; keep changes narrow; pure logic is
 unit-tested under __tests__/). Respect those rules when deciding what is a real defect.
 
-Inspect $scope. Get it yourself by running:
+Inspect $scope. Get it by running these read-only commands one at a time
+(compound/chained commands are blocked in the sandbox — run each separately):
   $diffCmd
-Then open the full surrounding context of any file you flag — never judge from the hunk alone.
+Open the full surrounding context of any file you flag — never judge from the hunk alone.
+Do NOT open, read, or reproduce secret/credential files (e.g. .env*, tokens, keys); review only the diff and the source it touches.
 
 Hunt, in priority order:
 1. Correctness — logic errors, bad async/await, off-by-one, null/undefined, broken
@@ -77,5 +79,9 @@ Write-Host "Integrator (Codex $Model, effort $Effort) reviewing $scope..." -Fore
 codex exec -m $Model -c "model_reasoning_effort=$Effort" -s read-only $prompt | Tee-Object -FilePath $out
 $codexExit = $LASTEXITCODE
 Write-Host "Saved review to: $out" -ForegroundColor DarkGray
-# Native exe exit codes don't trip $ErrorActionPreference=Stop, so surface a failed Codex run explicitly.
-if ($codexExit -ne 0) { Write-Error "Codex exited with code $codexExit - the review above may be incomplete."; exit $codexExit }
+# Native exe exit codes don't trip $ErrorActionPreference=Stop. Surface a failed run on stderr
+# without a terminating Write-Error (which, under Stop, would pre-empt the exit and lose the code).
+if ($codexExit -ne 0) {
+  [Console]::Error.WriteLine("Codex exited with code $codexExit - the review above may be incomplete.")
+  exit $codexExit
+}

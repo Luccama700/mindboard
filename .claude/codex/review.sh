@@ -24,11 +24,15 @@ while [ $# -gt 0 ]; do
 done
 
 case "$MODE" in
-  base)   DIFF_CMD="git diff ${BASE}...HEAD --stat  then  git diff ${BASE}...HEAD"
+  base)   DIFF_CMD="git diff ${BASE}...HEAD --stat
+  git diff ${BASE}...HEAD"
           SCOPE="the diff of the current branch against '${BASE}'" ;;
-  commit) DIFF_CMD="git show --stat ${COMMIT}  then  git show ${COMMIT}"
+  commit) DIFF_CMD="git show --stat ${COMMIT}
+  git show ${COMMIT}"
           SCOPE="the changes introduced by commit ${COMMIT}" ;;
-  *)      DIFF_CMD="git status --porcelain  then  git diff HEAD  (and read any untracked files listed as ?? )"
+  *)      DIFF_CMD="git status --porcelain
+  git diff HEAD
+  (then read any untracked files it lists as ??)"
           SCOPE="the uncommitted working-tree changes" ;;
 esac
 
@@ -53,9 +57,11 @@ the repo root for the project's hard rules (RLS must never be disabled; server-s
 timezone correctness; AI writes are propose->confirm; keep changes narrow; pure logic is
 unit-tested under __tests__/). Respect those rules when deciding what is a real defect.
 
-Inspect ${SCOPE}. Get it yourself by running:
+Inspect ${SCOPE}. Get it by running these read-only commands one at a time
+(compound/chained commands are blocked in the sandbox — run each separately):
   ${DIFF_CMD}
-Then open the full surrounding context of any file you flag — never judge from the hunk alone.
+Open the full surrounding context of any file you flag — never judge from the hunk alone.
+Do NOT open, read, or reproduce secret/credential files (e.g. .env*, tokens, keys); review only the diff and the source it touches.
 
 Hunt, in priority order:
 1. Correctness — logic errors, bad async/await, off-by-one, null/undefined, broken
