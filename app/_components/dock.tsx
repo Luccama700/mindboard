@@ -395,7 +395,6 @@ export function Dock({
           </button>
           {[
             { href: "/week", label: "week", badge: 0 },
-            { href: "/tasks", label: "tasks", badge: inboxCount },
             { href: "/learn", label: "learn", badge: 0 },
             { href: "/brain", label: "brain", badge: 0 },
             { href: "/settings", label: "settings", badge: 0 },
