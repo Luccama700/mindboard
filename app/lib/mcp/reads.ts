@@ -12,23 +12,10 @@ import {
   freeGaps,
   scheduleSnapshot,
 } from "@/app/lib/snapshots/schedule";
-import {
-  listEvents,
-  listEventsForCalendar,
-  type CalendarEvent,
-} from "@/utils/google/calendar";
-import {
-  buildDayRows,
-  computeIncomeByDate,
-  addDaysKey,
-  type IncomeSourceRate,
-  type RecurringRule,
-} from "@/app/_components/finance-projection";
-import {
-  computeSpendRate,
-  estimatedSpendOn,
-  type SpendHistoryRow,
-} from "@/app/_components/spend-baseline";
+import { listEvents, type CalendarEvent } from "@/utils/google/calendar";
+import { addDaysKey } from "@/app/_components/finance-projection";
+import { buildFinanceForecast } from "@/app/lib/finance/forecast";
+import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
 import {
   effectiveDailyRate,
   daysUntilEmpty,
@@ -614,188 +601,38 @@ export async function listProposals(filter?: {
   return data ?? [];
 }
 
-// ---------- forecasts ----------
+// ---------- planning snapshot (horizon-aware, cross-domain) ----------
 
-// Mirror of app/finance/page.tsx hoursByDay: timed-event durations per local day.
-function eventHoursByDay(
-  events: { start: string; end: string; allDay: boolean }[],
-): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const event of events) {
-    if (event.allDay) continue;
-    const start = new Date(event.start);
-    const end = new Date(event.end);
-    const hours = (end.getTime() - start.getTime()) / 3_600_000;
-    if (!Number.isFinite(hours) || hours <= 0) continue;
-    const month = String(start.getMonth() + 1).padStart(2, "0");
-    const day = String(start.getDate()).padStart(2, "0");
-    const key = `${start.getFullYear()}-${month}-${day}`;
-    out[key] = (out[key] ?? 0) + hours;
-  }
-  return out;
+// One-call planning read over today…+horizonDays: schedule (per-day timed items,
+// free gaps, committed load), tasks, finance (bills + projected net worth),
+// inventory run-out, and check-in/goal signals. The lean single-domain snapshots
+// above stay separate; this is the wide planning surface. Delegates to the shared
+// assembler with the service client.
+export async function getPlanningSnapshot(opts?: { horizonDays?: number }) {
+  const { supabase, ownerId } = scoped();
+  return buildPlanningSnapshot({
+    supabase,
+    userId: ownerId,
+    horizonDays: opts?.horizonDays ?? 7,
+  });
 }
 
-// Projected end-of-day net worth for the next N days: the finance calendar's
-// forecast math (buildDayRows + the flat everyday-spend baseline), assembled
-// session-less. Income sources with a linked Google Calendar contribute worked
-// shifts; a calendar that fails to load simply contributes no hours.
+// ---------- forecasts ----------
+
+// Projected end-of-day net worth for the next N days: delegates to the shared
+// cashflow core (app/lib/finance/forecast.ts). `today` stays the process-clock
+// day for parity with the finance calendar; the manual everyday-spend fallback
+// comes from user_settings.
 export async function getFinanceForecast(days = 30) {
   const { supabase, ownerId } = scoped();
-  const today = todayKey();
-  const horizon = Math.min(Math.max(1, Math.trunc(days)), 90);
-  const endKey = addDaysKey(today, horizon);
-
-  const historyStart = addDaysKey(today, -90);
-  const [accountsRes, expensesRes, incomeRes, historyRes, overridesRes, prefs] =
-    await Promise.all([
-      supabase
-        .from("accounts")
-        .select("id, balance")
-        .eq("user_id", ownerId)
-        .eq("archived", false),
-      supabase
-        .from("recurring_expenses")
-        .select(
-          "id, name, amount, category_id, frequency, day_of_month, weekday, interval_days, start_date",
-        )
-        .eq("user_id", ownerId)
-        .eq("archived", false),
-      supabase
-        .from("income_sources")
-        .select(
-          "id, name, hourly_wage, tax_rate, calendar_id, pay_frequency, anchor_payday, period_start, period_end, fixed_amount, fixed_day",
-        )
-        .eq("user_id", ownerId)
-        .eq("archived", false),
-      supabase
-        .from("balance_changes")
-        .select("occurred_at, direction, amount, category_id, is_transfer")
-        .eq("user_id", ownerId)
-        .gte("occurred_at", historyStart)
-        .limit(2000),
-      supabase
-        .from("spend_overrides")
-        .select("date, amount")
-        .eq("user_id", ownerId)
-        .gte("date", today),
-      readPreferencesRow(),
-    ]);
-
-  const netWorthToday = ((accountsRes.data ?? []) as { balance: number }[]).reduce(
-    (sum, a) => sum + Number(a.balance),
-    0,
-  );
-
-  type ExpenseRow = RecurringRule & {
-    id: string;
-    name: string;
-    category_id: string | null;
-  };
-  const expenses = ((expensesRes.data ?? []) as ExpenseRow[]).map((row) => ({
-    ...row,
-    amount: Number(row.amount),
-  }));
-
-  const history = ((historyRes.data ?? []) as SpendHistoryRow[]).map((row) => ({
-    ...row,
-    amount: Number(row.amount),
-  }));
-
-  const spendRate = computeSpendRate({
-    history,
-    rules: expenses.map((e) => ({ amount: e.amount, category_id: e.category_id })),
-    today,
+  const prefs = await readPreferencesRow();
+  return buildFinanceForecast({
+    supabase,
+    userId: ownerId,
+    today: todayKey(),
+    days,
+    dailySpendEstimate: prefs.dailySpendEstimate,
   });
-
-  const overrides: Record<string, number> = {};
-  for (const row of (overridesRes.data ?? []) as { date: string; amount: number }[]) {
-    overrides[row.date] = Number(row.amount);
-  }
-
-  type IncomeRow = IncomeSourceRate & { name: string; calendar_id: string | null };
-  const incomeSources = ((incomeRes.data ?? []) as IncomeRow[]).map((row) => ({
-    ...row,
-    hourly_wage: Number(row.hourly_wage),
-    tax_rate: Number(row.tax_rate),
-    fixed_amount: row.fixed_amount == null ? null : Number(row.fixed_amount),
-  }));
-
-  // Reach back ~2 months so a payday inside the window covers its full period.
-  const shiftStart = new Date(`${addDaysKey(today, -62)}T00:00:00`);
-  const shiftEnd = new Date(`${endKey}T00:00:00`);
-  shiftEnd.setDate(shiftEnd.getDate() + 1);
-  const hoursBySource: Record<string, Record<string, number>> = {};
-  await Promise.all(
-    incomeSources
-      .filter((s) => s.calendar_id && s.fixed_amount == null)
-      .map((source) =>
-        listEventsForCalendar(ownerId, source.calendar_id as string, {
-          timeMin: shiftStart.toISOString(),
-          timeMax: shiftEnd.toISOString(),
-        })
-          .then((events) => {
-            hoursBySource[source.id] = eventHoursByDay(events);
-          })
-          .catch(() => {
-            hoursBySource[source.id] = {};
-          }),
-      ),
-  );
-
-  const incomeByDate = computeIncomeByDate(incomeSources, hoursBySource, {
-    start: addDaysKey(today, 1),
-    end: endKey,
-  });
-
-  const estimatedSpendByDate: Record<string, number> = {};
-  for (let d = addDaysKey(today, 1); d <= endKey; d = addDaysKey(d, 1)) {
-    estimatedSpendByDate[d] = estimatedSpendOn(
-      spendRate,
-      prefs.dailySpendEstimate,
-      overrides,
-      d,
-    );
-  }
-
-  const gridDays: string[] = [];
-  for (let d = today; d <= endKey; d = addDaysKey(d, 1)) gridDays.push(d);
-
-  const todayChanges = history
-    .filter((row) => row.occurred_at === today)
-    .map((row) => ({
-      occurred_at: row.occurred_at,
-      direction: row.direction,
-      amount: row.amount,
-    }));
-
-  const rows = buildDayRows({
-    gridDays,
-    month: today.slice(0, 7),
-    today,
-    netWorthToday,
-    changes: todayChanges,
-    expenses,
-    incomeByDate,
-    estimatedSpendByDate,
-  });
-
-  return {
-    today,
-    netWorthToday,
-    everydaySpend: {
-      dailyRate: spendRate.dailyRate,
-      sampledWeeks: spendRate.sampledWeeks,
-      confident: spendRate.confident,
-      manualFallback: prefs.dailySpendEstimate,
-    },
-    days: rows.map((row) => ({
-      date: row.dateKey,
-      inflow: row.inflow,
-      outflow: row.outflow,
-      estimatedEverydaySpend: row.estimatedOutflow,
-      projectedNetWorth: Math.round(row.runningTotal * 100) / 100,
-    })),
-  };
 }
 
 // Per-item depletion forecast: effective daily rate from the usage rules, the

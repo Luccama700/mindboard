@@ -5,6 +5,40 @@ in the linked plan docs; this file records exactly what changed and where.
 
 ---
 
+## get_snapshot horizon planning read + zone-correct free-time math (2026-07-08)
+
+`get_snapshot` gains a wide planning mode across `today…+horizonDays`, and the
+wake-window/free-time math is now computed in the user's timezone instead of the
+UTC process clock.
+
+- **Zone-aware schedule math**: `app/lib/snapshots/schedule.ts`
+  (`scheduleSnapshot`, `freeGaps`, `freeIntervalsForDay`) take an optional
+  `timeZone` and resolve wake windows via new pure helpers in
+  `app/lib/snapshots/zoned-time.ts` (`zonedWallTimeToUtcMs`, `zonedDateKey`,
+  `zonedClock`, `zonedClockMinutes`, `zonedIso`). Omitting `timeZone` keeps the
+  old process-clock behavior (correct in the browser). Tests: `zoned-time.test.ts`,
+  new zone cases in `free-gaps.test.ts`.
+- **Horizon planning snapshot**: `app/lib/snapshots/planning.ts`
+  (`planningSnapshot`, pure + unit-tested in `planning-snapshot.test.ts`)
+  composes, over the horizon: per-day schedule (timed events, Mindboard
+  time-blocks, materialized recurring-task occurrences — source-tagged — plus
+  free gaps, free-hours-before-5pm, and committed minutes), every open task with
+  due time/duration + a scheduled flag, upcoming bills + projected net worth per
+  day, inventory run-out estimates, and the recent check-in trend + active
+  goals. Times carry explicit ISO offsets. Assembled session-less by
+  `app/lib/snapshots/planning-read.ts` (`buildPlanningSnapshot`), which is
+  client-agnostic so the MCP service client and the in-app session client share it.
+- **Shared cashflow core**: `getFinanceForecast` (MCP `finance_forecast`) was
+  extracted to `app/lib/finance/forecast.ts` (`buildFinanceForecast`) so the
+  planning snapshot reuses the exact finance-calendar projection.
+- **Surfaces**: the in-app assistant `get_snapshot` (`app/lib/assistant/tools.ts`)
+  takes `horizonDays` (1–60) / `verbose:true` — the bare call keeps the lean
+  default shape; the remote MCP server gains a `get_snapshot` tool
+  (`app/api/mcp/[transport]/route.ts` → `getPlanningSnapshot`) that is always the
+  wide read, alongside the existing lean `*_snapshot` tools.
+
+---
+
 ## v0.4.0 — landing page + Football-Manager onboarding (2026-07-08)
 
 The logged-out `/` and the first-run experience, rebuilt together. Plan and

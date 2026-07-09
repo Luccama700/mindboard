@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type Anthropic from "@anthropic-ai/sdk";
 
-import { todayISO } from "@/app/_components/date-utils";
+import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import {
   getAccounts,
   getActiveRecurringExpenses,
@@ -15,6 +15,7 @@ import { financeSnapshot } from "@/app/lib/snapshots/finance";
 import { inventorySnapshot } from "@/app/lib/snapshots/inventory";
 import { tasksSnapshot } from "@/app/lib/snapshots/tasks";
 import { freeGaps, scheduleSnapshot } from "@/app/lib/snapshots/schedule";
+import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
 import { recordProposal } from "@/app/lib/mcp/audit";
 import {
   proposeArchiveRecurringTaskFor,
@@ -50,8 +51,23 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_snapshot",
     description:
-      "Read the live cross-domain snapshot: finance (net worth, today delta, next bill), tasks (overdue/due today/due soon counts), inventory (low/out), schedule (next event, free hours today), and the next free time gaps. Call this first in almost every conversation.",
-    input_schema: { type: "object", properties: {}, additionalProperties: false },
+      "Read the live cross-domain snapshot: finance (net worth, today delta, next bill), tasks (overdue/due today/due soon counts), inventory (low/out), schedule (next event, free hours today), and the next free time gaps. Call this first in almost every conversation. For planning across days, pass horizonDays (1–60) or verbose:true to expand into a full horizon read: per-day timed events, time-blocks and recurring occurrences with free gaps + free-hours-before-5pm and committed load; every open task with due time/duration and scheduled flag; upcoming bills and projected net worth per day; inventory run-out estimates; and your recent check-in trend and active goals. Times are in your local timezone with explicit ISO offsets. Omit both for the lean default.",
+    input_schema: {
+      type: "object",
+      properties: {
+        horizonDays: {
+          type: "integer",
+          minimum: 1,
+          maximum: 60,
+          description: "Days ahead to expand the planning read (default 7 when verbose).",
+        },
+        verbose: {
+          type: "boolean",
+          description: "Expand into the full horizon planning read (default false).",
+        },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "list_tasks",
@@ -545,6 +561,18 @@ export async function runAssistantTool(
   try {
     switch (name) {
       case "get_snapshot": {
+        // Expanded horizon read when the caller asks for it; the bare call keeps
+        // the lean, fast default shape.
+        const horizonProvided = typeof input.horizonDays === "number";
+        if (horizonProvided || input.verbose === true) {
+          const horizonDays = horizonProvided ? Number(input.horizonDays) : 7;
+          const snapshot = await buildPlanningSnapshot({
+            supabase,
+            userId,
+            horizonDays,
+          });
+          return { type: "result", content: snapshot };
+        }
         const [dash, tasks, accounts, recurring, items, usages, todayChanges, prefs] =
           await Promise.all([
             getDashboardData(userId, currentMonth()),
@@ -556,6 +584,10 @@ export async function runAssistantTool(
             getBalanceChangesOn(userId, today),
             getUserPreferences(userId),
           ]);
+        // The wake-window/free-time math must run in the user's zone — the
+        // process clock is UTC on Vercel. `prefs.timezone` is already loaded, so
+        // this corrects the free-hours values without changing the shape.
+        const timeZone = safeTimeZone(prefs.timezone);
         return {
           type: "result",
           content: {
@@ -573,6 +605,7 @@ export async function runAssistantTool(
               now,
               wakeStartHour: prefs.wake_start_hour,
               wakeEndHour: prefs.wake_end_hour,
+              timeZone,
             }),
             freeGaps: freeGaps({
               events: dash.events,
@@ -581,6 +614,7 @@ export async function runAssistantTool(
               wakeEndHour: prefs.wake_end_hour,
               days: 3,
               limit: 6,
+              timeZone,
             }),
           },
         };

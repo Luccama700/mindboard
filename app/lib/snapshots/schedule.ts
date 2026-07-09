@@ -1,8 +1,20 @@
 // Pure schedule rollup for the dashboard vitals strip: the next timed event that
 // hasn't ended, and how many waking hours remain free today. "Free" = the gaps
 // between timed events inside a wake window, after now. All-day events have no
-// time and are ignored for both. `now` is passed in so the math is testable; it
-// uses local time, consistent with the rest of the app's date handling.
+// time and are ignored for both. `now` is passed in so the math is testable.
+//
+// Wake-window math is zone-aware: pass `timeZone` (IANA) and the window is
+// computed in that zone — required on Vercel, where the process clock is UTC.
+// Omit it (null) and the process clock is used, unchanged — correct in the
+// browser, where the process clock already IS the user's zone.
+
+import { addDaysKey } from "@/app/_components/finance-projection";
+import {
+  zonedClock,
+  zonedClockMinutes,
+  zonedDateKey,
+  zonedWallTimeToUtcMs,
+} from "@/app/lib/snapshots/zoned-time";
 
 export type ScheduleEvent = {
   summary: string;
@@ -73,19 +85,6 @@ export type FreeGap = {
   minutes: number;
 };
 
-function dateKeyOf(date: Date): string {
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${m}-${d}`;
-}
-
-function clockOf(ms: number): string {
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
-}
-
 // The next free stretches inside the wake window, today first (from now),
 // then subsequent days. Powers the [schedule ▾] one-tap chips and the week
 // view's free-gap underlay.
@@ -97,6 +96,7 @@ export function freeGaps(input: {
   days?: number;
   minMinutes?: number;
   limit?: number;
+  timeZone?: string | null;
 }): FreeGap[] {
   const {
     events,
@@ -106,36 +106,34 @@ export function freeGaps(input: {
     days = 2,
     minMinutes = 45,
     limit = 3,
+    timeZone = null,
   } = input;
 
   const busy = timedIntervals(events).sort((a, b) => a.start - b.start);
   const gaps: FreeGap[] = [];
+  const nowMs = now.getTime();
+  const baseKey = zonedDateKey(nowMs, timeZone);
 
   for (let offset = 0; offset < days && gaps.length < limit; offset++) {
-    const day = new Date(now);
-    day.setDate(now.getDate() + offset);
-    const wakeStart = new Date(day);
-    wakeStart.setHours(wakeStartHour, 0, 0, 0);
-    const wakeEnd = new Date(day);
-    wakeEnd.setHours(wakeEndHour, 0, 0, 0);
+    const dayKey = addDaysKey(baseKey, offset);
+    const wakeStart = zonedWallTimeToUtcMs(dayKey, wakeStartHour, 0, timeZone);
+    const hi = zonedWallTimeToUtcMs(dayKey, wakeEndHour, 0, timeZone);
 
-    let cursor =
-      offset === 0
-        ? Math.max(now.getTime(), wakeStart.getTime())
-        : wakeStart.getTime();
-    const hi = wakeEnd.getTime();
+    let cursor = offset === 0 ? Math.max(nowMs, wakeStart) : wakeStart;
     if (cursor >= hi) continue;
 
     // Round the cursor up to the next quarter hour so chips land on clean times.
+    // Real zone offsets are whole multiples of 15 minutes, so rounding the
+    // absolute instant lands on a clean local quarter too.
     const quarter = 15 * 60_000;
     cursor = Math.ceil(cursor / quarter) * quarter;
 
     for (const iv of freeIntervalsInWindow(busy, cursor, hi)) {
       if (iv.end - iv.start >= minMinutes * 60_000) {
         gaps.push({
-          dateKey: dateKeyOf(day),
-          start: clockOf(iv.start),
-          end: clockOf(iv.end),
+          dateKey: dayKey,
+          start: zonedClock(iv.start, timeZone),
+          end: zonedClock(iv.end, timeZone),
           minutes: Math.round((iv.end - iv.start) / 60_000),
         });
         if (gaps.length >= limit) break;
@@ -161,35 +159,32 @@ export function freeIntervalsForDay(input: {
   now: Date;
   wakeStartHour?: number;
   wakeEndHour?: number;
+  timeZone?: string | null;
 }): FreeInterval[] {
   const { events, dateKey, now } = input;
   const wakeStartHour = input.wakeStartHour ?? DEFAULT_WAKE_START_HOUR;
   const wakeEndHour = input.wakeEndHour ?? DEFAULT_WAKE_END_HOUR;
+  const timeZone = input.timeZone ?? null;
 
   const [y, m, d] = dateKey.split("-").map(Number);
   if (!y || !m || !d) return [];
-  const wakeStart = new Date(y, m - 1, d, wakeStartHour, 0, 0, 0);
-  const wakeEnd = new Date(y, m - 1, d, wakeEndHour, 0, 0, 0);
+  const wakeStart = zonedWallTimeToUtcMs(dateKey, wakeStartHour, 0, timeZone);
+  const wakeEnd = zonedWallTimeToUtcMs(dateKey, wakeEndHour, 0, timeZone);
 
   const lo =
-    dateKeyOf(now) === dateKey
-      ? Math.max(wakeStart.getTime(), now.getTime())
-      : wakeStart.getTime();
+    zonedDateKey(now.getTime(), timeZone) === dateKey
+      ? Math.max(wakeStart, now.getTime())
+      : wakeStart;
 
   // Clock minutes, except a boundary on the NEXT day (a wake window ending at
   // 24:00 is next-day midnight) reads as 1440+, not 0 — otherwise the last
   // interval of the day would come out negative-length and vanish.
   const minutesOf = (ms: number) => {
-    const t = new Date(ms);
-    const clock = t.getHours() * 60 + t.getMinutes();
-    return dateKeyOf(t) === dateKey ? clock : clock + 24 * 60;
+    const clock = zonedClockMinutes(ms, timeZone);
+    return zonedDateKey(ms, timeZone) === dateKey ? clock : clock + 24 * 60;
   };
 
-  return freeIntervalsInWindow(
-    timedIntervals(events),
-    lo,
-    wakeEnd.getTime(),
-  ).map((iv) => {
+  return freeIntervalsInWindow(timedIntervals(events), lo, wakeEnd).map((iv) => {
     const startMinutes = minutesOf(iv.start);
     const endMinutes = minutesOf(iv.end);
     return { startMinutes, endMinutes, minutes: endMinutes - startMinutes };
@@ -201,10 +196,12 @@ export function scheduleSnapshot(input: {
   now: Date;
   wakeStartHour?: number;
   wakeEndHour?: number;
+  timeZone?: string | null;
 }): ScheduleVitals {
   const { events, now } = input;
   const wakeStartHour = input.wakeStartHour ?? DEFAULT_WAKE_START_HOUR;
   const wakeEndHour = input.wakeEndHour ?? DEFAULT_WAKE_END_HOUR;
+  const timeZone = input.timeZone ?? null;
   const nowMs = now.getTime();
   const intervals = timedIntervals(events);
 
@@ -215,13 +212,11 @@ export function scheduleSnapshot(input: {
     ? { summary: upcoming.summary, start: upcoming.startIso }
     : null;
 
-  const wakeStart = new Date(now);
-  wakeStart.setHours(wakeStartHour, 0, 0, 0);
-  const wakeEnd = new Date(now);
-  wakeEnd.setHours(wakeEndHour, 0, 0, 0);
+  const todayKey = zonedDateKey(nowMs, timeZone);
+  const wakeStart = zonedWallTimeToUtcMs(todayKey, wakeStartHour, 0, timeZone);
+  const hi = zonedWallTimeToUtcMs(todayKey, wakeEndHour, 0, timeZone);
 
-  const lo = Math.max(nowMs, wakeStart.getTime());
-  const hi = wakeEnd.getTime();
+  const lo = Math.max(nowMs, wakeStart);
   const freeMs = freeMsInWindow(intervals, lo, hi);
   const freeHoursToday = Math.max(0, Math.round((freeMs / 3_600_000) * 10) / 10);
 

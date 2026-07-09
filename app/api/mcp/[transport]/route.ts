@@ -7,6 +7,7 @@ import {
   getFinanceSnapshot,
   getInventoryForecast,
   getInventorySnapshot,
+  getPlanningSnapshot,
   getPreferences,
   getScheduleSnapshot,
   getTasksSnapshot,
@@ -235,6 +236,20 @@ const mcpHandler = createMcpHandler(
         inputSchema: {},
       },
       () => guard(async () => ok(await getScheduleSnapshot())),
+    );
+
+    server.registerTool(
+      "get_snapshot",
+      {
+        title: "Planning snapshot",
+        description:
+          "One-call cross-domain planning read over today…+horizonDays (default 7, max 60). Per-day schedule: timed Google events, Mindboard time-blocks and recurring-task occurrences (source-tagged), free gaps, free-hours-before-5pm, and committed minutes. Plus every open task with due time/duration and a scheduled flag; upcoming recurring bills and projected end-of-day net worth per day; inventory run-out estimates; and the recent check-in trend + active goals. Times are in the user's local timezone with explicit ISO offsets. For one lean domain, use finance_snapshot / tasks_snapshot / inventory_snapshot / schedule_snapshot instead.",
+        inputSchema: { horizonDays: z.number().int().min(1).max(60).optional() },
+      },
+      (args) =>
+        guard(async () =>
+          ok(await getPlanningSnapshot({ horizonDays: args.horizonDays ?? 7 })),
+        ),
     );
 
     server.registerTool(

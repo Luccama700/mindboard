@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 
-import { freeGaps, freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
+import {
+  freeGaps,
+  freeIntervalsForDay,
+  scheduleSnapshot,
+} from "@/app/lib/snapshots/schedule";
 
 const NOON = new Date(2026, 6, 6, 12, 0, 0); // 2026-07-06 12:00 local
 
@@ -165,6 +169,61 @@ describe("freeIntervalsForDay", () => {
     expect(intervals).toEqual([
       { startMinutes: 12 * 60, endMinutes: 22 * 60, minutes: 600 },
       { startMinutes: 23 * 60, endMinutes: 24 * 60, minutes: 60 },
+    ]);
+  });
+});
+
+// On Vercel the process clock is UTC. These drive `now` as a UTC instant and a
+// user zone, proving the wake window lands on the user's local day, not the
+// server's.
+describe("zone-aware wake windows (UTC server, New York user)", () => {
+  const NY = "America/New_York"; // EDT = UTC-4 in July
+  // 16:00Z = 12:00 local on 2026-07-06.
+  const nowUtc = new Date("2026-07-06T16:00:00Z");
+
+  test("freeGaps builds the day from the user's local noon, not UTC", () => {
+    const gaps = freeGaps({ events: [], now: nowUtc, timeZone: NY, limit: 3 });
+    expect(gaps[0]).toEqual({
+      dateKey: "2026-07-06",
+      start: "12:00",
+      end: "22:00",
+      minutes: 600,
+    });
+    expect(gaps[1]).toEqual({
+      dateKey: "2026-07-07",
+      start: "08:00",
+      end: "22:00",
+      minutes: 840,
+    });
+  });
+
+  test("scheduleSnapshot counts free hours inside the local wake window", () => {
+    // A 13:00–14:00 local meeting = 17:00–18:00Z.
+    const busy = {
+      summary: "sync",
+      start: "2026-07-06T17:00:00Z",
+      end: "2026-07-06T18:00:00Z",
+      allDay: false,
+    };
+    const { freeHoursToday } = scheduleSnapshot({
+      events: [busy],
+      now: nowUtc,
+      timeZone: NY,
+    });
+    // Noon to 22:00 local is 10h, minus the 1h meeting = 9h.
+    expect(freeHoursToday).toBe(9);
+  });
+
+  test("freeIntervalsForDay clips the local day, not the UTC day", () => {
+    const intervals = freeIntervalsForDay({
+      events: [],
+      dateKey: "2026-07-06",
+      now: nowUtc,
+      timeZone: NY,
+    });
+    // Local noon (past-time clip) to local 22:00.
+    expect(intervals).toEqual([
+      { startMinutes: 12 * 60, endMinutes: 22 * 60, minutes: 600 },
     ]);
   });
 });
