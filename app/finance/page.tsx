@@ -13,9 +13,14 @@ import type {
   IncomeSource,
   RecurringExpense,
   SpendingCategory,
+  SpendLimit,
 } from "@/app/_components/finance-types";
 import { computeSpendRate } from "@/app/_components/spend-baseline";
-import { getSpendHistory, getSpendOverrides } from "@/app/lib/data/finance";
+import {
+  getSpendHistory,
+  getSpendLimits,
+  getSpendOverrides,
+} from "@/app/lib/data/finance";
 import { getDailySpendEstimate } from "@/app/lib/data/settings";
 import { FinanceClient } from "./finance-client";
 
@@ -105,6 +110,7 @@ export default async function FinancePage({
     spendHistory,
     manualSpendEstimate,
     spendOverrides,
+    spendLimits,
   ] = await Promise.all([
     supabase
       .from("accounts")
@@ -143,6 +149,7 @@ export default async function FinancePage({
     getSpendHistory(user.id),
     getDailySpendEstimate(user.id),
     getSpendOverrides(user.id),
+    getSpendLimits(user.id),
   ]);
 
   const incomeSources = (incomeResult.data ?? []) as IncomeSource[];
@@ -239,6 +246,7 @@ export default async function FinancePage({
         spendRate={spendRate}
         manualSpendEstimate={manualSpendEstimate}
         spendOverrides={spendOverrides}
+        initialSpendLimits={spendLimits as SpendLimit[]}
       />
     </main>
   );

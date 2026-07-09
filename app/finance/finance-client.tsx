@@ -16,19 +16,27 @@ import type {
   IncomeSource,
   RecurringExpense,
   SpendingCategory,
+  SpendLimit,
+  SpendLimitPeriod,
+  SpendLimitScope,
 } from "@/app/_components/finance-types";
 import type { SpendRate } from "@/app/_components/spend-baseline";
+import { computeLimitStatuses } from "@/app/_components/spend-limits";
 import {
   archiveAccount,
+  archiveSpendLimit,
   createAccount,
   createCategory,
+  createSpendLimit,
   deleteBalanceChange,
   recordBalanceChange,
   updateAccount,
   updateBalanceChange,
+  updateSpendLimit,
 } from "@/app/actions/finance";
 import { AccountRow, AddAccountForm } from "./accounts-section";
 import { categoriesReducer, toCents } from "./finance-shared";
+import { SpendLimitsSection } from "./spend-limits-section";
 
 type AccountAction =
   | { kind: "add"; account: Account }
@@ -44,6 +52,12 @@ type ChangeAction =
   | { kind: "update"; id: string; patch: Partial<BalanceChange> }
   | { kind: "remove"; id: string };
 
+type LimitAction =
+  | { kind: "add"; limit: SpendLimit }
+  | { kind: "replace"; tempId: string; limit: SpendLimit }
+  | { kind: "update"; id: string; patch: Partial<SpendLimit> }
+  | { kind: "remove"; id: string };
+
 export function FinanceClient({
   initialAccounts,
   initialCategories,
@@ -56,6 +70,7 @@ export function FinanceClient({
   spendRate,
   manualSpendEstimate,
   spendOverrides,
+  initialSpendLimits,
 }: {
   initialAccounts: Account[];
   initialCategories: SpendingCategory[];
@@ -68,6 +83,7 @@ export function FinanceClient({
   spendRate: SpendRate;
   manualSpendEstimate: number | null;
   spendOverrides: Record<string, number>;
+  initialSpendLimits: SpendLimit[];
 }) {
   const [accounts, dispatchAccounts] = useOptimistic<Account[], AccountAction>(
     initialAccounts,
@@ -122,6 +138,26 @@ export function FinanceClient({
     },
   );
 
+  const [spendLimits, dispatchLimits] = useOptimistic<SpendLimit[], LimitAction>(
+    initialSpendLimits,
+    (state, action) => {
+      switch (action.kind) {
+        case "add":
+          return [...state, action.limit];
+        case "replace":
+          return state.map((l) =>
+            l.id === action.tempId ? action.limit : l,
+          );
+        case "update":
+          return state.map((l) =>
+            l.id === action.id ? { ...l, ...action.patch } : l,
+          );
+        case "remove":
+          return state.filter((l) => l.id !== action.id);
+      }
+    },
+  );
+
   const [, startTransition] = useTransition();
   const [addOpen, setAddOpen] = useState(false);
 
@@ -157,6 +193,23 @@ export function FinanceClient({
     return map;
   }, [changes, today]);
   const todayDelta = sumMoney([...todayDeltaByAccount.values()]);
+
+  // Spending-limit status: actual discretionary spend this period vs each cap,
+  // recomputed from the same (optimistic) ledger rows and bill rules the
+  // forecast baseline uses, so logging a spend moves the meters live.
+  const limitStatusById = useMemo(() => {
+    const rules = expenses.map((e) => ({
+      amount: Number(e.amount),
+      category_id: e.category_id,
+    }));
+    const statuses = computeLimitStatuses({
+      limits: spendLimits,
+      rows: changes,
+      rules,
+      today,
+    });
+    return new Map(statuses.map((s) => [s.limitId, s]));
+  }, [spendLimits, changes, expenses, today]);
 
   function onCreateAccount(input: {
     name: string;
@@ -332,6 +385,61 @@ export function FinanceClient({
     return category;
   }
 
+  async function onCreateLimit(input: {
+    scope: SpendLimitScope;
+    categoryId: string | null;
+    period: SpendLimitPeriod;
+    amount: number;
+  }): Promise<string | null> {
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const optimistic: SpendLimit = {
+      id: tempId,
+      scope: input.scope,
+      category_id: input.categoryId,
+      period: input.period,
+      amount: toCents(input.amount),
+      archived: false,
+      created_at: new Date().toISOString(),
+    };
+    startTransition(() => {
+      dispatchLimits({ kind: "add", limit: optimistic });
+    });
+    const result = await createSpendLimit(input);
+    if (result.error) {
+      startTransition(() => {
+        dispatchLimits({ kind: "remove", id: tempId });
+      });
+      return result.error;
+    }
+    if (result.limit) {
+      startTransition(() => {
+        dispatchLimits({
+          kind: "replace",
+          tempId,
+          limit: result.limit as SpendLimit,
+        });
+      });
+    }
+    return null;
+  }
+
+  function onUpdateLimit(
+    id: string,
+    patch: { amount?: number; period?: SpendLimitPeriod },
+  ) {
+    startTransition(async () => {
+      dispatchLimits({ kind: "update", id, patch });
+      await updateSpendLimit({ id, amount: patch.amount, period: patch.period });
+    });
+  }
+
+  function onArchiveLimit(id: string) {
+    startTransition(async () => {
+      dispatchLimits({ kind: "remove", id });
+      await archiveSpendLimit(id);
+    });
+  }
+
   return (
     <div className="grid gap-8 lg:grid-cols-2 lg:gap-16 lg:items-start">
       <div className="min-w-0" data-tour="accounts">
@@ -398,6 +506,17 @@ export function FinanceClient({
             />
           </div>
         )}
+
+        <SpendLimitsSection
+          limits={spendLimits}
+          statusById={limitStatusById}
+          categories={categories}
+          categoryById={categoryById}
+          currency={baseCurrency}
+          onCreate={onCreateLimit}
+          onUpdate={onUpdateLimit}
+          onArchive={onArchiveLimit}
+        />
       </div>
 
       <aside className="min-w-0 lg:sticky lg:top-8" data-tour="finance-calendar">

@@ -20,10 +20,14 @@ import { recordProposal } from "@/app/lib/mcp/audit";
 import {
   proposeArchiveRecurringTaskFor,
   proposeCreateRecurringTaskFor,
+  proposeDeleteSpendLimitFor,
+  proposeSetSpendLimitFor,
   proposeUpdateFinanceFor,
   proposeUpdateStockFor,
   proposeUpsertGoalFor,
+  spendLimitWarningBlock,
 } from "@/app/lib/mcp/writes";
+import { buildSpendLimitStatus } from "@/app/lib/mcp/reads";
 import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
 import { formatRecurrence } from "@/app/lib/recurrence";
 import { captureToBrainFor } from "@/app/lib/mcp/brain";
@@ -94,18 +98,34 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "spend_limit_status",
+    description:
+      "Every active spending limit (budget cap) with actual spend this period vs the cap: limitId, label, scope, period, amount, spent, remaining, pctUsed, and state ('under' | 'approaching' at >=80% | 'over'). Spend uses the everyday-spend rules (out-flows only; transfers and recurring bills excluded; category scope respected). Use limitId for propose_delete_spend_limit.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "list_goals",
     description: "List the user's goals (id, title, why, horizon, status, target date).",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "list_task_groups",
+    description:
+      "List the user's task groups (id, name, type). Use the ids for propose_create_task's groupId.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "propose_create_task",
     description:
-      "Propose creating a task. Returns a proposal the user must confirm — never assume it ran.",
+      "Propose creating a task. Returns a proposal the user must confirm — never assume it ran. Sort as you add: call list_task_groups and set groupId to the group that clearly fits the task's content; only leave it out (inbox) when nothing fits.",
     input_schema: {
       type: "object",
       properties: {
         title: { type: "string" },
+        groupId: {
+          type: "string",
+          description: "group id from list_task_groups; omit for inbox",
+        },
         dueDate: { type: "string", description: "YYYY-MM-DD" },
         dueTime: { type: "string", description: "HH:MM 24h, optional" },
         priority: { type: "string", enum: ["low", "med", "high"] },
@@ -278,6 +298,36 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
         note: { type: "string" },
       },
       required: ["accountId", "amount"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_set_spend_limit",
+    description:
+      "Propose creating or updating a budget cap the app tracks actual spend against (distinct from the forecast's daily-spend estimate). scope 'overall' caps all discretionary spend; scope 'category' caps one category (pass its categoryId from list_accounts_and_categories). period is daily, weekly (Mon-Sun), or monthly (calendar month). Only one overall limit and one per category exist — setting again updates the existing one. User must confirm.",
+    input_schema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", enum: ["overall", "category"] },
+        categoryId: {
+          type: "string",
+          description: "Required when scope is 'category'.",
+        },
+        period: { type: "string", enum: ["daily", "weekly", "monthly"] },
+        amount: { type: "number", exclusiveMinimum: 0 },
+      },
+      required: ["scope", "period", "amount"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_delete_spend_limit",
+    description:
+      "Propose removing a spending limit (budget cap). Find limitId via spend_limit_status. User must confirm.",
+    input_schema: {
+      type: "object",
+      properties: { limitId: { type: "string" } },
+      required: ["limitId"],
       additionalProperties: false,
     },
   },
@@ -633,6 +683,14 @@ export async function runAssistantTool(
           })),
         };
       }
+      case "list_task_groups": {
+        const { data } = await supabase
+          .from("groups")
+          .select("id, name, type")
+          .eq("archived", false)
+          .order("created_at", { ascending: true });
+        return { type: "result", content: data ?? [] };
+      }
       case "list_accounts_and_categories": {
         const [accountsResult, categoriesResult, recurringResult] =
           await Promise.all([
@@ -709,12 +767,22 @@ export async function runAssistantTool(
         if (dueTime !== undefined && (typeof dueTime !== "string" || !TIME_RE.test(dueTime))) {
           return { type: "error", error: "dueTime must be HH:MM" };
         }
+        let groupName: string | null = null;
+        if (parsed.value.groupId) {
+          const { data } = await supabase
+            .from("groups")
+            .select("name")
+            .eq("id", parsed.value.groupId)
+            .maybeSingle();
+          if (!data) return { type: "error", error: "group not found" };
+          groupName = (data as { name: string }).name;
+        }
         const stored = {
           ...(parsed.value as unknown as Record<string, unknown>),
           ...(dueTime ? { dueTime } : {}),
         };
         const summary =
-          summarizeCreateTask(parsed.value, null) +
+          summarizeCreateTask(parsed.value, groupName) +
           (dueTime ? ` at ${dueTime}` : "");
         const proposalId = await recordProposal(
           supabase,
@@ -858,6 +926,30 @@ export async function runAssistantTool(
         if (!outcome.ok) return { type: "error", error: outcome.error };
         return { type: "proposal", ...outcome.value };
       }
+      case "spend_limit_status": {
+        return {
+          type: "result",
+          content: await buildSpendLimitStatus(supabase, userId),
+        };
+      }
+      case "propose_set_spend_limit": {
+        const outcome = await proposeSetSpendLimitFor(supabase, userId, input, {
+          source: "assistant",
+          conversationId,
+        });
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "proposal", ...outcome.value };
+      }
+      case "propose_delete_spend_limit": {
+        const outcome = await proposeDeleteSpendLimitFor(
+          supabase,
+          userId,
+          input,
+          { source: "assistant", conversationId },
+        );
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "proposal", ...outcome.value };
+      }
       case "propose_log_spend": {
         const parsed = validateLogSpend(input);
         if (!parsed.ok) return { type: "error", error: parsed.error };
@@ -880,11 +972,19 @@ export async function runAssistantTool(
           categoryName = (category as { name: string }).name;
         }
         const acct = account as { name: string; currency: string };
-        const summary = summarizeLogSpend(parsed.value, {
-          accountName: acct.name,
-          currency: acct.currency,
-          categoryName,
-        });
+        const warningBlock = await spendLimitWarningBlock(supabase, userId, [
+          {
+            amount: parsed.value.amount,
+            categoryId: parsed.value.categoryId,
+            dateKey: today,
+          },
+        ]);
+        const summary =
+          summarizeLogSpend(parsed.value, {
+            accountName: acct.name,
+            currency: acct.currency,
+            categoryName,
+          }) + warningBlock;
         const proposalId = await recordProposal(
           supabase,
           userId,

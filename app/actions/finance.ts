@@ -980,3 +980,127 @@ export async function archiveIncomeSource(id: string) {
   revalidatePath("/finance");
   return { error: null };
 }
+
+// ---------- spending limits ----------
+
+const SPEND_LIMIT_COLUMNS =
+  "id, scope, category_id, period, amount, archived, created_at";
+const LIMIT_PERIODS = ["daily", "weekly", "monthly"] as const;
+type LimitPeriod = (typeof LIMIT_PERIODS)[number];
+
+// A unique-violation (23505) means an active limit already exists for this
+// scope/category — the partial unique indexes in migration 0031.
+function isUniqueViolation(error: { code?: string } | null): boolean {
+  return error?.code === "23505";
+}
+
+export async function createSpendLimit(input: {
+  scope: string;
+  categoryId?: string | null;
+  period: string;
+  amount: number;
+}) {
+  if (input.scope !== "overall" && input.scope !== "category") {
+    return { error: "invalid scope" };
+  }
+  if (!LIMIT_PERIODS.includes(input.period as LimitPeriod)) {
+    return { error: "invalid period" };
+  }
+  const amount = toCents(input.amount);
+  if (amount === null || amount <= 0) return { error: "invalid amount" };
+
+  const categoryId = input.scope === "category" ? input.categoryId ?? null : null;
+  if (input.scope === "category" && !categoryId) {
+    return { error: "category required" };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { data, error } = await supabase
+    .from("spend_limits")
+    .insert({
+      user_id: user.id,
+      scope: input.scope,
+      category_id: categoryId,
+      period: input.period,
+      amount,
+    })
+    .select(SPEND_LIMIT_COLUMNS)
+    .single();
+
+  if (error) {
+    if (isUniqueViolation(error)) {
+      return {
+        error:
+          input.scope === "overall"
+            ? "an overall limit already exists"
+            : "a limit for this category already exists",
+      };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/finance");
+  return { error: null, limit: data };
+}
+
+export async function updateSpendLimit(input: {
+  id: string;
+  period?: string;
+  amount?: number;
+}) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const updates: Record<string, unknown> = {};
+
+  if (input.period !== undefined) {
+    if (!LIMIT_PERIODS.includes(input.period as LimitPeriod)) {
+      return { error: "invalid period" };
+    }
+    updates.period = input.period;
+  }
+  if (input.amount !== undefined) {
+    const amount = toCents(input.amount);
+    if (amount === null || amount <= 0) return { error: "invalid amount" };
+    updates.amount = amount;
+  }
+
+  if (Object.keys(updates).length === 0) return { error: null };
+  updates.updated_at = new Date().toISOString();
+
+  const { error } = await supabase
+    .from("spend_limits")
+    .update(updates)
+    .eq("id", input.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/finance");
+  return { error: null };
+}
+
+export async function archiveSpendLimit(id: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase
+    .from("spend_limits")
+    .update({ archived: true, updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/finance");
+  return { error: null };
+}

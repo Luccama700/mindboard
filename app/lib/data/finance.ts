@@ -5,6 +5,7 @@ import type {
   Account,
   BalanceChange,
   RecurringExpense,
+  SpendLimit,
 } from "@/app/_components/finance-types";
 import type { SpendHistoryRow } from "@/app/_components/spend-baseline";
 
@@ -19,6 +20,8 @@ const CHANGE_COLUMNS =
   "id, account_id, category_id, direction, amount, note, occurred_at, created_at, source, is_transfer";
 const RECURRING_COLUMNS =
   "id, name, amount, category_id, frequency, day_of_month, weekday, interval_days, start_date, archived, created_at";
+const SPEND_LIMIT_COLUMNS =
+  "id, scope, category_id, period, amount, archived, created_at";
 
 export const getAccounts = cache(
   async (userId: string): Promise<Account[]> => {
@@ -43,6 +46,20 @@ export const getActiveRecurringExpenses = cache(
       .eq("archived", false)
       .order("created_at", { ascending: false });
     return (data ?? []) as RecurringExpense[];
+  },
+);
+
+// Active spending limits (budget caps tracked against actual spend).
+export const getSpendLimits = cache(
+  async (userId: string): Promise<SpendLimit[]> => {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("spend_limits")
+      .select(SPEND_LIMIT_COLUMNS)
+      .eq("user_id", userId)
+      .eq("archived", false)
+      .order("created_at", { ascending: true });
+    return (data ?? []) as SpendLimit[];
   },
 );
 

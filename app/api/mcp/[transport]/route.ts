@@ -24,6 +24,8 @@ import {
   listRecentLedger,
   listRecurringExpenses,
   listRecurringTasks,
+  listSpendLimits,
+  getSpendLimitStatus,
   listTasks,
   readBrainNote,
 } from "@/app/lib/mcp/reads";
@@ -36,12 +38,14 @@ import {
   proposeCreateEvent,
   proposeCreateRecurringTask,
   proposeCreateTask,
+  proposeDeleteSpendLimit,
   proposeDeleteTask,
   proposeLogDaily,
   proposeLogSpend,
   proposeManageFinance,
   proposeManageGroup,
   proposeRescheduleEvent,
+  proposeSetSpendLimit,
   proposeUpdateFinance,
   proposeUpdateRecurringTask,
   proposeUpdateSettings,
@@ -110,6 +114,28 @@ const mcpHandler = createMcpHandler(
         inputSchema: {},
       },
       () => guard(async () => ok(await getFinanceSnapshot())),
+    );
+
+    server.registerTool(
+      "spend_limit_status",
+      {
+        title: "Spending limit status",
+        description:
+          "Every active spending limit with actual spend this period vs the cap: amount, spent, remaining, pctUsed, and state ('under' | 'approaching' at >=80% | 'over'). Spend uses the everyday-spend inclusion rules (out-flows only; transfers and recurring bills excluded; category scope respected).",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await getSpendLimitStatus())),
+    );
+
+    server.registerTool(
+      "list_spend_limits",
+      {
+        title: "List spending limits",
+        description:
+          "Active spending limits (budget caps) with their ids — use as the id source for delete_spend_limit. For spent-vs-cap figures use spend_limit_status.",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await listSpendLimits())),
     );
 
     server.registerTool(
@@ -378,7 +404,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: create a task",
         description:
-          "Propose creating a task. Returns a preview + proposalId; call confirm_action to apply. groupId omitted/null → inbox. dueDate is YYYY-MM-DD.",
+          "Propose creating a task. Returns a preview + proposalId; call confirm_action to apply. Sort as you add: call list_groups and set groupId to the group that clearly fits the task's content (e.g. a course group for its assignments); only leave groupId omitted/null (inbox) when nothing fits. dueDate is YYYY-MM-DD.",
         inputSchema: {
           title: z.string(),
           groupId: z.string().nullish(),
@@ -741,6 +767,46 @@ const mcpHandler = createMcpHandler(
       (args) =>
         guard(async () => {
           const r = await proposeLogSpend(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "set_spend_limit",
+      {
+        title: "Propose: set a spending limit",
+        description:
+          "Propose creating or updating a budget cap the app tracks actual spend against (distinct from the forecast's daily-spend estimate). scope 'overall' caps all discretionary spend; scope 'category' caps one category (pass its categoryId from list_categories). period is daily, weekly (Mon-Sun), or monthly (calendar month). Only one overall limit and one limit per category exist — setting again updates the existing one. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          scope: z.enum(["overall", "category"]),
+          categoryId: z
+            .string()
+            .nullish()
+            .describe("Required when scope is 'category'."),
+          period: z.enum(["daily", "weekly", "monthly"]),
+          amount: z.number().positive(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeSetSpendLimit(args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "delete_spend_limit",
+      {
+        title: "Propose: delete a spending limit",
+        description:
+          "Propose removing a spending limit (budget cap). Find limitId via list_spend_limits. Returns a preview + proposalId; call confirm_action to apply.",
+        inputSchema: {
+          limitId: z.string(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await proposeDeleteSpendLimit(args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );

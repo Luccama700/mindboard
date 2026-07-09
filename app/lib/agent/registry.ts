@@ -254,6 +254,44 @@ export const toolRegistry: ToolDescriptor[] = [
     mapsTo: "app/lib/mcp/reads#getFinanceForecast",
   },
   {
+    name: "finance.limits.status",
+    kind: "read",
+    description:
+      "Every active spending limit (budget cap) with actual spend this period vs the cap: amount, spent, remaining, pctUsed, and state (under / approaching / over).",
+    inputSchema: EMPTY_INPUT,
+    mapsTo: "app/lib/mcp/reads#getSpendLimitStatus",
+  },
+  {
+    name: "finance.limits.set",
+    kind: "write",
+    description:
+      "Create or update a spending limit: an overall cap or a per-category cap, over a daily / weekly / monthly period.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", description: "'overall' or 'category'." },
+        categoryId: { type: "string", description: "Required when scope is 'category'." },
+        period: { type: "string", description: "daily / weekly / monthly." },
+        amount: { type: "string", description: "The cap amount." },
+      },
+      required: ["scope", "period", "amount"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeSetSpendLimit",
+    confirm: true,
+  },
+  {
+    name: "finance.limits.delete",
+    kind: "write",
+    description: "Remove a spending limit by id.",
+    inputSchema: {
+      type: "object",
+      properties: { limitId: { type: "string", description: "Spending limit id." } },
+      required: ["limitId"],
+    },
+    mapsTo: "app/lib/mcp/writes#proposeDeleteSpendLimit",
+    confirm: true,
+  },
+  {
     name: "finance.income.list",
     kind: "read",
     description: "List wage income sources (rate, tax, linked shift calendar, pay schedule).",

@@ -1,4 +1,5 @@
 import "server-only";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
 import { ownerUserId, todayKey } from "./config";
 import { formatRecurrence } from "@/app/lib/recurrence";
@@ -34,7 +35,16 @@ import type {
   Account,
   BalanceChange,
   RecurringExpense,
+  SpendLimit,
 } from "@/app/_components/finance-types";
+import type {
+  BillRule,
+  SpendHistoryRow,
+} from "@/app/_components/spend-baseline";
+import {
+  computeLimitStatuses,
+  type SpendLimitStatus,
+} from "@/app/_components/spend-limits";
 import type {
   InventoryItem,
   InventoryUsage,
@@ -58,6 +68,8 @@ const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
 const TASK_COLUMNS =
   "id, title, due_date, status, priority, notes, group_id, created_at, completed_at";
+const SPEND_LIMIT_COLUMNS =
+  "id, scope, category_id, period, amount, archived, created_at";
 
 function scoped() {
   return { supabase: createServiceClient(), ownerId: ownerUserId() };
@@ -105,6 +117,92 @@ export async function getFinanceSnapshot(): Promise<FinanceVitals> {
 export async function getTasksSnapshot(): Promise<TaskVitals> {
   const tasks = await listTasks({});
   return tasksSnapshot(tasks, todayKey());
+}
+
+// ---------- spending limits ----------
+
+export async function listSpendLimits(): Promise<SpendLimit[]> {
+  const { supabase, ownerId } = scoped();
+  const { data } = await supabase
+    .from("spend_limits")
+    .select(SPEND_LIMIT_COLUMNS)
+    .eq("user_id", ownerId)
+    .eq("archived", false)
+    .order("created_at", { ascending: true });
+  return (data ?? []) as SpendLimit[];
+}
+
+export type SpendLimitStatusRead = SpendLimitStatus & {
+  label: string; // "overall" or the category name
+};
+
+// Each active limit with actual spend this period, using the same inclusion
+// rules as the everyday-spend baseline (out-flows only, transfers and recurring
+// bills excluded; category scope respected). Shared by the MCP read (service
+// client + owner) and the in-app assistant (session client + RLS).
+export async function buildSpendLimitStatus(
+  supabase: SupabaseClient,
+  ownerId: string,
+): Promise<SpendLimitStatusRead[]> {
+  const today = todayKey();
+  const windowStart = addDaysKey(today, -40); // covers the current month/week
+
+  const [limitsRes, recurringRes, changesRes, categoriesRes] = await Promise.all(
+    [
+      supabase
+        .from("spend_limits")
+        .select(SPEND_LIMIT_COLUMNS)
+        .eq("user_id", ownerId)
+        .eq("archived", false)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("recurring_expenses")
+        .select("amount, category_id")
+        .eq("user_id", ownerId)
+        .eq("archived", false),
+      supabase
+        .from("balance_changes")
+        .select("occurred_at, direction, amount, category_id, is_transfer")
+        .eq("user_id", ownerId)
+        .gte("occurred_at", windowStart)
+        .limit(2000),
+      supabase
+        .from("spending_categories")
+        .select("id, name")
+        .eq("user_id", ownerId),
+    ],
+  );
+
+  const limits = (limitsRes.data ?? []) as SpendLimit[];
+  const rules = ((recurringRes.data ?? []) as BillRule[]).map((r) => ({
+    amount: Number(r.amount),
+    category_id: r.category_id,
+  }));
+  const rows = ((changesRes.data ?? []) as SpendHistoryRow[]).map((r) => ({
+    ...r,
+    amount: Number(r.amount),
+  }));
+  const categoryNameById = new Map<string, string>(
+    ((categoriesRes.data ?? []) as { id: string; name: string }[]).map((c) => [
+      c.id,
+      c.name,
+    ]),
+  );
+
+  const statuses = computeLimitStatuses({ limits, rows, rules, today });
+  return statuses.map((s) => ({
+    ...s,
+    label:
+      s.scope === "overall"
+        ? "overall"
+        : (s.categoryId ? categoryNameById.get(s.categoryId) : null) ??
+          "category",
+  }));
+}
+
+export async function getSpendLimitStatus(): Promise<SpendLimitStatusRead[]> {
+  const { supabase, ownerId } = scoped();
+  return buildSpendLimitStatus(supabase, ownerId);
 }
 
 export async function getInventorySnapshot(): Promise<InventoryVitals> {

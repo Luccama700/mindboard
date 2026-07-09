@@ -57,6 +57,23 @@ export type RecurringExpense = {
   created_at: string;
 };
 
+export type SpendLimitScope = "overall" | "category";
+export type SpendLimitPeriod = "daily" | "weekly" | "monthly";
+
+// A user-set budget cap the app tracks actual spend against. scope 'overall'
+// caps all discretionary spend (category_id null); scope 'category' caps one
+// category. Distinct from the forecast's daily_spend_estimate, which predicts
+// future spend rather than capping it.
+export type SpendLimit = {
+  id: string;
+  scope: SpendLimitScope;
+  category_id: string | null;
+  period: SpendLimitPeriod;
+  amount: number;
+  archived: boolean;
+  created_at: string;
+};
+
 export type PayFrequency = "weekly" | "biweekly" | "monthly";
 
 export type IncomeSource = {

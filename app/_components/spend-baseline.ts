@@ -87,6 +87,18 @@ export function matchesBill(
   return false;
 }
 
+// The everyday-spend inclusion rule, shared by the forecast baseline and the
+// spending-limits tracker so the two stay in lockstep: a row counts as
+// discretionary spend only when it is an out-flow, not a transfer, and not a
+// recurring bill payment.
+export function isDiscretionarySpend(
+  row: Pick<SpendHistoryRow, "direction" | "amount" | "category_id" | "is_transfer">,
+  rules: BillRule[],
+): boolean {
+  if (row.direction !== "out" || row.is_transfer) return false;
+  return !matchesBill(row, rules);
+}
+
 // Predicted-minimum rate: MIN_SPEND_FACTOR × the median weekly discretionary
 // total ÷ 7, over trailing 7-day blocks ending yesterday (today is a partial
 // day). Only blocks fully covered by recorded history count, so a young
@@ -110,8 +122,7 @@ export function computeSpendRate(input: {
 
   const dailyTotals = new Map<string, number>();
   for (const row of history) {
-    if (row.direction !== "out" || row.is_transfer) continue;
-    if (matchesBill(row, rules)) continue;
+    if (!isDiscretionarySpend(row, rules)) continue;
     dailyTotals.set(
       row.occurred_at,
       roundCents((dailyTotals.get(row.occurred_at) ?? 0) + Number(row.amount)),

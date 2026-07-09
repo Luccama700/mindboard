@@ -54,6 +54,24 @@ import {
   type ResolvableCategory,
   type ResolvableRecurring,
 } from "./finance-ops";
+import {
+  formatLimitWarnings,
+  summarizeDeleteSpendLimit,
+  summarizeSetSpendLimit,
+  validateDeleteSpendLimit,
+  validateSetSpendLimit,
+} from "./spend-limit-ops";
+import {
+  limitWarningsForSpends,
+  type PendingSpend,
+} from "@/app/_components/spend-limits";
+import type {
+  SpendLimit,
+  SpendLimitPeriod,
+  SpendLimitScope,
+} from "@/app/_components/finance-types";
+import type { BillRule, SpendHistoryRow } from "@/app/_components/spend-baseline";
+import { addDaysKey } from "@/app/_components/finance-projection";
 
 // The MCP write layer. Each write is two steps (the plan's locked
 // write-with-confirmation rule):
@@ -169,11 +187,19 @@ export async function proposeLogSpend(raw: unknown): Promise<Result<Proposal>> {
     categoryName = (category as { name: string }).name;
   }
 
-  const summary = summarizeLogSpend(parsed.value, {
-    accountName: acct.name,
-    currency: acct.currency,
-    categoryName,
-  });
+  const warningBlock = await spendLimitWarningBlock(supabase, ownerId, [
+    {
+      amount: parsed.value.amount,
+      categoryId: parsed.value.categoryId,
+      dateKey: todayKey(),
+    },
+  ]);
+  const summary =
+    summarizeLogSpend(parsed.value, {
+      accountName: acct.name,
+      currency: acct.currency,
+      categoryName,
+    }) + warningBlock;
   const proposalId = await recordProposal(
     supabase,
     ownerId,
@@ -182,6 +208,85 @@ export async function proposeLogSpend(raw: unknown): Promise<Result<Proposal>> {
     summary,
   );
   return { ok: true, value: { proposalId, preview: summary } };
+}
+
+// The base account currency, for money formatting in limit/spend previews.
+async function baseCurrency(
+  supabase: SupabaseClient,
+  ownerId: string,
+): Promise<string> {
+  const { data } = await supabase
+    .from("accounts")
+    .select("currency")
+    .eq("user_id", ownerId)
+    .eq("archived", false)
+    .limit(1);
+  return ((data ?? []) as { currency: string }[])[0]?.currency ?? "USD";
+}
+
+// Spend-limit warning block appended to a spend proposal's preview so the user
+// sees the impact on any applicable cap before confirming. Never blocks — it is
+// preview text only. Empty string when there are no limits or none are hit.
+export async function spendLimitWarningBlock(
+  supabase: SupabaseClient,
+  ownerId: string,
+  spends: PendingSpend[],
+): Promise<string> {
+  const today = todayKey();
+  const windowStart = addDaysKey(today, -40); // covers the current month/week
+  const [limitsRes, recurringRes, changesRes, categoriesRes, accountRes] =
+    await Promise.all([
+      supabase
+        .from("spend_limits")
+        .select("id, scope, category_id, period, amount, archived, created_at")
+        .eq("user_id", ownerId)
+        .eq("archived", false),
+      supabase
+        .from("recurring_expenses")
+        .select("amount, category_id")
+        .eq("user_id", ownerId)
+        .eq("archived", false),
+      supabase
+        .from("balance_changes")
+        .select("occurred_at, direction, amount, category_id, is_transfer")
+        .eq("user_id", ownerId)
+        .gte("occurred_at", windowStart)
+        .limit(2000),
+      supabase
+        .from("spending_categories")
+        .select("id, name")
+        .eq("user_id", ownerId),
+      supabase
+        .from("accounts")
+        .select("currency")
+        .eq("user_id", ownerId)
+        .eq("archived", false)
+        .limit(1),
+    ]);
+
+  const limits = (limitsRes.data ?? []) as SpendLimit[];
+  if (limits.length === 0) return "";
+
+  const rules: BillRule[] = ((recurringRes.data ?? []) as BillRule[]).map(
+    (r) => ({ amount: Number(r.amount), category_id: r.category_id }),
+  );
+  const rows = ((changesRes.data ?? []) as SpendHistoryRow[]).map((r) => ({
+    ...r,
+    amount: Number(r.amount),
+  }));
+
+  const warnings = limitWarningsForSpends({ limits, rows, rules, spends, today });
+  if (warnings.length === 0) return "";
+
+  const categoryNameById = new Map<string, string>(
+    ((categoriesRes.data ?? []) as { id: string; name: string }[]).map((c) => [
+      c.id,
+      c.name,
+    ]),
+  );
+  const currency =
+    ((accountRes.data ?? []) as { currency: string }[])[0]?.currency ?? "USD";
+  return formatLimitWarnings(warnings, { categoryNameById, currency });
 }
 
 // Shared with the in-app assistant (session client + RLS) and the MCP server
@@ -402,7 +507,18 @@ export async function proposeUpdateFinanceFor(
     };
   }
 
-  const preview = renderFinanceReceipt(resolved.value);
+  const spends: PendingSpend[] = [];
+  for (const op of resolved.value) {
+    if (op.kind === "spend") {
+      spends.push({
+        amount: op.amount,
+        categoryId: op.categoryId,
+        dateKey: op.date,
+      });
+    }
+  }
+  const warningBlock = await spendLimitWarningBlock(supabase, userId, spends);
+  const preview = renderFinanceReceipt(resolved.value) + warningBlock;
   const proposalId = await recordProposal(
     supabase,
     userId,
@@ -416,6 +532,106 @@ export async function proposeUpdateFinanceFor(
 
 export async function proposeUpdateFinance(raw: unknown): Promise<Result<Proposal>> {
   return proposeUpdateFinanceFor(createServiceClient(), ownerUserId(), raw);
+}
+
+// ---------- spending limits ----------
+
+export async function proposeSetSpendLimitFor(
+  supabase: SupabaseClient,
+  userId: string,
+  raw: unknown,
+  options?: { source?: "mcp" | "assistant"; conversationId?: string | null },
+): Promise<Result<Proposal>> {
+  const parsed = validateSetSpendLimit((raw ?? {}) as Record<string, unknown>);
+  if (!parsed.ok) return parsed;
+  const v = parsed.value;
+
+  let categoryName: string | null = null;
+  if (v.scope === "category" && v.categoryId) {
+    const { data } = await supabase
+      .from("spending_categories")
+      .select("name")
+      .eq("id", v.categoryId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!data) return { ok: false, error: "category not found" };
+    categoryName = (data as { name: string }).name;
+  }
+
+  const currency = await baseCurrency(supabase, userId);
+  const summary = summarizeSetSpendLimit(v, { categoryName, currency });
+  const proposalId = await recordProposal(
+    supabase,
+    userId,
+    "set_spend_limit",
+    v as unknown as Record<string, unknown>,
+    summary,
+    options,
+  );
+  return { ok: true, value: { proposalId, preview: summary } };
+}
+
+export async function proposeSetSpendLimit(raw: unknown): Promise<Result<Proposal>> {
+  return proposeSetSpendLimitFor(createServiceClient(), ownerUserId(), raw);
+}
+
+export async function proposeDeleteSpendLimitFor(
+  supabase: SupabaseClient,
+  userId: string,
+  raw: unknown,
+  options?: { source?: "mcp" | "assistant"; conversationId?: string | null },
+): Promise<Result<Proposal>> {
+  const parsed = validateDeleteSpendLimit((raw ?? {}) as Record<string, unknown>);
+  if (!parsed.ok) return parsed;
+  const { limitId } = parsed.value;
+
+  const { data: limit } = await supabase
+    .from("spend_limits")
+    .select("scope, category_id, period, amount")
+    .eq("id", limitId)
+    .eq("user_id", userId)
+    .eq("archived", false)
+    .maybeSingle();
+  if (!limit) return { ok: false, error: "limit not found" };
+  const l = limit as {
+    scope: SpendLimitScope;
+    category_id: string | null;
+    period: SpendLimitPeriod;
+    amount: number;
+  };
+
+  let categoryName: string | null = null;
+  if (l.scope === "category" && l.category_id) {
+    const { data } = await supabase
+      .from("spending_categories")
+      .select("name")
+      .eq("id", l.category_id)
+      .eq("user_id", userId)
+      .maybeSingle();
+    categoryName = data ? (data as { name: string }).name : null;
+  }
+
+  const currency = await baseCurrency(supabase, userId);
+  const summary = summarizeDeleteSpendLimit({
+    scope: l.scope,
+    categoryName,
+    period: l.period,
+    amount: Number(l.amount),
+    currency,
+  });
+  const proposalId = await recordProposal(
+    supabase,
+    userId,
+    "delete_spend_limit",
+    { limitId },
+    summary,
+    options,
+  );
+  return { ok: true, value: { proposalId, preview: summary } };
+}
+
+export async function proposeDeleteSpendLimit(raw: unknown): Promise<Result<Proposal>> {
+  return proposeDeleteSpendLimitFor(createServiceClient(), ownerUserId(), raw);
 }
 
 // ---------- execute (called by confirm, scoped to the owner) ----------
@@ -573,6 +789,99 @@ async function executeLogSpend(
   if (recomputed.error) return { ok: false, error: recomputed.error };
 
   return { ok: true, value: { change, newBalance: recomputed.balance } };
+}
+
+const SPEND_LIMIT_SELECT =
+  "id, scope, category_id, period, amount, archived, created_at";
+
+// "set" = create-or-update the single active limit for this scope/category
+// (the partial unique indexes enforce one overall + one per category).
+async function executeSetSpendLimit(
+  supabase: SupabaseClient,
+  ownerId: string,
+  input: Record<string, unknown>,
+): Promise<Result<Record<string, unknown>>> {
+  const parsed = validateSetSpendLimit(input);
+  if (!parsed.ok) return parsed;
+  const v = parsed.value;
+
+  if (v.scope === "category") {
+    if (
+      !v.categoryId ||
+      !(await ownsRow(supabase, "spending_categories", v.categoryId, ownerId))
+    ) {
+      return { ok: false, error: "category not found" };
+    }
+  }
+
+  let existing = supabase
+    .from("spend_limits")
+    .select("id")
+    .eq("user_id", ownerId)
+    .eq("scope", v.scope)
+    .eq("archived", false);
+  existing =
+    v.scope === "category"
+      ? existing.eq("category_id", v.categoryId as string)
+      : existing.is("category_id", null);
+  const { data: found } = await existing.maybeSingle();
+
+  if (found) {
+    const { data, error } = await supabase
+      .from("spend_limits")
+      .update({
+        period: v.period,
+        amount: v.amount,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", (found as { id: string }).id)
+      .eq("user_id", ownerId)
+      .select(SPEND_LIMIT_SELECT)
+      .single();
+    if (error || !data) {
+      return { ok: false, error: error?.message ?? "update failed" };
+    }
+    return { ok: true, value: { limit: data } };
+  }
+
+  const { data, error } = await supabase
+    .from("spend_limits")
+    .insert({
+      user_id: ownerId,
+      scope: v.scope,
+      category_id: v.categoryId,
+      period: v.period,
+      amount: v.amount,
+    })
+    .select(SPEND_LIMIT_SELECT)
+    .single();
+  if (error || !data) {
+    return { ok: false, error: error?.message ?? "insert failed" };
+  }
+  return { ok: true, value: { limit: data } };
+}
+
+async function executeDeleteSpendLimit(
+  supabase: SupabaseClient,
+  ownerId: string,
+  input: Record<string, unknown>,
+): Promise<Result<Record<string, unknown>>> {
+  const parsed = validateDeleteSpendLimit(input);
+  if (!parsed.ok) return parsed;
+  const { limitId } = parsed.value;
+
+  if (!(await ownsRow(supabase, "spend_limits", limitId, ownerId))) {
+    return { ok: false, error: "limit not found" };
+  }
+
+  const { error } = await supabase
+    .from("spend_limits")
+    .update({ archived: true, updated_at: new Date().toISOString() })
+    .eq("id", limitId)
+    .eq("user_id", ownerId);
+  if (error) return { ok: false, error: error.message };
+
+  return { ok: true, value: { archived: true, limitId } };
 }
 
 // Applies a confirmed stock batch. Quantities are re-read at execute time:
@@ -2179,6 +2488,8 @@ export const EXECUTORS: Record<
   update_stock: executeUpdateStock,
   update_finance: executeUpdateFinance,
   manage_finance: executeManageFinance,
+  set_spend_limit: executeSetSpendLimit,
+  delete_spend_limit: executeDeleteSpendLimit,
   generate_audio_overview: executeGenerateAudioOverview,
 };
 
