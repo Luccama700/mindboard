@@ -1,11 +1,12 @@
 "use client";
 
-import { startTransition, useEffect, useOptimistic } from "react";
+import { startTransition, useEffect, useOptimistic, useState } from "react";
 import {
   deleteTask,
   toggleTaskStatus,
   updateTask,
 } from "@/app/actions/tasks";
+import { autoSortInbox } from "@/app/actions/auto-sort";
 import { subscribeCapture } from "./capture-bus";
 import { TaskRow, type GroupOption } from "./task-row";
 import type { Task } from "./types";
@@ -128,11 +129,59 @@ export function TasksClient({
     });
   }
 
+  const [sorting, setSorting] = useState(false);
+  const [sortNote, setSortNote] = useState<string | null>(null);
+
+  function onAutoSort() {
+    setSorting(true);
+    setSortNote(null);
+    startTransition(async () => {
+      const result = await autoSortInbox();
+      setSorting(false);
+      if (result.error) {
+        setSortNote(result.error);
+        return;
+      }
+      const moves = result.moves ?? [];
+      if (moves.length === 0) {
+        setSortNote("nothing sorted — no confident matches");
+        return;
+      }
+      const names = new Map(groups.map((g) => [g.id, g.name]));
+      const counts = new Map<string, number>();
+      for (const m of moves) {
+        counts.set(m.groupId, (counts.get(m.groupId) ?? 0) + 1);
+      }
+      const breakdown = [...counts]
+        .map(([id, n]) => `${names.get(id) ?? "?"} ×${n}`)
+        .join(" · ");
+      const left = result.left ?? 0;
+      setSortNote(
+        `sorted ${moves.length} → ${breakdown}${left > 0 ? ` · ${left} left in inbox` : ""}`,
+      );
+    });
+  }
+
   const active = tasks.filter((t) => t.status !== "done");
   const done = tasks.filter((t) => t.status === "done");
+  const showAutoSort =
+    filter === null && groups.length > 0 && (active.length > 0 || !!sortNote);
 
   return (
     <div className="space-y-1 pb-4">
+      {showAutoSort && (
+        <div className="flex flex-wrap items-center gap-3 pb-2">
+          <button
+            type="button"
+            onClick={onAutoSort}
+            disabled={sorting}
+            className="inline-flex items-center min-h-11 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors disabled:opacity-50"
+          >
+            {sorting ? "sorting…" : "✦ auto sort"}
+          </button>
+          {sortNote && <p className="text-meta text-muted">{sortNote}</p>}
+        </div>
+      )}
       {active.length === 0 && done.length === 0 && (
         <p className="text-muted text-sm text-center pt-12 pb-8">
           no tasks here — capture one below.
