@@ -19,11 +19,12 @@ Arguments passed to this command: `$ARGUMENTS`
    ```
    (No args → reviews uncommitted changes. It pins the model, runs Codex **read-only**, and saves the review under `.claude/codex/reviews/`.) A thorough review can take a minute or two at `high` effort; set `CODEX_REVIEW_EFFORT=xhigh` before the run for maximum rigor on a final pre-ship pass.
 
-3. **Adjudicate every finding as the Visionary.** Do **not** reflexively accept or reject. For each finding, decide and state your call in one line:
-   - **Accept** → it's a real defect or a fair intent-mismatch; fix it.
-   - **Reject** → give a concrete reason (wrong, out of scope for this change, contradicts a repo rule, or a false positive). The Integrator is adversarial and *will* be wrong sometimes; that's expected. But a rejection needs a reason, not a shrug.
-   - **Defer** → real but out of scope for this ship; capture it as a task.
-   Weigh each finding against product intent and the repo's hard rules in `AGENTS.md` (RLS, timezone correctness, narrow changes, propose→confirm for AI writes, unit tests for pure logic).
+3. **Adjudicate every finding with the Integrator's Identify → Discuss → Solve track.** Do **not** reflexively accept or reject. For each finding:
+   - **Identify** the real issue in one sentence — dig to the root, not the surface symptom.
+   - **Discuss** it honestly from both sides, but say it once (no re-litigating to get your way — that's an "end run").
+   - **Solve** — state your call in one line: **Accept** (real defect or fair intent-mismatch → fix it), **Reject** (concrete reason: wrong, out of scope, contradicts a repo rule, or a false positive), or **Defer** (real but out of scope for this ship → capture as a task).
+
+   Two rules on who wins: on **execution/correctness** calls ("is this a real bug, will this break, is this untested"), treat Codex as the **tie-breaker** — override only with a concrete reason, never a shrug. On **product scope/vision** calls, you hold the decision. It matters more *that* you decide than *what* you decide — leave no finding in limbo. Weigh everything against the repo's hard rules in `AGENTS.md` (RLS, timezone correctness, narrow changes, propose→confirm for AI writes, unit tests for pure logic).
 
 4. **Apply the accepted fixes** yourself (you are still the one writing the code).
 

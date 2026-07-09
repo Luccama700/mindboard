@@ -75,4 +75,7 @@ VERDICT: HOLD (B blockers, H high) — otherwise
 
 Write-Host "Integrator (Codex $Model, effort $Effort) reviewing $scope..." -ForegroundColor Cyan
 codex exec -m $Model -c "model_reasoning_effort=$Effort" -s read-only $prompt | Tee-Object -FilePath $out
+$codexExit = $LASTEXITCODE
 Write-Host "Saved review to: $out" -ForegroundColor DarkGray
+# Native exe exit codes don't trip $ErrorActionPreference=Stop, so surface a failed Codex run explicitly.
+if ($codexExit -ne 0) { Write-Error "Codex exited with code $codexExit - the review above may be incomplete."; exit $codexExit }
