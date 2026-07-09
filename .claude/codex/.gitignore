@@ -1,0 +1,2 @@
+# Per-run Integrator review artifacts are ephemeral; keep them out of git.
+reviews/
