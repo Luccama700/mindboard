@@ -17,12 +17,20 @@ type OptimisticAction =
   | { kind: "archive"; id: string }
   | { kind: "update"; id: string; patch: Partial<Group> };
 
+// variant "sheet" is the dock's drop-up: tighter spacing, and opening a
+// group's ··· panel locks onto that group (inbox card, create form, and the
+// other rows hide) until ··· is tapped again. onNavigate lets the host close
+// the sheet when a row link is followed.
 export function GroupsClient({
   initial,
   calendars,
+  variant = "page",
+  onNavigate,
 }: {
   initial: Group[];
   calendars: CalendarListEntry[];
+  variant?: "page" | "sheet";
+  onNavigate?: () => void;
 }) {
   const [groups, dispatch] = useOptimistic<Group[], OptimisticAction>(
     initial,
@@ -39,6 +47,7 @@ export function GroupsClient({
   );
 
   const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
@@ -73,6 +82,7 @@ export function GroupsClient({
   }
 
   function onArchive(id: string) {
+    setEditingId(null);
     startTransition(async () => {
       dispatch({ kind: "archive", id });
       await archiveGroup(id);
@@ -95,10 +105,17 @@ export function GroupsClient({
     });
   }
 
+  const focused = variant === "sheet" && editingId !== null;
+  const visibleGroups = focused
+    ? groups.filter((g) => g.id === editingId)
+    : groups;
+
   return (
-    <div className="space-y-6">
+    <div className={variant === "sheet" ? "space-y-3" : "space-y-6"}>
+      {!focused && (
       <Link
         href="/tasks?group=inbox"
+        onClick={() => onNavigate?.()}
         className="block border border-line bg-card hover:bg-card-hover transition-colors"
       >
         <div className="flex items-center gap-3 px-4 py-4">
@@ -115,8 +132,10 @@ export function GroupsClient({
           <span className="text-muted text-xs">›</span>
         </div>
       </Link>
+      )}
 
-      {!formOpen ? (
+      {!focused &&
+        (!formOpen ? (
         <button
           onClick={openForm}
           className="w-full text-left bg-transparent border border-dashed border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-5 px-4 transition-colors"
@@ -162,14 +181,19 @@ export function GroupsClient({
             </button>
           </div>
         </form>
-      )}
+      ))}
 
       <ul className="space-y-2">
-        {groups.map((g) => (
+        {visibleGroups.map((g) => (
           <GroupRow
             key={g.id}
             group={g}
             calendars={calendars}
+            editOpen={editingId === g.id}
+            onToggleEdit={() =>
+              setEditingId((current) => (current === g.id ? null : g.id))
+            }
+            onNavigate={onNavigate}
             onArchive={onArchive}
             onUpdate={onUpdate}
           />
@@ -182,21 +206,26 @@ export function GroupsClient({
 function GroupRow({
   group,
   calendars,
+  editOpen,
+  onToggleEdit,
+  onNavigate,
   onArchive,
   onUpdate,
 }: {
   group: Group;
   calendars: CalendarListEntry[];
+  editOpen: boolean;
+  onToggleEdit: () => void;
+  onNavigate?: () => void;
   onArchive: (id: string) => void;
   onUpdate: (id: string, patch: Partial<Group>) => void;
 }) {
-  const [editOpen, setEditOpen] = useState(false);
-
   return (
     <li className="border border-line bg-card">
       <div className="flex items-stretch">
         <Link
           href={`/tasks?group=${group.id}`}
+          onClick={() => onNavigate?.()}
           className="flex-1 flex items-center gap-3 px-4 py-4 hover:bg-card-hover transition-colors min-w-0"
         >
           <span
@@ -216,8 +245,9 @@ function GroupRow({
         </Link>
 
         <button
-          onClick={() => setEditOpen((v) => !v)}
+          onClick={onToggleEdit}
           aria-label="group actions"
+          aria-expanded={editOpen}
           className="px-4 border-l border-line text-muted hover:text-fg hover:bg-card-hover transition-colors text-lg"
         >
           ···
@@ -229,10 +259,7 @@ function GroupRow({
           group={group}
           calendars={calendars}
           onUpdate={onUpdate}
-          onArchive={(id) => {
-            setEditOpen(false);
-            onArchive(id);
-          }}
+          onArchive={onArchive}
         />
       )}
     </li>

@@ -1,4 +1,5 @@
 import { createClient } from "@/utils/supabase/server";
+import type { Group } from "@/app/tasks/groups-types";
 import { Dock } from "./dock";
 
 // Server shell for the global Dock: resolves the session and the data the
@@ -15,7 +16,7 @@ export async function DockMount() {
     await Promise.all([
       supabase
         .from("groups")
-        .select("id, name, color")
+        .select("id, name, type, color, archived, created_at, google_calendar_id")
         .eq("archived", false)
         .order("created_at", { ascending: false }),
       supabase
@@ -34,11 +35,7 @@ export async function DockMount() {
         .order("name", { ascending: true }),
     ]);
 
-  const groups = (groupsResponse.data ?? []) as {
-    id: string;
-    name: string;
-    color: string;
-  }[];
+  const groups = (groupsResponse.data ?? []) as Group[];
   const accounts = ((accountsResponse.data ?? []) as {
     id: string;
     name: string;

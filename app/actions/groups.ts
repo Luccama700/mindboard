@@ -2,6 +2,29 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
+import {
+  type CalendarListEntry,
+  GoogleCalendarConnectionError,
+  listCalendars,
+} from "@/utils/google/calendar";
+
+// Calendar list for the dock's groups sheet, fetched on first open — the
+// globally-mounted dock must never pay the Google round-trip per page load.
+export async function loadCalendarOptions(): Promise<CalendarListEntry[]> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return [];
+  try {
+    return await listCalendars(user.id);
+  } catch (error) {
+    if (!(error instanceof GoogleCalendarConnectionError)) {
+      console.error("listCalendars failed", error);
+    }
+    return [];
+  }
+}
 
 const ALLOWED_TYPES = ["course", "project", "work", "personal"] as const;
 type GroupType = (typeof ALLOWED_TYPES)[number];
@@ -34,7 +57,7 @@ export async function createGroup(formData: FormData) {
 
   if (error) return { error: error.message };
 
-  revalidatePath("/groups");
+  revalidatePath("/", "layout");
   return { error: null };
 }
 
@@ -109,6 +132,6 @@ export async function archiveGroup(id: string) {
 
   if (error) return { error: error.message };
 
-  revalidatePath("/groups");
+  revalidatePath("/", "layout");
   return { error: null };
 }

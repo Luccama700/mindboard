@@ -4,8 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { recordBalanceChange } from "@/app/actions/finance";
+import { loadCalendarOptions } from "@/app/actions/groups";
 import { createRecurringTask } from "@/app/actions/recurring-tasks";
 import { createTask } from "@/app/actions/tasks";
+import { GroupsClient } from "@/app/tasks/groups-client";
+import type { Group } from "@/app/tasks/groups-types";
+import type { CalendarListEntry } from "@/utils/google/calendar";
 import {
   extractTrailingRecurrence,
   extractTrailingTime,
@@ -16,7 +20,6 @@ import { formatMoney } from "./money";
 import { ProposalCard } from "./proposal-card";
 import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
 import { formatDue, todayISO } from "./date-utils";
-import type { GroupOption } from "./task-row";
 import type { Task } from "./types";
 
 const RAIL_TABS: {
@@ -62,7 +65,7 @@ export function Dock({
   accounts,
   categories,
 }: {
-  groups: GroupOption[];
+  groups: Group[];
   inboxCount: number;
   accounts: DockAccount[];
   categories: DockCategory[];
@@ -78,6 +81,10 @@ export function Dock({
   const [groupOpen, setGroupOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [groupsOpen, setGroupsOpen] = useState(false);
+  const [calendarOptions, setCalendarOptions] = useState<
+    CalendarListEntry[] | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const [typing, setTyping] = useState(false);
   const [keyboardUp, setKeyboardUp] = useState(false);
@@ -93,7 +100,7 @@ export function Dock({
   const [spendError, setSpendError] = useState<string | null>(null);
   const [spendBusy, setSpendBusy] = useState(false);
 
-  const formRef = useRef<HTMLFormElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
 
@@ -150,18 +157,19 @@ export function Dock({
   }, []);
 
   useEffect(() => {
-    if (!groupOpen && !moreOpen) return;
+    if (!groupOpen && !moreOpen && !groupsOpen) return;
 
     function onPointerDown(e: PointerEvent) {
-      if (!formRef.current?.contains(e.target as Node)) {
+      if (!wrapRef.current?.contains(e.target as Node)) {
         setGroupOpen(false);
         setMoreOpen(false);
+        setGroupsOpen(false);
       }
     }
 
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [groupOpen, moreOpen]);
+  }, [groupOpen, moreOpen, groupsOpen]);
 
   // Only collapsing the rail for the capture text fields — not the nav links or
   // toolbar buttons, whose focus would otherwise collapse the rail out from
@@ -177,6 +185,17 @@ export function Dock({
     if (isTextEntry(e.target)) {
       setTyping(true);
       setMoreOpen(false);
+      setGroupsOpen(false);
+    }
+  }
+
+  function openGroupsSheet() {
+    setMoreOpen(false);
+    setGroupsOpen(true);
+    // One lazy fetch per mount — the sheet works without it (link picker
+    // just explains calendars aren't available yet).
+    if (calendarOptions === null) {
+      void loadCalendarOptions().then(setCalendarOptions);
     }
   }
 
@@ -350,15 +369,30 @@ export function Dock({
   }
 
   return (
-    <form
-      ref={formRef}
-      onSubmit={onSubmit}
-      onFocus={onFormFocus}
-      onBlur={onFormBlur}
+    <div
+      ref={wrapRef}
       className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] rounded-t-[8px] bg-page/95 border border-line p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:left-1/2 lg:right-auto lg:w-[min(44rem,calc(100vw-4rem))] lg:-translate-x-1/2"
     >
       {moreOpen && (
         <nav className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
+          <Link
+            href="/tasks"
+            onClick={() => setMoreOpen(false)}
+            className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+          >
+            <span>tasks</span>
+            {inboxCount > 0 && (
+              <span className="text-meta text-muted">{inboxCount} inbox</span>
+            )}
+          </Link>
+          <button
+            type="button"
+            onClick={openGroupsSheet}
+            className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+          >
+            <span>groups</span>
+            <span className="text-meta text-muted">{groups.length}</span>
+          </button>
           {[
             { href: "/week", label: "week", badge: 0 },
             { href: "/tasks", label: "tasks", badge: inboxCount },
@@ -373,14 +407,40 @@ export function Dock({
               className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
             >
               <span>{item.label}</span>
-              {item.badge > 0 && (
-                <span className="text-meta text-muted">{item.badge} inbox</span>
-              )}
             </Link>
           ))}
         </nav>
       )}
 
+      {groupsOpen && (
+        <section
+          aria-label="manage groups"
+          className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover shadow-[0_0_28px_rgba(0,0,0,0.65)]"
+        >
+          <div className="flex items-center justify-between border-b border-line px-3 py-1">
+            <p className="text-label uppercase text-muted">groups</p>
+            <button
+              type="button"
+              onClick={() => setGroupsOpen(false)}
+              aria-label="close groups"
+              className="min-h-11 px-2 text-lg leading-none text-muted hover:text-fg transition-colors"
+            >
+              ×
+            </button>
+          </div>
+          <div className="max-h-[min(60vh,30rem)] overflow-y-auto p-3">
+            <GroupsClient
+              key={groups.map((g) => g.id).join(",")}
+              initial={groups}
+              calendars={calendarOptions ?? []}
+              variant="sheet"
+              onNavigate={() => setGroupsOpen(false)}
+            />
+          </div>
+        </section>
+      )}
+
+      <form onSubmit={onSubmit} onFocus={onFormFocus} onBlur={onFormBlur}>
       <div
         className={`overflow-hidden transition-[max-height,opacity,margin] duration-200 ease-signal ${
           railCollapsed ? "max-h-0 opacity-0 mb-0" : "max-h-14 opacity-100 mb-2"
@@ -836,6 +896,7 @@ export function Dock({
           </button>
         </div>
       </div>
-    </form>
+      </form>
+    </div>
   );
 }
