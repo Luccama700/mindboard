@@ -48,6 +48,9 @@ export default async function TasksPage({
     .select(
       "id, title, due_date, due_time, duration_min, status, priority, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at",
     )
+    // Soonest due date first; undated tasks sink to the bottom, newest-captured
+    // first among ties/undated.
+    .order("due_date", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: false });
   if (filter === null) {
     tasksQuery = tasksQuery.is("group_id", null);
