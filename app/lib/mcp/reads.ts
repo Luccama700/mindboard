@@ -91,7 +91,7 @@ function firstRel<T>(rel: Rel<T>): T | null {
 
 export async function getFinanceSnapshot(): Promise<FinanceVitals> {
   const { supabase, ownerId } = scoped();
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
 
   const [accountsRes, recurringRes, changesRes] = await Promise.all([
     supabase
@@ -120,8 +120,9 @@ export async function getFinanceSnapshot(): Promise<FinanceVitals> {
 }
 
 export async function getTasksSnapshot(): Promise<TaskVitals> {
+  const { supabase, ownerId } = scoped();
   const tasks = await listTasks({});
-  return tasksSnapshot(tasks, await todayKey());
+  return tasksSnapshot(tasks, await todayKey(supabase, ownerId));
 }
 
 // ---------- spending limits ----------
@@ -149,7 +150,7 @@ export async function buildSpendLimitStatus(
   supabase: SupabaseClient,
   ownerId: string,
 ): Promise<SpendLimitStatusRead[]> {
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
   const windowStart = addDaysKey(today, -40); // covers the current month/week
 
   const [limitsRes, recurringRes, changesRes, categoriesRes] = await Promise.all(
@@ -230,7 +231,7 @@ export async function getInventorySnapshot(): Promise<InventoryVitals> {
   return inventorySnapshot({
     items: (itemsRes.data ?? []) as InventoryItem[],
     usages: (usagesRes.data ?? []) as InventoryUsage[],
-    today: await todayKey(),
+    today: await todayKey(supabase, ownerId),
   });
 }
 
@@ -394,7 +395,7 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
 // via update_stock (pin_shopping / unpin_shopping / set_price).
 export async function getShoppingList() {
   const { supabase, ownerId } = scoped();
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
 
   const [itemsRes, usagesRes, settingsRes] = await Promise.all([
     supabase
@@ -632,7 +633,7 @@ const MAX_EVENT_RANGE_DAYS = 62;
 
 export async function listCalendarEvents(filter?: { from?: string; to?: string }) {
   const { supabase, ownerId } = scoped();
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
   const from = filter?.from && ISO_DATE_RE.test(filter.from) ? filter.from : today;
   const defaultTo = addDaysKey(from, 7);
   let to = filter?.to && ISO_DATE_RE.test(filter.to) ? filter.to : defaultTo;
@@ -804,7 +805,7 @@ export async function getFinanceForecast(days = 30) {
   return buildFinanceForecast({
     supabase,
     userId: ownerId,
-    today: await todayKey(),
+    today: await todayKey(supabase, ownerId),
     days,
     dailySpendEstimate: prefs.dailySpendEstimate,
   });
@@ -814,7 +815,7 @@ export async function getFinanceForecast(days = 30) {
 // projected run-out day, and the reorder-by day when a threshold is set.
 export async function getInventoryForecast() {
   const { supabase, ownerId } = scoped();
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
 
   const [itemsRes, usagesRes] = await Promise.all([
     supabase

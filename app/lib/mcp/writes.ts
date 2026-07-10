@@ -196,7 +196,7 @@ export async function proposeLogSpend(raw: unknown): Promise<Result<Proposal>> {
     {
       amount: parsed.value.amount,
       categoryId: parsed.value.categoryId,
-      dateKey: await todayKey(),
+      dateKey: await todayKey(supabase, ownerId),
     },
   ]);
   const summary =
@@ -237,7 +237,7 @@ export async function spendLimitWarningBlock(
   ownerId: string,
   spends: PendingSpend[],
 ): Promise<string> {
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
   const windowStart = addDaysKey(today, -40); // covers the current month/week
   const [limitsRes, recurringRes, changesRes, categoriesRes, accountRes] =
     await Promise.all([
@@ -320,7 +320,7 @@ export async function proposeCreateRecurringTaskFor(
   const summary = summarizeCreateRecurringTask(
     parsed.value,
     groupName,
-    await todayKey(),
+    await todayKey(supabase, userId),
   );
   const proposalId = await recordProposal(
     supabase,
@@ -520,7 +520,7 @@ export async function proposeUpdateFinanceFor(
     categories: (categoriesRes.data ?? []) as ResolvableCategory[],
     recurring: (recurringRes.data ?? []) as ResolvableRecurring[],
     existingChanges: [...existingById.values()],
-    today: await todayKey(),
+    today: await todayKey(supabase, userId),
   });
   if (!resolved.ok) return resolved;
 
@@ -725,7 +725,7 @@ async function executeCreateRecurringTask(
       interval_days: v.interval_days,
       start_date:
         v.frequency === "custom"
-          ? (v.start_date ?? (await todayKey()))
+          ? (v.start_date ?? (await todayKey(supabase, ownerId)))
           : v.start_date,
       due_time: v.dueTime ? `${v.dueTime}:00` : null,
       duration_min: v.durationMin,
@@ -793,7 +793,7 @@ async function executeLogSpend(
     return { ok: false, error: "category not found" };
   }
 
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
   const { data: change, error: insertError } = await supabase
     .from("balance_changes")
     .insert({
@@ -1857,7 +1857,7 @@ async function executeUpdateRecurringTask(
     updates.interval_days = v.recurrence.interval_days;
     updates.start_date =
       v.recurrence.frequency === "custom"
-        ? (v.recurrence.start_date ?? (await todayKey()))
+        ? (v.recurrence.start_date ?? (await todayKey(supabase, ownerId)))
         : v.recurrence.start_date;
   }
   if (v.dueTime !== undefined) {
@@ -1931,7 +1931,7 @@ async function executeCompleteRecurring(
   if (!(await ownsRow(supabase, "recurring_tasks", ruleId, ownerId))) {
     return { ok: false, error: "repeating task not found" };
   }
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
   if (input.undo === true) {
     const { error } = await supabase
       .from("recurring_task_completions")
@@ -2292,7 +2292,7 @@ async function executeLogDaily(
   const parsed = validateDailyLog(input);
   if (!parsed.ok) return parsed;
   const v = parsed.value;
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
   const { error } = await supabase.from("daily_logs").upsert(
     {
       user_id: ownerId,
@@ -2412,7 +2412,7 @@ export async function proposeManageFinanceFor(
     categories: (categoriesRes.data ?? []) as ResolvableRef[],
     recurring: (recurringRes.data ?? []) as ResolvableRef[],
     incomeSources: (incomeRes.data ?? []) as ResolvableRef[],
-    today: await todayKey(),
+    today: await todayKey(supabase, userId),
   });
   if (!resolved.ok) return resolved;
 
@@ -2440,7 +2440,7 @@ async function executeManageFinance(
   const parsed = validateResolvedAdminOps(input);
   if (!parsed.ok) return parsed;
   const ops = parsed.value;
-  const today = await todayKey();
+  const today = await todayKey(supabase, ownerId);
 
   const applied: string[] = [];
   for (let i = 0; i < ops.length; i++) {

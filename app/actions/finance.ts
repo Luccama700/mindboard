@@ -285,6 +285,17 @@ export async function recordBalanceChange(input: {
   const newBalance = toCents(input.newBalance);
   if (newBalance === null) return { error: "invalid balance" };
 
+  // Reject a malformed explicit date up front (zone-independent), preserving
+  // the original error precedence; a missing date still defaults to the
+  // zone-aware today resolved after auth below.
+  if (
+    input.occurredAt !== undefined &&
+    input.occurredAt !== null &&
+    !ISO_DATE.test(input.occurredAt)
+  ) {
+    return { error: "invalid date" };
+  }
+
   const note = input.note?.trim() || null;
 
   const supabase = await createClient();
