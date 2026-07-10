@@ -252,7 +252,7 @@ export function StudyClient({
               value={artifactKind}
               onChange={(e) => setArtifactKind(e.target.value)}
               aria-label="artifact kind"
-              className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 focus:outline-none focus:border-accent font-mono"
+              className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
             >
               {ARTIFACT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>

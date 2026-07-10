@@ -172,9 +172,9 @@ export function CourseChatClient({
               type="button"
               onClick={() => toggle(source.id)}
               aria-pressed={on}
-              className={`min-h-8 px-2 text-meta lowercase border transition-colors ${
+              className={`inline-flex items-center min-h-11 px-2 text-meta lowercase border transition-colors ${
                 on
-                  ? "border-accent text-fg bg-accent-wash"
+                  ? "border-accent-ink text-fg bg-accent-wash"
                   : "border-hairline text-muted hover:text-fg"
               }`}
             >

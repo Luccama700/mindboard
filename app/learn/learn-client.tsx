@@ -647,12 +647,12 @@ function EpisodesSection({
       )}
 
       {hasConvertedSources && (
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           <select
             value={flavor}
             onChange={(e) => setFlavor(e.target.value)}
             aria-label="episode flavor"
-            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 focus:outline-none focus:border-accent font-mono"
+            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
           >
             {FLAVOR_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -664,7 +664,7 @@ function EpisodesSection({
             value={engine}
             onChange={(e) => setEngine(e.target.value)}
             aria-label="voice engine"
-            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 focus:outline-none focus:border-accent font-mono"
+            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
           >
             <option value="gemini">gemini (instant)</option>
             <option value="vibevoice">home pc (free)</option>
@@ -761,7 +761,7 @@ function SourceRowItem({
   return (
     <li className="flex min-h-11 items-center gap-2 py-1">
       <span className="flex-1 min-w-0">
-        <span className="block truncate text-body text-fg">{source.title}</span>
+        <span className="line-clamp-2 break-words text-body text-fg">{source.title}</span>
         <span
           className={`block text-meta ${
             source.status === "failed" ? "text-danger" : "text-muted"
@@ -777,7 +777,7 @@ function SourceRowItem({
             value={model}
             onChange={(e) => setModel(e.target.value)}
             aria-label="conversion model"
-            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 focus:outline-none focus:border-accent font-mono"
+            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
           >
             {CONVERT_MODEL_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
