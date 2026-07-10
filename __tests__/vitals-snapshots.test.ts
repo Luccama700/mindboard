@@ -198,6 +198,78 @@ describe("financeSnapshot", () => {
     });
     expect(snap.nextBill).toBeNull();
   });
+
+  test("currency defaults to USD with no accounts", () => {
+    const snap = financeSnapshot({
+      accounts: [],
+      todayChanges: [],
+      recurringExpenses: [],
+      today: TODAY,
+    });
+    expect(snap.currency).toBe("USD");
+  });
+
+  test("the first-listed expense wins when two land on the same soonest day", () => {
+    const snap = financeSnapshot({
+      accounts: [],
+      todayChanges: [],
+      recurringExpenses: [
+        expense({ id: "e1", name: "rent", amount: 900, frequency: "monthly", day_of_month: 5 }),
+        expense({ id: "e2", name: "phone", amount: 60, frequency: "monthly", day_of_month: 5 }),
+      ],
+      today: TODAY,
+    });
+    expect(snap.nextBill?.name).toBe("rent");
+  });
+
+  test("finds a bill exactly at the 62-day lookahead edge but not one day beyond it", () => {
+    const withinLookahead = financeSnapshot({
+      accounts: [],
+      todayChanges: [],
+      recurringExpenses: [
+        expense({
+          name: "annual-ish",
+          amount: 40,
+          frequency: "custom",
+          interval_days: 62,
+          start_date: TODAY,
+        }),
+      ],
+      today: TODAY,
+    });
+    expect(withinLookahead.nextBill).toEqual({
+      name: "annual-ish",
+      amount: 40,
+      dateKey: "2026-08-02",
+    });
+
+    const beyondLookahead = financeSnapshot({
+      accounts: [],
+      todayChanges: [],
+      recurringExpenses: [
+        expense({
+          name: "too-far",
+          amount: 40,
+          frequency: "custom",
+          interval_days: 63,
+          start_date: TODAY,
+        }),
+      ],
+      today: TODAY,
+    });
+    expect(beyondLookahead.nextBill).toBeNull();
+  });
+
+  test("coerces a Supabase-numeric-as-string balance/amount", () => {
+    const snap = financeSnapshot({
+      accounts: [account({ balance: "150.50" as unknown as number })],
+      todayChanges: [change({ direction: "in", amount: "20.25" as unknown as number })],
+      recurringExpenses: [],
+      today: TODAY,
+    });
+    expect(snap.netWorth).toBe(150.5);
+    expect(snap.todayDelta).toBe(20.25);
+  });
 });
 
 // ---------- inventory ----------
@@ -240,6 +312,47 @@ describe("inventorySnapshot", () => {
     });
     expect(snap.soonestRunOut).toBeNull();
   });
+
+  test("archived items are excluded from counts and run-out entirely", () => {
+    const snap = inventorySnapshot({
+      items: [
+        item({ id: "gone", name: "gone", quantity: 0, reorder_threshold: 5, archived: true }),
+      ],
+      usages: [usage({ id: "u", inventory_item_id: "gone", amount: 5, period: "day" })],
+      today: TODAY,
+    });
+    expect(snap.lowCount).toBe(0);
+    expect(snap.outCount).toBe(0);
+    expect(snap.soonestRunOut).toBeNull();
+  });
+
+  test("multiple usage rules for the same item combine into one effective rate", () => {
+    const snap = inventorySnapshot({
+      items: [item({ id: "milk", name: "milk", quantity: 10 })],
+      usages: [
+        usage({ id: "u1", inventory_item_id: "milk", amount: 1, period: "day" }),
+        usage({ id: "u2", inventory_item_id: "milk", amount: 2, period: "day" }),
+      ],
+      today: TODAY,
+    });
+    // combined rate 3/day: ceil(10/3) = 4 days
+    expect(snap.soonestRunOut).toEqual({ name: "milk", dateKey: "2026-06-05" });
+  });
+
+  test("a tied run-out date keeps the first item processed, not the last", () => {
+    const snap = inventorySnapshot({
+      items: [
+        item({ id: "a", name: "first", quantity: 5 }),
+        item({ id: "b", name: "second", quantity: 5 }),
+      ],
+      usages: [
+        usage({ id: "u1", inventory_item_id: "a", amount: 1, period: "day" }),
+        usage({ id: "u2", inventory_item_id: "b", amount: 1, period: "day" }),
+      ],
+      today: TODAY,
+    });
+    expect(snap.soonestRunOut).toEqual({ name: "first", dateKey: "2026-06-06" });
+  });
 });
 
 // ---------- tasks ----------
@@ -258,6 +371,25 @@ describe("tasksSnapshot", () => {
       TODAY,
     );
     expect(snap).toEqual({ overdue: 1, dueToday: 1, dueSoon: 1 });
+  });
+
+  test("day 7 is the inclusive edge of dueSoon; day 8 falls outside it", () => {
+    const snap = tasksSnapshot(
+      [
+        task({ id: "1", due_date: "2026-06-08" }), // exactly 7 days out
+        task({ id: "2", due_date: "2026-06-09" }), // 8 days out
+      ],
+      TODAY,
+    );
+    expect(snap).toEqual({ overdue: 0, dueToday: 0, dueSoon: 1 });
+  });
+
+  test("in-progress tasks are counted like open tasks, not skipped like done ones", () => {
+    const snap = tasksSnapshot(
+      [task({ id: "1", due_date: "2026-06-01", status: "doing" })],
+      TODAY,
+    );
+    expect(snap.dueToday).toBe(1);
   });
 });
 
