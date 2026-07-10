@@ -443,6 +443,7 @@ export function Dock({
   return (
     <div
       ref={wrapRef}
+      data-capture-dock
       className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] rounded-t-[8px] bg-page/95 border border-line p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:left-1/2 lg:right-auto lg:w-[min(48rem,calc(100vw-4rem))] lg:-translate-x-1/2"
     >
       {moreOpen && (

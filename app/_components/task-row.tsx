@@ -180,17 +180,22 @@ function EditPanel({
   const dateInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // The capture dock is a fixed island (~230px) pinned to the bottom of the
-  // viewport. A panel that opens for a task low in the list expands directly
-  // behind it, so its notes field and delete button are occluded and the whole
-  // edit reads as unresponsive. Lift the panel into view on open when it lands
-  // inside the dock's band; panels already clear of the dock are left in place.
+  // The capture dock is a fixed island pinned to the bottom of the viewport.
+  // A panel that opens for a task low in the list expands directly behind it,
+  // so its notes field and delete button (the panel's last element) are
+  // occluded and the whole edit reads as unresponsive. On open, lift the panel
+  // by exactly the amount its bottom overlaps the dock, so the delete button
+  // clears the dock's top edge; panels already above the dock are left in place.
   useEffect(() => {
     const el = panelRef.current;
     if (!el) return;
-    const DOCK_CLEARANCE = 260;
-    if (el.getBoundingClientRect().bottom > window.innerHeight - DOCK_CLEARANCE) {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    const dock = document.querySelector<HTMLElement>("[data-capture-dock]");
+    const floor = dock
+      ? dock.getBoundingClientRect().top
+      : window.innerHeight - 280;
+    const overshoot = el.getBoundingClientRect().bottom - (floor - 12);
+    if (overshoot > 0) {
+      window.scrollBy({ top: overshoot, behavior: "smooth" });
     }
   }, []);
 
