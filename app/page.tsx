@@ -122,12 +122,14 @@ const getStreamData = cache(
       now,
       wakeStartHour: prefs.wake_start_hour,
       wakeEndHour: prefs.wake_end_hour,
+      timeZone,
     });
     const gaps = freeGaps({
       events: busyEvents,
       now,
       wakeStartHour: prefs.wake_start_hour,
       wakeEndHour: prefs.wake_end_hour,
+      timeZone,
     });
 
     const bills: StreamBillInput[] = recurringExpenses.map((expense) => ({
@@ -257,7 +259,8 @@ async function WeekPaneSection({
     getUserPreferences(userId),
   ]);
 
-  const today = todayISO();
+  const timeZone = safeTimeZone(prefs.timezone);
+  const today = todayISO(timeZone);
   const schedule = scheduleSnapshot({
     events: [
       ...events,
@@ -266,6 +269,7 @@ async function WeekPaneSection({
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,
     wakeEndHour: prefs.wake_end_hour,
+    timeZone,
   });
 
   return (
