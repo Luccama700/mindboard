@@ -3,6 +3,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { listEventsForCalendar } from "@/utils/google/calendar";
 import {
+  zonedDateKey,
+  zonedWallTimeToUtcMs,
+} from "@/app/lib/snapshots/zoned-time";
+import {
   addDaysKey,
   buildDayRows,
   computeIncomeByDate,
@@ -59,9 +63,13 @@ export type FinanceForecast = {
   days: ForecastDay[];
 };
 
-// Timed-event durations per local day (mirror of app/finance/page.tsx hoursByDay).
+// Timed-event durations per day, bucketed in the user's zone. The process clock
+// is UTC on Vercel, so an evening shift that crosses UTC midnight must still be
+// attributed to (and paid on) the local day it was worked. timeZone null falls
+// back to the process clock (unchanged in the browser / for zone-less callers).
 function eventHoursByDay(
   events: { start: string; end: string; allDay: boolean }[],
+  timeZone: string | null,
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const event of events) {
@@ -70,9 +78,7 @@ function eventHoursByDay(
     const end = new Date(event.end);
     const hours = (end.getTime() - start.getTime()) / 3_600_000;
     if (!Number.isFinite(hours) || hours <= 0) continue;
-    const month = String(start.getMonth() + 1).padStart(2, "0");
-    const day = String(start.getDate()).padStart(2, "0");
-    const key = `${start.getFullYear()}-${month}-${day}`;
+    const key = zonedDateKey(start.getTime(), timeZone);
     out[key] = (out[key] ?? 0) + hours;
   }
   return out;
@@ -84,8 +90,10 @@ export async function buildFinanceForecast(params: {
   today: string;
   days: number;
   dailySpendEstimate: number | null;
+  timeZone?: string | null;
 }): Promise<FinanceForecast> {
   const { supabase, userId, today, dailySpendEstimate } = params;
+  const timeZone = params.timeZone ?? null;
   const horizon = Math.min(Math.max(1, Math.trunc(params.days)), 90);
   const endKey = addDaysKey(today, horizon);
   const historyStart = addDaysKey(today, -90);
@@ -185,9 +193,14 @@ export async function buildFinanceForecast(params: {
   }));
 
   // Reach back ~2 months so a payday inside the window covers its full period.
-  const shiftStart = new Date(`${addDaysKey(today, -62)}T00:00:00`);
-  const shiftEnd = new Date(`${endKey}T00:00:00`);
-  shiftEnd.setDate(shiftEnd.getDate() + 1);
+  // Window bounds are the user's local midnights (zoned), so a shift near the
+  // window edge isn't dropped by the UTC/local offset.
+  const shiftStart = new Date(
+    zonedWallTimeToUtcMs(addDaysKey(today, -62), 0, 0, timeZone),
+  );
+  const shiftEnd = new Date(
+    zonedWallTimeToUtcMs(addDaysKey(endKey, 1), 0, 0, timeZone),
+  );
   const hoursBySource: Record<string, Record<string, number>> = {};
   await Promise.all(
     incomeSources
@@ -200,7 +213,7 @@ export async function buildFinanceForecast(params: {
           timeMax: shiftEnd.toISOString(),
         })
           .then((events) => {
-            hoursBySource[source.id] = eventHoursByDay(events);
+            hoursBySource[source.id] = eventHoursByDay(events, timeZone);
           })
           .catch(() => {
             hoursBySource[source.id] = {};

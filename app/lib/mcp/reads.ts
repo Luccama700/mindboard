@@ -15,6 +15,7 @@ import {
 } from "@/app/lib/snapshots/schedule";
 import { listEvents, type CalendarEvent } from "@/utils/google/calendar";
 import { addDaysKey } from "@/app/_components/finance-projection";
+import { safeTimeZone } from "@/app/_components/date-utils";
 import { buildFinanceForecast } from "@/app/lib/finance/forecast";
 import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
 import {
@@ -796,9 +797,9 @@ export async function getPlanningSnapshot(opts?: { horizonDays?: number }) {
 // ---------- forecasts ----------
 
 // Projected end-of-day net worth for the next N days: delegates to the shared
-// cashflow core (app/lib/finance/forecast.ts). `today` stays the process-clock
-// day for parity with the finance calendar; the manual everyday-spend fallback
-// comes from user_settings.
+// cashflow core (app/lib/finance/forecast.ts). `today` and shift-hour bucketing
+// resolve in the owner's zone (user_settings.timezone), which also carries the
+// manual everyday-spend fallback.
 export async function getFinanceForecast(days = 30) {
   const { supabase, ownerId } = scoped();
   const prefs = await readPreferencesRow();
@@ -808,6 +809,7 @@ export async function getFinanceForecast(days = 30) {
     today: await todayKey(supabase, ownerId),
     days,
     dailySpendEstimate: prefs.dailySpendEstimate,
+    timeZone: safeTimeZone(prefs.timezone),
   });
 }
 

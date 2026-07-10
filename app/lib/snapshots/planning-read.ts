@@ -172,6 +172,7 @@ export async function buildPlanningSnapshot(params: {
       today,
       days: horizonDays,
       dailySpendEstimate,
+      timeZone,
     }),
   ]);
 
