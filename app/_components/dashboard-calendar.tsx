@@ -593,7 +593,24 @@ export function DashboardCalendar({
                   )}
                 </div>
 
-                <div className="space-y-1">
+                {/* Narrow columns (~46px on mobile) can't fit readable chip
+                    text — every label truncates to "−CA…" — so show color
+                    squares instead; the day taps through to the selected-day
+                    list below. Wider screens keep the labelled chips. */}
+                {items.length > 0 && (
+                  <div className="flex flex-wrap gap-0.5 lg:hidden">
+                    {items.slice(0, 8).map((item) => (
+                      <span
+                        key={`dot-${item.kind}-${item.id}`}
+                        className="h-1.5 w-1.5"
+                        style={{ backgroundColor: item.color }}
+                        aria-hidden
+                      />
+                    ))}
+                  </div>
+                )}
+
+                <div className="hidden space-y-1 lg:block">
                   {visible.map((item) => (
                     <div
                       key={`${item.kind}-${item.id}`}
