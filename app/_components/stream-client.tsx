@@ -201,12 +201,12 @@ function CardRow({
           </div>
         )}
       </div>,
-      <div key="group" className="relative">
+      <div key="group" className="relative min-w-0">
         <button
           type="button"
           onClick={() => setGroupOpen((v) => !v)}
           aria-expanded={groupOpen}
-          className="flex min-h-11 max-w-40 items-center gap-2 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors"
+          className="flex min-h-11 min-w-0 max-w-40 items-center gap-2 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors"
         >
           <span
             className={`h-2.5 w-2.5 flex-shrink-0 ${
@@ -374,7 +374,7 @@ function CardRow({
           )}
         </p>
         {actions.length > 0 && (
-          <div className="flex items-center gap-2 mt-1.5">{actions}</div>
+          <div className="flex flex-wrap items-center gap-2 mt-1.5">{actions}</div>
         )}
       </div>
     </div>
