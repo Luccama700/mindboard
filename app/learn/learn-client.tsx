@@ -761,7 +761,7 @@ function SourceRowItem({
   return (
     <li className="flex min-h-11 items-center gap-2 py-1">
       <span className="flex-1 min-w-0">
-        <span className="block line-clamp-2 break-words text-body text-fg">{source.title}</span>
+        <span className="line-clamp-2 break-words text-body text-fg">{source.title}</span>
         <span
           className={`block text-meta ${
             source.status === "failed" ? "text-danger" : "text-muted"
