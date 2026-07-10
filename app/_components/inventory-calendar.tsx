@@ -166,7 +166,7 @@ export function InventoryCalendar({
             type="button"
             onClick={() => setMonth((m) => addMonths(m, -1))}
             aria-label="previous month"
-            className="px-2 text-muted hover:text-fg transition-colors"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center text-muted hover:text-fg transition-colors"
           >
             ‹
           </button>
@@ -177,7 +177,7 @@ export function InventoryCalendar({
             type="button"
             onClick={() => setMonth((m) => addMonths(m, 1))}
             aria-label="next month"
-            className="px-2 text-muted hover:text-fg transition-colors"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center text-muted hover:text-fg transition-colors"
           >
             ›
           </button>
