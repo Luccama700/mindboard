@@ -3,6 +3,7 @@ import {
   changeFingerprint,
   deriveBalance,
   rowAfterAnchor,
+  signedAmount,
   type LedgerRow,
   type ReconciliationAnchor,
 } from "@/app/lib/finance/derive";
@@ -38,6 +39,23 @@ describe("rowAfterAnchor", () => {
     expect(
       rowAfterAnchor(anchor, row("2026-07-04", "out", 10, "2026-07-04T12:00:00Z")),
     ).toBe(true);
+  });
+
+  it("a row created at the exact same instant as the anchor is not counted", () => {
+    expect(
+      rowAfterAnchor(anchor, row("2026-07-04", "out", 10, anchor.created_at)),
+    ).toBe(false);
+  });
+});
+
+describe("signedAmount", () => {
+  it("is positive for inflows and negative for outflows", () => {
+    expect(signedAmount({ direction: "in", amount: 12.5 })).toBe(12.5);
+    expect(signedAmount({ direction: "out", amount: 12.5 })).toBe(-12.5);
+  });
+
+  it("treats a non-numeric amount as zero rather than NaN", () => {
+    expect(signedAmount({ direction: "in", amount: Number("not-a-number") })).toBe(0);
   });
 });
 
@@ -88,6 +106,24 @@ describe("deriveBalance", () => {
     const credit: ReconciliationAnchor = { ...anchor, balance: -250 };
     expect(deriveBalance(credit, [row("2026-07-05", "out", 54.1)])).toBe(-304.1);
   });
+
+  it("returns exactly the anchor balance with no rows at all", () => {
+    expect(deriveBalance(anchor, [])).toBe(100);
+  });
+
+  it("returns zero with no anchor and no rows", () => {
+    expect(deriveBalance(null, [])).toBe(0);
+  });
+
+  it("splits multiple same-day rows individually by creation time, not by day", () => {
+    expect(
+      deriveBalance(anchor, [
+        row("2026-07-04", "out", 10, "2026-07-04T08:00:00Z"), // before anchor — excluded
+        row("2026-07-04", "in", 30, "2026-07-04T10:00:00Z"), // after anchor — included
+        row("2026-07-04", "out", 5, "2026-07-04T08:30:00Z"), // before anchor — excluded
+      ]),
+    ).toBe(130);
+  });
 });
 
 describe("changeFingerprint", () => {
@@ -100,5 +136,9 @@ describe("changeFingerprint", () => {
     expect(changeFingerprint("2026-07-05", "out", 0.1 + 0.2)).toBe(
       "2026-07-05|out|30",
     );
+  });
+
+  it("preserves a negative sign for correction amounts", () => {
+    expect(changeFingerprint("2026-07-05", "out", -6.4)).toBe("2026-07-05|out|-640");
   });
 });
