@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { pushTaskToCalendar } from "@/app/actions/tasks";
 import { formatDue, todayISO } from "./date-utils";
 import type { Task, TaskWithGroup } from "./types";
@@ -178,6 +178,26 @@ function EditPanel({
   const [pushState, setPushState] = useState<string | null>(null);
   const [pushing, startPush] = useTransition();
   const dateInputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // The capture dock is a fixed island pinned to the bottom of the viewport.
+  // A panel that opens for a task low in the list expands directly behind it,
+  // so its notes field and delete button (the panel's last element) are
+  // occluded and the whole edit reads as unresponsive. On open, lift the panel
+  // by exactly the amount its bottom overlaps the dock, so the delete button
+  // clears the dock's top edge; panels already above the dock are left in place.
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const dock = document.querySelector<HTMLElement>("[data-capture-dock]");
+    const floor = dock
+      ? dock.getBoundingClientRect().top
+      : window.innerHeight - 280;
+    const overshoot = el.getBoundingClientRect().bottom - (floor - 12);
+    if (overshoot > 0) {
+      window.scrollBy({ top: overshoot, behavior: "smooth" });
+    }
+  }, []);
 
   const today = todayISO();
   const isToday = task.due_date === today;
@@ -215,7 +235,7 @@ function EditPanel({
   }
 
   return (
-    <div className="pb-3 space-y-3">
+    <div ref={panelRef} className="pb-3 space-y-3">
       <input
         type="text"
         value={titleDraft}
@@ -233,14 +253,14 @@ function EditPanel({
         }}
         maxLength={200}
         aria-label="task title"
-        className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+        className="w-full min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
       />
 
       <div className="flex items-center flex-wrap gap-2">
         <button
           type="button"
           onClick={() => onUpdate(task.id, { dueDate: isToday ? null : today })}
-          className={`text-[10px] tracking-widest uppercase px-2.5 py-1.5 border transition-colors ${
+          className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border transition-colors ${
             isToday
               ? "bg-accent text-accent-fg border-accent"
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -252,7 +272,7 @@ function EditPanel({
         <button
           type="button"
           onClick={openDatePicker}
-          className={`text-[10px] tracking-widest uppercase px-2.5 py-1.5 border transition-colors ${
+          className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border transition-colors ${
             isCustomDate
               ? "bg-accent text-accent-fg border-accent"
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -278,7 +298,7 @@ function EditPanel({
             type="button"
             onClick={() => onUpdate(task.id, { dueDate: null })}
             aria-label="clear date"
-            className="text-muted text-lg leading-none hover:text-fg transition-colors px-1.5 py-1"
+            className="inline-flex items-center justify-center min-h-11 min-w-11 text-muted text-lg leading-none hover:text-fg transition-colors"
           >
             ×
           </button>
@@ -298,7 +318,7 @@ function EditPanel({
               onUpdate(task.id, { dueTime: e.target.value || null })
             }
             aria-label="due time"
-            className="bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
+            className="min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
           />
           {task.due_time && (
             <>
@@ -308,7 +328,7 @@ function EditPanel({
                   onUpdate(task.id, { durationMin: Number(e.target.value) })
                 }
                 aria-label="duration"
-                className="bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
+                className="min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
               >
                 {[15, 30, 45, 60, 90, 120, 180, 240].map((m) => (
                   <option key={m} value={m}>
@@ -333,7 +353,7 @@ function EditPanel({
                       );
                     })
                   }
-                  className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                  className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
                 >
                   {pushing ? "pushing…" : "→ calendar event"}
                 </button>
@@ -355,7 +375,7 @@ function EditPanel({
             key={p}
             type="button"
             onClick={() => onUpdate(task.id, { priority: p })}
-            className={`text-[10px] tracking-widest uppercase px-2.5 py-1.5 border transition-colors ${
+            className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border transition-colors ${
               task.priority === p
                 ? p === "high"
                   ? "bg-danger text-white border-danger"
@@ -380,7 +400,7 @@ function EditPanel({
             onUpdate(task.id, { groupId: e.target.value || null })
           }
           aria-label="task group"
-          className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
+          className="flex-1 min-w-0 min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
         >
           <option value="">inbox</option>
           {groups.map((g) => (
@@ -415,7 +435,7 @@ function EditPanel({
       <div className="flex justify-end">
         <button
           onClick={() => onDelete(task.id)}
-          className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-1.5 px-3"
+          className="inline-flex items-center min-h-11 text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors px-3"
         >
           delete
         </button>

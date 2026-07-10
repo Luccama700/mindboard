@@ -350,7 +350,7 @@ function TypePicker({
             onClick={() => onChange(t)}
             className={`text-xs px-3 py-2 border transition-colors ${
               value === t
-                ? "bg-fg text-accent-fg border-fg"
+                ? "bg-fg text-page border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
