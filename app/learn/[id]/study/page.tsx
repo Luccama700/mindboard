@@ -44,7 +44,7 @@ export default async function StudyPage({
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto">
-      <header className="flex items-center justify-between mb-6">
+      <header className="flex items-center justify-between mb-6 pr-24 lg:pr-0">
         <Link
           href="/learn"
           className="inline-flex items-center min-h-11 text-muted text-label tracking-widest uppercase hover:text-fg transition-colors"
