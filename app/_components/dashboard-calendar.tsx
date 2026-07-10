@@ -438,7 +438,7 @@ export function DashboardCalendar({
   }
 
   const navArrowClass =
-    "flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg";
+    "flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg";
 
   return (
     <section className="border border-line bg-popover p-3 lg:min-h-[calc(100vh-4rem)]">
@@ -512,7 +512,7 @@ export function DashboardCalendar({
             key={option}
             type="button"
             onClick={() => setView(option)}
-            className={`min-h-8 text-[9px] tracking-widest uppercase transition-colors ${
+            className={`min-h-11 text-[9px] tracking-widest uppercase transition-colors ${
               view === option
                 ? "bg-accent text-accent-fg"
                 : "bg-page text-muted hover:text-fg"
