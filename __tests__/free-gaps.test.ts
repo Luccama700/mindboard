@@ -78,6 +78,56 @@ describe("freeGaps", () => {
     const gaps = freeGaps({ events: [], now: oddNow, days: 1, limit: 1 });
     expect(gaps[0].start).toBe("12:15");
   });
+
+  test("a custom minMinutes floor keeps gaps the default would drop", () => {
+    const gaps = freeGaps({
+      events: [
+        event("2026-07-06T13:00:00", "2026-07-06T14:00:00"),
+        // 30-minute gap — below the default 45-minute floor, above a 15-minute one
+        event("2026-07-06T14:30:00", "2026-07-06T20:00:00"),
+      ],
+      now: NOON,
+      days: 1,
+      limit: 5,
+      minMinutes: 15,
+    });
+    expect(gaps).toEqual([
+      { dateKey: "2026-07-06", start: "12:00", end: "13:00", minutes: 60 },
+      { dateKey: "2026-07-06", start: "14:00", end: "14:30", minutes: 30 },
+      { dateKey: "2026-07-06", start: "20:00", end: "22:00", minutes: 120 },
+    ]);
+  });
+
+  test("the limit can cut off mid-day, before later gaps on the same day", () => {
+    const gaps = freeGaps({
+      events: [
+        event("2026-07-06T13:00:00", "2026-07-06T14:00:00"),
+        event("2026-07-06T15:00:00", "2026-07-06T16:00:00"),
+      ],
+      now: NOON,
+      days: 1,
+      limit: 1,
+    });
+    expect(gaps).toEqual([
+      { dateKey: "2026-07-06", start: "12:00", end: "13:00", minutes: 60 },
+    ]);
+  });
+
+  test("out-of-order events are sorted before the sweep", () => {
+    const gaps = freeGaps({
+      events: [
+        event("2026-07-06T14:30:00", "2026-07-06T20:00:00"),
+        event("2026-07-06T13:00:00", "2026-07-06T14:00:00"),
+      ],
+      now: NOON,
+      days: 1,
+      limit: 5,
+    });
+    expect(gaps).toEqual([
+      { dateKey: "2026-07-06", start: "12:00", end: "13:00", minutes: 60 },
+      { dateKey: "2026-07-06", start: "20:00", end: "22:00", minutes: 120 },
+    ]);
+  });
 });
 
 describe("freeIntervalsForDay", () => {
@@ -171,6 +221,63 @@ describe("freeIntervalsForDay", () => {
       { startMinutes: 23 * 60, endMinutes: 24 * 60, minutes: 60 },
     ]);
   });
+
+  test("a malformed dateKey yields no intervals instead of throwing", () => {
+    expect(
+      freeIntervalsForDay({ events: [], dateKey: "not-a-date", now: NOON }),
+    ).toEqual([]);
+  });
+});
+
+describe("scheduleSnapshot", () => {
+  test("an event already in progress still counts as the next event", () => {
+    const { nextEvent } = scheduleSnapshot({
+      events: [event("2026-07-06T11:00:00", "2026-07-06T13:00:00")],
+      now: NOON,
+    });
+    expect(nextEvent).toEqual({
+      summary: "e",
+      start: "2026-07-06T11:00:00",
+    });
+  });
+
+  test("picks the earliest-starting upcoming event, ignoring all-day events", () => {
+    const { nextEvent } = scheduleSnapshot({
+      events: [
+        { summary: "allday", start: "2026-07-06", end: "2026-07-07", allDay: true },
+        event("2026-07-06T15:00:00", "2026-07-06T16:00:00"),
+        event("2026-07-06T13:00:00", "2026-07-06T14:00:00"),
+      ],
+      now: NOON,
+    });
+    expect(nextEvent).toEqual({
+      summary: "e",
+      start: "2026-07-06T13:00:00",
+    });
+  });
+
+  test("freeHoursToday rounds to one decimal place", () => {
+    const { freeHoursToday } = scheduleSnapshot({
+      // Free from noon to 22:00 (10h) minus a 35-minute meeting = 9h25m.
+      events: [event("2026-07-06T12:00:00", "2026-07-06T12:35:00")],
+      now: NOON,
+    });
+    expect(freeHoursToday).toBe(9.4);
+  });
+
+  test("freeHoursToday is 0 once the wake window has already passed", () => {
+    const night = new Date(2026, 6, 6, 23, 0, 0);
+    const { freeHoursToday } = scheduleSnapshot({ events: [], now: night });
+    expect(freeHoursToday).toBe(0);
+  });
+
+  test("freeHoursToday is 0 when events cover the whole remaining window", () => {
+    const { freeHoursToday } = scheduleSnapshot({
+      events: [event("2026-07-06T08:00:00", "2026-07-06T22:00:00")],
+      now: NOON,
+    });
+    expect(freeHoursToday).toBe(0);
+  });
 });
 
 // On Vercel the process clock is UTC. These drive `now` as a UTC instant and a
@@ -225,5 +332,19 @@ describe("zone-aware wake windows (UTC server, New York user)", () => {
     expect(intervals).toEqual([
       { startMinutes: 12 * 60, endMinutes: 22 * 60, minutes: 600 },
     ]);
+  });
+
+  test("a wake window spanning the spring-forward gap reflects real elapsed hours", () => {
+    // 2026-03-08: NY clocks jump 02:00 EST -> 03:00 EDT. A 01:00-04:00 wake
+    // window reads as 3 wall-clock hours but only 2 real hours elapse.
+    const beforeWindow = new Date("2026-03-08T05:00:00Z"); // 00:00 EST, same local day
+    const { freeHoursToday } = scheduleSnapshot({
+      events: [],
+      now: beforeWindow,
+      wakeStartHour: 1,
+      wakeEndHour: 4,
+      timeZone: NY,
+    });
+    expect(freeHoursToday).toBe(2);
   });
 });
