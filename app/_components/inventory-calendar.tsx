@@ -131,7 +131,7 @@ export function InventoryCalendar({
                 <span className="text-danger font-bold">out</span>
               ) : (
                 <>
-                  <span className="text-accent font-bold tabular-nums">
+                  <span className="text-accent-ink font-bold tabular-nums">
                     ≈ {daysLeft}
                   </span>{" "}
                   {daysLeft === 1 ? "day" : "days"} left
@@ -207,13 +207,13 @@ export function InventoryCalendar({
                 key={day.dateKey}
                 className={`relative min-h-12 border-b border-r border-line px-1 py-1 last:border-r-0 ${
                   inMonth ? "" : "opacity-40"
-                } ${day.isToday ? "ring-1 ring-inset ring-accent" : ""} ${
+                } ${day.isToday ? "ring-1 ring-inset ring-accent-ink" : ""} ${
                   isRunOut ? "bg-danger/15" : ""
                 }`}
               >
                 <span
                   className={`block text-[9px] tabular-nums ${
-                    day.isToday ? "text-accent font-bold" : "text-muted"
+                    day.isToday ? "text-accent-ink font-bold" : "text-muted"
                   }`}
                 >
                   {date.getDate()}
@@ -309,7 +309,7 @@ function UsagesEditor({
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="w-full border border-dashed border-line-strong text-muted text-xs px-3 py-2 hover:border-accent hover:text-accent transition-colors"
+          className="w-full border border-dashed border-line-strong text-muted text-xs px-3 py-2 hover:border-accent-ink hover:text-accent-ink transition-colors"
         >
           + add usage
         </button>
