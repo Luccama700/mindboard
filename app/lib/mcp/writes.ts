@@ -473,7 +473,8 @@ export async function proposeUpdateFinanceFor(
     ),
   ];
 
-  const CHANGE_SELECT = "id, account_id, occurred_at, direction, amount, note";
+  const CHANGE_SELECT =
+    "id, account_id, occurred_at, direction, amount, note, is_transfer";
   const [accountsRes, categoriesRes, recurringRes, spanRes, idsRes] =
     await Promise.all([
       supabase

@@ -199,8 +199,8 @@ describe("validateFinanceOps", () => {
 
 describe("resolveFinanceOps transfer dedup", () => {
   const transferLegs: ExistingChange[] = [
-    { id: "t-out", account_id: "acc-chase", occurred_at: "2026-07-05", direction: "out", amount: 200, note: "card payment" },
-    { id: "t-in", account_id: "acc-visa", occurred_at: "2026-07-05", direction: "in", amount: 200, note: "card payment" },
+    { id: "t-out", account_id: "acc-chase", occurred_at: "2026-07-05", direction: "out", amount: 200, note: "card payment", is_transfer: true },
+    { id: "t-in", account_id: "acc-visa", occurred_at: "2026-07-05", direction: "in", amount: 200, note: "card payment", is_transfer: true },
   ];
   const dupTransfer: FinanceOp = {
     op: "transfer",
@@ -231,6 +231,34 @@ describe("resolveFinanceOps transfer dedup", () => {
     const r = resolve([dupTransfer], { existingChanges: [transferLegs[0]] });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value[0].kind).toBe("transfer");
+  });
+
+  it("does not skip when the matching rows are not transfers (coincidental spend+income)", () => {
+    const coincidental: ExistingChange[] = [
+      { id: "s-out", account_id: "acc-chase", occurred_at: "2026-07-05", direction: "out", amount: 200, note: "walmart", is_transfer: false },
+      { id: "i-in", account_id: "acc-visa", occurred_at: "2026-07-05", direction: "in", amount: 200, note: "refund", is_transfer: false },
+    ];
+    const r = resolve([dupTransfer], { existingChanges: coincidental });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[0].kind).toBe("transfer");
+  });
+
+  it("does not skip against transfer rows removed earlier in the same batch", () => {
+    // A correction batch: delete both old legs, then re-add the transfer.
+    const r = resolve(
+      [
+        { op: "remove", changeId: "t-out" },
+        { op: "remove", changeId: "t-in" },
+        dupTransfer,
+      ],
+      { existingChanges: transferLegs },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const kinds = r.value.map((o) => o.kind);
+      expect(kinds).toContain("transfer");
+      expect(kinds).not.toContain("skip_duplicate");
+    }
   });
 });
 
