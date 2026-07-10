@@ -198,7 +198,7 @@ export function FinanceCalendar({
           <Link
             href={`/finance?fm=${addMonths(month, -1)}`}
             scroll={false}
-            className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
+            className="flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="previous month"
           >
             ←
@@ -206,7 +206,7 @@ export function FinanceCalendar({
           <Link
             href={`/finance?fm=${addMonths(month, 1)}`}
             scroll={false}
-            className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
+            className="flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="next month"
           >
             →
