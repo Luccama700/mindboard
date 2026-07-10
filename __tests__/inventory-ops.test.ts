@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  receiptLine,
   renderStockReceipt,
+  resolveItemRef,
   resolveStockOps,
   validateResolvedOps,
   validateStockOps,
   type ResolvableGroup,
   type ResolvableItem,
+  type ResolvedStockOp,
   type StockOp,
 } from "@/app/lib/mcp/inventory-ops";
 
@@ -70,6 +73,38 @@ describe("validateStockOps", () => {
     expect(
       validateStockOps({ operations: [{ op: "set_priority", priority: "high" }] }).ok,
     ).toBe(false);
+  });
+});
+
+describe("resolveItemRef", () => {
+  it("an exact match wins over a substring collision", () => {
+    const pool: ResolvableItem[] = [
+      { id: "i1", name: "Milk", quantity: 1, unit: "L", archived: false },
+      { id: "i2", name: "Milkshake mix", quantity: 1, unit: "", archived: false },
+    ];
+    const r = resolveItemRef("milk", pool);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.id).toBe("i1");
+  });
+
+  it("an id match takes priority over any name matching", () => {
+    const r = resolveItemRef("i-rice", ITEMS);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.name).toBe("Rice");
+  });
+
+  it("substring matching is case-insensitive", () => {
+    const r = resolveItemRef("RIC", ITEMS);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.id).toBe("i-rice");
+  });
+
+  it("no match at all returns a plain error, not a candidates list", () => {
+    const r = resolveItemRef("unobtainium", ITEMS);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toBe('no item matching "unobtainium"');
+    }
   });
 });
 
@@ -154,6 +189,64 @@ describe("resolveStockOps", () => {
     ]);
     expect(bad.ok).toBe(false);
   });
+
+  it("renaming an item to a different case of its own name is not a collision", () => {
+    const result = resolve([{ op: "rename", item: "eggs", name: "eggs" }]);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value[0]).toMatchObject({ from: "Eggs", to: "eggs" });
+  });
+
+  it("set accepts exactly zero as a valid recount", () => {
+    const result = resolve([{ op: "set", item: "eggs", quantity: 0 }]);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value[0]).toMatchObject({ quantity: 0, before: 6 });
+  });
+
+  it("move to an unknown group fails", () => {
+    const result = resolve([{ op: "move", item: "eggs", group: "garage" }]);
+    expect(result.ok).toBe(false);
+  });
+
+  it("care ops fail cleanly on a completely unknown item", () => {
+    for (const op of [
+      { op: "set_threshold" as const, item: "unobtainium", threshold: 1 },
+      { op: "set_usage" as const, item: "unobtainium", amount: 1, period: "day" as const },
+      { op: "set_priority" as const, item: "unobtainium", priority: "low" as const },
+      { op: "clear_usage" as const, item: "unobtainium" },
+      { op: "set_price" as const, item: "unobtainium", price: 5 },
+      { op: "set_buy" as const, item: "unobtainium", buyAmount: 1 },
+    ]) {
+      expect(resolve([op]).ok).toBe(false);
+    }
+  });
+
+  it("set_price on an archived item is a plain miss, unlike add/pin's restore hint", () => {
+    const result = resolve([{ op: "set_price", item: "sunscreen", price: 5 }]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).not.toContain("restore");
+  });
+
+  it("running quantities keep clamping correctly across more than two chained ops", () => {
+    const result = resolve([
+      { op: "remove", item: "eggs", amount: 10 }, // 6 -> clamped to 0
+      { op: "add", item: "eggs", amount: 3 }, // 0 -> 3
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0]).toMatchObject({ before: 6, after: 0 });
+    expect(result.value[1]).toMatchObject({ before: 0, after: 3 });
+  });
+
+  it("fractional quantities round cleanly across chained ops (no float drift)", () => {
+    const result = resolve([
+      { op: "add", item: "milk", amount: 0.1 },
+      { op: "add", item: "milk", amount: 0.2 },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0].after).toBe(1.1);
+    expect(result.value[1].after).toBe(1.3);
+  });
 });
 
 describe("renderStockReceipt", () => {
@@ -177,6 +270,39 @@ describe("renderStockReceipt", () => {
     expect(receipt).toContain("Dish soap  stop tracking");
     expect(receipt).toContain("Sunscreen  tracking again");
     expect(receipt).toContain("Eggs  priority → high (!!!)");
+  });
+
+  it("renders move's group fallback chain and a bare create with no group or price", () => {
+    const pendingMove: ResolvedStockOp = {
+      kind: "move",
+      itemId: "i-eggs",
+      name: "Eggs",
+      groupId: null,
+      groupName: null,
+      pendingGroup: "Pantry",
+    };
+    expect(receiptLine(pendingMove)).toBe("Eggs  moved to Pantry");
+
+    const noGroupMove: ResolvedStockOp = { ...pendingMove, pendingGroup: null };
+    expect(receiptLine(noGroupMove)).toBe("Eggs  moved to no group");
+
+    const bareCreate: ResolvedStockOp = {
+      kind: "create",
+      name: "Flour",
+      quantity: 1,
+      unit: "kg",
+      groupId: null,
+      groupName: null,
+      price: null,
+    };
+    expect(receiptLine(bareCreate)).toBe("Flour  new · 1 kg");
+  });
+
+  it("low and med priority do not get the (!!!) suffix", () => {
+    const low: ResolvedStockOp = { kind: "priority", itemId: "i-eggs", name: "Eggs", priority: "low" };
+    const med: ResolvedStockOp = { ...low, priority: "med" };
+    expect(receiptLine(low)).toBe("Eggs  priority → low");
+    expect(receiptLine(med)).toBe("Eggs  priority → med");
   });
 });
 
@@ -206,6 +332,26 @@ describe("validateResolvedOps", () => {
       validateResolvedOps({
         operations: [{ kind: "priority", itemId: "x", priority: "urgent" }],
       }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects malformed move, create_group, and recount shapes", () => {
+    expect(
+      validateResolvedOps({ operations: [{ kind: "move", groupId: "g-house" }] }).ok,
+    ).toBe(false);
+    expect(
+      validateResolvedOps({ operations: [{ kind: "create_group", name: "" }] }).ok,
+    ).toBe(false);
+    expect(
+      validateResolvedOps({
+        operations: [{ kind: "recount", itemId: "x", quantity: -1 }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects an unknown stored operation kind", () => {
+    expect(
+      validateResolvedOps({ operations: [{ kind: "teleport", itemId: "x" }] }).ok,
     ).toBe(false);
   });
 });
