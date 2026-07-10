@@ -6,7 +6,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # Mindboard Project Context
 
-Mindboard is a personal life dashboard — multi-tenant since 2026-07-10 (any Google account signs in to its own fully isolated workspace; see `docs/multi-tenant-mcp-plan.md` + `docs/mcp-provisioning.md`), with the product voice still centered on one primary user per workspace. It started as a task tracker (tasks across groups of responsibility, with what matters today and an embedded Google Calendar) and has grown into a broader life command center: it now also tracks **finance** (`/finance`) and **inventory** (`/inventory`), and the dashboard opens with an at-a-glance "vitals" strip that synthesizes every domain. The app is designed for fast capture on iPhone as an installed PWA, so the bottom task input staying quick, focused, and reachable is the most important UX constraint.
+Mindboard is a personal life dashboard — multi-tenant since 2026-07-10 (any Google account signs in to its own fully isolated workspace; see `docs/multi-tenant-mcp-plan.md` + `docs/mcp-provisioning.md`), with the product voice still centered on one primary user per workspace. It started as a task tracker (tasks across groups of responsibility, with what matters today and an embedded Google Calendar) and has grown into a broader life command center: it now also tracks **finance** (`/finance`) and **inventory** (`/inventory`), and the dashboard opens with a **stream** — a daily pulse plus what's due now/next — beside a desktop week calendar. The app is designed for fast capture on iPhone as an installed PWA, so the bottom task input staying quick, focused, and reachable is the most important UX constraint.
 
 The longer-term direction is to evolve Mindboard into an AI "second brain" / life command center — an in-app assistant with access to all this data, a notes/knowledge layer, and MCP interoperability. That plan and its phased roadmap live in `docs/second-brain-plan.md`; the groundwork (a typed agent tool layer) has begun. See the "AI Second-Brain Direction" section below.
 
@@ -26,7 +26,7 @@ The longer-term direction is to evolve Mindboard into an AI "second brain" / lif
 
 Shipped routes:
 
-- `/` dashboard: an at-a-glance **vitals strip** (command center) across the top, then today task sections on the left and embedded calendar on the right on desktop (full viewport width, ~50/50 split); tasks first and calendar below on mobile.
+- `/` dashboard: a **stream** (daily pulse header + NOW/NEXT/LATER task sections) as the left column, with a week calendar pane beside it on desktop (`hidden lg:block`, ~50/50 two-column grid); on mobile the stream stands alone and the calendar is the dedicated `/week` route.
 - `/login`: Google OAuth sign-in.
 - `/auth/callback`: exchanges Supabase OAuth code and persists Google provider tokens.
 - `/groups`: group list with inline create form, inbox card, and per-group edit panels for renaming, type, color, and Google Calendar link.
@@ -282,13 +282,13 @@ Files: `app/inventory/page.tsx`, `app/inventory/inventory-client.tsx`, `app/_com
 
 Files: `app/learn/*`, `app/actions/learn.ts`, `app/actions/connections.ts`, `app/lib/learn/*`, `app/lib/connections/*`, `app/lib/mcp/course-ops.ts`, `app/lib/mcp/courses.ts`, `app/api/course-chat/route.ts`, `app/api/worker/route.ts`, `app/_components/learn-types.ts`, `app/_components/connection-card.tsx`, `worker/*`.
 
-## Command Center (dashboard vitals)
+## Command Center (dashboard stream)
 
-The dashboard (`/`) opens with a horizontally scrollable **vitals strip** that synthesizes every domain at a glance — net worth + today's delta, next bill, tasks due/overdue, next event + free hours today, inventory low/run-out. It is deterministic (no AI), anchored to *today* regardless of the calendar month, and composed from:
+The dashboard (`/`) opens with a **stream** (`app/_components/stream-client.tsx`): a compact daily pulse header — clock + date, tasks-to-clear count, free-hours today, and a daily-log mood row — above `NOW` / `NEXT` / `LATER` task sections. On desktop a week calendar pane sits beside it (`app/page.tsx` renders a `lg:grid-cols-2` layout with the calendar column gated `hidden lg:block`, `data-tour="calendar-pane"`); on mobile the stream stands alone and the calendar is the dedicated `/week` route. It is deterministic (no AI), anchored to *today* regardless of the calendar month, and composed from:
 
 - `app/lib/data/*` — reusable, `cache()`-deduped, RLS-scoped reads (finance, inventory). It reuses the dashboard's cached read for tasks/events, so the common current-month view adds no extra Supabase/Google round-trips.
 - `app/lib/snapshots/*` — pure, unit-tested rollups (`financeSnapshot`, `inventorySnapshot`, `tasksSnapshot`, `scheduleSnapshot`) that reuse the finance/inventory projections; the only net-new math is calendar free-gap computation.
-- `app/_components/vitals-strip.tsx` plus `getVitalsData`/`VitalsSection` in `app/page.tsx`, rendered in its own Suspense boundary above the today/calendar grid.
+- `app/_components/stream-client.tsx`, fed by `getStreamData` in `app/page.tsx` (`StreamSection`, its own Suspense boundary); the desktop week pane is `WeekPaneSection` → `DashboardCalendar`. (The earlier horizontally-scrollable `vitals-strip.tsx` / `getVitalsData` / `VitalsSection` was replaced by this stream — those symbols no longer exist.)
 
 **Timezone convention.** The process clock is UTC on Vercel. The dashboard stream is timezone-aware via `user_settings.timezone`: `app/page.tsx` computes the header clock (`formatClock12`), the date label, and the stream's `today` in the user's zone (`todayISO(timeZone)` / `safeTimeZone` in `app/_components/date-utils.ts`), passes `timeZone` into `streamSnapshot` for all wall-clock facts (daily-log invite gate, due-time checks, event day bucketing), and `saveDailyLog` stamps `log_date` in the same zone. The wake-window/free-time math (`app/lib/snapshots/schedule.ts`: `scheduleSnapshot`, `freeGaps`, `freeIntervalsForDay`) is now zone-aware too — it takes an optional `timeZone` and computes windows via the pure `app/lib/snapshots/zoned-time.ts` helpers (`zonedWallTimeToUtcMs`, `zonedDateKey`, `zonedClock`, `zonedIso`). Both `get_snapshot` surfaces and the horizon planning snapshot pass it, so free hours land in the user's day, not UTC. Callers that omit `timeZone` stay on the process clock — correct in the browser (week grid). The former server-side debts are now closed (2026-07-10): the dashboard's free-time (`getStreamData`) and week pane (`WeekPaneSection`) in `app/page.tsx` thread `timeZone` into `scheduleSnapshot`/`freeGaps`; the finance server action (`app/actions/finance.ts`: `createAccount`/`recordBalanceChange`/`setSpendOverride`) resolves the owner's zone so recorded dates, fingerprints, and the future-override guard land on the local day; `getSpendOverrides`/`getSpendHistory` (`app/lib/data/finance.ts`) key their windows off `todayISO(timeZone)`; and MCP `todayKey()` (`app/lib/mcp/config.ts`) is now async and resolves the owner's `user_settings.timezone` per request, so the assistant/MCP and the app agree on "today" near local midnight. When adding user-facing wall-clock logic, take a `timeZone` input rather than calling `getHours()` on the server.
 
@@ -298,7 +298,7 @@ The dashboard (`/`) opens with a horizontally scrollable **vitals strip** that s
 
 Mindboard is being evolved into an AI "second brain" / life command center. The architectural spine is a single **agent tool layer** (`app/lib/agent/registry.ts`): a typed catalog of read/write tools intended to be exposed three ways without rewriting logic — an in-app assistant, a remote MCP server, and a proactive "what should I do next" planner. The registry is currently the catalog (the seam); live handlers, an `ai_audit_log`, and the confirmation step are wired in a later phase.
 
-Decided constraints: assistant writes are **propose → confirm** (never silent), and finance is read-safe by default. The AI stack (raw Anthropic SDK vs Vercel AI SDK vs Claude Agent SDK) is intentionally not yet chosen — Phase 0/1 (the read/tool layer + the vitals command center) are stack-agnostic. The full vision, phased roadmap, and decisions are in `docs/second-brain-plan.md`. This direction is what authorizes the future notes/goals/pgvector tables noted in the Data Model scope note.
+Decided constraints: assistant writes are **propose → confirm** (never silent), and finance is read-safe by default. The AI stack (raw Anthropic SDK vs Vercel AI SDK vs Claude Agent SDK) is intentionally not yet chosen — Phase 0/1 (the read/tool layer + the dashboard stream/command center) are stack-agnostic. The full vision, phased roadmap, and decisions are in `docs/second-brain-plan.md`. This direction is what authorizes the future notes/goals/pgvector tables noted in the Data Model scope note.
 
 ## Important Files
 
@@ -326,8 +326,8 @@ Decided constraints: assistant writes are **propose → confirm** (never silent)
 - `app/_components/money.ts`: money formatting + `splitEvenly`/`sumMoney`.
 - `app/inventory/inventory-client.tsx`: inventory UI — grouped items, steppers, item detail with depletion calendar.
 - `app/_components/inventory-projection.ts`: pure, unit-tested depletion forecast.
-- `app/_components/vitals-strip.tsx`: the dashboard command-center vitals strip.
-- `app/lib/data/*`, `app/lib/snapshots/*`: reusable reads and pure cross-domain rollups feeding the vitals strip.
+- `app/_components/stream-client.tsx`: the dashboard stream (daily pulse + NOW/NEXT/LATER task sections).
+- `app/lib/data/*`, `app/lib/snapshots/*`: reusable reads and pure cross-domain rollups feeding the dashboard stream, the calendar, and the MCP/assistant snapshots.
 - `app/lib/agent/registry.ts`: the agent tool-layer seam (see AI Second-Brain Direction).
 - `docs/second-brain-plan.md`: the second-brain vision, roadmap, and decisions.
 

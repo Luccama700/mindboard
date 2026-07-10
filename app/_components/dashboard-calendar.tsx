@@ -438,7 +438,7 @@ export function DashboardCalendar({
   }
 
   const navArrowClass =
-    "flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg";
+    "flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg";
 
   return (
     <section className="border border-line bg-popover p-3 lg:min-h-[calc(100vh-4rem)]">
@@ -512,7 +512,7 @@ export function DashboardCalendar({
             key={option}
             type="button"
             onClick={() => setView(option)}
-            className={`min-h-8 text-[9px] tracking-widest uppercase transition-colors ${
+            className={`min-h-11 text-[9px] tracking-widest uppercase transition-colors ${
               view === option
                 ? "bg-accent text-accent-fg"
                 : "bg-page text-muted hover:text-fg"
@@ -575,13 +575,13 @@ export function DashboardCalendar({
                 type="button"
                 onClick={() => setSelected(key)}
                 className={`min-h-24 bg-page p-1.5 text-left transition-colors ${
-                  isSelected ? "outline outline-1 outline-accent" : ""
+                  isSelected ? "outline outline-1 outline-accent-ink" : ""
                 } ${inMonth ? "text-fg" : "text-line-subtle"}`}
               >
                 <div className="flex items-center justify-between mb-1">
                   <span
                     className={`text-xs ${
-                      isToday ? "text-accent font-bold" : ""
+                      isToday ? "text-accent-ink font-bold" : ""
                     }`}
                   >
                     {date.getDate()}
@@ -593,7 +593,24 @@ export function DashboardCalendar({
                   )}
                 </div>
 
-                <div className="space-y-1">
+                {/* Narrow columns (~46px on mobile) can't fit readable chip
+                    text — every label truncates to "−CA…" — so show color
+                    squares instead; the day taps through to the selected-day
+                    list below. Wider screens keep the labelled chips. */}
+                {items.length > 0 && (
+                  <div className="flex flex-wrap gap-0.5 lg:hidden">
+                    {items.slice(0, 8).map((item) => (
+                      <span
+                        key={`dot-${item.kind}-${item.id}`}
+                        className="h-1.5 w-1.5"
+                        style={{ backgroundColor: item.color }}
+                        aria-hidden
+                      />
+                    ))}
+                  </div>
+                )}
+
+                <div className="hidden space-y-1 lg:block">
                   {visible.map((item) => (
                     <div
                       key={`${item.kind}-${item.id}`}
