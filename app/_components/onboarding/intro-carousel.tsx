@@ -75,7 +75,7 @@ export function IntroCarousel({
                     : "opacity-0 translate-y-8"
                 }`}
               >
-                <p className="text-2xl text-accent mb-4" aria-hidden>
+                <p className="text-2xl text-accent-ink mb-4" aria-hidden>
                   {card.glyph}
                 </p>
                 <h2 className="text-2xl font-bold tracking-tight text-fg mb-3">
@@ -138,7 +138,7 @@ export function IntroCarousel({
               <span
                 aria-hidden
                 className={`h-1.5 transition-all duration-300 ${
-                  i === index ? "w-6 bg-accent" : "w-1.5 bg-card-hover"
+                  i === index ? "w-6 bg-accent-ink" : "w-1.5 bg-card-hover"
                 }`}
               />
             </button>

@@ -204,7 +204,7 @@ export function OnboardingController({
               >
                 ※
                 {newsUnread && (
-                  <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-accent" />
+                  <span className="absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-accent-ink" />
                 )}
               </span>
             </button>

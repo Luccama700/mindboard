@@ -51,7 +51,7 @@ export function WhatsNewPanel({ onClose }: { onClose: () => void }) {
                     key={index}
                     className="flex gap-2 text-meta lowercase text-muted"
                   >
-                    <span aria-hidden className="text-accent">
+                    <span aria-hidden className="text-accent-ink">
                       ·
                     </span>
                     <span>{item}</span>
