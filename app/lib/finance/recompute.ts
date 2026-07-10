@@ -47,7 +47,10 @@ export async function recomputeAccountBalance(
   const { data: rows, error: rowsError } = await query;
   if (rowsError) return { error: rowsError.message };
 
-  const balance = deriveBalance(anchor, (rows ?? []) as LedgerRow[]);
+  // Exclude future-dated rows from the current balance (UTC calendar day; the
+  // zone-aware clock is handled separately by the timezone workstream).
+  const today = new Date().toISOString().slice(0, 10);
+  const balance = deriveBalance(anchor, (rows ?? []) as LedgerRow[], today);
 
   const { error: updateError } = await supabase
     .from("accounts")

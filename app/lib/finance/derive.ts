@@ -41,13 +41,18 @@ export function rowAfterAnchor(
 }
 
 // Derived balance. With no anchor (should not happen after migration 0022
-// seeds one per account) every row counts from a zero base.
+// seeds one per account) every row counts from a zero base. When `today` is
+// given, rows dated after it are excluded: a future-dated ledger row is not yet
+// real money, so it must not move the *current* balance (a user can date or
+// re-date a row into the future via the ledger edit panel).
 export function deriveBalance(
   anchor: ReconciliationAnchor | null,
   rows: LedgerRow[],
+  today?: string,
 ): number {
   let balance = anchor ? Number(anchor.balance) || 0 : 0;
   for (const row of rows) {
+    if (today && row.occurred_at > today) continue;
     if (anchor && !rowAfterAnchor(anchor, row)) continue;
     balance += signedAmount(row);
   }
