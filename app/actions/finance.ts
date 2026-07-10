@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
+import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { changeFingerprint } from "@/app/lib/finance/derive";
 import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 
@@ -30,15 +31,25 @@ function toCents(value: number): number | null {
   return Math.round(value * 100) / 100;
 }
 
-function todayKey(): string {
-  const d = new Date();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${month}-${day}`;
+// The process clock is UTC on Vercel; dates the user records must land on the
+// user's local day, not UTC's, so we resolve their stored timezone per request.
+async function zonedToday(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<string> {
+  const { data } = await supabase
+    .from("user_settings")
+    .select("timezone")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return todayISO(safeTimeZone((data as { timezone: string | null } | null)?.timezone));
 }
 
-function normalizeOccurredAt(value: string | null | undefined): string | null {
-  if (value === undefined || value === null) return todayKey();
+function normalizeOccurredAt(
+  value: string | null | undefined,
+  fallback: string,
+): string | null {
+  if (value === undefined || value === null) return fallback;
   if (!ISO_DATE.test(value)) return null;
   return value;
 }
@@ -152,6 +163,8 @@ export async function createAccount(input: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
+  const today = await zonedToday(supabase, user.id);
+
   const { data: account, error } = await supabase
     .from("accounts")
     .insert({
@@ -175,9 +188,9 @@ export async function createAccount(input: {
       direction: "in",
       amount: balance,
       note: "opening balance",
-      occurred_at: todayKey(),
+      occurred_at: today,
       source: "manual",
-      fingerprint: changeFingerprint(todayKey(), "in", balance),
+      fingerprint: changeFingerprint(today, "in", balance),
     });
   }
 
@@ -187,7 +200,7 @@ export async function createAccount(input: {
     user_id: user.id,
     account_id: account.id,
     balance,
-    as_of: todayKey(),
+    as_of: today,
     source: "manual",
     note: "opening balance",
   });
@@ -272,9 +285,6 @@ export async function recordBalanceChange(input: {
   const newBalance = toCents(input.newBalance);
   if (newBalance === null) return { error: "invalid balance" };
 
-  const occurredAt = normalizeOccurredAt(input.occurredAt);
-  if (occurredAt === null) return { error: "invalid date" };
-
   const note = input.note?.trim() || null;
 
   const supabase = await createClient();
@@ -282,6 +292,10 @@ export async function recordBalanceChange(input: {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
+
+  const today = await zonedToday(supabase, user.id);
+  const occurredAt = normalizeOccurredAt(input.occurredAt, today);
+  if (occurredAt === null) return { error: "invalid date" };
 
   const { data: account, error: loadError } = await supabase
     .from("accounts")
@@ -311,7 +325,7 @@ export async function recordBalanceChange(input: {
         user_id: userId,
         account_id: input.accountId,
         balance,
-        as_of: todayKey(),
+        as_of: today,
         source: "manual",
         note,
       });
@@ -524,13 +538,15 @@ export async function setSpendOverride(input: {
   amount: number | null;
 }) {
   if (!ISO_DATE.test(input.date)) return { error: "invalid date" };
-  if (input.date <= todayKey()) return { error: "only future days" };
 
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
+
+  const today = await zonedToday(supabase, user.id);
+  if (input.date <= today) return { error: "only future days" };
 
   if (input.amount === null) {
     const { error } = await supabase
