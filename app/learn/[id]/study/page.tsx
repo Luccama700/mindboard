@@ -47,7 +47,7 @@ export default async function StudyPage({
       <header className="flex items-center justify-between mb-6">
         <Link
           href="/learn"
-          className="text-muted text-label tracking-widest uppercase hover:text-fg transition-colors"
+          className="inline-flex items-center min-h-11 text-muted text-label tracking-widest uppercase hover:text-fg transition-colors"
         >
           ← learn
         </Link>
