@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId } from "@/app/lib/mcp/config";
+import { workerAllowedUserIds } from "@/app/lib/mcp/config";
 import { recordProposal } from "@/app/lib/mcp/audit";
 import { readProviderKey } from "@/app/lib/connections/keys";
 import { resolveCourse } from "@/app/lib/mcp/courses";
@@ -295,8 +295,15 @@ export async function generateEpisodeFor(
   if (!script.ok) return fail(script.error);
 
   // VibeVoice: the script is done on Vercel; the render is a queued job the
-  // home PC pulls through /api/worker.
+  // home PC pulls through /api/worker. The worker only serves allowlisted
+  // users (owner-controlled env), so gate at enqueue too — a job outside the
+  // allowlist would sit queued forever.
   if (input.engine === "vibevoice") {
+    if (!workerAllowedUserIds().includes(userId)) {
+      return fail(
+        "the home-pc renderer isn't enabled for your account — use the gemini engine instead",
+      );
+    }
     await supabase
       .from("audio_episodes")
       .update({
@@ -406,8 +413,8 @@ export async function proposeGenerateAudioOverviewFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeGenerateAudioOverview(raw: unknown) {
-  return proposeGenerateAudioOverviewFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeGenerateAudioOverview(userId: string, raw: unknown) {
+  return proposeGenerateAudioOverviewFor(createServiceClient(), userId, raw);
 }
 
 // EXECUTORS-shaped: confirm re-runs from the stored proposal input.

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
+import { workerAllowedUserIds } from "@/app/lib/mcp/config";
 import {
   COURSE_COLUMNS,
   SOURCE_COLUMNS,
@@ -215,6 +216,9 @@ export async function queueSourceConversion(input: {
 }): Promise<{ error: string | null }> {
   const { supabase, user } = await requireUser();
   if (!user) return { error: "not authenticated" };
+  if (!workerAllowedUserIds().includes(user.id)) {
+    return { error: "the home worker isn't enabled for your account — use in-app conversion instead" };
+  }
 
   const { data: source } = await supabase
     .from("course_sources")

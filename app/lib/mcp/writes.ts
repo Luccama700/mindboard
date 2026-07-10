@@ -6,7 +6,7 @@ import {
   lookupPrices,
   lookupPricesByRefs,
 } from "@/app/lib/shopping/price-lookup";
-import { ownerUserId, todayKey } from "./config";
+import { todayKey } from "./config";
 import {
   summarizeCreateRecurringTask,
   summarizeCreateTask,
@@ -108,12 +108,12 @@ export type Proposal = { proposalId: string; preview: string };
 
 // ---------- propose (records a 'proposed' audit row) ----------
 
-export async function proposeCreateTask(raw: unknown): Promise<Result<Proposal>> {
+export async function proposeCreateTask(userId: string, raw: unknown): Promise<Result<Proposal>> {
   const parsed = validateCreateTask((raw ?? {}) as Record<string, unknown>);
   if (!parsed.ok) return parsed;
 
   const supabase = createServiceClient();
-  const ownerId = ownerUserId();
+  const ownerId = userId;
 
   let groupName: string | null = null;
   if (parsed.value.groupId) {
@@ -138,14 +138,14 @@ export async function proposeCreateTask(raw: unknown): Promise<Result<Proposal>>
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeCompleteTask(raw: unknown): Promise<Result<Proposal>> {
+export async function proposeCompleteTask(userId: string, raw: unknown): Promise<Result<Proposal>> {
   const taskId = (raw as { taskId?: unknown })?.taskId;
   if (typeof taskId !== "string" || !taskId) {
     return { ok: false, error: "taskId is required" };
   }
 
   const supabase = createServiceClient();
-  const ownerId = ownerUserId();
+  const ownerId = userId;
 
   const { data } = await supabase
     .from("tasks")
@@ -164,12 +164,12 @@ export async function proposeCompleteTask(raw: unknown): Promise<Result<Proposal
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeLogSpend(raw: unknown): Promise<Result<Proposal>> {
+export async function proposeLogSpend(userId: string, raw: unknown): Promise<Result<Proposal>> {
   const parsed = validateLogSpend((raw ?? {}) as Record<string, unknown>);
   if (!parsed.ok) return parsed;
 
   const supabase = createServiceClient();
-  const ownerId = ownerUserId();
+  const ownerId = userId;
 
   const { data: account } = await supabase
     .from("accounts")
@@ -329,8 +329,8 @@ export async function proposeCreateRecurringTaskFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeCreateRecurringTask(raw: unknown): Promise<Result<Proposal>> {
-  return proposeCreateRecurringTaskFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeCreateRecurringTask(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeCreateRecurringTaskFor(createServiceClient(), userId, raw);
 }
 
 export async function proposeArchiveRecurringTaskFor(
@@ -378,8 +378,8 @@ export async function proposeArchiveRecurringTaskFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeArchiveRecurringTask(raw: unknown): Promise<Result<Proposal>> {
-  return proposeArchiveRecurringTaskFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeArchiveRecurringTask(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeArchiveRecurringTaskFor(createServiceClient(), userId, raw);
 }
 
 // Shared with the in-app assistant (session client + RLS) and the MCP server
@@ -424,21 +424,21 @@ export async function proposeUpdateStockFor(
   return { ok: true, value: { proposalId, preview } };
 }
 
-export async function proposeUpdateStock(raw: unknown): Promise<Result<Proposal>> {
-  return proposeUpdateStockFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeUpdateStock(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeUpdateStockFor(createServiceClient(), userId, raw);
 }
 
 // Direct execute (no propose step): AI price lookups only write source-labeled
 // cache metadata (est_price/price_source/price_checked_at) and never overwrite
 // a manual price — same spend-the-user's-key category as free-form capture
 // parsing, same direct-write category as icon generation.
-export async function lookupShoppingPrices(input: {
+export async function lookupShoppingPrices(userId: string, input: {
   items?: string[];
   force?: boolean;
 }) {
   return lookupPricesByRefs({
     supabase: createServiceClient(),
-    userId: ownerUserId(),
+    userId,
     items: input.items,
     force: input.force,
   });
@@ -551,8 +551,8 @@ export async function proposeUpdateFinanceFor(
   return { ok: true, value: { proposalId, preview } };
 }
 
-export async function proposeUpdateFinance(raw: unknown): Promise<Result<Proposal>> {
-  return proposeUpdateFinanceFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeUpdateFinance(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeUpdateFinanceFor(createServiceClient(), userId, raw);
 }
 
 // ---------- spending limits ----------
@@ -592,8 +592,8 @@ export async function proposeSetSpendLimitFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeSetSpendLimit(raw: unknown): Promise<Result<Proposal>> {
-  return proposeSetSpendLimitFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeSetSpendLimit(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeSetSpendLimitFor(createServiceClient(), userId, raw);
 }
 
 export async function proposeDeleteSpendLimitFor(
@@ -651,8 +651,8 @@ export async function proposeDeleteSpendLimitFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeDeleteSpendLimit(raw: unknown): Promise<Result<Proposal>> {
-  return proposeDeleteSpendLimitFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeDeleteSpendLimit(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeDeleteSpendLimitFor(createServiceClient(), userId, raw);
 }
 
 // ---------- execute (called by confirm, scoped to the owner) ----------
@@ -1576,8 +1576,8 @@ export async function proposeUpdateTaskFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeUpdateTask(raw: unknown): Promise<Result<Proposal>> {
-  return proposeUpdateTaskFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeUpdateTask(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeUpdateTaskFor(createServiceClient(), userId, raw);
 }
 
 function addMinutesToClock(time: string, minutes: number): string {
@@ -1752,8 +1752,8 @@ export async function proposeDeleteTaskFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeDeleteTask(raw: unknown): Promise<Result<Proposal>> {
-  return proposeDeleteTaskFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeDeleteTask(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeDeleteTaskFor(createServiceClient(), userId, raw);
 }
 
 async function executeDeleteTask(
@@ -1821,8 +1821,8 @@ export async function proposeUpdateRecurringTaskFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeUpdateRecurringTask(raw: unknown): Promise<Result<Proposal>> {
-  return proposeUpdateRecurringTaskFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeUpdateRecurringTask(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeUpdateRecurringTaskFor(createServiceClient(), userId, raw);
 }
 
 async function executeUpdateRecurringTask(
@@ -1908,8 +1908,8 @@ export async function proposeCompleteRecurringFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeCompleteRecurring(raw: unknown): Promise<Result<Proposal>> {
-  return proposeCompleteRecurringFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeCompleteRecurring(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeCompleteRecurringFor(createServiceClient(), userId, raw);
 }
 
 // Only today is completable — occurrences skip silently, so there is no
@@ -1994,8 +1994,8 @@ export async function proposeManageGroupFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeManageGroup(raw: unknown): Promise<Result<Proposal>> {
-  return proposeManageGroupFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeManageGroup(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeManageGroupFor(createServiceClient(), userId, raw);
 }
 
 async function executeManageGroup(
@@ -2077,8 +2077,8 @@ export async function proposeUpsertGoalFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeUpsertGoal(raw: unknown): Promise<Result<Proposal>> {
-  return proposeUpsertGoalFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeUpsertGoal(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeUpsertGoalFor(createServiceClient(), userId, raw);
 }
 
 // Shared executor for goal upserts (formerly assistant-only in
@@ -2153,8 +2153,8 @@ export async function proposeRescheduleEventFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeRescheduleEvent(raw: unknown): Promise<Result<Proposal>> {
-  return proposeRescheduleEventFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeRescheduleEvent(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeRescheduleEventFor(createServiceClient(), userId, raw);
 }
 
 async function executeRescheduleEvent(
@@ -2207,8 +2207,8 @@ export async function proposeCreateEventFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeCreateEvent(raw: unknown): Promise<Result<Proposal>> {
-  return proposeCreateEventFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeCreateEvent(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeCreateEventFor(createServiceClient(), userId, raw);
 }
 
 async function executeCreateEvent(
@@ -2273,8 +2273,8 @@ export async function proposeLogDailyFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeLogDaily(raw: unknown): Promise<Result<Proposal>> {
-  return proposeLogDailyFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeLogDaily(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeLogDailyFor(createServiceClient(), userId, raw);
 }
 
 async function executeLogDaily(
@@ -2341,8 +2341,8 @@ export async function proposeUpdateSettingsFor(
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
-export async function proposeUpdateSettings(raw: unknown): Promise<Result<Proposal>> {
-  return proposeUpdateSettingsFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeUpdateSettings(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeUpdateSettingsFor(createServiceClient(), userId, raw);
 }
 
 async function executeUpdateSettings(
@@ -2420,8 +2420,8 @@ export async function proposeManageFinanceFor(
   return { ok: true, value: { proposalId, preview } };
 }
 
-export async function proposeManageFinance(raw: unknown): Promise<Result<Proposal>> {
-  return proposeManageFinanceFor(createServiceClient(), ownerUserId(), raw);
+export async function proposeManageFinance(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  return proposeManageFinanceFor(createServiceClient(), userId, raw);
 }
 
 async function executeManageFinance(
@@ -2673,6 +2673,7 @@ export const EXECUTORS: Record<
 // ---------- confirm / cancel ----------
 
 export async function confirmAction(
+  userId: string,
   proposalId: unknown,
 ): Promise<Result<{ preview: string; result: Record<string, unknown> }>> {
   if (typeof proposalId !== "string" || !proposalId) {
@@ -2680,7 +2681,7 @@ export async function confirmAction(
   }
 
   const supabase = createServiceClient();
-  const ownerId = ownerUserId();
+  const ownerId = userId;
 
   const proposal = await loadProposal(supabase, ownerId, proposalId);
   if (!proposal) {
@@ -2713,13 +2714,14 @@ export async function confirmAction(
 }
 
 export async function cancelAction(
+  userId: string,
   proposalId: unknown,
 ): Promise<Result<{ cancelled: true }>> {
   if (typeof proposalId !== "string" || !proposalId) {
     return { ok: false, error: "proposalId is required" };
   }
   const supabase = createServiceClient();
-  const ownerId = ownerUserId();
+  const ownerId = userId;
   const ok = await resolveProposal(supabase, ownerId, proposalId, "rejected", null);
   if (!ok) return { ok: false, error: "proposal not found or already resolved" };
   return { ok: true, value: { cancelled: true } };
