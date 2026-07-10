@@ -19,6 +19,10 @@ export type RecordedDelta = {
   occurred_at: string;
   direction: "in" | "out";
   amount: number;
+  // Internal transfers (e.g. a credit-card payment) move money between two
+  // owned accounts and net to zero across net worth; they must not show up as
+  // real income/spending in a day's inflow/outflow.
+  is_transfer?: boolean;
 };
 
 export type PayFrequency = "weekly" | "biweekly" | "monthly";
@@ -347,6 +351,10 @@ export function buildDayRows(input: {
   const outByDate = new Map<string, number>();
   const signedByDate = new Map<string, number>();
   for (const ch of changes) {
+    // Transfer legs cancel across accounts, so excluding them leaves the
+    // running total unchanged while keeping them out of the per-day
+    // inflow/outflow figures.
+    if (ch.is_transfer) continue;
     const target = ch.direction === "in" ? inByDate : outByDate;
     target.set(ch.occurred_at, (target.get(ch.occurred_at) ?? 0) + ch.amount);
     const signed = ch.direction === "in" ? ch.amount : -ch.amount;

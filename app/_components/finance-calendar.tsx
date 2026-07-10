@@ -161,6 +161,7 @@ export function FinanceCalendar({
           occurred_at: c.occurred_at,
           direction: c.direction,
           amount: Number(c.amount),
+          is_transfer: c.is_transfer,
         })),
         expenses,
         incomeByDate,

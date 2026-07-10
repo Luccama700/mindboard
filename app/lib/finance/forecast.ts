@@ -260,6 +260,7 @@ export async function buildFinanceForecast(params: {
       occurred_at: row.occurred_at,
       direction: row.direction,
       amount: row.amount,
+      is_transfer: row.is_transfer,
     }));
 
   const rows = buildDayRows({
