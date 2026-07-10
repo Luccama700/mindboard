@@ -281,6 +281,56 @@ describe("running total projection", () => {
     expect(byDay["2026-05-24"].runningTotal).toBe(1120); // before the deduction
   });
 
+  test("excludes transfer legs from per-day inflow/outflow (net worth unchanged)", () => {
+    const rows = buildDayRows({
+      gridDays,
+      month: "2026-05",
+      today: "2026-05-26",
+      netWorthToday: 1000,
+      // a $500 internal transfer on the 25th (both legs) plus a real $30 spend.
+      changes: [
+        { occurred_at: "2026-05-25", direction: "out", amount: 500, is_transfer: true },
+        { occurred_at: "2026-05-25", direction: "in", amount: 500, is_transfer: true },
+        { occurred_at: "2026-05-25", direction: "out", amount: 30 },
+      ],
+      expenses: [],
+      incomeByDate: {},
+    });
+    const byDay = Object.fromEntries(rows.map((r) => [r.dateKey, r]));
+
+    // the transfer is not shown as income or spending — only the real $30 spend
+    expect(byDay["2026-05-25"].inflow).toBe(0);
+    expect(byDay["2026-05-25"].outflow).toBe(30);
+    // net worth math is unchanged: before the $30 spend the balance was 1030
+    expect(byDay["2026-05-25"].runningTotal).toBe(1000);
+    expect(byDay["2026-05-24"].runningTotal).toBe(1030);
+  });
+
+  test("split-date transfer still moves the running total while money is in flight", () => {
+    const rows = buildDayRows({
+      gridDays,
+      month: "2026-05",
+      today: "2026-05-26",
+      netWorthToday: 1000,
+      // $500 leaves checking on the 24th and lands in savings on the 25th, so
+      // net worth dips by 500 on the 24th and recovers on the 25th.
+      changes: [
+        { occurred_at: "2026-05-24", direction: "out", amount: 500, is_transfer: true },
+        { occurred_at: "2026-05-25", direction: "in", amount: 500, is_transfer: true },
+      ],
+      expenses: [],
+      incomeByDate: {},
+    });
+    const byDay = Object.fromEntries(rows.map((r) => [r.dateKey, r]));
+
+    // neither day shows it as inflow/outflow
+    expect(byDay["2026-05-24"].outflow).toBe(0);
+    expect(byDay["2026-05-25"].inflow).toBe(0);
+    // but the running total reflects the money in flight
+    expect(byDay["2026-05-25"].runningTotal).toBe(1000); // in-leg posted -> back to 1000
+    expect(byDay["2026-05-24"].runningTotal).toBe(500); // out-leg posted, in-leg not yet
+  });
+
   test("layers estimated everyday spend and grocery-trip spend together on future days only", () => {
     const rows = buildDayRows({
       gridDays,

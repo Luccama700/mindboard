@@ -38,7 +38,13 @@ import { executeGenerateAudioOverview } from "@/app/lib/learn/episodes";
 import { changeFingerprint } from "@/app/lib/finance/derive";
 import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 import { formatRecurrence } from "@/app/lib/recurrence";
-import { loadProposal, recordProposal, resolveProposal } from "./audit";
+import {
+  claimProposal,
+  finalizeClaimedProposal,
+  loadProposal,
+  recordProposal,
+  resolveProposal,
+} from "./audit";
 import {
   renderStockReceipt,
   resolveStockOps,
@@ -471,7 +477,8 @@ export async function proposeUpdateFinanceFor(
     ),
   ];
 
-  const CHANGE_SELECT = "id, account_id, occurred_at, direction, amount, note";
+  const CHANGE_SELECT =
+    "id, account_id, occurred_at, direction, amount, note, is_transfer";
   const [accountsRes, categoriesRes, recurringRes, spanRes, idsRes] =
     await Promise.all([
       supabase
@@ -2704,19 +2711,32 @@ export async function confirmAction(
     return { ok: false, error: `unknown tool ${proposal.tool_name}` };
   }
 
-  const outcome = await executor(supabase, ownerId, proposal.input);
+  // Claim BEFORE executing so a concurrent confirm (double-tap / client retry)
+  // can't also run the executor and double-apply the write. The loser gets
+  // no rows and bails without touching anything.
+  const claimed = await claimProposal(supabase, ownerId, proposalId);
+  if (!claimed) {
+    return { ok: false, error: "proposal is already being confirmed or resolved" };
+  }
+
+  let outcome: Result<Record<string, unknown>>;
+  try {
+    outcome = await executor(supabase, ownerId, proposal.input);
+  } catch (err) {
+    await finalizeClaimedProposal(supabase, ownerId, proposalId, "error", {
+      error: err instanceof Error ? err.message : "executor threw",
+    });
+    return { ok: false, error: err instanceof Error ? err.message : "executor threw" };
+  }
+
   if (!outcome.ok) {
-    await resolveProposal(supabase, ownerId, proposalId, "error", { error: outcome.error });
+    await finalizeClaimedProposal(supabase, ownerId, proposalId, "error", {
+      error: outcome.error,
+    });
     return outcome;
   }
 
-  const claimed = await resolveProposal(supabase, ownerId, proposalId, "executed", outcome.value);
-  if (!claimed) {
-    // Someone resolved it between load and here; the write above still ran, but
-    // report the race rather than pretend a fresh execution.
-    return { ok: false, error: "proposal was already resolved" };
-  }
-
+  await finalizeClaimedProposal(supabase, ownerId, proposalId, "executed", outcome.value);
   await revalidateWeb();
   return { ok: true, value: { preview: proposal.summary, result: outcome.value } };
 }

@@ -7,7 +7,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // a row here (the plan's locked write-with-confirmation rule). MCP rows carry
 // source='mcp'.
 
-export type AuditStatus = "proposed" | "executed" | "rejected" | "error";
+export type AuditStatus =
+  | "proposed"
+  | "executing"
+  | "executed"
+  | "rejected"
+  | "error";
 
 export type AuditProposal = {
   id: string;
@@ -77,4 +82,46 @@ export async function resolveProposal(
     .select("id");
   if (error) throw new Error(error.message);
   return (data ?? []).length > 0;
+}
+
+// Claim a proposal for execution BEFORE running the executor: an atomic
+// proposed → 'executing' flip guarded on status='proposed'. Only one caller can
+// win, so a concurrent confirm (double-tap / client retry) can't also run the
+// executor and double-apply the write. Returns false if it was already claimed
+// or resolved. The row reads 'executing' only while the write is in flight;
+// finalizeClaimedProposal then flips it to 'executed' (with result) or 'error'.
+// A mid-execution crash therefore leaves a distinguishable 'executing' row, not
+// a fake-completed 'executed' one. Requires migration 0035.
+export async function claimProposal(
+  supabase: SupabaseClient,
+  ownerId: string,
+  proposalId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("ai_audit_log")
+    .update({ status: "executing" })
+    .eq("id", proposalId)
+    .eq("user_id", ownerId)
+    .eq("status", "proposed")
+    .select("id");
+  if (error) throw new Error(error.message);
+  return (data ?? []).length > 0;
+}
+
+// Record the outcome of a claimed proposal (result on success, or flip to
+// 'error'). Guarded on status='executing' — the claim we already hold.
+export async function finalizeClaimedProposal(
+  supabase: SupabaseClient,
+  ownerId: string,
+  proposalId: string,
+  status: "executed" | "error",
+  result: Record<string, unknown> | null,
+): Promise<void> {
+  const { error } = await supabase
+    .from("ai_audit_log")
+    .update({ status, result, resolved_at: new Date().toISOString() })
+    .eq("id", proposalId)
+    .eq("user_id", ownerId)
+    .eq("status", "executing");
+  if (error) throw new Error(error.message);
 }

@@ -49,6 +49,7 @@ export type FinanceOp =
       amount: number;
       date: string;
       note?: string;
+      force?: boolean;
     }
   | { op: "reconcile"; account: string; balance: number; asOf: string }
   | { op: "create_category"; name: string; color?: string }
@@ -168,6 +169,9 @@ export type ExistingChange = {
   direction: "in" | "out";
   amount: number;
   note: string | null;
+  // Whether the stored row is itself a transfer leg — transfer dedup only
+  // matches against existing transfers, never coincidental spends/incomes.
+  is_transfer?: boolean;
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -268,6 +272,7 @@ export function validateFinanceOps(raw: unknown): Result<FinanceOp[]> {
           amount,
           date,
           note: noteString(entry.note) ?? undefined,
+          force: entry.force === true ? true : undefined,
         });
         break;
       }
@@ -506,6 +511,24 @@ export function resolveFinanceOps(
       row.note,
     ]),
   );
+  // Transfer dedup pool: fingerprints of pre-existing rows that are themselves
+  // transfers (so a coincidental spend+income pair on the same date/amount is
+  // never mistaken for the same transfer), and NOT targeted by a remove/adjust
+  // op earlier in this batch (so a correction batch that removes-then-re-adds a
+  // transfer isn't skipped against rows it's about to delete). Never mutated.
+  const mutatedIds = new Set(
+    ops
+      .filter((o) => o.op === "remove" || o.op === "adjust")
+      .map((o) => (o as { changeId: string }).changeId),
+  );
+  const existingTransferFingerprints = new Set(
+    existingChanges
+      .filter((row) => row.is_transfer === true && !mutatedIds.has(row.id))
+      .map(
+        (row) =>
+          `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
+      ),
+  );
   const changeById = new Map(existingChanges.map((row) => [row.id, row]));
   const createdCategories = new Set<string>();
   const removedIds = new Set<string>();
@@ -587,14 +610,28 @@ export function resolveFinanceOps(
             error: `transfer on ${op.date} is in the future — transactions must be dated today or earlier`,
           };
         }
+        const fromKey = `${from.value.id}|${changeFingerprint(op.date, "out", op.amount)}`;
+        const toKey = `${to.value.id}|${changeFingerprint(op.date, "in", op.amount)}`;
+        // Re-importing a statement re-sends the same transfer; when BOTH legs
+        // already exist as transfers, skip it (visibly) unless forced — like
+        // spend/income, and because both legs move real balances a missed
+        // duplicate drifts two accounts. A single-leg match, or a match against
+        // non-transfer rows, is left alone (likely a distinct real transfer).
+        if (
+          existingTransferFingerprints.has(fromKey) &&
+          existingTransferFingerprints.has(toKey) &&
+          !op.force
+        ) {
+          body.push({
+            kind: "skip_duplicate",
+            label: `${op.date} ${from.value.name} → ${to.value.name} ${formatMoney(op.amount, from.value.currency)} transfer${op.note ? ` "${op.note}"` : ""} — matches an existing transfer; pass force to import anyway`,
+          });
+          break;
+        }
         // both legs join the fingerprint pool so a later spend/income op in the
         // same batch can't silently double-record the same movement
-        seenFingerprints.add(
-          `${from.value.id}|${changeFingerprint(op.date, "out", op.amount)}`,
-        );
-        seenFingerprints.add(
-          `${to.value.id}|${changeFingerprint(op.date, "in", op.amount)}`,
-        );
+        seenFingerprints.add(fromKey);
+        seenFingerprints.add(toKey);
         body.push({
           kind: "transfer",
           fromId: from.value.id,

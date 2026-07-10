@@ -124,6 +124,37 @@ describe("deriveBalance", () => {
       ]),
     ).toBe(130);
   });
+
+  it("excludes future-dated rows from the current balance when today is given", () => {
+    // A row dated after `today` (e.g. re-dated into the future via the ledger
+    // edit panel) must not move the current balance — the anchor already
+    // accounts for everything through today.
+    expect(
+      deriveBalance(
+        anchor,
+        [row("2026-07-20", "out", 30)], // future relative to today
+        "2026-07-10",
+      ),
+    ).toBe(100);
+  });
+
+  it("still counts rows dated on or before today", () => {
+    expect(
+      deriveBalance(
+        anchor,
+        [
+          row("2026-07-08", "out", 6), // past — counts
+          row("2026-07-10", "in", 4), // today — counts
+          row("2026-07-11", "in", 999), // future — excluded
+        ],
+        "2026-07-10",
+      ),
+    ).toBe(98);
+  });
+
+  it("without a today bound, keeps the prior behavior (future rows count)", () => {
+    expect(deriveBalance(anchor, [row("2026-07-20", "out", 30)])).toBe(70);
+  });
 });
 
 describe("changeFingerprint", () => {

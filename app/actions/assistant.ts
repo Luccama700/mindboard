@@ -3,7 +3,12 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
-import { loadProposal, resolveProposal } from "@/app/lib/mcp/audit";
+import {
+  claimProposal,
+  finalizeClaimedProposal,
+  loadProposal,
+  resolveProposal,
+} from "@/app/lib/mcp/audit";
 import { EXECUTORS } from "@/app/lib/mcp/writes";
 import type { Result } from "@/app/lib/mcp/validate";
 import { pushTaskToCalendar, updateTask } from "@/app/actions/tasks";
@@ -55,39 +60,50 @@ export async function confirmProposal(
   const proposal = await loadProposal(supabase, user.id, proposalId);
   if (!proposal) return { error: "proposal not found or already resolved" };
 
+  const isSchedule = proposal.tool_name === "schedule_task";
+  const executor = isSchedule ? null : EXECUTORS[proposal.tool_name];
+  if (!isSchedule && !executor) {
+    await resolveProposal(supabase, user.id, proposalId, "error", {
+      error: `unknown tool ${proposal.tool_name}`,
+    });
+    return { error: `unknown tool ${proposal.tool_name}` };
+  }
+
+  // Claim BEFORE executing so a concurrent confirm (double-tap / retry, or a
+  // race with the MCP confirm path) can't also run the executor and double-
+  // apply the write. The loser bails without touching anything.
+  const claimed = await claimProposal(supabase, user.id, proposalId);
+  if (!claimed) {
+    return { error: "proposal is already being confirmed or resolved" };
+  }
+
   let outcome: Result<Record<string, unknown>>;
-  switch (proposal.tool_name) {
-    case "schedule_task":
-      outcome = await executeScheduleTask(user.id, proposal.input);
-      break;
-    default: {
-      const executor = EXECUTORS[proposal.tool_name];
-      if (!executor) {
-        await resolveProposal(supabase, user.id, proposalId, "error", {
-          error: `unknown tool ${proposal.tool_name}`,
-        });
-        return { error: `unknown tool ${proposal.tool_name}` };
-      }
-      outcome = await executor(supabase, user.id, proposal.input);
-    }
+  try {
+    outcome = isSchedule
+      ? await executeScheduleTask(user.id, proposal.input)
+      : await executor!(supabase, user.id, proposal.input);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "executor threw";
+    await finalizeClaimedProposal(supabase, user.id, proposalId, "error", {
+      error: message,
+    });
+    return { error: message };
   }
 
   if (!outcome.ok) {
-    await resolveProposal(supabase, user.id, proposalId, "error", {
+    await finalizeClaimedProposal(supabase, user.id, proposalId, "error", {
       error: outcome.error,
     });
     return { error: outcome.error };
   }
 
-  const claimed = await resolveProposal(
+  await finalizeClaimedProposal(
     supabase,
     user.id,
     proposalId,
     "executed",
     outcome.value,
   );
-  if (!claimed) return { error: "proposal was already resolved" };
-
   revalidatePath("/", "layout");
   return { error: null, preview: proposal.summary };
 }

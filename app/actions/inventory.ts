@@ -268,6 +268,10 @@ export async function updateInventoryItem(input: {
   }
 
   revalidatePath("/inventory");
+  // The dashboard stream shows inventory vitals and its quantity stepper reads
+  // the server snapshot; revalidate it so a step is reflected and the stepper's
+  // optimistic override reconciles against a fresh quantity (not a stale one).
+  revalidatePath("/", "layout");
   return { error: null };
 }
 
