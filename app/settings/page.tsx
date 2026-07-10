@@ -81,7 +81,7 @@ export default async function SettingsPage() {
       provider: "anthropic",
       title: "anthropic",
       powers:
-        "planning copilot · pdf → vault conversion · podcast scripts · stock capture parsing.",
+        "planning copilot · pdf → vault conversion · podcast scripts · inventory capture parsing.",
       placeholder: "paste anthropic api key (sk-ant-…)",
     },
     {

@@ -3,6 +3,7 @@
 import { useMemo, useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import { FinanceCalendar } from "@/app/_components/finance-calendar";
+import type { GroceryTrip } from "@/app/_components/grocery-forecast";
 import { todayISO } from "@/app/_components/date-utils";
 import {
   formatMoney,
@@ -70,6 +71,7 @@ export function FinanceClient({
   spendRate,
   manualSpendEstimate,
   spendOverrides,
+  groceryTrips,
   initialSpendLimits,
 }: {
   initialAccounts: Account[];
@@ -83,6 +85,7 @@ export function FinanceClient({
   spendRate: SpendRate;
   manualSpendEstimate: number | null;
   spendOverrides: Record<string, number>;
+  groceryTrips: Record<string, GroceryTrip>;
   initialSpendLimits: SpendLimit[];
 }) {
   const [accounts, dispatchAccounts] = useOptimistic<Account[], AccountAction>(
@@ -532,6 +535,7 @@ export function FinanceClient({
           spendRate={spendRate}
           manualSpendEstimate={manualSpendEstimate}
           spendOverrides={spendOverrides}
+          groceryTrips={groceryTrips}
         />
       </aside>
 

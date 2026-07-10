@@ -19,7 +19,7 @@ export default async function InventoryPage() {
 
   if (!user) redirect("/login");
 
-  const [groupsResult, itemsResult, usagesResult] = await Promise.all([
+  const [groupsResult, itemsResult, usagesResult, settingsResult] = await Promise.all([
     supabase
       .from("inventory_groups")
       .select("id, name, color, created_at")
@@ -27,13 +27,18 @@ export default async function InventoryPage() {
     supabase
       .from("inventory_items")
       .select(
-        "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, created_at",
+        "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, shopping_pinned, buy_amount, est_price, price_source, price_checked_at, created_at",
       )
       .order("created_at", { ascending: true }),
     supabase
       .from("inventory_usages")
       .select("id, inventory_item_id, amount, period, interval_days, created_at")
       .order("created_at", { ascending: true }),
+    supabase
+      .from("user_settings")
+      .select("shopping_store, shopping_day")
+      .eq("user_id", user.id)
+      .maybeSingle(),
   ]);
 
   return (
@@ -55,6 +60,14 @@ export default async function InventoryPage() {
         initialGroups={(groupsResult.data ?? []) as InventoryGroup[]}
         initialItems={(itemsResult.data ?? []) as InventoryItem[]}
         initialUsages={(usagesResult.data ?? []) as InventoryUsage[]}
+        initialShoppingStore={
+          (settingsResult.data?.shopping_store as string | null) ?? null
+        }
+        initialShoppingDay={
+          typeof settingsResult.data?.shopping_day === "number"
+            ? settingsResult.data.shopping_day
+            : null
+        }
       />
     </main>
   );

@@ -114,9 +114,9 @@ function baseInput(): PlanningInput {
     ],
     todayDelta: -12,
     forecast: [
-      { date: "2026-07-08", inflow: 0, outflow: 0, estimatedEverydaySpend: 0, projectedNetWorth: 1000 },
-      { date: "2026-07-09", inflow: 0, outflow: 50, estimatedEverydaySpend: 10, projectedNetWorth: 940 },
-      { date: "2026-07-10", inflow: 0, outflow: 0, estimatedEverydaySpend: 10, projectedNetWorth: 930 },
+      { date: "2026-07-08", inflow: 0, outflow: 0, estimatedEverydaySpend: 0, estimatedGroceries: 0, projectedNetWorth: 1000 },
+      { date: "2026-07-09", inflow: 0, outflow: 50, estimatedEverydaySpend: 10, estimatedGroceries: 0, projectedNetWorth: 940 },
+      { date: "2026-07-10", inflow: 0, outflow: 0, estimatedEverydaySpend: 10, estimatedGroceries: 0, projectedNetWorth: 930 },
     ],
     everydaySpend: { dailyRate: 10, confident: true, manualFallback: null },
     items: [

@@ -688,6 +688,8 @@ export type UpdateSettingsInput = {
   timezone?: string;
   wakeStartHour?: number;
   wakeEndHour?: number;
+  shoppingStore?: string | null;
+  shoppingDay?: number | null;
 };
 
 export function validateUpdateSettings(
@@ -714,6 +716,29 @@ export function validateUpdateSettings(
       return { ok: false, error: "wakeEndHour must be 1-24" };
     }
     out.wakeEndHour = h;
+  }
+  if (raw.shoppingStore !== undefined) {
+    if (raw.shoppingStore === null) {
+      out.shoppingStore = null;
+    } else {
+      const store =
+        typeof raw.shoppingStore === "string" ? raw.shoppingStore.trim() : "";
+      if (!store || store.length > 200) {
+        return { ok: false, error: "shoppingStore must be 1-200 chars (or null to clear)" };
+      }
+      out.shoppingStore = store;
+    }
+  }
+  if (raw.shoppingDay !== undefined) {
+    if (raw.shoppingDay === null) {
+      out.shoppingDay = null;
+    } else {
+      const d = Math.trunc(Number(raw.shoppingDay));
+      if (!Number.isFinite(d) || d < 0 || d > 6) {
+        return { ok: false, error: "shoppingDay must be 0 (Sunday) through 6 (Saturday), or null to clear" };
+      }
+      out.shoppingDay = d;
+    }
   }
   if (
     out.wakeStartHour !== undefined &&

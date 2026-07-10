@@ -128,7 +128,7 @@ export function InventoryCalendar({
           <div className="space-y-1">
             <p className="text-fg">
               {daysLeft === 0 ? (
-                <span className="text-danger font-bold">out of stock</span>
+                <span className="text-danger font-bold">out</span>
               ) : (
                 <>
                   <span className="text-accent font-bold tabular-nums">

@@ -14,6 +14,17 @@ import {
   estimatedSpendOn,
   type SpendHistoryRow,
 } from "@/app/_components/spend-baseline";
+import {
+  buildShoppingList,
+  type ShoppingListItem,
+} from "@/app/_components/shopping-list";
+import {
+  buildGroceriesByDate,
+  deductBaseline,
+  groceryAmountsByDate,
+  type GroceryTrip,
+} from "@/app/_components/grocery-forecast";
+import type { UsageRule } from "@/app/_components/inventory-projection";
 
 // Shared cashflow-forecast core: the finance calendar's math (buildDayRows + the
 // flat everyday-spend baseline), assembled session-less. Parameterized by a
@@ -28,6 +39,7 @@ export type ForecastDay = {
   inflow: number;
   outflow: number;
   estimatedEverydaySpend: number;
+  estimatedGroceries: number;
   projectedNetWorth: number;
 };
 
@@ -41,6 +53,9 @@ export type FinanceForecast = {
     confident: boolean;
     manualFallback: number | null;
   };
+  // Projected grocery trips (shopping-list prices snapped to the shopping
+  // day); empty when no shopping day is configured.
+  groceryTrips: Record<string, GroceryTrip>;
   days: ForecastDay[];
 };
 
@@ -108,6 +123,25 @@ export async function buildFinanceForecast(params: {
         .eq("user_id", userId)
         .gte("date", today),
     ]);
+
+  const [inventoryRes, usagesRes, shoppingSettingsRes] = await Promise.all([
+    supabase
+      .from("inventory_items")
+      .select(
+        "id, name, quantity, unit, reorder_threshold, archived, shopping_pinned, buy_amount, est_price, price_source",
+      )
+      .eq("user_id", userId)
+      .eq("archived", false),
+    supabase
+      .from("inventory_usages")
+      .select("inventory_item_id, amount, period, interval_days")
+      .eq("user_id", userId),
+    supabase
+      .from("user_settings")
+      .select("shopping_day")
+      .eq("user_id", userId)
+      .maybeSingle(),
+  ]);
 
   const accounts = (accountsRes.data ?? []) as {
     balance: number;
@@ -179,15 +213,43 @@ export async function buildFinanceForecast(params: {
     end: endKey,
   });
 
-  const estimatedSpendByDate: Record<string, number> = {};
+  const baselineByDate: Record<string, number> = {};
   for (let d = addDaysKey(today, 1); d <= endKey; d = addDaysKey(d, 1)) {
-    estimatedSpendByDate[d] = estimatedSpendOn(
+    baselineByDate[d] = estimatedSpendOn(
       spendRate,
       dailySpendEstimate,
       overrides,
       d,
     );
   }
+
+  // Grocery layer: shopping-list prices snapped to the weekly shopping day,
+  // then absorbed into the everyday baseline so trips aren't double-counted.
+  const shoppingDay = shoppingSettingsRes.data?.shopping_day;
+  let groceryTrips: Record<string, GroceryTrip> = {};
+  if (typeof shoppingDay === "number") {
+    const shoppingItems = (inventoryRes.data ?? []) as ShoppingListItem[];
+    const rulesByItem = new Map<string, UsageRule[]>();
+    type UsageRow = UsageRule & { inventory_item_id: string };
+    for (const row of (usagesRes.data ?? []) as UsageRow[]) {
+      const bucket = rulesByItem.get(row.inventory_item_id);
+      if (bucket) bucket.push(row);
+      else rulesByItem.set(row.inventory_item_id, [row]);
+    }
+    groceryTrips = buildGroceriesByDate({
+      entries: buildShoppingList({
+        items: shoppingItems,
+        rulesByItem,
+        today,
+        horizonDays: horizon,
+      }),
+      today,
+      shoppingDay,
+      horizonDays: horizon,
+    });
+  }
+  const groceriesByDate = groceryAmountsByDate(groceryTrips);
+  const estimatedSpendByDate = deductBaseline(baselineByDate, groceriesByDate);
 
   const gridDays: string[] = [];
   for (let d = today; d <= endKey; d = addDaysKey(d, 1)) gridDays.push(d);
@@ -209,6 +271,7 @@ export async function buildFinanceForecast(params: {
     expenses,
     incomeByDate,
     estimatedSpendByDate,
+    groceriesByDate,
   });
 
   return {
@@ -221,11 +284,13 @@ export async function buildFinanceForecast(params: {
       confident: spendRate.confident,
       manualFallback: dailySpendEstimate,
     },
+    groceryTrips,
     days: rows.map((row) => ({
       date: row.dateKey,
       inflow: row.inflow,
       outflow: row.outflow,
       estimatedEverydaySpend: row.estimatedOutflow,
+      estimatedGroceries: row.estimatedGroceries,
       projectedNetWorth: Math.round(row.runningTotal * 100) / 100,
     })),
   };

@@ -11,7 +11,7 @@ import type {
 // future consumer share one query per request. userId is the cache key.
 
 const ITEM_COLUMNS =
-  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, created_at";
+  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, shopping_pinned, buy_amount, est_price, price_source, price_checked_at, created_at";
 const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
 

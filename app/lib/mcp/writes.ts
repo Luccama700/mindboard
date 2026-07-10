@@ -1,6 +1,11 @@
 import "server-only";
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
+import {
+  lookupPrices,
+  lookupPricesByRefs,
+} from "@/app/lib/shopping/price-lookup";
 import { ownerUserId, todayKey } from "./config";
 import {
   summarizeCreateRecurringTask,
@@ -421,6 +426,22 @@ export async function proposeUpdateStockFor(
 
 export async function proposeUpdateStock(raw: unknown): Promise<Result<Proposal>> {
   return proposeUpdateStockFor(createServiceClient(), ownerUserId(), raw);
+}
+
+// Direct execute (no propose step): AI price lookups only write source-labeled
+// cache metadata (est_price/price_source/price_checked_at) and never overwrite
+// a manual price — same spend-the-user's-key category as free-form capture
+// parsing, same direct-write category as icon generation.
+export async function lookupShoppingPrices(input: {
+  items?: string[];
+  force?: boolean;
+}) {
+  return lookupPricesByRefs({
+    supabase: createServiceClient(),
+    userId: ownerUserId(),
+    items: input.items,
+    force: input.force,
+  });
 }
 
 // The statement-import batch (docs/finance-automation-plan.md): resolve refs
@@ -900,21 +921,39 @@ async function executeUpdateStock(
 
   const itemIds = [
     ...new Set(
-      ops.flatMap((op) =>
-        op.kind === "create" || op.kind === "create_group" ? [] : [op.itemId],
-      ),
+      ops.flatMap((op) => {
+        if (op.kind === "create" || op.kind === "create_group") return [];
+        // Pin ops for items created earlier in the batch have no id yet.
+        if (op.kind === "pin") return op.itemId ? [op.itemId] : [];
+        return [op.itemId];
+      }),
     ),
   ];
   const running = new Map<string, number>();
+  // est_price/price_source per item, so buy-amount changes know whether an
+  // AI price is now stale (manual prices are never refreshed).
+  const priceMeta = new Map<
+    string,
+    { estPrice: number | null; source: "ai" | "manual" | null }
+  >();
   if (itemIds.length > 0) {
     const { data, error } = await supabase
       .from("inventory_items")
-      .select("id, quantity")
+      .select("id, quantity, est_price, price_source")
       .eq("user_id", ownerId)
       .in("id", itemIds);
     if (error) return { ok: false, error: error.message };
-    for (const row of (data ?? []) as { id: string; quantity: number }[]) {
+    for (const row of (data ?? []) as {
+      id: string;
+      quantity: number;
+      est_price: number | null;
+      price_source: "ai" | "manual" | null;
+    }[]) {
       running.set(row.id, Number(row.quantity) || 0);
+      priceMeta.set(row.id, {
+        estPrice: row.est_price === null ? null : Number(row.est_price),
+        source: row.price_source,
+      });
     }
     const missing = itemIds.filter((id) => !running.has(id));
     if (missing.length > 0) {
@@ -927,6 +966,14 @@ async function executeUpdateStock(
   // Groups created earlier in this batch, so later create/move ops can land in
   // them (resolved as pendingGroup at propose time).
   const createdGroups = new Map<string, string>(); // lowercased name → id
+  // Items created earlier in this batch, so later pin ops can target them
+  // (resolved as pendingItem at propose time).
+  const createdItems = new Map<string, string>(); // lowercased name → id
+  // Items newly pinned without a supplied price → post-batch AI price lookup.
+  const pinnedItemIds = new Set<string>();
+  // Items whose planned buy amount changed while carrying an AI price → the
+  // price no longer matches the plan; force-refresh it post-batch.
+  const staleAiPriceIds = new Set<string>();
 
   const groupIdFor = (
     groupId: string | null,
@@ -978,15 +1025,27 @@ async function executeUpdateStock(
         ) {
           return fail(`group for "${op.name}" not found`);
         }
-        const { error } = await supabase.from("inventory_items").insert({
-          user_id: ownerId,
-          inventory_group_id: group.value,
-          name: op.name,
-          quantity: op.quantity,
-          unit: op.unit,
-          last_restocked_at: op.quantity > 0 ? now : null,
-        });
-        if (error) return fail(error.message);
+        const { data, error } = await supabase
+          .from("inventory_items")
+          .insert({
+            user_id: ownerId,
+            inventory_group_id: group.value,
+            name: op.name,
+            quantity: op.quantity,
+            unit: op.unit,
+            last_restocked_at: op.quantity > 0 ? now : null,
+            ...(op.price != null
+              ? {
+                  est_price: op.price,
+                  price_source: "ai",
+                  price_checked_at: now,
+                }
+              : {}),
+          })
+          .select("id")
+          .single();
+        if (error || !data) return fail(error?.message ?? "item insert failed");
+        createdItems.set(op.name.toLowerCase(), data.id as string);
         applied.push(`${op.name}: created (${op.quantity}${op.unit ? ` ${op.unit}` : ""})`);
         break;
       }
@@ -1089,6 +1148,107 @@ async function executeUpdateStock(
         applied.push(`${op.name}: new group`);
         break;
       }
+      case "pin": {
+        const itemId =
+          op.itemId ?? createdItems.get((op.pendingItem ?? "").toLowerCase());
+        if (!itemId) {
+          return fail(`item "${op.pendingItem ?? op.name}" was not created`);
+        }
+        const updates: Record<string, unknown> = { shopping_pinned: op.pinned };
+        if (op.pinned && op.price != null) {
+          updates.est_price = op.price;
+          updates.price_source = "ai";
+          updates.price_checked_at = now;
+        }
+        if (op.pinned && op.buyAmount != null) {
+          updates.buy_amount = op.buyAmount;
+        }
+        const { error } = await supabase
+          .from("inventory_items")
+          .update(updates)
+          .eq("id", itemId)
+          .eq("user_id", ownerId);
+        if (error) return fail(error.message);
+        if (op.pinned && op.price == null) {
+          if (op.buyAmount != null && priceMeta.get(itemId)?.source === "ai") {
+            staleAiPriceIds.add(itemId);
+          } else {
+            pinnedItemIds.add(itemId);
+          }
+        }
+        applied.push(
+          `${op.name}: ${op.pinned ? "pinned to" : "removed from"} shopping list`,
+        );
+        break;
+      }
+      case "price": {
+        const { error } = await supabase
+          .from("inventory_items")
+          .update(
+            op.price === null
+              ? { est_price: null, price_source: null, price_checked_at: null }
+              : {
+                  est_price: op.price,
+                  price_source: "manual",
+                  price_checked_at: now,
+                },
+          )
+          .eq("id", op.itemId)
+          .eq("user_id", ownerId);
+        if (error) return fail(error.message);
+        applied.push(
+          op.price === null
+            ? `${op.name}: price cleared`
+            : `${op.name}: price → $${op.price.toFixed(2)}`,
+        );
+        break;
+      }
+      case "buy": {
+        const { error } = await supabase
+          .from("inventory_items")
+          .update({ buy_amount: op.amount })
+          .eq("id", op.itemId)
+          .eq("user_id", ownerId);
+        if (error) return fail(error.message);
+        const meta = priceMeta.get(op.itemId);
+        if (meta?.source === "ai") staleAiPriceIds.add(op.itemId);
+        else if (meta?.estPrice === null) pinnedItemIds.add(op.itemId);
+        applied.push(
+          op.amount === null
+            ? `${op.name}: buy amount cleared`
+            : `${op.name}: will buy ${op.amount}`,
+        );
+        break;
+      }
+    }
+  }
+
+  // Quiet post-response AI lookups: fill prices for newly-listed items, and
+  // force-refresh AI prices whose planned buy amount changed (lookupPrices
+  // never touches manual prices and no-ops without a store/key).
+  const fillIds = [...pinnedItemIds].filter((id) => !staleAiPriceIds.has(id));
+  const refreshIds = [...staleAiPriceIds];
+  if (fillIds.length > 0 || refreshIds.length > 0) {
+    try {
+      after(async () => {
+        try {
+          if (fillIds.length > 0) {
+            await lookupPrices({ supabase, userId: ownerId, itemIds: fillIds });
+          }
+          if (refreshIds.length > 0) {
+            await lookupPrices({
+              supabase,
+              userId: ownerId,
+              itemIds: refreshIds,
+              force: true,
+            });
+          }
+        } catch {
+          // best-effort: a failed lookup just leaves the price unset/stale
+        }
+      });
+    } catch {
+      // outside a request scope (e.g. tests) — skip the auto-lookup
     }
   }
 
@@ -2154,6 +2314,21 @@ export async function proposeUpdateSettingsFor(
   if (v.timezone !== undefined) bits.push(`timezone → ${v.timezone}`);
   if (v.wakeStartHour !== undefined) bits.push(`wake start → ${v.wakeStartHour}:00`);
   if (v.wakeEndHour !== undefined) bits.push(`wake end → ${v.wakeEndHour}:00`);
+  if (v.shoppingStore !== undefined) {
+    bits.push(
+      v.shoppingStore === null
+        ? "grocery store cleared"
+        : `grocery store → ${v.shoppingStore}`,
+    );
+  }
+  if (v.shoppingDay !== undefined) {
+    const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    bits.push(
+      v.shoppingDay === null
+        ? "shopping day cleared"
+        : `shopping day → ${DAY_NAMES[v.shoppingDay]}`,
+    );
+  }
   const summary = `Update preferences: ${bits.join(", ")}.`;
   const proposalId = await recordProposal(
     supabase,
@@ -2196,6 +2371,8 @@ async function executeUpdateSettings(
   if (v.timezone !== undefined) patch.timezone = v.timezone;
   if (v.wakeStartHour !== undefined) patch.wake_start_hour = v.wakeStartHour;
   if (v.wakeEndHour !== undefined) patch.wake_end_hour = v.wakeEndHour;
+  if (v.shoppingStore !== undefined) patch.shopping_store = v.shoppingStore;
+  if (v.shoppingDay !== undefined) patch.shopping_day = v.shoppingDay;
 
   const { error } = await supabase
     .from("user_settings")

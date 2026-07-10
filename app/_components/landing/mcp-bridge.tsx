@@ -75,7 +75,7 @@ export function McpBridge() {
           >
             <div className="flex items-center justify-between gap-3">
               <div className="text-meta text-muted space-y-0.5">
-                <p className="text-sm text-fg">stock: +2 milk · +12 eggs</p>
+                <p className="text-sm text-fg">inventory: +2 milk · +12 eggs</p>
                 <p>spend: −$34.20 · groceries</p>
               </div>
               <span className="px-3 py-2 text-[10px] tracking-widest uppercase bg-accent text-accent-fg whitespace-nowrap">

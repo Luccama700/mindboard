@@ -29,6 +29,28 @@ export const getDailySpendEstimate = cache(
   },
 );
 
+export type ShoppingSettings = {
+  store: string | null;
+  // Weekly shopping weekday, 0 = Sunday. Null = unset (grocery forecast off).
+  shoppingDay: number | null;
+};
+
+export const getShoppingSettings = cache(
+  async (userId: string): Promise<ShoppingSettings> => {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("user_settings")
+      .select("shopping_store, shopping_day")
+      .eq("user_id", userId)
+      .maybeSingle();
+    return {
+      store: (data?.shopping_store as string | null) ?? null,
+      shoppingDay:
+        typeof data?.shopping_day === "number" ? data.shopping_day : null,
+    };
+  },
+);
+
 export const getUserPreferences = cache(
   async (userId: string): Promise<UserPreferences> => {
     const supabase = await createClient();

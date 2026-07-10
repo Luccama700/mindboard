@@ -24,6 +24,7 @@ export type StockOp =
       quantity: number;
       unit?: string;
       group?: string;
+      price?: number;
     }
   | { op: "archive"; item: string }
   | { op: "restore"; item: string }
@@ -39,7 +40,12 @@ export type StockOp =
   | { op: "clear_usage"; item: string }
   | { op: "rename"; item: string; name: string }
   | { op: "move"; item: string; group?: string }
-  | { op: "create_group"; name: string };
+  | { op: "create_group"; name: string }
+  | { op: "pin_shopping"; item: string; price?: number; buyAmount?: number }
+  | { op: "unpin_shopping"; item: string }
+  | { op: "set_price"; item: string; price: number | null }
+  // Planned purchase amount in the item's own unit; null = one typical package.
+  | { op: "set_buy"; item: string; buyAmount: number | null };
 
 // What gets stored on the proposal and executed on confirm. groupId null +
 // pendingGroup set means the group is created by a create_group op earlier in
@@ -55,6 +61,8 @@ export type ResolvedStockOp =
       groupId: string | null;
       groupName: string | null;
       pendingGroup?: string | null;
+      // Agent-supplied estimated price, stored as an 'ai' price on insert.
+      price?: number | null;
     }
   | { kind: "archive"; itemId: string; name: string }
   | { kind: "restore"; itemId: string; name: string }
@@ -84,7 +92,24 @@ export type ResolvedStockOp =
       groupName: string | null;
       pendingGroup?: string | null;
     }
-  | { kind: "create_group"; name: string };
+  | { kind: "create_group"; name: string }
+  // itemId null + pendingItem set means the item is created by a create op
+  // earlier in the same batch; the executor resolves the id after that insert
+  // (the pendingGroup pattern). price only applies when pinned is true and is
+  // stored as an 'ai' price.
+  | {
+      kind: "pin";
+      itemId: string | null;
+      name: string;
+      pinned: boolean;
+      price?: number | null;
+      buyAmount?: number | null;
+      pendingItem?: string | null;
+    }
+  // A deliberate correction: stored as a 'manual' price (null clears it).
+  | { kind: "price"; itemId: string; name: string; price: number | null }
+  // Planned purchase amount (null clears back to "one typical package").
+  | { kind: "buy"; itemId: string; name: string; unit: string; amount: number | null };
 
 const ITEM_PRIORITIES = new Set(["low", "med", "high"]);
 
@@ -118,6 +143,12 @@ function refString(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const s = v.trim();
   return s ? s : null;
+}
+
+function moneyNumber(v: unknown): number | null {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0 || n > 100000) return null;
+  return Math.round(n * 100) / 100;
 }
 
 // ---------- shape validation ----------
@@ -172,7 +203,15 @@ export function validateStockOps(raw: unknown): Result<StockOp[]> {
         }
         const unit = typeof entry.unit === "string" ? entry.unit.trim() : "";
         const group = refString(entry.group) ?? undefined;
-        ops.push({ op, name, quantity, unit, group });
+        let price: number | undefined;
+        if (entry.price !== undefined && entry.price !== null) {
+          const p = moneyNumber(entry.price);
+          if (p === null) {
+            return { ok: false, error: `operation ${i + 1} (create ${name}): price must be a positive number` };
+          }
+          price = p;
+        }
+        ops.push({ op, name, quantity, unit, group, price });
         break;
       }
       case "archive":
@@ -265,10 +304,64 @@ export function validateStockOps(raw: unknown): Result<StockOp[]> {
         ops.push({ op, name });
         break;
       }
+      case "pin_shopping": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (pin_shopping): item is required` };
+        let price: number | undefined;
+        if (entry.price !== undefined && entry.price !== null) {
+          const p = moneyNumber(entry.price);
+          if (p === null) {
+            return { ok: false, error: `operation ${i + 1} (pin_shopping ${item}): price must be a positive number` };
+          }
+          price = p;
+        }
+        let buyAmount: number | undefined;
+        if (entry.buyAmount !== undefined && entry.buyAmount !== null) {
+          const b = positiveNumber(entry.buyAmount);
+          if (b === null) {
+            return { ok: false, error: `operation ${i + 1} (pin_shopping ${item}): buyAmount must be a positive number` };
+          }
+          buyAmount = b;
+        }
+        ops.push({ op, item, price, buyAmount });
+        break;
+      }
+      case "set_buy": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (set_buy): item is required` };
+        let buyAmount: number | null = null;
+        if (entry.buyAmount !== undefined && entry.buyAmount !== null) {
+          buyAmount = positiveNumber(entry.buyAmount);
+          if (buyAmount === null) {
+            return { ok: false, error: `operation ${i + 1} (set_buy ${item}): buyAmount must be a positive number or null` };
+          }
+        }
+        ops.push({ op, item, buyAmount });
+        break;
+      }
+      case "unpin_shopping": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (unpin_shopping): item is required` };
+        ops.push({ op, item });
+        break;
+      }
+      case "set_price": {
+        const item = refString(entry.item);
+        if (!item) return { ok: false, error: `operation ${i + 1} (set_price): item is required` };
+        let price: number | null = null;
+        if (entry.price !== undefined && entry.price !== null) {
+          price = moneyNumber(entry.price);
+          if (price === null) {
+            return { ok: false, error: `operation ${i + 1} (set_price ${item}): price must be a positive number or null` };
+          }
+        }
+        ops.push({ op, item, price });
+        break;
+      }
       default:
         return {
           ok: false,
-          error: `operation ${i + 1}: unknown op "${String(op)}" (expected add/remove/set/create/archive/restore/set_priority/set_threshold/set_usage/clear_usage/rename/move/create_group)`,
+          error: `operation ${i + 1}: unknown op "${String(op)}" (expected add/remove/set/create/archive/restore/set_priority/set_threshold/set_usage/clear_usage/rename/move/create_group/pin_shopping/unpin_shopping/set_price/set_buy)`,
         };
     }
   }
@@ -427,6 +520,7 @@ export function resolveStockOps(
           groupId,
           groupName,
           pendingGroup,
+          price: op.price ?? null,
         });
         break;
       }
@@ -544,6 +638,68 @@ export function resolveStockOps(
         resolved.push({ kind: "create_group", name: op.name });
         break;
       }
+      case "pin_shopping":
+      case "unpin_shopping": {
+        const pinned = op.op === "pin_shopping";
+        // An item created earlier in this batch has no id yet; the executor
+        // fills it in after the insert (the pendingGroup pattern).
+        if (createdNames.has(op.item.toLowerCase())) {
+          resolved.push({
+            kind: "pin",
+            itemId: null,
+            name: op.item,
+            pinned,
+            price: pinned ? (op.price ?? null) : null,
+            buyAmount: pinned ? (op.buyAmount ?? null) : null,
+            pendingItem: op.item,
+          });
+          break;
+        }
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) {
+          const inArchive = resolveItemRef(op.item, archived);
+          if (inArchive.ok) {
+            return {
+              ok: false,
+              error: `"${inArchive.value.name}" is not being tracked — add a restore op first`,
+            };
+          }
+          return found;
+        }
+        resolved.push({
+          kind: "pin",
+          itemId: found.value.id,
+          name: found.value.name,
+          pinned,
+          price: pinned ? (op.price ?? null) : null,
+          buyAmount: pinned ? (op.buyAmount ?? null) : null,
+          pendingItem: null,
+        });
+        break;
+      }
+      case "set_buy": {
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) return found;
+        resolved.push({
+          kind: "buy",
+          itemId: found.value.id,
+          name: found.value.name,
+          unit: found.value.unit,
+          amount: op.buyAmount,
+        });
+        break;
+      }
+      case "set_price": {
+        const found = resolveItemRef(op.item, active);
+        if (!found.ok) return found;
+        resolved.push({
+          kind: "price",
+          itemId: found.value.id,
+          name: found.value.name,
+          price: op.price,
+        });
+        break;
+      }
     }
   }
   return { ok: true, value: resolved };
@@ -569,7 +725,7 @@ export function receiptLine(op: ResolvedStockOp): string {
     case "recount":
       return `${op.name}  ${formatQty(op.before)} → ${withUnit(op.quantity, op.unit)}  (recount)`;
     case "create":
-      return `${op.name}  new · ${withUnit(op.quantity, op.unit)}${op.groupName ? ` · ${op.groupName}` : ""}`;
+      return `${op.name}  new · ${withUnit(op.quantity, op.unit)}${op.groupName ? ` · ${op.groupName}` : ""}${op.price != null ? ` · ~$${op.price.toFixed(2)}` : ""}`;
     case "archive":
       return `${op.name}  stop tracking`;
     case "restore":
@@ -597,6 +753,18 @@ export function receiptLine(op: ResolvedStockOp): string {
       return `${op.name}  moved to ${op.groupName ?? op.pendingGroup ?? "no group"}`;
     case "create_group":
       return `${op.name}  new group`;
+    case "pin":
+      return op.pinned
+        ? `${op.name}  → shopping list${op.buyAmount != null ? ` · buy ${formatQty(op.buyAmount)}` : ""}${op.price != null ? ` · ~$${op.price.toFixed(2)}` : ""}`
+        : `${op.name}  off shopping list`;
+    case "price":
+      return op.price === null
+        ? `${op.name}  price cleared`
+        : `${op.name}  price → $${op.price.toFixed(2)}`;
+    case "buy":
+      return op.amount === null
+        ? `${op.name}  buy amount cleared (one package)`
+        : `${op.name}  will buy ${withUnit(op.amount, op.unit)}`;
   }
 }
 
@@ -655,6 +823,13 @@ export function validateResolvedOps(raw: unknown): Result<ResolvedStockOp[]> {
         if (!name || quantity === null) {
           return { ok: false, error: "malformed create operation" };
         }
+        let createPrice: number | null = null;
+        if (entry.price !== null && entry.price !== undefined) {
+          createPrice = moneyNumber(entry.price);
+          if (createPrice === null) {
+            return { ok: false, error: "malformed create operation" };
+          }
+        }
         ops.push({
           kind: "create",
           name,
@@ -664,6 +839,7 @@ export function validateResolvedOps(raw: unknown): Result<ResolvedStockOp[]> {
           groupName: typeof entry.groupName === "string" ? entry.groupName : null,
           pendingGroup:
             typeof entry.pendingGroup === "string" ? entry.pendingGroup : null,
+          price: createPrice,
         });
         break;
       }
@@ -783,6 +959,81 @@ export function validateResolvedOps(raw: unknown): Result<ResolvedStockOp[]> {
         const name = refString(entry.name);
         if (!name) return { ok: false, error: "malformed create_group operation" };
         ops.push({ kind: "create_group", name });
+        break;
+      }
+      case "pin": {
+        const itemId = typeof entry.itemId === "string" ? entry.itemId : null;
+        const pendingItem =
+          typeof entry.pendingItem === "string" ? entry.pendingItem : null;
+        // Exactly one of itemId/pendingItem must identify the target.
+        if (
+          typeof entry.pinned !== "boolean" ||
+          (itemId === null) === (pendingItem === null)
+        ) {
+          return { ok: false, error: "malformed pin operation" };
+        }
+        let pinPrice: number | null = null;
+        if (entry.price !== null && entry.price !== undefined) {
+          pinPrice = moneyNumber(entry.price);
+          if (pinPrice === null) {
+            return { ok: false, error: "malformed pin operation" };
+          }
+        }
+        let pinBuy: number | null = null;
+        if (entry.buyAmount !== null && entry.buyAmount !== undefined) {
+          pinBuy = positiveNumber(entry.buyAmount);
+          if (pinBuy === null) {
+            return { ok: false, error: "malformed pin operation" };
+          }
+        }
+        ops.push({
+          kind: "pin",
+          itemId,
+          name: String(entry.name ?? ""),
+          pinned: entry.pinned,
+          price: pinPrice,
+          buyAmount: pinBuy,
+          pendingItem,
+        });
+        break;
+      }
+      case "buy": {
+        if (typeof entry.itemId !== "string") {
+          return { ok: false, error: "malformed buy operation" };
+        }
+        let amount: number | null = null;
+        if (entry.amount !== null && entry.amount !== undefined) {
+          amount = positiveNumber(entry.amount);
+          if (amount === null) {
+            return { ok: false, error: "malformed buy operation" };
+          }
+        }
+        ops.push({
+          kind: "buy",
+          itemId: entry.itemId,
+          name: String(entry.name ?? ""),
+          unit: String(entry.unit ?? ""),
+          amount,
+        });
+        break;
+      }
+      case "price": {
+        if (typeof entry.itemId !== "string") {
+          return { ok: false, error: "malformed price operation" };
+        }
+        let price: number | null = null;
+        if (entry.price !== null && entry.price !== undefined) {
+          price = moneyNumber(entry.price);
+          if (price === null) {
+            return { ok: false, error: "malformed price operation" };
+          }
+        }
+        ops.push({
+          kind: "price",
+          itemId: entry.itemId,
+          name: String(entry.name ?? ""),
+          price,
+        });
         break;
       }
       default:

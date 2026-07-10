@@ -10,6 +10,7 @@ import {
   getPlanningSnapshot,
   getPreferences,
   getScheduleSnapshot,
+  getShoppingList,
   getTasksSnapshot,
   listAccounts,
   listBrainNotes,
@@ -32,6 +33,7 @@ import {
 import {
   cancelAction,
   confirmAction,
+  lookupShoppingPrices,
   proposeArchiveRecurringTask,
   proposeCompleteRecurring,
   proposeCompleteTask,
@@ -203,10 +205,21 @@ const mcpHandler = createMcpHandler(
       {
         title: "List inventory",
         description:
-          "List stock items (id, name, quantity, unit, group, archived) plus inventory groups. Use it to find item ids/names before update_stock. Pass includeArchived to also see untracked items (needed before a restore op).",
+          "List inventory items (id, name, quantity, unit, group, archived, shoppingPinned, estPrice) plus inventory groups. Use it to find item ids/names before update_stock. Pass includeArchived to also see untracked items (needed before a restore op).",
         inputSchema: { includeArchived: z.boolean().optional() },
       },
       (args) => guard(async () => ok(await listInventory(args))),
+    );
+
+    server.registerTool(
+      "shopping_list",
+      {
+        title: "Shopping list",
+        description:
+          "The derived shopping list: items that are out, at/below their reorder threshold, projected to run out within ~7 days, or manually pinned — each with a reason, estimated price (AI-looked-up or manual), and the projected total. Manage it via update_stock ops pin_shopping / unpin_shopping / set_price; fetch missing prices with lookup_prices. Also returns the configured grocery store and weekly shopping day (set via update_settings).",
+        inputSchema: {},
+      },
+      () => guard(async () => ok(await getShoppingList())),
     );
 
     server.registerTool(
@@ -297,7 +310,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Finance forecast",
         description:
-          "Projected end-of-day net worth for the next N days (default 30, max 90): wage income from calendar-linked income sources, recurring bills, and the estimated everyday-spend layer (predicted-minimum baseline of half the median week, per-day overrides, manual fallback) — the same math as the finance calendar.",
+          "Projected end-of-day net worth for the next N days (default 30, max 90): wage income from calendar-linked income sources, recurring bills, the estimated everyday-spend layer (predicted-minimum baseline of half the median week, per-day overrides, manual fallback), and projected grocery trips (shopping-list prices snapped to the weekly shopping day, deducted from the baseline to avoid double-counting) — the same math as the finance calendar.",
         inputSchema: {
           days: z.number().int().min(1).max(90).optional(),
         },
@@ -354,7 +367,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Get preferences",
         description:
-          "The user's settings: timezone, wake window (start/end hour, drives free-time math), and the manual daily-spend estimate fallback.",
+          "The user's settings: timezone, wake window (start/end hour, drives free-time math), the manual daily-spend estimate fallback, and the grocery store + weekly shopping day behind the shopping list's prices and the finance forecast's grocery layer.",
         inputSchema: {},
       },
       () => guard(async () => ok(await getPreferences())),
@@ -630,11 +643,13 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: update preferences",
         description:
-          "Propose changing user preferences: timezone (IANA name) and/or the wake window (wakeStartHour 0-23, wakeEndHour 1-24 — drives free-time math). The daily-spend estimate lives in manage_finance instead. Returns a preview + proposalId; call confirm_action to apply.",
+          "Propose changing user preferences: timezone (IANA name), the wake window (wakeStartHour 0-23, wakeEndHour 1-24 — drives free-time math), the grocery store (shoppingStore, free text like \"Save-On-Foods Wesbrook, Vancouver\" — feeds AI price lookups; null clears), and/or the weekly shopping day (shoppingDay 0=Sunday…6=Saturday — anchors projected grocery spend on the finance forecast; null clears). The daily-spend estimate lives in manage_finance instead. Returns a preview + proposalId; call confirm_action to apply.",
         inputSchema: {
           timezone: z.string().optional(),
           wakeStartHour: z.number().int().min(0).max(23).optional(),
           wakeEndHour: z.number().int().min(1).max(24).optional(),
+          shoppingStore: z.string().nullish(),
+          shoppingDay: z.number().int().min(0).max(6).nullish(),
         },
       },
       (args) =>
@@ -909,7 +924,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: update inventory stock",
         description:
-          "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again), set_priority (how loudly it nags: high surfaces on home when merely low, med only when out, low never), set_threshold (reorder level; null clears), set_usage (consumption rate driving the depletion forecast — replaces the item's existing usage rules; period day/week/custom, custom needs intervalDays), clear_usage, rename, move (to a group; omit group for none), create_group (new inventory group, usable by later ops in the same batch). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Returns a receipt preview + proposalId; call confirm_action to apply. Batch a whole grocery haul into ONE call.",
+          "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item; optional price), archive (stop tracking), restore (track again), set_priority (how loudly it nags: high surfaces on home when merely low, med only when out, low never), set_threshold (reorder level; null clears), set_usage (consumption rate driving the depletion forecast — replaces the item's existing usage rules; period day/week/custom, custom needs intervalDays), clear_usage, rename, move (to a group; omit group for none), create_group (new inventory group, usable by later ops in the same batch), pin_shopping (keep an item on the shopping list regardless of stock; optional price if you already know it), unpin_shopping (take it off), set_price (record the expected TOTAL cost of the planned purchase; null clears — stored as a manual price that AI lookups never overwrite), set_buy (how much the user plans to buy, in the item's own unit; the AI price lookup then estimates the total for the realistic package combination covering it — changing it refreshes a stale AI price automatically). A create earlier in the batch can be pinned by name in the same batch. Items pinned without a price get an automatic AI price lookup after confirm (when a store is configured). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Returns a receipt preview + proposalId; call confirm_action to apply. Batch a whole grocery haul into ONE call.",
         inputSchema: {
           operations: z
             .array(
@@ -928,6 +943,10 @@ const mcpHandler = createMcpHandler(
                   "rename",
                   "move",
                   "create_group",
+                  "pin_shopping",
+                  "unpin_shopping",
+                  "set_price",
+                  "set_buy",
                 ]),
                 item: z
                   .string()
@@ -973,6 +992,20 @@ const mcpHandler = createMcpHandler(
                   .min(1)
                   .optional()
                   .describe("Every N days, for period=custom (set_usage)."),
+                price: z
+                  .number()
+                  .positive()
+                  .nullish()
+                  .describe(
+                    "Estimated TOTAL cost of the item's planned purchase, in the user's currency (create/pin_shopping optional; set_price required, null clears).",
+                  ),
+                buyAmount: z
+                  .number()
+                  .positive()
+                  .nullish()
+                  .describe(
+                    "How much the user plans to buy, in the item's own unit (pin_shopping optional; set_buy required, null clears back to one typical package). est_price should then cover the whole planned purchase — packs don't map 1:1 to units, so it's not price × amount.",
+                  ),
               }),
             )
             .min(1)
@@ -983,6 +1016,27 @@ const mcpHandler = createMcpHandler(
         guard(async () => {
           const r = await proposeUpdateStock(args);
           return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    // Direct execute (no propose step): price lookups only write source-labeled
+    // cache metadata and never overwrite a manual price. Spends cents on the
+    // user's stored Anthropic key per item, like free-form capture parsing.
+    server.registerTool(
+      "lookup_prices",
+      {
+        title: "Look up shopping prices",
+        description:
+          "Look up current prices for shopping-list items at the user's configured grocery store (one web-search Claude call per item on the user's stored Anthropic key — cents per item, max 10 per call). With no items given, targets the shopping list's unpriced entries. items accepts ids or names. force re-fetches AI-sourced prices; manually-set prices are never overwritten. Applies immediately (prices are editable cache metadata, not a confirmable write).",
+        inputSchema: {
+          items: z.array(z.string()).max(10).optional(),
+          force: z.boolean().optional(),
+        },
+      },
+      (args) =>
+        guard(async () => {
+          const r = await lookupShoppingPrices(args);
+          return r.ok ? ok({ results: r.results }) : fail(r.error);
         }),
     );
 

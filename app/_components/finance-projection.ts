@@ -62,6 +62,9 @@ export type DayRow = {
   // everyday-spend estimate (future days only) — kept apart from the firm
   // recurring-bill outflow so the UI can render it as an estimate (~).
   estimatedOutflow: number;
+  // projected grocery-trip spend (future days only), also an estimate but
+  // rendered as its own line so trips read distinctly from the daily baseline.
+  estimatedGroceries: number;
   runningTotal: number;
 };
 
@@ -328,10 +331,15 @@ export function buildDayRows(input: {
   // projected everyday spend per future day (weekday baseline or manual
   // fallback); must cover (today, last grid day] like incomeByDate.
   estimatedSpendByDate?: Record<string, number>;
+  // projected grocery-trip spend per future day (shopping-list prices snapped
+  // to the shopping day). Callers should deduct these from the everyday
+  // baseline (deductBaseline) before passing both, to avoid double-counting.
+  groceriesByDate?: Record<string, number>;
 }): DayRow[] {
   const { gridDays, month, today, netWorthToday, changes, expenses, incomeByDate } =
     input;
   const estimatedSpendByDate = input.estimatedSpendByDate ?? {};
+  const groceriesByDate = input.groceriesByDate ?? {};
 
   if (gridDays.length === 0) return [];
 
@@ -360,7 +368,8 @@ export function buildDayRows(input: {
     cum +=
       (incomeByDate[cursor] ?? 0) -
       expensesOnDate(expenses, cursor) -
-      (estimatedSpendByDate[cursor] ?? 0);
+      (estimatedSpendByDate[cursor] ?? 0) -
+      (groceriesByDate[cursor] ?? 0);
     futureCum.set(cursor, cum);
     cursor = addDaysKey(cursor, 1);
   }
@@ -384,17 +393,20 @@ export function buildDayRows(input: {
     let inflow: number;
     let outflow: number;
     let estimatedOutflow: number;
+    let estimatedGroceries: number;
     let runningTotal: number;
 
     if (isPast) {
       inflow = inByDate.get(dateKey) ?? 0;
       outflow = outByDate.get(dateKey) ?? 0;
       estimatedOutflow = 0;
+      estimatedGroceries = 0;
       runningTotal = netWorthToday - (pastSubtract.get(dateKey) ?? 0);
     } else {
       inflow = incomeByDate[dateKey] ?? 0;
       outflow = expensesOnDate(expenses, dateKey);
       estimatedOutflow = estimatedSpendByDate[dateKey] ?? 0;
+      estimatedGroceries = groceriesByDate[dateKey] ?? 0;
       runningTotal = netWorthToday + (futureCum.get(dateKey) ?? 0);
     }
 
@@ -406,6 +418,7 @@ export function buildDayRows(input: {
       inflow,
       outflow,
       estimatedOutflow,
+      estimatedGroceries,
       runningTotal,
     };
   });

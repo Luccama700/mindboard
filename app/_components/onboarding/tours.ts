@@ -86,7 +86,7 @@ export const INTRO_CARDS: IntroCard[] = [
   },
   {
     glyph: "▤",
-    title: "stock",
+    title: "inventory",
     body: "the shelf. what you have, and when you'll run out of it. milk becomes a plan, not a crisis.",
   },
   {

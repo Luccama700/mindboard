@@ -213,8 +213,21 @@ capture-bar, occurred_at). Two payoffs, both deferred until wanted:
 
 ## Explicitly out of scope
 
-Barcode scanning, shopping-list/task auto-generation, price tracking, multi-user
-sharing, editing past events. Any of these reopens scope with the user first.
+Barcode scanning, multi-user sharing, editing past events. Any of these reopens
+scope with the user first.
+
+**Scope reopened 2026-07-09: shopping list + price tracking.** The user asked
+for both, so they shipped as a follow-up milestone: a derived shopping list
+(out / low / running-out-soon items plus a stored `shopping_pinned` flag),
+AI-looked-up prices (`est_price`/`price_source`/`price_checked_at` — the total for the planned `buy_amount`, added in 0033, since store packs don't map 1:1 to tracked units;
+web-search Claude call against `user_settings.shopping_store`; manual edits
+always win), `update_stock` ops pin_shopping/unpin_shopping/set_price, the
+`shopping_list` + `lookup_prices` tools, and a projected-groceries layer on the
+finance forecast (trips snapped to `user_settings.shopping_day`, deducted from
+the everyday baseline). Pure logic: `app/_components/shopping-list.ts` and
+`app/_components/grocery-forecast.ts`. The same milestone moved ran-out items
+inline (quantity 0, greyed icon + ! badge) replacing the "ran out" footer, and
+renamed the user-facing feature "stock" → "inventory".
 
 ## Verification per milestone
 

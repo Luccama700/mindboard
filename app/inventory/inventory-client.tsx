@@ -1,12 +1,15 @@
 "use client";
 
-// The shelf: a calm picture of what you HAVE. Active stock renders grouped and
-// alphabetical; items that hit zero exit into a quiet "ran out" footer
-// (restock… / stop tracking) instead of alarming at the top; "stop tracking"
+// The shelf: a calm picture of what you HAVE. Active items render grouped and
+// alphabetical; items at zero stay on the shelf showing 0 with a greyed icon
+// and a quiet ! badge (restock is the normal + stepper); "stop tracking"
 // archives (reversible, in "not tracking") and hard delete only lives there.
 // The omnibox on top is search + capture in one field: plain text filters,
 // "12 eggs" / "+2 milk" apply instantly on enter, and anything else goes to
 // Claude and comes back as a propose → confirm receipt (ProposalCard).
+// The shopping panel (toolbar button, right aside) is the derived buy list:
+// out/low/running-out-soon items plus manual pins, with estimated prices that
+// feed the finance forecast's grocery layer.
 
 import {
   useEffect,
@@ -37,6 +40,8 @@ import {
   updateInventoryUsage,
 } from "@/app/actions/inventory";
 import { generateItemIcon } from "@/app/actions/inventory-icon";
+import { lookupItemPrices } from "@/app/actions/shopping";
+import { saveShoppingSettings } from "@/app/actions/settings";
 import {
   proposeStockFromText,
   proposeStockOps,
@@ -58,6 +63,11 @@ import {
   type UsageRule,
 } from "@/app/_components/inventory-projection";
 import { parseStockText } from "@/app/_components/stock-capture-parse";
+import {
+  buildShoppingList,
+  shoppingTotal,
+  type ShoppingEntry,
+} from "@/app/_components/shopping-list";
 import {
   resolveItemRef,
   type ResolvableItem,
@@ -196,11 +206,15 @@ export function InventoryClient({
   initialGroups,
   initialItems,
   initialUsages,
+  initialShoppingStore,
+  initialShoppingDay,
 }: {
   userId: string;
   initialGroups: InventoryGroup[];
   initialItems: InventoryItem[];
   initialUsages: InventoryUsage[];
+  initialShoppingStore: string | null;
+  initialShoppingDay: number | null;
 }) {
   const router = useRouter();
 
@@ -276,6 +290,10 @@ export function InventoryClient({
     new Set(),
   );
 
+  const [shoppingOpen, setShoppingOpen] = useState(false);
+  const [shoppingStore, setShoppingStore] = useState(initialShoppingStore);
+  const [shoppingDay, setShoppingDay] = useState(initialShoppingDay);
+
   const asideRef = useRef<HTMLDivElement>(null);
   const view = useViewMode();
   const countMode = useCountMode();
@@ -291,12 +309,6 @@ export function InventoryClient({
         .sort((a, b) => (b.archived_at ?? "").localeCompare(a.archived_at ?? "")),
     [items],
   );
-
-  const groupNames = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const g of groups) map.set(g.id, g.name);
-    return map;
-  }, [groups]);
 
   const groupColors = useMemo(() => {
     const map = new Map<string, string>();
@@ -317,21 +329,25 @@ export function InventoryClient({
     return out;
   }, [activeItems]);
 
-  // Quiet, opt-in attention: a hint only exists when the user set a usage rule
-  // (projected run-out date) or a reorder threshold ("low").
-  const hints = useMemo(() => {
-    const today = todayISO();
-    const rulesByItem = new Map<string, UsageRule[]>();
+  const rulesByItem = useMemo(() => {
+    const map = new Map<string, UsageRule[]>();
     for (const u of usages) {
       const rule: UsageRule = {
         amount: Number(u.amount),
         period: u.period,
         interval_days: u.interval_days,
       };
-      const bucket = rulesByItem.get(u.inventory_item_id);
+      const bucket = map.get(u.inventory_item_id);
       if (bucket) bucket.push(rule);
-      else rulesByItem.set(u.inventory_item_id, [rule]);
+      else map.set(u.inventory_item_id, [rule]);
     }
+    return map;
+  }, [usages]);
+
+  // Quiet, opt-in attention: a hint only exists when the user set a usage rule
+  // (projected run-out date) or a reorder threshold ("low") — plus "out" at 0.
+  const hints = useMemo(() => {
+    const today = todayISO();
     const map = new Map<string, { status: StockStatus; runOut: string | null }>();
     for (const item of activeItems) {
       const qty = Number(item.quantity);
@@ -341,7 +357,17 @@ export function InventoryClient({
       map.set(item.id, { status, runOut });
     }
     return map;
-  }, [activeItems, usages]);
+  }, [activeItems, rulesByItem]);
+
+  const shoppingEntries = useMemo(
+    () =>
+      buildShoppingList({
+        items: activeItems,
+        rulesByItem,
+        today: todayISO(),
+      }),
+    [activeItems, rulesByItem],
+  );
 
   // Omnibox doubles as search: when the text parses as a stock command, filter
   // by the item reference it names, not the raw "+2 milk".
@@ -356,7 +382,6 @@ export function InventoryClient({
 
   const shelfSections = useMemo(() => {
     const shelf = activeItems
-      .filter((it) => Number(it.quantity) > 0)
       .filter(matchesNeedle)
       .sort((a, b) => a.name.localeCompare(b.name));
     const byGroup = new Map<string | null, InventoryItem[]>();
@@ -383,6 +408,8 @@ export function InventoryClient({
     [shelfSections],
   );
 
+  // Still needed for the gentle "stop tracking?" nudge below, even though
+  // zero-quantity items now render inline on the shelf.
   const ranOutAll = useMemo(
     () =>
       activeItems
@@ -390,7 +417,6 @@ export function InventoryClient({
         .sort((a, b) => a.name.localeCompare(b.name)),
     [activeItems],
   );
-  const ranOut = ranOutAll.filter(matchesNeedle);
   const archivedFiltered = archivedItems.filter(matchesNeedle);
 
   // At most one gentle nudge, and only when an item has sat at zero for weeks:
@@ -419,13 +445,22 @@ export function InventoryClient({
 
   function onSelect(id: string) {
     setAdding(false);
+    setShoppingOpen(false);
     setSelectedId(id);
     scrollDetailIntoView();
   }
 
   function startAdd() {
     setAdding(true);
+    setShoppingOpen(false);
     setSelectedId(null);
+    scrollDetailIntoView();
+  }
+
+  function openShopping() {
+    setAdding(false);
+    setSelectedId(null);
+    setShoppingOpen(true);
     scrollDetailIntoView();
   }
 
@@ -449,6 +484,11 @@ export function InventoryClient({
       archived: false,
       archived_at: null,
       last_restocked_at: null,
+      shopping_pinned: false,
+      buy_amount: null,
+      est_price: null,
+      price_source: null,
+      price_checked_at: null,
       created_at: new Date().toISOString(),
     };
     setAdding(false);
@@ -493,7 +533,26 @@ export function InventoryClient({
         imageUrl: patch.image_url,
         reorderThreshold: patch.reorder_threshold,
         priority: patch.priority,
+        shoppingPinned: patch.shopping_pinned,
+        buyAmount: patch.buy_amount,
+        estPrice: patch.est_price,
       });
+      // Pinning can trigger a post-response AI price lookup server-side;
+      // refresh so the filled price lands without a manual reload.
+      if (patch.shopping_pinned === true) {
+        setTimeout(() => router.refresh(), 12000);
+      }
+    });
+  }
+
+  function onSaveShoppingSettings(input: {
+    store?: string | null;
+    shoppingDay?: number | null;
+  }) {
+    if (input.store !== undefined) setShoppingStore(input.store);
+    if (input.shoppingDay !== undefined) setShoppingDay(input.shoppingDay);
+    startTransition(async () => {
+      await saveShoppingSettings(input);
     });
   }
 
@@ -694,7 +753,7 @@ export function InventoryClient({
     try {
       const result = await fn();
       if (result.error || !result.proposalId || !result.preview) {
-        setCaptureError(result.error ?? "could not build a stock update");
+        setCaptureError(result.error ?? "could not build an inventory update");
         return;
       }
       setProposal({ proposalId: result.proposalId, preview: result.preview });
@@ -819,7 +878,7 @@ export function InventoryClient({
               type="text"
               placeholder='search · "12 eggs" · "+2 milk" · or say what you got'
               autoComplete="off"
-              aria-label="search or update stock"
+              aria-label="search or update inventory"
               className="min-h-11 flex-1 min-w-0 bg-transparent px-3 text-sm text-fg placeholder-muted focus:outline-none"
             />
             {query.trim() && (
@@ -837,7 +896,7 @@ export function InventoryClient({
 
         {proposal && (
           <ProposalCard
-            title="stock update"
+            title="inventory update"
             confirmLabel="apply"
             onConfirm={onConfirmProposal}
             onSkip={onSkipProposal}
@@ -851,7 +910,19 @@ export function InventoryClient({
         )}
 
         {hasActiveItems && (
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => (shoppingOpen ? setShoppingOpen(false) : openShopping())}
+              aria-pressed={shoppingOpen}
+              className={`min-h-9 px-3 text-[10px] tracking-widest uppercase border transition-colors mr-auto ${
+                shoppingOpen
+                  ? "border-accent bg-accent text-accent-fg"
+                  : "border-line bg-page text-muted hover:text-fg"
+              }`}
+            >
+              shopping{shoppingEntries.length > 0 ? ` · ${shoppingEntries.length}` : ""}
+            </button>
             <button
               type="button"
               onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
@@ -910,7 +981,7 @@ export function InventoryClient({
           >
             nothing on the shelf yet. add your first item.
           </p>
-        ) : shelfItems.length === 0 && ranOut.length === 0 ? (
+        ) : shelfItems.length === 0 ? (
           <p className="border border-dashed border-line-strong text-muted text-sm px-4 py-10 text-center">
             no matches.
           </p>
@@ -979,32 +1050,6 @@ export function InventoryClient({
               </div>
             ))}
           </div>
-        )}
-
-        {ranOut.length > 0 && (
-          <details className="border border-hairline px-3 py-2">
-            <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center gap-2 list-none [&::-webkit-details-marker]:hidden">
-              <span>ran out · {ranOut.length} ▸</span>
-            </summary>
-            <ul className="divide-y divide-hairline border-t border-hairline pb-1">
-              {ranOut.map((it) => (
-                <RanOutRow
-                  key={it.id}
-                  item={it}
-                  groupName={
-                    it.inventory_group_id
-                      ? (groupNames.get(it.inventory_group_id) ?? null)
-                      : null
-                  }
-                  selectMode={selectMode}
-                  checked={checkedIds.has(it.id)}
-                  onToggleCheck={toggleChecked}
-                  onRestock={(id, quantity) => onUpdateItem(id, { quantity })}
-                  onArchive={(id) => onSetArchived(id, true)}
-                />
-              ))}
-            </ul>
-          </details>
         )}
 
         {suggestion && (
@@ -1150,7 +1195,18 @@ export function InventoryClient({
       </section>
 
       <aside ref={asideRef} className="min-w-0 lg:sticky lg:top-8">
-        {adding ? (
+        {shoppingOpen ? (
+          <ShoppingListPanel
+            entries={shoppingEntries}
+            items={activeItems}
+            store={shoppingStore}
+            shoppingDay={shoppingDay}
+            onOpenItem={onSelect}
+            onUpdateItem={onUpdateItem}
+            onSaveSettings={onSaveShoppingSettings}
+            onRefresh={() => router.refresh()}
+          />
+        ) : adding ? (
           <AddItemForm
             groups={groups}
             defaultGroupId={groups[0]?.id ?? null}
@@ -1436,8 +1492,10 @@ function ItemRow({
     }
   }
 
-  const statusLabel =
-    hint.status === "low"
+  const out = hint.status === "out";
+  const statusLabel = out
+    ? "out"
+    : hint.status === "low"
       ? "low"
       : hint.runOut !== null
         ? `≈ ${formatRunOut(hint.runOut)}`
@@ -1497,20 +1555,36 @@ function ItemRow({
           }
           className="flex-1 min-w-0 text-left flex items-center gap-3 px-3 min-h-11 py-2 hover:bg-card-hover transition-colors"
         >
-          {item.image_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={item.image_url}
-              alt=""
-              className="w-8 h-8 flex-shrink-0 object-cover border border-line bg-page"
-            />
-          ) : (
-            <span
-              className="w-8 h-8 flex-shrink-0 border border-dashed border-line-subtle"
-              aria-hidden
-            />
-          )}
-          <span className="flex-1 min-w-0 truncate text-fg text-sm">
+          <span className="relative w-8 h-8 flex-shrink-0">
+            {item.image_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={item.image_url}
+                alt=""
+                className={`w-8 h-8 object-cover border border-line bg-page ${
+                  out ? "grayscale opacity-40" : ""
+                }`}
+              />
+            ) : (
+              <span
+                className={`block w-8 h-8 border border-dashed border-line-subtle ${
+                  out ? "opacity-40" : ""
+                }`}
+                aria-hidden
+              />
+            )}
+            {out && (
+              <span
+                className="absolute -top-1 -right-1 w-3.5 h-3.5 flex items-center justify-center bg-danger text-white text-[9px] leading-none"
+                aria-hidden
+              >
+                !
+              </span>
+            )}
+          </span>
+          <span
+            className={`flex-1 min-w-0 truncate text-sm ${out ? "text-muted" : "text-fg"}`}
+          >
             {item.name}
             {item.priority === "high" && (
               <span className="ml-2 text-[10px] text-danger" aria-label="high priority">
@@ -1521,7 +1595,7 @@ function ItemRow({
           {statusLabel !== null && (
             <span
               className={`flex-shrink-0 max-w-[45%] truncate text-meta ${
-                hint.status === "low" ? "text-danger" : "text-muted"
+                hint.status !== "ok" ? "text-danger" : "text-muted"
               }`}
             >
               {statusLabel}
@@ -1562,117 +1636,6 @@ function ItemRow({
           </button>
         </div>
       </div>
-    </li>
-  );
-}
-
-// An item at zero: quiet, one question — restock, or stop tracking?
-function RanOutRow({
-  item,
-  groupName,
-  selectMode,
-  checked,
-  onToggleCheck,
-  onRestock,
-  onArchive,
-}: {
-  item: InventoryItem;
-  groupName: string | null;
-  selectMode: boolean;
-  checked: boolean;
-  onToggleCheck: (id: string) => void;
-  onRestock: (id: string, quantity: number) => void;
-  onArchive: (id: string) => void;
-}) {
-  const [restocking, setRestocking] = useState(false);
-  const [draft, setDraft] = useState("1");
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (restocking) inputRef.current?.focus();
-  }, [restocking]);
-
-  function commitRestock() {
-    const n = Number(draft);
-    if (!Number.isFinite(n) || n <= 0) {
-      setRestocking(false);
-      return;
-    }
-    onRestock(item.id, Math.round(n * 1000) / 1000);
-    setRestocking(false);
-  }
-
-  return (
-    <li className="flex items-center gap-2 min-h-11 py-1">
-      {selectMode && (
-        <button
-          type="button"
-          onClick={() => onToggleCheck(item.id)}
-          aria-label={`select ${item.name}`}
-          aria-pressed={checked}
-          className="w-11 self-stretch flex items-center justify-center flex-shrink-0"
-        >
-          <span
-            className={`w-4 h-4 border transition-colors ${
-              checked ? "bg-accent border-accent" : "border-line-strong"
-            }`}
-            aria-hidden
-          />
-        </button>
-      )}
-      <span className="flex-1 min-w-0 truncate text-sm text-muted">
-        {item.name}
-        {groupName && (
-          <span className="text-meta text-muted"> · {groupName}</span>
-        )}
-      </span>
-      {restocking ? (
-        <span className="flex items-center gap-1">
-          <input
-            ref={inputRef}
-            type="number"
-            inputMode="decimal"
-            min={0}
-            step="any"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                commitRestock();
-              }
-              if (e.key === "Escape") setRestocking(false);
-            }}
-            aria-label={`restock quantity for ${item.name}`}
-            className="w-20 min-h-9 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center focus:outline-none transition-colors"
-          />
-          {item.unit && <span className="text-meta text-muted">{item.unit}</span>}
-          <button
-            type="button"
-            onClick={commitRestock}
-            className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-accent bg-accent text-accent-fg hover:opacity-90 transition-opacity"
-          >
-            ok
-          </button>
-        </span>
-      ) : (
-        <>
-          <button
-            type="button"
-            onClick={() => setRestocking(true)}
-            className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
-          >
-            restock…
-          </button>
-          <button
-            type="button"
-            onClick={() => onArchive(item.id)}
-            className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
-          >
-            stop tracking
-          </button>
-        </>
-      )}
     </li>
   );
 }
@@ -1729,6 +1692,7 @@ function ItemTile({
   onSelect: (id: string) => void;
   onAdjust: (id: string, delta: number) => void;
 }) {
+  const out = Number(item.quantity) <= 0;
   return (
     <div
       className={`relative flex aspect-square flex-col overflow-hidden border bg-card transition-colors ${
@@ -1754,11 +1718,25 @@ function ItemTile({
             <img
               src={item.image_url}
               alt=""
-              className="absolute inset-0 h-full w-full object-cover"
+              className={`absolute inset-0 h-full w-full object-cover ${
+                out ? "grayscale opacity-40" : ""
+              }`}
             />
           ) : (
-            <span className="absolute inset-0 flex items-center justify-center text-2xl font-bold text-muted">
+            <span
+              className={`absolute inset-0 flex items-center justify-center text-2xl font-bold text-muted ${
+                out ? "opacity-40" : ""
+              }`}
+            >
               {item.name.slice(0, 1).toUpperCase()}
+            </span>
+          )}
+          {out && (
+            <span
+              className="absolute top-1 right-1 w-4 h-4 flex items-center justify-center bg-danger text-white text-[10px] leading-none"
+              aria-hidden
+            >
+              !
             </span>
           )}
           <span className="absolute bottom-1 right-1 border border-line bg-page/85 px-1 py-0.5 text-[10px] leading-none text-fg tabular-nums">
@@ -2086,9 +2064,98 @@ function ItemDetail({
 
   return (
     <div className="border border-line bg-card p-4 space-y-5">
-      <h2 className="min-w-0 truncate text-title text-fg border-b border-hairline pb-2">
-        {item.name}
-      </h2>
+      <div className="space-y-2 border-b border-hairline pb-4">
+        <p className="text-[10px] tracking-widest uppercase text-muted">icon</p>
+        <div className="flex gap-3">
+          {item.image_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={item.image_url}
+              alt=""
+              className="w-20 h-20 flex-shrink-0 object-cover border border-line bg-page"
+            />
+          ) : (
+            <div
+              className="w-20 h-20 flex-shrink-0 border border-dashed border-line-subtle bg-page flex items-center justify-center text-muted text-[10px] tracking-widest uppercase"
+              aria-hidden
+            >
+              none
+            </div>
+          )}
+          <div className="flex-1 min-w-0 space-y-2">
+            <input
+              type="text"
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+                if (e.key === "Escape") {
+                  setNameDraft(item.name);
+                  e.currentTarget.blur();
+                }
+              }}
+              maxLength={120}
+              aria-label="item name"
+              className="w-full bg-transparent text-fg text-xl font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
+            />
+            <input
+              type="text"
+              value={genPrompt}
+              onChange={(e) => setGenPrompt(e.target.value)}
+              placeholder="describe the icon…"
+              maxLength={300}
+              aria-label="icon prompt"
+              className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={busy}
+                className="text-[10px] tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
+              >
+                {busy ? "working…" : "generate"}
+              </button>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy}
+                className="text-[10px] tracking-widest uppercase px-3 py-2 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              >
+                upload
+              </button>
+              {item.image_url && (
+                <button
+                  type="button"
+                  onClick={() => onUpdate(item.id, { image_url: null })}
+                  disabled={busy}
+                  className="text-[10px] tracking-widest uppercase px-3 py-2 text-danger hover:text-danger-hover transition-colors disabled:opacity-50"
+                >
+                  remove
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+        {iconError && <p className="text-danger text-xs">{iconError}</p>}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onUpload(f);
+            e.target.value = "";
+          }}
+          tabIndex={-1}
+          aria-hidden
+          className="sr-only"
+        />
+      </div>
 
       <div className="space-y-2">
         <p className="text-[10px] tracking-widest uppercase text-muted">
@@ -2179,108 +2246,32 @@ function ItemDetail({
         />
       </div>
 
-      <details className="border border-hairline px-3 py-2">
-        <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center list-none [&::-webkit-details-marker]:hidden">
-          appearance ▸
-        </summary>
-        <div className="space-y-5 pb-2">
-          <input
-            type="text"
-            value={nameDraft}
-            onChange={(e) => setNameDraft(e.target.value)}
-            onBlur={commitName}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                e.currentTarget.blur();
-              }
-              if (e.key === "Escape") {
-                setNameDraft(item.name);
-                e.currentTarget.blur();
-              }
-            }}
-            maxLength={120}
-            aria-label="item name"
-            className="w-full bg-transparent text-fg text-xl font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
-          />
-
-          <div className="space-y-2">
-            <p className="text-[10px] tracking-widest uppercase text-muted">
-              icon
-            </p>
-            <div className="flex gap-3">
-              {item.image_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={item.image_url}
-                  alt=""
-                  className="w-20 h-20 flex-shrink-0 object-cover border border-line bg-page"
-                />
-              ) : (
-                <div
-                  className="w-20 h-20 flex-shrink-0 border border-dashed border-line-subtle bg-page flex items-center justify-center text-muted text-[10px] tracking-widest uppercase"
-                  aria-hidden
-                >
-                  none
-                </div>
-              )}
-              <div className="flex-1 min-w-0 space-y-2">
-                <input
-                  type="text"
-                  value={genPrompt}
-                  onChange={(e) => setGenPrompt(e.target.value)}
-                  placeholder="describe the icon…"
-                  maxLength={300}
-                  aria-label="icon prompt"
-                  className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
-                />
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={onGenerate}
-                    disabled={busy}
-                    className="text-[10px] tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
-                  >
-                    {busy ? "working…" : "generate"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={busy}
-                    className="text-[10px] tracking-widest uppercase px-3 py-2 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
-                  >
-                    upload
-                  </button>
-                  {item.image_url && (
-                    <button
-                      type="button"
-                      onClick={() => onUpdate(item.id, { image_url: null })}
-                      disabled={busy}
-                      className="text-[10px] tracking-widest uppercase px-3 py-2 text-danger hover:text-danger-hover transition-colors disabled:opacity-50"
-                    >
-                      remove
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-            {iconError && <p className="text-danger text-xs">{iconError}</p>}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) onUpload(f);
-                e.target.value = "";
-              }}
-              tabIndex={-1}
-              aria-hidden
-              className="sr-only"
-            />
-          </div>
+      <div className="space-y-2">
+        <p className="text-[10px] tracking-widest uppercase text-muted">
+          shopping list
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              onUpdate(item.id, { shopping_pinned: !item.shopping_pinned })
+            }
+            aria-pressed={item.shopping_pinned}
+            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 border transition-colors ${
+              item.shopping_pinned
+                ? "bg-accent text-accent-fg border-accent"
+                : "border-line-strong text-muted hover:border-fg hover:text-fg"
+            }`}
+          >
+            {item.shopping_pinned ? "on the list" : "add to list"}
+          </button>
+          <PriceField item={item} onUpdate={onUpdate} />
         </div>
-      </details>
+        <p className="text-[10px] text-muted leading-relaxed">
+          pinned items stay on the shopping list · price is per package and
+          feeds the finance forecast
+        </p>
+      </div>
 
       <div className="flex items-center justify-between border-t border-hairline pt-3">
         <button
@@ -2307,5 +2298,588 @@ function ItemDetail({
         </button>
       </div>
     </div>
+  );
+}
+
+const DAY_LABELS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+// The buy list: derived entries (out/low/soon) plus manual pins, with editable
+// per-package prices. The store + shopping day it shows feed the AI price
+// lookups and the finance forecast's grocery layer.
+function ShoppingListPanel({
+  entries,
+  items,
+  store,
+  shoppingDay,
+  onOpenItem,
+  onUpdateItem,
+  onSaveSettings,
+  onRefresh,
+}: {
+  entries: ShoppingEntry[];
+  items: InventoryItem[];
+  store: string | null;
+  shoppingDay: number | null;
+  onOpenItem: (id: string) => void;
+  onUpdateItem: (id: string, patch: Partial<InventoryItem>) => void;
+  onSaveSettings: (input: { store?: string | null; shoppingDay?: number | null }) => void;
+  onRefresh: () => void;
+}) {
+  const [storeDraft, setStoreDraft] = useState(store ?? "");
+  const [prevStore, setPrevStore] = useState(store);
+  if (store !== prevStore) {
+    setPrevStore(store);
+    setStoreDraft(store ?? "");
+  }
+  const [addDraft, setAddDraft] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+  const [lookingUp, setLookingUp] = useState(false);
+  const [lookupNote, setLookupNote] = useState<string | null>(null);
+
+  const imageById = useMemo(
+    () => new Map(items.map((it) => [it.id, it.image_url])),
+    [items],
+  );
+  const { total, unpricedCount } = shoppingTotal(entries);
+
+  function commitStore() {
+    const next = storeDraft.trim() || null;
+    if (next === store) return;
+    onSaveSettings({ store: next });
+  }
+
+  function onAddSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const ref = addDraft.trim();
+    if (!ref) return;
+    const pool: ResolvableItem[] = items.map((it) => ({
+      id: it.id,
+      name: it.name,
+      quantity: Number(it.quantity),
+      unit: it.unit,
+      archived: it.archived,
+    }));
+    const found = resolveItemRef(ref, pool);
+    if (!found.ok) {
+      setAddError(found.error);
+      return;
+    }
+    setAddError(null);
+    setAddDraft("");
+    onUpdateItem(found.value.id, { shopping_pinned: true });
+  }
+
+  async function refreshPrices() {
+    const unpriced = entries
+      .filter((entry) => entry.estPrice === null)
+      .map((entry) => entry.id);
+    if (unpriced.length === 0) {
+      setLookupNote("everything has a price already");
+      return;
+    }
+    setLookingUp(true);
+    setLookupNote(null);
+    try {
+      const result = await lookupItemPrices({ itemIds: unpriced.slice(0, 10) });
+      if (result.error) {
+        setLookupNote(result.error);
+      } else {
+        const found =
+          result.results?.filter((r) => r.price !== null).length ?? 0;
+        setLookupNote(
+          found === 0 ? "no prices found" : `${found} price${found === 1 ? "" : "s"} found`,
+        );
+        onRefresh();
+      }
+    } finally {
+      setLookingUp(false);
+    }
+  }
+
+  return (
+    <div className="border border-line bg-card p-4 space-y-4">
+      <h2 className="text-title text-fg border-b border-hairline pb-2">
+        shopping list
+      </h2>
+
+      <div className="space-y-2">
+        <label
+          htmlFor="shopping-store"
+          className="text-[10px] tracking-widest uppercase text-muted"
+        >
+          store
+        </label>
+        <input
+          id="shopping-store"
+          type="text"
+          value={storeDraft}
+          onChange={(e) => setStoreDraft(e.target.value)}
+          onBlur={commitStore}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          placeholder='e.g. "Save-On-Foods Wesbrook, Vancouver"'
+          maxLength={200}
+          className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+        />
+        <div className="flex items-center gap-2">
+          <label
+            htmlFor="shopping-day"
+            className="text-[10px] tracking-widest uppercase text-muted"
+          >
+            shops on
+          </label>
+          <select
+            id="shopping-day"
+            value={shoppingDay === null ? "" : String(shoppingDay)}
+            onChange={(e) =>
+              onSaveSettings({
+                shoppingDay: e.target.value === "" ? null : Number(e.target.value),
+              })
+            }
+            className="min-h-9 bg-card border border-line-strong text-[10px] uppercase tracking-widest text-fg px-2 focus:outline-none focus:border-accent transition-colors"
+          >
+            <option value="">not set</option>
+            {DAY_LABELS.map((label, day) => (
+              <option key={label} value={day}>
+                {label}s
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="text-[10px] text-muted leading-relaxed">
+          the store powers price look-ups · the day anchors grocery spend on the
+          finance calendar
+        </p>
+      </div>
+
+      {entries.length === 0 ? (
+        <p className="border border-dashed border-line-strong text-muted text-sm px-4 py-10 text-center">
+          nothing to buy.
+        </p>
+      ) : (
+        <ul className="border-y border-hairline divide-y divide-hairline">
+          {entries.map((entry) => (
+            <li key={entry.id} className="flex items-center gap-2 min-h-11 py-1">
+              <span className="relative w-6 h-6 flex-shrink-0">
+                {imageById.get(entry.id) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={imageById.get(entry.id) as string}
+                    alt=""
+                    className={`w-6 h-6 object-cover border border-line bg-page ${
+                      entry.reason === "out" ? "grayscale opacity-40" : ""
+                    }`}
+                  />
+                ) : (
+                  <span
+                    className="block w-6 h-6 border border-dashed border-line-subtle"
+                    aria-hidden
+                  />
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={() => onOpenItem(entry.id)}
+                className="flex-1 min-w-0 text-left truncate text-sm text-fg hover:underline"
+              >
+                {entry.name}
+                <span className="ml-2 text-meta text-muted tabular-nums">
+                  {formatQty(entry.quantity)}
+                  {entry.unit ? ` ${entry.unit}` : ""}
+                </span>
+              </button>
+              <span
+                className={`flex-shrink-0 text-meta ${
+                  entry.reason === "out" || entry.reason === "low"
+                    ? "text-danger"
+                    : "text-muted"
+                }`}
+              >
+                {entry.reason === "soon"
+                  ? `≈ ${formatRunOut(entry.buyBy ?? entry.runOutDate ?? "")}`
+                  : entry.reason}
+              </span>
+              <BuyQty
+                entry={entry}
+                onUpdateItem={onUpdateItem}
+                onRefresh={onRefresh}
+              />
+              <RowPrice entry={entry} onUpdateItem={onUpdateItem} />
+              {entry.pinned && (
+                <button
+                  type="button"
+                  onClick={() => onUpdateItem(entry.id, { shopping_pinned: false })}
+                  aria-label={`remove ${entry.name} from shopping list`}
+                  className="min-h-9 px-2 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+                >
+                  unpin
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {entries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-fg tabular-nums">
+            total ~${total.toFixed(2)}
+          </span>
+          {unpricedCount > 0 && (
+            <span className="text-meta text-muted">
+              · {unpricedCount} unpriced
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={refreshPrices}
+            disabled={lookingUp}
+            className="ml-auto min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-50"
+          >
+            {lookingUp ? "looking up…" : "look up prices"}
+          </button>
+        </div>
+      )}
+      {lookupNote && <p className="text-[10px] text-muted">{lookupNote}</p>}
+
+      <form onSubmit={onAddSubmit} className="space-y-1">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={addDraft}
+            onChange={(e) => setAddDraft(e.target.value)}
+            placeholder="pin an item by name…"
+            aria-label="pin an item to the shopping list"
+            className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+          />
+          <button
+            type="submit"
+            className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+          >
+            pin
+          </button>
+        </div>
+        {addError && <p className="text-danger text-xs">{addError}</p>}
+      </form>
+    </div>
+  );
+}
+
+// How much of the item the user plans to buy, in its own unit. Changing it
+// re-fetches an AI price for the new plan (the model does the pack math —
+// chicken comes in packs of 2/4/6, so the total isn't price × amount). Manual
+// prices are left alone.
+function BuyQty({
+  entry,
+  onUpdateItem,
+  onRefresh,
+}: {
+  entry: ShoppingEntry;
+  onUpdateItem: (id: string, patch: Partial<InventoryItem>) => void;
+  onRefresh: () => void;
+}) {
+  const [draft, setDraft] = useState(
+    entry.buyAmount === null ? "" : String(entry.buyAmount),
+  );
+  const [prevBuy, setPrevBuy] = useState(entry.buyAmount);
+  if (entry.buyAmount !== prevBuy) {
+    setPrevBuy(entry.buyAmount);
+    setDraft(entry.buyAmount === null ? "" : String(entry.buyAmount));
+  }
+  const [looking, setLooking] = useState(false);
+
+  async function commit() {
+    const trimmed = draft.trim();
+    let next: number | null;
+    if (trimmed === "") {
+      next = null;
+    } else {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n <= 0) {
+        setDraft(entry.buyAmount === null ? "" : String(entry.buyAmount));
+        return;
+      }
+      next = Math.round(n * 1000) / 1000;
+    }
+    if (next === entry.buyAmount) return;
+    onUpdateItem(entry.id, { buy_amount: next });
+    if (entry.priceSource !== "manual") {
+      setLooking(true);
+      try {
+        await lookupItemPrices({ itemIds: [entry.id], force: true });
+        onRefresh();
+      } finally {
+        setLooking(false);
+      }
+    }
+  }
+
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      min={0}
+      step="any"
+      value={draft}
+      disabled={looking}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+        if (e.key === "Escape") {
+          setDraft(entry.buyAmount === null ? "" : String(entry.buyAmount));
+          e.currentTarget.blur();
+        }
+      }}
+      placeholder="qty"
+      title={`how many ${entry.unit || "of this"} you'll buy`}
+      aria-label={`planned buy amount for ${entry.name}`}
+      className="w-12 min-h-9 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors disabled:opacity-50"
+    />
+  );
+}
+
+function RowPrice({
+  entry,
+  onUpdateItem,
+}: {
+  entry: ShoppingEntry;
+  onUpdateItem: (id: string, patch: Partial<InventoryItem>) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  function commit() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed === "") {
+      if (entry.estPrice !== null) {
+        onUpdateItem(entry.id, { est_price: null, price_source: null });
+      }
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n <= 0) return;
+    const rounded = Math.round(n * 100) / 100;
+    if (rounded === entry.estPrice) return;
+    onUpdateItem(entry.id, { est_price: rounded, price_source: "manual" });
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        type="number"
+        inputMode="decimal"
+        min={0}
+        step="0.01"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+          if (e.key === "Escape") setEditing(false);
+        }}
+        aria-label={`price for ${entry.name}`}
+        className="w-20 min-h-9 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center focus:outline-none transition-colors"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setDraft(entry.estPrice === null ? "" : String(entry.estPrice));
+        setEditing(true);
+      }}
+      aria-label={`edit price for ${entry.name}`}
+      className={`min-h-9 px-2 text-sm tabular-nums transition-colors ${
+        entry.estPrice === null
+          ? "text-muted hover:text-fg"
+          : entry.priceSource === "ai"
+            ? "text-muted hover:text-fg"
+            : "text-fg hover:text-accent"
+      }`}
+    >
+      {entry.estPrice === null
+        ? "price?"
+        : `${entry.priceSource === "ai" ? "~" : ""}$${entry.estPrice.toFixed(2)}`}
+    </button>
+  );
+}
+
+// Per-package price in the item detail: manual edits stick (AI never
+// overwrites them); "look up" force-fetches from the configured store.
+function PriceField({
+  item,
+  onUpdate,
+}: {
+  item: InventoryItem;
+  onUpdate: (id: string, patch: Partial<InventoryItem>) => void;
+}) {
+  const router = useRouter();
+  const [draft, setDraft] = useState(
+    item.est_price === null ? "" : String(item.est_price),
+  );
+  const [prevPrice, setPrevPrice] = useState(item.est_price);
+  if (item.est_price !== prevPrice) {
+    setPrevPrice(item.est_price);
+    setDraft(item.est_price === null ? "" : String(item.est_price));
+  }
+  const [buyDraft, setBuyDraft] = useState(
+    item.buy_amount === null ? "" : String(item.buy_amount),
+  );
+  const [prevBuy, setPrevBuy] = useState(item.buy_amount);
+  if (item.buy_amount !== prevBuy) {
+    setPrevBuy(item.buy_amount);
+    setBuyDraft(item.buy_amount === null ? "" : String(item.buy_amount));
+  }
+  const [looking, setLooking] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  function commitBuy() {
+    const trimmed = buyDraft.trim();
+    let next: number | null;
+    if (trimmed === "") {
+      next = null;
+    } else {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n <= 0) {
+        setBuyDraft(item.buy_amount === null ? "" : String(item.buy_amount));
+        return;
+      }
+      next = Math.round(n * 1000) / 1000;
+    }
+    if (next === item.buy_amount) return;
+    onUpdate(item.id, { buy_amount: next });
+    // The plan changed, so an AI price is stale — re-fetch it. Manual prices
+    // stay put (the user owns them).
+    if (item.price_source !== "manual") void lookUp();
+  }
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (trimmed === "") {
+      if (item.est_price !== null) {
+        onUpdate(item.id, { est_price: null, price_source: null });
+      }
+      return;
+    }
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n <= 0) {
+      setDraft(item.est_price === null ? "" : String(item.est_price));
+      return;
+    }
+    const rounded = Math.round(n * 100) / 100;
+    if (rounded === item.est_price) return;
+    onUpdate(item.id, { est_price: rounded, price_source: "manual" });
+  }
+
+  async function lookUp() {
+    setLooking(true);
+    setNote(null);
+    try {
+      const result = await lookupItemPrices({
+        itemIds: [item.id],
+        force: true,
+      });
+      if (result.error) {
+        setNote(result.error);
+        return;
+      }
+      const r = result.results?.[0];
+      if (r?.skipped === "manual-price") {
+        setNote("manual price kept — clear it to let AI update");
+      } else if (r?.error) {
+        setNote(r.error);
+      } else if (r?.price != null) {
+        setNote(r.productName ? `found: ${r.productName}` : null);
+      }
+      router.refresh();
+    } finally {
+      setLooking(false);
+    }
+  }
+
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <span className="flex items-center gap-1">
+        <span className="text-[10px] tracking-widest uppercase text-muted">
+          buy
+        </span>
+        <input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="any"
+          value={buyDraft}
+          onChange={(e) => setBuyDraft(e.target.value)}
+          onBlur={commitBuy}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+            if (e.key === "Escape") {
+              setBuyDraft(item.buy_amount === null ? "" : String(item.buy_amount));
+              e.currentTarget.blur();
+            }
+          }}
+          placeholder="qty"
+          aria-label="planned buy amount"
+          className="w-16 min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors"
+        />
+        {item.unit && (
+          <span className="text-meta text-muted">{item.unit}</span>
+        )}
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="text-muted text-sm">
+          {item.price_source === "ai" ? "~$" : "$"}
+        </span>
+        <input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="0.01"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+            if (e.key === "Escape") {
+              setDraft(item.est_price === null ? "" : String(item.est_price));
+              e.currentTarget.blur();
+            }
+          }}
+          placeholder="price"
+          aria-label="estimated price per package"
+          className="w-24 min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors"
+        />
+      </span>
+      <button
+        type="button"
+        onClick={lookUp}
+        disabled={looking}
+        className="min-h-11 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+      >
+        {looking ? "looking…" : "look up"}
+      </button>
+      {note && <span className="w-full text-[10px] text-muted">{note}</span>}
+    </span>
   );
 }

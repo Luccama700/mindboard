@@ -1,10 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { createClient } from "@/utils/supabase/server";
+import { lookupPrices } from "@/app/lib/shopping/price-lookup";
 
 const ITEM_COLUMNS =
-  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, created_at";
+  "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, shopping_pinned, buy_amount, est_price, price_source, price_checked_at, created_at";
 
 const PRIORITIES = new Set(["low", "med", "high"]);
 const GROUP_COLUMNS = "id, name, color, created_at";
@@ -152,6 +154,9 @@ export async function updateInventoryItem(input: {
   imageUrl?: string | null;
   reorderThreshold?: number | null;
   priority?: "low" | "med" | "high";
+  shoppingPinned?: boolean;
+  buyAmount?: number | null;
+  estPrice?: number | null;
 }) {
   const supabase = await createClient();
   const {
@@ -197,6 +202,33 @@ export async function updateInventoryItem(input: {
     if (!PRIORITIES.has(input.priority)) return { error: "invalid priority" };
     updates.priority = input.priority;
   }
+  if (input.shoppingPinned !== undefined) {
+    updates.shopping_pinned = input.shoppingPinned === true;
+  }
+  if (input.buyAmount !== undefined) {
+    if (input.buyAmount === null) {
+      updates.buy_amount = null;
+    } else {
+      const n = Number(input.buyAmount);
+      if (!Number.isFinite(n) || n <= 0) return { error: "invalid buy amount" };
+      updates.buy_amount = Math.round(n * 1000) / 1000;
+    }
+  }
+  if (input.estPrice !== undefined) {
+    if (input.estPrice === null) {
+      updates.est_price = null;
+      updates.price_source = null;
+      updates.price_checked_at = null;
+    } else {
+      const p = Number(input.estPrice);
+      if (!Number.isFinite(p) || p < 0 || p > 100000) {
+        return { error: "invalid price" };
+      }
+      updates.est_price = Math.round(p * 100) / 100;
+      updates.price_source = "manual";
+      updates.price_checked_at = new Date().toISOString();
+    }
+  }
 
   if (Object.keys(updates).length === 0) return { error: null };
 
@@ -220,6 +252,20 @@ export async function updateInventoryItem(input: {
     .eq("id", input.id);
 
   if (error) return { error: error.message };
+
+  // Pinning to the shopping list quietly fills a missing price after the
+  // response (lookupPrices skips priced items and no-ops without a store/key).
+  if (updates.shopping_pinned === true) {
+    after(async () => {
+      try {
+        await lookupPrices({ supabase, userId: user.id, itemIds: [input.id] });
+        revalidatePath("/inventory");
+        revalidatePath("/finance");
+      } catch {
+        // best-effort: a failed lookup just leaves the price unset
+      }
+    });
+  }
 
   revalidatePath("/inventory");
   return { error: null };

@@ -16,12 +16,25 @@ import type {
   SpendLimit,
 } from "@/app/_components/finance-types";
 import { computeSpendRate } from "@/app/_components/spend-baseline";
+import { buildShoppingList } from "@/app/_components/shopping-list";
+import {
+  buildGroceriesByDate,
+  type GroceryTrip,
+} from "@/app/_components/grocery-forecast";
+import type { UsageRule } from "@/app/_components/inventory-projection";
 import {
   getSpendHistory,
   getSpendLimits,
   getSpendOverrides,
 } from "@/app/lib/data/finance";
-import { getDailySpendEstimate } from "@/app/lib/data/settings";
+import {
+  getInventoryItems,
+  getInventoryUsages,
+} from "@/app/lib/data/inventory";
+import {
+  getDailySpendEstimate,
+  getShoppingSettings,
+} from "@/app/lib/data/settings";
 import { FinanceClient } from "./finance-client";
 
 type GoogleStatus = "connected" | "connect" | "error";
@@ -222,6 +235,40 @@ export default async function FinancePage({
       ? "error"
       : "connected";
 
+  // Projected grocery trips: shopping-list prices snapped to the weekly
+  // shopping day (see grocery-forecast.ts). Off until a shopping day is set.
+  const [inventoryItems, inventoryUsages, shoppingSettings] = await Promise.all([
+    getInventoryItems(user.id),
+    getInventoryUsages(user.id),
+    getShoppingSettings(user.id),
+  ]);
+  let groceryTrips: Record<string, GroceryTrip> = {};
+  if (shoppingSettings.shoppingDay !== null) {
+    const rulesByItem = new Map<string, UsageRule[]>();
+    for (const usage of inventoryUsages) {
+      const rule: UsageRule = {
+        amount: Number(usage.amount),
+        period: usage.period,
+        interval_days: usage.interval_days,
+      };
+      const bucket = rulesByItem.get(usage.inventory_item_id);
+      if (bucket) bucket.push(rule);
+      else rulesByItem.set(usage.inventory_item_id, [rule]);
+    }
+    const today = toDateKey(new Date());
+    groceryTrips = buildGroceriesByDate({
+      entries: buildShoppingList({
+        items: inventoryItems,
+        rulesByItem,
+        today,
+        horizonDays: 90,
+      }),
+      today,
+      shoppingDay: shoppingSettings.shoppingDay,
+      horizonDays: 90,
+    });
+  }
+
   return (
     <main className="min-h-screen px-5 pt-8 pb-64 lg:px-12">
       <header className="mb-8 flex items-center justify-between pr-10 lg:pr-0">
@@ -246,6 +293,7 @@ export default async function FinancePage({
         spendRate={spendRate}
         manualSpendEstimate={manualSpendEstimate}
         spendOverrides={spendOverrides}
+        groceryTrips={groceryTrips}
         initialSpendLimits={spendLimits as SpendLimit[]}
       />
     </main>

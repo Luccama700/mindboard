@@ -84,6 +84,11 @@ function item(partial: Partial<InventoryItem>): InventoryItem {
     archived: false,
     archived_at: null,
     last_restocked_at: null,
+    shopping_pinned: false,
+    buy_amount: null,
+    est_price: null,
+    price_source: null,
+    price_checked_at: null,
     created_at: "2026-01-01T00:00:00Z",
     ...partial,
   };

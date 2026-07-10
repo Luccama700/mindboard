@@ -18,6 +18,11 @@ export type InventoryItem = {
   archived: boolean;
   archived_at: string | null;
   last_restocked_at: string | null;
+  shopping_pinned: boolean;
+  buy_amount: number | null;
+  est_price: number | null;
+  price_source: "ai" | "manual" | null;
+  price_checked_at: string | null;
   created_at: string;
 };
 

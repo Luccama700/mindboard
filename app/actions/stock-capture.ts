@@ -99,7 +99,7 @@ export async function proposeStockFromText(input: {
     .maybeSingle();
   const encrypted = settings?.anthropic_api_key as string | null | undefined;
   if (!encrypted) {
-    return { error: "add your anthropic api key in settings to use free-form stock notes" };
+    return { error: "add your anthropic api key in settings to use free-form inventory notes" };
   }
   let apiKey: string;
   try {

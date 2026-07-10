@@ -17,6 +17,11 @@ import {
   ruleLandsOn,
 } from "./finance-projection";
 import { estimatedSpendOn, type SpendRate } from "./spend-baseline";
+import {
+  deductBaseline,
+  groceryAmountsByDate,
+  type GroceryTrip,
+} from "./grocery-forecast";
 import { saveDailySpendEstimate } from "@/app/actions/settings";
 import { setSpendOverride } from "@/app/actions/finance";
 import type {
@@ -76,6 +81,7 @@ export function FinanceCalendar({
   spendRate,
   manualSpendEstimate,
   spendOverrides,
+  groceryTrips,
 }: {
   month: string;
   currency: string;
@@ -88,6 +94,9 @@ export function FinanceCalendar({
   spendRate: SpendRate;
   manualSpendEstimate: number | null;
   spendOverrides: Record<string, number>;
+  // Projected grocery trips (shopping-list prices snapped to the shopping
+  // day), computed server-side; empty when no shopping day is set.
+  groceryTrips: Record<string, GroceryTrip>;
 }) {
   const today = todayISO();
   const gridDays = useMemo(() => buildGrid(month), [month]);
@@ -116,8 +125,14 @@ export function FinanceCalendar({
     return computeIncomeByDate(incomeSources, hoursBySource, { start, end });
   }, [incomeSources, hoursBySource, gridDays, today]);
 
+  const groceriesByDate = useMemo(
+    () => groceryAmountsByDate(groceryTrips),
+    [groceryTrips],
+  );
+
   // Everyday-spend estimate per future day, covering (today, grid end] so the
-  // running total stays anchored when viewing a far-future month.
+  // running total stays anchored when viewing a far-future month. Grocery
+  // trips absorb the baseline that follows them (no double-counting).
   const estimatedSpendByDate = useMemo(() => {
     const out: Record<string, number> = {};
     const end = gridDays[gridDays.length - 1] ?? today;
@@ -132,8 +147,8 @@ export function FinanceCalendar({
       if (estimate > 0) out[cursor] = estimate;
       cursor = addDaysKey(cursor, 1);
     }
-    return out;
-  }, [gridDays, today, spendRate, manualSpendEstimate, overrides]);
+    return deductBaseline(out, groceriesByDate);
+  }, [gridDays, today, spendRate, manualSpendEstimate, overrides, groceriesByDate]);
 
   const rows = useMemo(
     () =>
@@ -150,8 +165,9 @@ export function FinanceCalendar({
         expenses,
         incomeByDate,
         estimatedSpendByDate,
+        groceriesByDate,
       }),
-    [gridDays, month, today, netWorthToday, changes, expenses, incomeByDate, estimatedSpendByDate],
+    [gridDays, month, today, netWorthToday, changes, expenses, incomeByDate, estimatedSpendByDate, groceriesByDate],
   );
 
   const rowByDate = useMemo(() => {
@@ -269,6 +285,14 @@ export function FinanceCalendar({
                     ~−{formatMoney(row.estimatedOutflow, currency)}
                   </p>
                 )}
+                {row.estimatedGroceries > 0 && (
+                  <p
+                    className="text-[10px] tabular-nums text-muted leading-tight"
+                    title="projected grocery trip"
+                  >
+                    ≈−{formatMoney(row.estimatedGroceries, currency)}
+                  </p>
+                )}
               </div>
             </button>
           );
@@ -292,6 +316,7 @@ export function FinanceCalendar({
           )}
           override={overrides[selected]}
           onSetOverride={handleSetOverride}
+          groceryTrip={groceryTrips[selected]}
         />
       )}
     </section>
@@ -514,6 +539,7 @@ function SelectedDay({
   baselineEstimate,
   override,
   onSetOverride,
+  groceryTrip,
 }: {
   dateKey: string;
   row: ReturnType<typeof buildDayRows>[number];
@@ -525,6 +551,7 @@ function SelectedDay({
   baselineEstimate: number;
   override: number | undefined;
   onSetOverride: (dateKey: string, amount: number | null) => void;
+  groceryTrip: GroceryTrip | undefined;
 }) {
   const label = formatWeekdayMonthDay(new Date(`${dateKey}T00:00:00`));
   const date = new Date(`${dateKey}T00:00:00`);
@@ -615,6 +642,22 @@ function SelectedDay({
               </p>
             </div>
           ))}
+
+          {!row.isPast && groceryTrip && (
+            <div className="flex items-center gap-2 border border-line border-dashed px-3 py-2">
+              <span className="h-3 w-3 flex-shrink-0 border border-danger" aria-hidden />
+              <p className="flex-1 min-w-0 text-sm text-fg">
+                grocery trip
+                <span className="text-muted">
+                  {" "}
+                  · {groceryTrip.itemNames.join(", ")}
+                </span>
+              </p>
+              <p className="text-sm font-bold tabular-nums text-muted whitespace-nowrap">
+                ≈−{formatMoney(groceryTrip.amount, currency)}
+              </p>
+            </div>
+          )}
 
           {!row.isPast && (
             <FutureSpendSlider

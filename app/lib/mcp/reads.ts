@@ -26,6 +26,11 @@ import {
   type UsageRule,
 } from "@/app/_components/inventory-projection";
 import {
+  buildShoppingList,
+  shoppingTotal,
+  type ShoppingListItem,
+} from "@/app/_components/shopping-list";
+import {
   listVaultNotePaths,
   readVaultCredentials,
   readVaultNoteRaw,
@@ -328,7 +333,7 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
   let itemQuery = supabase
     .from("inventory_items")
     .select(
-      "id, name, quantity, unit, reorder_threshold, priority, archived, archived_at, inventory_group_id, created_at",
+      "id, name, quantity, unit, reorder_threshold, priority, archived, archived_at, inventory_group_id, shopping_pinned, buy_amount, est_price, price_source, created_at",
     )
     .eq("user_id", ownerId)
     .order("name", { ascending: true });
@@ -356,6 +361,10 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
     archived: boolean;
     archived_at: string | null;
     inventory_group_id: string | null;
+    shopping_pinned: boolean;
+    buy_amount: number | null;
+    est_price: number | null;
+    price_source: "ai" | "manual" | null;
     created_at: string;
   };
 
@@ -368,11 +377,75 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
       reorderThreshold: row.reorder_threshold,
       priority: row.priority,
       archived: row.archived,
+      shoppingPinned: row.shopping_pinned,
+      buyAmount: row.buy_amount === null ? null : Number(row.buy_amount),
+      estPrice: row.est_price === null ? null : Number(row.est_price),
+      priceSource: row.price_source,
       group: row.inventory_group_id
         ? (groupNames.get(row.inventory_group_id) ?? null)
         : null,
     })),
     groups: groups.map((g) => ({ id: g.id, name: g.name })),
+  };
+}
+
+// The derived shopping list: out / low / running-out-soon items plus manual
+// pins, with estimated prices and the projected total. Manage pins and prices
+// via update_stock (pin_shopping / unpin_shopping / set_price).
+export async function getShoppingList() {
+  const { supabase, ownerId } = scoped();
+  const today = todayKey();
+
+  const [itemsRes, usagesRes, settingsRes] = await Promise.all([
+    supabase
+      .from("inventory_items")
+      .select(
+        "id, name, quantity, unit, reorder_threshold, archived, shopping_pinned, buy_amount, est_price, price_source",
+      )
+      .eq("user_id", ownerId)
+      .eq("archived", false),
+    supabase
+      .from("inventory_usages")
+      .select("inventory_item_id, amount, period, interval_days")
+      .eq("user_id", ownerId),
+    supabase
+      .from("user_settings")
+      .select("shopping_store, shopping_day")
+      .eq("user_id", ownerId)
+      .maybeSingle(),
+  ]);
+
+  const rulesByItem = new Map<string, UsageRule[]>();
+  for (const row of (usagesRes.data ?? []) as {
+    inventory_item_id: string;
+    amount: number;
+    period: "day" | "week" | "custom";
+    interval_days: number | null;
+  }[]) {
+    const rules = rulesByItem.get(row.inventory_item_id) ?? [];
+    rules.push({
+      amount: Number(row.amount),
+      period: row.period,
+      interval_days: row.interval_days,
+    });
+    rulesByItem.set(row.inventory_item_id, rules);
+  }
+
+  const entries = buildShoppingList({
+    items: (itemsRes.data ?? []) as ShoppingListItem[],
+    rulesByItem,
+    today,
+  });
+
+  return {
+    today,
+    store: (settingsRes.data?.shopping_store as string | null) ?? null,
+    shoppingDay:
+      typeof settingsRes.data?.shopping_day === "number"
+        ? settingsRes.data.shopping_day
+        : null,
+    ...shoppingTotal(entries),
+    entries,
   };
 }
 
@@ -500,7 +573,9 @@ async function readPreferencesRow() {
   const { supabase, ownerId } = scoped();
   const { data } = await supabase
     .from("user_settings")
-    .select("timezone, wake_start_hour, wake_end_hour, daily_spend_estimate")
+    .select(
+      "timezone, wake_start_hour, wake_end_hour, daily_spend_estimate, shopping_store, shopping_day",
+    )
     .eq("user_id", ownerId)
     .maybeSingle();
   return {
@@ -511,6 +586,8 @@ async function readPreferencesRow() {
       data?.daily_spend_estimate === null || data?.daily_spend_estimate === undefined
         ? null
         : Number(data.daily_spend_estimate),
+    shoppingStore: (data?.shopping_store as string | null) ?? null,
+    shoppingDay: typeof data?.shopping_day === "number" ? data.shopping_day : null,
   };
 }
 

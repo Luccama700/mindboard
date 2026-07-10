@@ -28,6 +28,13 @@ import {
   spendLimitWarningBlock,
 } from "@/app/lib/mcp/writes";
 import { buildSpendLimitStatus } from "@/app/lib/mcp/reads";
+import { lookupPricesByRefs } from "@/app/lib/shopping/price-lookup";
+import {
+  buildShoppingList,
+  shoppingTotal,
+  type ShoppingListItem,
+} from "@/app/_components/shopping-list";
+import type { UsageRule } from "@/app/_components/inventory-projection";
 import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
 import { formatRecurrence } from "@/app/lib/recurrence";
 import { captureToBrainFor } from "@/app/lib/mcp/brain";
@@ -216,7 +223,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "list_inventory",
     description:
-      "List stock items (id, name, quantity, unit, group, archived) plus inventory groups. Use it to find item ids/names before propose_update_stock. Pass includeArchived to also see untracked items (needed before a restore op).",
+      "List inventory items (id, name, quantity, unit, group, archived, shoppingPinned, estPrice) plus inventory groups. Use it to find item ids/names before propose_update_stock. Pass includeArchived to also see untracked items (needed before a restore op).",
     input_schema: {
       type: "object",
       properties: { includeArchived: { type: "boolean" } },
@@ -224,9 +231,32 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "shopping_list",
+    description:
+      "The derived shopping list: items that are out, at/below their reorder threshold, projected to run out within ~7 days, or manually pinned — each with a reason, estimated price, and the projected total. Manage it via propose_update_stock ops pin_shopping / unpin_shopping / set_price; fetch missing prices with lookup_prices.",
+    input_schema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "lookup_prices",
+    description:
+      "Look up current prices for shopping-list items at the user's configured grocery store (one web-search Claude call per item on the user's stored Anthropic key — cents per item, max 10 per call). With no items given, targets the shopping list's unpriced entries. items accepts ids or names. force re-fetches AI-sourced prices; manually-set prices are never overwritten. Applies immediately (prices are editable cache metadata, not a confirmable write).",
+    input_schema: {
+      type: "object",
+      properties: {
+        items: { type: "array", items: { type: "string" }, maxItems: 10 },
+        force: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "propose_update_stock",
     description:
-      "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item), archive (stop tracking), restore (track again), set_priority (how loudly it nags: high surfaces on home when merely low, med only when out, low never). `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Batch a whole grocery haul into ONE call. User must confirm.",
+      "Propose a batch of inventory edits in one confirmable receipt: add (got more), remove (used some), set (recount), create (new item; optional price), archive (stop tracking), restore (track again), set_priority (how loudly it nags: high surfaces on home when merely low, med only when out, low never), set_threshold (reorder level; null clears), set_usage (consumption rate driving the depletion forecast — replaces existing rules; period day/week/custom, custom needs intervalDays), clear_usage, rename, move (to a group; omit group for none), create_group (usable by later ops in the same batch), pin_shopping (keep an item on the shopping list; optional price if you already know it), unpin_shopping, set_price (expected TOTAL cost of the planned purchase; null clears — stored as a manual price AI lookups never overwrite), set_buy (planned purchase amount in the item's own unit; null clears — a stale AI price refreshes automatically after confirm). A create earlier in the batch can be pinned by name in the same batch; items pinned without a price get an automatic AI price lookup after confirm. `item` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates). Batch a whole grocery haul into ONE call. User must confirm.",
     input_schema: {
       type: "object",
       properties: {
@@ -247,33 +277,73 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
                   "archive",
                   "restore",
                   "set_priority",
+                  "set_threshold",
+                  "set_usage",
+                  "clear_usage",
+                  "rename",
+                  "move",
+                  "create_group",
+                  "pin_shopping",
+                  "unpin_shopping",
+                  "set_price",
+                  "set_buy",
                 ],
               },
               item: {
                 type: "string",
                 description:
-                  "Item id or name (for add/remove/set/archive/restore/set_priority).",
+                  "Item id or name (every op except create/create_group).",
               },
               amount: {
                 type: "number",
                 exclusiveMinimum: 0,
-                description: "How much was gained/used (for add/remove).",
+                description:
+                  "How much was gained/used (add/remove), or consumed per period (set_usage).",
               },
               quantity: {
                 type: "number",
                 minimum: 0,
                 description: "Absolute count (for set/create).",
               },
-              name: { type: "string", description: "New item name (for create)." },
+              name: {
+                type: "string",
+                description:
+                  "New name (create/create_group), or the new item name (rename).",
+              },
               unit: { type: "string", description: 'Optional unit for create, e.g. "rolls".' },
               group: {
                 type: "string",
-                description: "Optional inventory group id or name (for create).",
+                description:
+                  "Inventory group id or name (create/move; omit on move to ungroup).",
               },
               priority: {
                 type: "string",
                 enum: ["low", "med", "high"],
                 description: "Attention priority (for set_priority).",
+              },
+              threshold: {
+                type: ["number", "null"],
+                description: "Reorder level (set_threshold); null clears it.",
+              },
+              period: {
+                type: "string",
+                enum: ["day", "week", "custom"],
+                description: "Usage cadence (set_usage).",
+              },
+              intervalDays: {
+                type: "integer",
+                minimum: 1,
+                description: "Every N days, for period=custom (set_usage).",
+              },
+              price: {
+                type: ["number", "null"],
+                description:
+                  "Estimated TOTAL cost of the item's planned purchase (create/pin_shopping optional; set_price required, null clears).",
+              },
+              buyAmount: {
+                type: ["number", "null"],
+                description:
+                  "How much the user plans to buy, in the item's own unit (pin_shopping optional; set_buy required, null clears). Prices then cover the whole planned purchase — packs don't map 1:1 to units, so it's not price × amount.",
               },
             },
             required: ["op"],
@@ -831,7 +901,7 @@ export async function runAssistantTool(
         let itemQuery = supabase
           .from("inventory_items")
           .select(
-            "id, name, quantity, unit, reorder_threshold, priority, archived, inventory_group_id",
+            "id, name, quantity, unit, reorder_threshold, priority, archived, inventory_group_id, shopping_pinned, buy_amount, est_price, price_source",
           )
           .order("name", { ascending: true });
         if (!includeArchived) itemQuery = itemQuery.eq("archived", false);
@@ -853,6 +923,10 @@ export async function runAssistantTool(
           priority: "low" | "med" | "high";
           archived: boolean;
           inventory_group_id: string | null;
+          shopping_pinned: boolean;
+          buy_amount: number | null;
+          est_price: number | null;
+          price_source: "ai" | "manual" | null;
         };
         return {
           type: "result",
@@ -865,6 +939,10 @@ export async function runAssistantTool(
               reorderThreshold: row.reorder_threshold,
               priority: row.priority,
               archived: row.archived,
+              shoppingPinned: row.shopping_pinned,
+              buyAmount: row.buy_amount === null ? null : Number(row.buy_amount),
+              estPrice: row.est_price === null ? null : Number(row.est_price),
+              priceSource: row.price_source,
               group: row.inventory_group_id
                 ? (groupNames.get(row.inventory_group_id) ?? null)
                 : null,
@@ -872,6 +950,62 @@ export async function runAssistantTool(
             groups,
           },
         };
+      }
+      case "shopping_list": {
+        const [itemsRes, usagesRes, settingsRes] = await Promise.all([
+          supabase
+            .from("inventory_items")
+            .select(
+              "id, name, quantity, unit, reorder_threshold, archived, shopping_pinned, buy_amount, est_price, price_source",
+            )
+            .eq("archived", false),
+          supabase
+            .from("inventory_usages")
+            .select("inventory_item_id, amount, period, interval_days"),
+          supabase
+            .from("user_settings")
+            .select("shopping_store, shopping_day")
+            .eq("user_id", userId)
+            .maybeSingle(),
+        ]);
+        const rulesByItem = new Map<string, UsageRule[]>();
+        for (const row of (usagesRes.data ?? []) as (UsageRule & {
+          inventory_item_id: string;
+        })[]) {
+          const rules = rulesByItem.get(row.inventory_item_id) ?? [];
+          rules.push(row);
+          rulesByItem.set(row.inventory_item_id, rules);
+        }
+        const entries = buildShoppingList({
+          items: (itemsRes.data ?? []) as ShoppingListItem[],
+          rulesByItem,
+          today: todayISO(),
+        });
+        return {
+          type: "result",
+          content: {
+            today: todayISO(),
+            store: (settingsRes.data?.shopping_store as string | null) ?? null,
+            shoppingDay:
+              typeof settingsRes.data?.shopping_day === "number"
+                ? settingsRes.data.shopping_day
+                : null,
+            ...shoppingTotal(entries),
+            entries,
+          },
+        };
+      }
+      case "lookup_prices": {
+        const outcome = await lookupPricesByRefs({
+          supabase,
+          userId,
+          items: Array.isArray(input.items)
+            ? (input.items as string[])
+            : undefined,
+          force: input.force === true,
+        });
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "result", content: { results: outcome.results } };
       }
       case "list_recurring_tasks": {
         const rules = await getActiveRecurringTasks(userId);

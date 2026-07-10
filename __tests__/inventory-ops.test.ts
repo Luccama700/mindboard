@@ -332,3 +332,215 @@ describe("care ops (threshold / usage / rename / move / groups)", () => {
     if (back.ok) expect(back.value).toEqual(resolved.value);
   });
 });
+
+describe("shopping list ops", () => {
+  it("validates pin/unpin/set_price shapes", () => {
+    const result = validateStockOps({
+      operations: [
+        { op: "pin_shopping", item: "eggs" },
+        { op: "pin_shopping", item: "milk", price: 6.499 },
+        { op: "unpin_shopping", item: "rice" },
+        { op: "set_price", item: "eggs", price: 4.29 },
+        { op: "set_price", item: "milk", price: null },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value[1]).toEqual({ op: "pin_shopping", item: "milk", price: 6.5 });
+      expect(result.value[4]).toEqual({ op: "set_price", item: "milk", price: null });
+    }
+  });
+
+  it("rejects missing items and bad prices", () => {
+    expect(validateStockOps({ operations: [{ op: "pin_shopping" }] }).ok).toBe(false);
+    expect(validateStockOps({ operations: [{ op: "unpin_shopping" }] }).ok).toBe(false);
+    expect(
+      validateStockOps({ operations: [{ op: "pin_shopping", item: "eggs", price: -1 }] }).ok,
+    ).toBe(false);
+    expect(
+      validateStockOps({ operations: [{ op: "set_price", item: "eggs", price: 0 }] }).ok,
+    ).toBe(false);
+    const unknown = validateStockOps({ operations: [{ op: "shoplift", item: "eggs" }] });
+    expect(unknown.ok).toBe(false);
+    if (!unknown.ok) expect(unknown.error).toContain("pin_shopping");
+  });
+
+  it("resolves pins fuzzily and fails on ambiguity", () => {
+    const resolved = resolve([
+      { op: "pin_shopping", item: "egg", price: 4.29 },
+      { op: "unpin_shopping", item: "i-milk" },
+    ]);
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.value[0]).toMatchObject({
+        kind: "pin",
+        itemId: "i-eggs",
+        pinned: true,
+        price: 4.29,
+      });
+      expect(resolved.value[1]).toMatchObject({
+        kind: "pin",
+        itemId: "i-milk",
+        pinned: false,
+        price: null,
+      });
+    }
+    expect(resolve([{ op: "pin_shopping", item: "soap" }]).ok).toBe(false);
+  });
+
+  it("refuses to pin an archived item and points at restore", () => {
+    const resolved = resolve([{ op: "pin_shopping", item: "sunscreen" }]);
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) expect(resolved.error).toContain("restore");
+  });
+
+  it("create then pin in one batch resolves via pendingItem", () => {
+    const resolved = resolve([
+      { op: "create", name: "paper towels", quantity: 0, unit: "rolls", price: 7.99 },
+      { op: "pin_shopping", item: "paper towels" },
+    ]);
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.value[0]).toMatchObject({ kind: "create", price: 7.99 });
+      expect(resolved.value[1]).toMatchObject({
+        kind: "pin",
+        itemId: null,
+        pendingItem: "paper towels",
+        pinned: true,
+      });
+    }
+  });
+
+  it("renders shopping receipts", () => {
+    const resolved = resolve([
+      { op: "pin_shopping", item: "milk", price: 6.5 },
+      { op: "unpin_shopping", item: "rice" },
+      { op: "set_price", item: "eggs", price: 4.29 },
+      { op: "set_price", item: "milk", price: null },
+    ]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(renderStockReceipt(resolved.value)).toBe(
+      [
+        "Milk  → shopping list · ~$6.50",
+        "Rice  off shopping list",
+        "Eggs  price → $4.29",
+        "Milk  price cleared",
+      ].join("\n"),
+    );
+  });
+
+  it("round-trips resolved pin/price ops through validateResolvedOps", () => {
+    const resolved = resolve([
+      { op: "create", name: "paper towels", quantity: 0, price: 7.99 },
+      { op: "pin_shopping", item: "paper towels" },
+      { op: "pin_shopping", item: "milk", price: 6.5 },
+      { op: "set_price", item: "eggs", price: null },
+    ]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const stored = JSON.parse(JSON.stringify({ operations: resolved.value }));
+    const back = validateResolvedOps(stored);
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.value).toEqual(resolved.value);
+  });
+
+  it("rejects malformed stored pin ops", () => {
+    expect(
+      validateResolvedOps({
+        operations: [{ kind: "pin", itemId: "i-eggs", pendingItem: "eggs", pinned: true }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateResolvedOps({
+        operations: [{ kind: "pin", itemId: null, pendingItem: null, pinned: true }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateResolvedOps({
+        operations: [{ kind: "price", itemId: "i-eggs", price: -2 }],
+      }).ok,
+    ).toBe(false);
+  });
+});
+
+describe("buy amount ops", () => {
+  it("validates set_buy and pin buyAmount shapes", () => {
+    const result = validateStockOps({
+      operations: [
+        { op: "set_buy", item: "eggs", buyAmount: 12 },
+        { op: "set_buy", item: "milk", buyAmount: null },
+        { op: "pin_shopping", item: "rice", buyAmount: 2.5, price: 8 },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value[0]).toEqual({ op: "set_buy", item: "eggs", buyAmount: 12 });
+      expect(result.value[1]).toEqual({ op: "set_buy", item: "milk", buyAmount: null });
+      expect(result.value[2]).toEqual({
+        op: "pin_shopping",
+        item: "rice",
+        price: 8,
+        buyAmount: 2.5,
+      });
+    }
+    expect(validateStockOps({ operations: [{ op: "set_buy" }] }).ok).toBe(false);
+    expect(
+      validateStockOps({ operations: [{ op: "set_buy", item: "eggs", buyAmount: 0 }] }).ok,
+    ).toBe(false);
+    expect(
+      validateStockOps({
+        operations: [{ op: "pin_shopping", item: "eggs", buyAmount: -3 }],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("resolves set_buy with the item's unit and renders receipts", () => {
+    const resolved = resolve([
+      { op: "set_buy", item: "milk", buyAmount: 4 },
+      { op: "set_buy", item: "eggs", buyAmount: null },
+      { op: "pin_shopping", item: "rice", buyAmount: 2 },
+    ]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.value[0]).toEqual({
+      kind: "buy",
+      itemId: "i-milk",
+      name: "Milk",
+      unit: "L",
+      amount: 4,
+    });
+    expect(resolved.value[2]).toMatchObject({
+      kind: "pin",
+      itemId: "i-rice",
+      pinned: true,
+      buyAmount: 2,
+    });
+    expect(renderStockReceipt(resolved.value)).toBe(
+      [
+        "Milk  will buy 4 L",
+        "Eggs  buy amount cleared (one package)",
+        "Rice  → shopping list · buy 2",
+      ].join("\n"),
+    );
+  });
+
+  it("round-trips buy ops through validateResolvedOps", () => {
+    const resolved = resolve([
+      { op: "set_buy", item: "milk", buyAmount: 4 },
+      { op: "set_buy", item: "eggs", buyAmount: null },
+      { op: "pin_shopping", item: "rice", buyAmount: 2, price: 8 },
+    ]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const stored = JSON.parse(JSON.stringify({ operations: resolved.value }));
+    const back = validateResolvedOps(stored);
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.value).toEqual(resolved.value);
+    expect(
+      validateResolvedOps({
+        operations: [{ kind: "buy", itemId: "i-eggs", amount: -1 }],
+      }).ok,
+    ).toBe(false);
+  });
+});
