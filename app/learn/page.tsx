@@ -55,7 +55,7 @@ export default async function LearnPage() {
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto">
-      <header className="flex items-center justify-between mb-10 pr-10 lg:pr-0">
+      <header className="flex items-center justify-between mb-10 pr-24 lg:pr-0">
         <Link
           href="/"
           className="inline-flex items-center min-h-11 text-muted text-label tracking-widest uppercase hover:text-fg transition-colors"
