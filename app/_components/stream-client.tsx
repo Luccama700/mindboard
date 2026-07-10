@@ -402,6 +402,7 @@ export function StreamClient({
   const [leaving, setLeaving] = useState<Set<string>>(new Set());
   const [bought, setBought] = useState<Set<string>>(new Set());
   const [qtys, setQtys] = useState<Record<string, number>>({});
+  const [stepError, setStepError] = useState<string | null>(null);
   const [extraNext, setExtraNext] = useState<StreamCard[]>([]);
   const [logOpen, setLogOpen] = useState(false);
   const [mood, setMood] = useState<number | null>(snapshot.pulse.mood);
@@ -595,12 +596,27 @@ export function StreamClient({
   function onAdjust(card: StreamCard, delta: number) {
     if (card.entity.kind !== "item") return;
     const itemId = card.entity.id;
+    const itemName = card.entity.name;
     const current = qtys[card.id] ?? card.entity.quantity;
     const next = Math.max(0, current + delta);
     if (next === current) return;
     setQtys((prev) => ({ ...prev, [card.id]: next }));
     startTransition(async () => {
-      await updateInventoryItem({ id: itemId, quantity: next });
+      const result = await updateInventoryItem({ id: itemId, quantity: next });
+      // Drop the optimistic override once the write settles so the next tap
+      // (and any reconciliation) reads the authoritative server quantity from
+      // revalidation — a stale override must never seed the next adjustment,
+      // mask an external change, or survive a failed write. Only clear if this
+      // adjustment is still the latest (not superseded by a newer tap).
+      setQtys((prev) => {
+        if (prev[card.id] !== next) return prev;
+        const rest = { ...prev };
+        delete rest[card.id];
+        return rest;
+      });
+      if (result?.error) {
+        setStepError(`couldn't update ${itemName}`);
+      }
     });
   }
 
@@ -720,6 +736,16 @@ export function StreamClient({
           </button>
         </p>
       </div>
+
+      {stepError && (
+        <button
+          type="button"
+          onClick={() => setStepError(null)}
+          className="block w-full text-left text-meta text-danger mb-4"
+        >
+          {stepError} · tap to dismiss
+        </button>
+      )}
 
       {empty ? (
         <div
