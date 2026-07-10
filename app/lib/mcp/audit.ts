@@ -7,7 +7,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // a row here (the plan's locked write-with-confirmation rule). MCP rows carry
 // source='mcp'.
 
-export type AuditStatus = "proposed" | "executed" | "rejected" | "error";
+export type AuditStatus =
+  | "proposed"
+  | "executing"
+  | "executed"
+  | "rejected"
+  | "error";
 
 export type AuditProposal = {
   id: string;
@@ -80,13 +85,13 @@ export async function resolveProposal(
 }
 
 // Claim a proposal for execution BEFORE running the executor: an atomic
-// proposed → 'executed' flip guarded on status='proposed'. Only one caller can
+// proposed → 'executing' flip guarded on status='proposed'. Only one caller can
 // win, so a concurrent confirm (double-tap / client retry) can't also run the
 // executor and double-apply the write. Returns false if it was already claimed
-// or resolved. The row briefly reads 'executed' with a null result while the
-// work runs; finalizeClaimedProposal fills the result (or flips to 'error').
-// (A dedicated 'executing' status would be cleaner but the status column has a
-// CHECK constraint — avoided to keep this migration-free.)
+// or resolved. The row reads 'executing' only while the write is in flight;
+// finalizeClaimedProposal then flips it to 'executed' (with result) or 'error'.
+// A mid-execution crash therefore leaves a distinguishable 'executing' row, not
+// a fake-completed 'executed' one. Requires migration 0035.
 export async function claimProposal(
   supabase: SupabaseClient,
   ownerId: string,
@@ -94,7 +99,7 @@ export async function claimProposal(
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from("ai_audit_log")
-    .update({ status: "executed", resolved_at: new Date().toISOString() })
+    .update({ status: "executing" })
     .eq("id", proposalId)
     .eq("user_id", ownerId)
     .eq("status", "proposed")
@@ -104,7 +109,7 @@ export async function claimProposal(
 }
 
 // Record the outcome of a claimed proposal (result on success, or flip to
-// 'error'). Guarded on status='executed' — the claim we already hold.
+// 'error'). Guarded on status='executing' — the claim we already hold.
 export async function finalizeClaimedProposal(
   supabase: SupabaseClient,
   ownerId: string,
@@ -117,6 +122,6 @@ export async function finalizeClaimedProposal(
     .update({ status, result, resolved_at: new Date().toISOString() })
     .eq("id", proposalId)
     .eq("user_id", ownerId)
-    .eq("status", "executed");
+    .eq("status", "executing");
   if (error) throw new Error(error.message);
 }
