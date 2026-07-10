@@ -133,6 +133,55 @@ describe("buildShoppingList reasons", () => {
     });
     expect(list).toHaveLength(0);
   });
+
+  test("a low item never gets a buyBy date, even with an active usage rate", () => {
+    // buyBy is only ever computed for the "soon" branch — "low" is its own
+    // reason and must not borrow the reorder-by/run-out date.
+    const list = buildShoppingList({
+      items: [item({ id: "eggs", quantity: 2, reorder_threshold: 3 })],
+      rulesByItem: rules([
+        ["eggs", [{ amount: 1, period: "day", interval_days: null }]],
+      ]),
+      today: TODAY,
+    });
+    expect(list[0].reason).toBe("low");
+    expect(list[0].buyBy).toBeNull();
+    expect(list[0].runOutDate).toBe("2026-07-11"); // still computed, just unused for buyBy
+  });
+
+  test("buyAmount, estPrice, and priceSource pass through onto the entry", () => {
+    const list = buildShoppingList({
+      items: [
+        item({
+          id: "x",
+          quantity: 0,
+          buy_amount: 5,
+          est_price: 12.5,
+          price_source: "manual",
+        }),
+      ],
+      rulesByItem: rules([]),
+      today: TODAY,
+    });
+    expect(list[0]).toMatchObject({ buyAmount: 5, estPrice: 12.5, priceSource: "manual" });
+  });
+
+  test("coerces Supabase-numeric-as-string quantity/buy_amount/est_price", () => {
+    const list = buildShoppingList({
+      items: [
+        item({
+          id: "y",
+          quantity: "2" as unknown as number,
+          reorder_threshold: 3,
+          buy_amount: "4" as unknown as number,
+          est_price: "9.99" as unknown as number,
+        }),
+      ],
+      rulesByItem: rules([]),
+      today: TODAY,
+    });
+    expect(list[0]).toMatchObject({ quantity: 2, buyAmount: 4, estPrice: 9.99 });
+  });
 });
 
 describe("buildShoppingList sorting", () => {
