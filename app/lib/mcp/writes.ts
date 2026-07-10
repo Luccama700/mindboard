@@ -196,7 +196,7 @@ export async function proposeLogSpend(raw: unknown): Promise<Result<Proposal>> {
     {
       amount: parsed.value.amount,
       categoryId: parsed.value.categoryId,
-      dateKey: todayKey(),
+      dateKey: await todayKey(supabase, ownerId),
     },
   ]);
   const summary =
@@ -237,7 +237,7 @@ export async function spendLimitWarningBlock(
   ownerId: string,
   spends: PendingSpend[],
 ): Promise<string> {
-  const today = todayKey();
+  const today = await todayKey(supabase, ownerId);
   const windowStart = addDaysKey(today, -40); // covers the current month/week
   const [limitsRes, recurringRes, changesRes, categoriesRes, accountRes] =
     await Promise.all([
@@ -317,7 +317,11 @@ export async function proposeCreateRecurringTaskFor(
     groupName = (data as { name: string }).name;
   }
 
-  const summary = summarizeCreateRecurringTask(parsed.value, groupName, todayKey());
+  const summary = summarizeCreateRecurringTask(
+    parsed.value,
+    groupName,
+    await todayKey(supabase, userId),
+  );
   const proposalId = await recordProposal(
     supabase,
     userId,
@@ -516,7 +520,7 @@ export async function proposeUpdateFinanceFor(
     categories: (categoriesRes.data ?? []) as ResolvableCategory[],
     recurring: (recurringRes.data ?? []) as ResolvableRecurring[],
     existingChanges: [...existingById.values()],
-    today: todayKey(),
+    today: await todayKey(supabase, userId),
   });
   if (!resolved.ok) return resolved;
 
@@ -720,7 +724,9 @@ async function executeCreateRecurringTask(
       day_of_month: v.day_of_month,
       interval_days: v.interval_days,
       start_date:
-        v.frequency === "custom" ? (v.start_date ?? todayKey()) : v.start_date,
+        v.frequency === "custom"
+          ? (v.start_date ?? (await todayKey(supabase, ownerId)))
+          : v.start_date,
       due_time: v.dueTime ? `${v.dueTime}:00` : null,
       duration_min: v.durationMin,
     })
@@ -787,6 +793,7 @@ async function executeLogSpend(
     return { ok: false, error: "category not found" };
   }
 
+  const today = await todayKey(supabase, ownerId);
   const { data: change, error: insertError } = await supabase
     .from("balance_changes")
     .insert({
@@ -796,9 +803,9 @@ async function executeLogSpend(
       direction: "out",
       amount: v.amount,
       note: v.note,
-      occurred_at: todayKey(),
+      occurred_at: today,
       source: "assistant",
-      fingerprint: changeFingerprint(todayKey(), "out", v.amount),
+      fingerprint: changeFingerprint(today, "out", v.amount),
     })
     .select("id, amount, occurred_at")
     .single();
@@ -1850,7 +1857,7 @@ async function executeUpdateRecurringTask(
     updates.interval_days = v.recurrence.interval_days;
     updates.start_date =
       v.recurrence.frequency === "custom"
-        ? (v.recurrence.start_date ?? todayKey())
+        ? (v.recurrence.start_date ?? (await todayKey(supabase, ownerId)))
         : v.recurrence.start_date;
   }
   if (v.dueTime !== undefined) {
@@ -1924,7 +1931,7 @@ async function executeCompleteRecurring(
   if (!(await ownsRow(supabase, "recurring_tasks", ruleId, ownerId))) {
     return { ok: false, error: "repeating task not found" };
   }
-  const today = todayKey();
+  const today = await todayKey(supabase, ownerId);
   if (input.undo === true) {
     const { error } = await supabase
       .from("recurring_task_completions")
@@ -2285,10 +2292,11 @@ async function executeLogDaily(
   const parsed = validateDailyLog(input);
   if (!parsed.ok) return parsed;
   const v = parsed.value;
+  const today = await todayKey(supabase, ownerId);
   const { error } = await supabase.from("daily_logs").upsert(
     {
       user_id: ownerId,
-      log_date: todayKey(),
+      log_date: today,
       mood: v.mood,
       energy: v.energy,
       sleep_hours: v.sleepHours,
@@ -2297,7 +2305,7 @@ async function executeLogDaily(
     { onConflict: "user_id,log_date" },
   );
   if (error) return { ok: false, error: error.message };
-  return { ok: true, value: { logged: todayKey() } };
+  return { ok: true, value: { logged: today } };
 }
 
 export async function proposeUpdateSettingsFor(
@@ -2404,7 +2412,7 @@ export async function proposeManageFinanceFor(
     categories: (categoriesRes.data ?? []) as ResolvableRef[],
     recurring: (recurringRes.data ?? []) as ResolvableRef[],
     incomeSources: (incomeRes.data ?? []) as ResolvableRef[],
-    today: todayKey(),
+    today: await todayKey(supabase, userId),
   });
   if (!resolved.ok) return resolved;
 
@@ -2432,6 +2440,7 @@ async function executeManageFinance(
   const parsed = validateResolvedAdminOps(input);
   if (!parsed.ok) return parsed;
   const ops = parsed.value;
+  const today = await todayKey(supabase, ownerId);
 
   const applied: string[] = [];
   for (let i = 0; i < ops.length; i++) {
@@ -2465,9 +2474,9 @@ async function executeManageFinance(
             direction: "in",
             amount: op.balance,
             note: "opening balance",
-            occurred_at: todayKey(),
+            occurred_at: today,
             source: "assistant",
-            fingerprint: changeFingerprint(todayKey(), "in", op.balance),
+            fingerprint: changeFingerprint(today, "in", op.balance),
           });
           if (rowError) return fail(rowError.message);
         }
@@ -2477,7 +2486,7 @@ async function executeManageFinance(
             user_id: ownerId,
             account_id: account.id,
             balance: op.balance,
-            as_of: todayKey(),
+            as_of: today,
             source: "assistant",
             note: "opening balance",
           });
@@ -2595,7 +2604,7 @@ async function executeManageFinance(
         break;
       }
       case "set_spend_override": {
-        if (op.date <= todayKey()) {
+        if (op.date <= today) {
           return fail(`${op.date} is no longer a future day`);
         }
         if (op.amount === null) {

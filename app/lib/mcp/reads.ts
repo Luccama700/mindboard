@@ -15,6 +15,7 @@ import {
 } from "@/app/lib/snapshots/schedule";
 import { listEvents, type CalendarEvent } from "@/utils/google/calendar";
 import { addDaysKey } from "@/app/_components/finance-projection";
+import { safeTimeZone } from "@/app/_components/date-utils";
 import { buildFinanceForecast } from "@/app/lib/finance/forecast";
 import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
 import {
@@ -91,7 +92,7 @@ function firstRel<T>(rel: Rel<T>): T | null {
 
 export async function getFinanceSnapshot(): Promise<FinanceVitals> {
   const { supabase, ownerId } = scoped();
-  const today = todayKey();
+  const today = await todayKey(supabase, ownerId);
 
   const [accountsRes, recurringRes, changesRes] = await Promise.all([
     supabase
@@ -120,8 +121,9 @@ export async function getFinanceSnapshot(): Promise<FinanceVitals> {
 }
 
 export async function getTasksSnapshot(): Promise<TaskVitals> {
+  const { supabase, ownerId } = scoped();
   const tasks = await listTasks({});
-  return tasksSnapshot(tasks, todayKey());
+  return tasksSnapshot(tasks, await todayKey(supabase, ownerId));
 }
 
 // ---------- spending limits ----------
@@ -149,7 +151,7 @@ export async function buildSpendLimitStatus(
   supabase: SupabaseClient,
   ownerId: string,
 ): Promise<SpendLimitStatusRead[]> {
-  const today = todayKey();
+  const today = await todayKey(supabase, ownerId);
   const windowStart = addDaysKey(today, -40); // covers the current month/week
 
   const [limitsRes, recurringRes, changesRes, categoriesRes] = await Promise.all(
@@ -230,7 +232,7 @@ export async function getInventorySnapshot(): Promise<InventoryVitals> {
   return inventorySnapshot({
     items: (itemsRes.data ?? []) as InventoryItem[],
     usages: (usagesRes.data ?? []) as InventoryUsage[],
-    today: todayKey(),
+    today: await todayKey(supabase, ownerId),
   });
 }
 
@@ -394,7 +396,7 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
 // via update_stock (pin_shopping / unpin_shopping / set_price).
 export async function getShoppingList() {
   const { supabase, ownerId } = scoped();
-  const today = todayKey();
+  const today = await todayKey(supabase, ownerId);
 
   const [itemsRes, usagesRes, settingsRes] = await Promise.all([
     supabase
@@ -632,7 +634,7 @@ const MAX_EVENT_RANGE_DAYS = 62;
 
 export async function listCalendarEvents(filter?: { from?: string; to?: string }) {
   const { supabase, ownerId } = scoped();
-  const today = todayKey();
+  const today = await todayKey(supabase, ownerId);
   const from = filter?.from && ISO_DATE_RE.test(filter.from) ? filter.from : today;
   const defaultTo = addDaysKey(from, 7);
   let to = filter?.to && ISO_DATE_RE.test(filter.to) ? filter.to : defaultTo;
@@ -795,18 +797,19 @@ export async function getPlanningSnapshot(opts?: { horizonDays?: number }) {
 // ---------- forecasts ----------
 
 // Projected end-of-day net worth for the next N days: delegates to the shared
-// cashflow core (app/lib/finance/forecast.ts). `today` stays the process-clock
-// day for parity with the finance calendar; the manual everyday-spend fallback
-// comes from user_settings.
+// cashflow core (app/lib/finance/forecast.ts). `today` and shift-hour bucketing
+// resolve in the owner's zone (user_settings.timezone), which also carries the
+// manual everyday-spend fallback.
 export async function getFinanceForecast(days = 30) {
   const { supabase, ownerId } = scoped();
   const prefs = await readPreferencesRow();
   return buildFinanceForecast({
     supabase,
     userId: ownerId,
-    today: todayKey(),
+    today: await todayKey(supabase, ownerId),
     days,
     dailySpendEstimate: prefs.dailySpendEstimate,
+    timeZone: safeTimeZone(prefs.timezone),
   });
 }
 
@@ -814,7 +817,7 @@ export async function getFinanceForecast(days = 30) {
 // projected run-out day, and the reorder-by day when a threshold is set.
 export async function getInventoryForecast() {
   const { supabase, ownerId } = scoped();
-  const today = todayKey();
+  const today = await todayKey(supabase, ownerId);
 
   const [itemsRes, usagesRes] = await Promise.all([
     supabase

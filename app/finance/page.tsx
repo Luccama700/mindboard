@@ -34,7 +34,9 @@ import {
 import {
   getDailySpendEstimate,
   getShoppingSettings,
+  getUserPreferences,
 } from "@/app/lib/data/settings";
+import { safeTimeZone } from "@/app/_components/date-utils";
 import { FinanceClient } from "./finance-client";
 
 type GoogleStatus = "connected" | "connect" | "error";
@@ -114,6 +116,8 @@ export default async function FinancePage({
 
   if (!user) redirect("/login");
 
+  const timeZone = safeTimeZone((await getUserPreferences(user.id)).timezone);
+
   const [
     accountsResult,
     categoriesResult,
@@ -159,9 +163,9 @@ export default async function FinancePage({
       )
       .eq("archived", false)
       .order("created_at", { ascending: false }),
-    getSpendHistory(user.id),
+    getSpendHistory(user.id, 90, timeZone),
     getDailySpendEstimate(user.id),
-    getSpendOverrides(user.id),
+    getSpendOverrides(user.id, timeZone),
     getSpendLimits(user.id),
   ]);
 

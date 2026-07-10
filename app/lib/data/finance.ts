@@ -8,6 +8,8 @@ import type {
   SpendLimit,
 } from "@/app/_components/finance-types";
 import type { SpendHistoryRow } from "@/app/_components/spend-baseline";
+import { todayISO } from "@/app/_components/date-utils";
+import { addDaysKey } from "@/app/_components/finance-projection";
 
 // Reusable finance reads. Selects mirror app/finance/page.tsx; RLS scopes every
 // row to the caller, so no explicit user_id filter is needed. Each read is
@@ -79,10 +81,12 @@ export const getBalanceChangesOn = cache(
 // Per-day everyday-spend overrides for today onward, as a date → amount map
 // (set via the finance calendar's selected-day slider).
 export const getSpendOverrides = cache(
-  async (userId: string): Promise<Record<string, number>> => {
+  async (
+    userId: string,
+    timeZone?: string | null,
+  ): Promise<Record<string, number>> => {
     const supabase = await createClient();
-    const now = new Date();
-    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const todayKey = todayISO(timeZone ?? null);
     const { data } = await supabase
       .from("spend_overrides")
       .select("date, amount")
@@ -99,11 +103,13 @@ export const getSpendOverrides = cache(
 // Trailing transaction history feeding the everyday-spend baseline (90 days
 // comfortably covers the 12-week window).
 export const getSpendHistory = cache(
-  async (userId: string, days = 90): Promise<SpendHistoryRow[]> => {
+  async (
+    userId: string,
+    days = 90,
+    timeZone?: string | null,
+  ): Promise<SpendHistoryRow[]> => {
     const supabase = await createClient();
-    const start = new Date();
-    start.setDate(start.getDate() - days);
-    const startKey = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+    const startKey = addDaysKey(todayISO(timeZone ?? null), -days);
     const { data } = await supabase
       .from("balance_changes")
       .select("occurred_at, direction, amount, category_id, is_transfer")
