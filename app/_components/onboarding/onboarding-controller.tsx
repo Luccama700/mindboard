@@ -196,7 +196,7 @@ export function OnboardingController({
                 if (!newsOpen) markNewsSeen();
                 setNewsOpen(!newsOpen);
               }}
-              className="flex h-11 w-11 items-center justify-center text-muted opacity-50 hover:opacity-100 hover:text-fg transition-opacity lg:h-9 lg:w-9"
+              className="flex h-11 w-11 items-center justify-center text-muted hover:text-fg transition-colors lg:h-9 lg:w-9"
             >
               <span
                 aria-hidden
@@ -219,7 +219,7 @@ export function OnboardingController({
                   setActive({ key: routeKey, startedOn: pathname });
                 }
               }}
-              className="flex h-11 w-11 items-center justify-center text-muted opacity-50 hover:opacity-100 hover:text-fg transition-opacity lg:h-9 lg:w-9"
+              className="flex h-11 w-11 items-center justify-center text-muted hover:text-fg transition-colors lg:h-9 lg:w-9"
             >
               <span
                 aria-hidden
