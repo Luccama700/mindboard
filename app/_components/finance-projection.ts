@@ -351,17 +351,20 @@ export function buildDayRows(input: {
   const outByDate = new Map<string, number>();
   const signedByDate = new Map<string, number>();
   for (const ch of changes) {
-    // Transfer legs cancel across accounts, so excluding them leaves the
-    // running total unchanged while keeping them out of the per-day
-    // inflow/outflow figures.
-    if (ch.is_transfer) continue;
-    const target = ch.direction === "in" ? inByDate : outByDate;
-    target.set(ch.occurred_at, (target.get(ch.occurred_at) ?? 0) + ch.amount);
+    // A transfer still moves each account's balance on its own day — when the
+    // two legs land on different days (re-dated via ledger edit / MCP adjust)
+    // net worth legitimately dips while the money is in flight — so transfers
+    // DO count toward the running total.
     const signed = ch.direction === "in" ? ch.amount : -ch.amount;
     signedByDate.set(
       ch.occurred_at,
       (signedByDate.get(ch.occurred_at) ?? 0) + signed,
     );
+    // But a transfer is not real income/spending, so keep it out of the
+    // per-day inflow/outflow figures.
+    if (ch.is_transfer) continue;
+    const target = ch.direction === "in" ? inByDate : outByDate;
+    target.set(ch.occurred_at, (target.get(ch.occurred_at) ?? 0) + ch.amount);
   }
 
   const minDay = gridDays[0];
