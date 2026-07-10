@@ -1146,7 +1146,7 @@ export function InventoryClient({
         </details>
 
         {selectMode && (
-          <div className="sticky bottom-28 z-30 flex flex-wrap items-center gap-2 border border-line-strong bg-card px-3 py-2 shadow-lg">
+          <div className="sticky bottom-64 z-50 lg:bottom-52 flex flex-wrap items-center gap-2 border border-line-strong bg-card px-3 py-2 shadow-lg">
             <span className="text-label uppercase text-muted tabular-nums">
               {checkedIds.size} selected
             </span>
