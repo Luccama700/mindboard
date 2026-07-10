@@ -39,6 +39,12 @@ describe("snapToShoppingDay", () => {
   test("day after a shopping day waits a full week", () => {
     expect(snapToShoppingDay("2026-07-12", SATURDAY)).toBe("2026-07-18");
   });
+
+  test("Sunday (0) as the shopping day resolves correctly", () => {
+    // 2026-07-09 is a Thursday; the next Sunday is 2026-07-12.
+    expect(snapToShoppingDay("2026-07-09", 0)).toBe("2026-07-12");
+    expect(snapToShoppingDay("2026-07-12", 0)).toBe("2026-07-12");
+  });
 });
 
 describe("buildGroceriesByDate", () => {
@@ -109,6 +115,50 @@ describe("buildGroceriesByDate", () => {
       horizonDays: 7,
     });
     expect(trips).toEqual({});
+  });
+
+  test("a trip exactly at the horizon boundary is kept, not dropped", () => {
+    // undated entry lands at the next Saturday (2026-07-11), 2 days from today.
+    const trips = buildGroceriesByDate({
+      entries: [entry({ id: "milk", estPrice: 6.5 })],
+      today: TODAY,
+      shoppingDay: SATURDAY,
+      horizonDays: 2,
+    });
+    expect(Object.keys(trips)).toEqual(["2026-07-11"]);
+  });
+
+  test("a buy-by of exactly today is not yet due and lands at the next trip", () => {
+    const trips = buildGroceriesByDate({
+      entries: [entry({ id: "eggs", reason: "soon", buyBy: TODAY, estPrice: 3 })],
+      today: TODAY,
+      shoppingDay: SATURDAY,
+      horizonDays: 30,
+    });
+    expect(Object.keys(trips)).toEqual(["2026-07-11"]);
+  });
+
+  test("a negative estPrice is treated like unpriced", () => {
+    const trips = buildGroceriesByDate({
+      entries: [entry({ id: "coupon", estPrice: -5 })],
+      today: TODAY,
+      shoppingDay: SATURDAY,
+      horizonDays: 30,
+    });
+    expect(trips).toEqual({});
+  });
+
+  test("trip totals round cleanly despite floating-point addition", () => {
+    const trips = buildGroceriesByDate({
+      entries: [
+        entry({ id: "gum", estPrice: 0.1 }),
+        entry({ id: "mint", estPrice: 0.2 }),
+      ],
+      today: TODAY,
+      shoppingDay: SATURDAY,
+      horizonDays: 30,
+    });
+    expect(trips["2026-07-11"].amount).toBe(0.3);
   });
 
   test("groceryAmountsByDate flattens trips to amounts", () => {
@@ -185,5 +235,35 @@ describe("deductBaseline", () => {
     expect(adjusted["2026-07-12"]).toBe(0);
     expect(adjusted["2026-07-11"]).toBeUndefined();
     expect(baseline["2026-07-12"]).toBe(10);
+  });
+
+  test("a missing baseline day on the trip day itself is skipped, not treated as zero", () => {
+    // no baseline entry for the trip day (07-11); absorption starts on 07-12.
+    const baseline = { "2026-07-12": 10, "2026-07-13": 10 };
+    const adjusted = deductBaseline(baseline, { "2026-07-11": 15 });
+    expect(adjusted["2026-07-11"]).toBeUndefined();
+    expect(adjusted["2026-07-12"]).toBe(0);
+    expect(adjusted["2026-07-13"]).toBe(5);
+  });
+
+  test("a zero-amount trip leaves the baseline untouched", () => {
+    const baseline = flatBaseline("2026-07-11", 3, 10);
+    const adjusted = deductBaseline(baseline, { "2026-07-11": 0 });
+    expect(adjusted).toEqual(baseline);
+  });
+
+  test("an already-negative baseline day is skipped, not driven further negative", () => {
+    const baseline = { "2026-07-11": -5, "2026-07-12": 10 };
+    const adjusted = deductBaseline(baseline, { "2026-07-11": 8 });
+    expect(adjusted["2026-07-11"]).toBe(-5);
+    expect(adjusted["2026-07-12"]).toBe(2);
+  });
+
+  test("absorption rounds cleanly across days despite floating-point subtraction", () => {
+    const baseline = flatBaseline("2026-07-11", 3, 20);
+    const adjusted = deductBaseline(baseline, { "2026-07-11": 33.33 });
+    expect(adjusted["2026-07-11"]).toBe(0);
+    expect(adjusted["2026-07-12"]).toBe(6.67);
+    expect(adjusted["2026-07-13"]).toBe(20);
   });
 });
