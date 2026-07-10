@@ -1,10 +1,36 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 import { createClient } from "@/utils/supabase/server";
+import type { SpendingCategory } from "@/app/_components/finance-types";
+import {
+  listVaultNotePaths,
+  readVaultCredentials,
+  vaultTag,
+} from "@/app/lib/brain/vault";
 import type { Group } from "@/app/tasks/groups-types";
 import { Dock } from "./dock";
 
+// Rail badge: how many notes the vault holds. The tree fetch is cached for
+// 180s (see vault.ts) and DockMount renders inside its own Suspense boundary,
+// so a cold or failing GitHub call never blocks page content — it only
+// delays the dock, and any failure degrades to no badge.
+async function brainNoteCount(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<number> {
+  try {
+    const credentials = await readVaultCredentials(supabase, userId);
+    if (!credentials) return 0;
+    const notes = await listVaultNotePaths(credentials, vaultTag(userId));
+    return notes.length;
+  } catch {
+    return 0;
+  }
+}
+
 // Server shell for the global Dock: resolves the session and the data the
-// capture input needs (active groups, inbox count). Logged-out visitors get
-// no dock at all.
+// capture input needs (active groups, inbox count, rail badges). Logged-out
+// visitors get no dock at all.
 export async function DockMount() {
   const supabase = await createClient();
   const {
@@ -12,28 +38,35 @@ export async function DockMount() {
   } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const [groupsResponse, inboxResponse, accountsResponse, categoriesResponse] =
-    await Promise.all([
-      supabase
-        .from("groups")
-        .select("id, name, type, color, archived, created_at, google_calendar_id")
-        .eq("archived", false)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("tasks")
-        .select("id", { count: "exact", head: true })
-        .is("group_id", null)
-        .neq("status", "done"),
-      supabase
-        .from("accounts")
-        .select("id, name, balance, currency")
-        .eq("archived", false)
-        .order("created_at", { ascending: true }),
-      supabase
-        .from("spending_categories")
-        .select("id, name, color")
-        .order("name", { ascending: true }),
-    ]);
+  const [
+    groupsResponse,
+    inboxResponse,
+    brainCount,
+    accountsResponse,
+    categoriesResponse,
+  ] = await Promise.all([
+    supabase
+      .from("groups")
+      .select("id, name, type, color, archived, created_at, google_calendar_id")
+      .eq("archived", false)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .is("group_id", null)
+      .neq("status", "done"),
+    brainNoteCount(supabase, user.id),
+    supabase
+      .from("accounts")
+      .select("id, name, balance, currency")
+      .eq("archived", false)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("spending_categories")
+      .select("id, name, color, archived, created_at")
+      .eq("archived", false)
+      .order("name", { ascending: true }),
+  ]);
 
   const groups = (groupsResponse.data ?? []) as Group[];
   const accounts = ((accountsResponse.data ?? []) as {
@@ -42,16 +75,13 @@ export async function DockMount() {
     balance: number;
     currency: string;
   }[]).map((a) => ({ ...a, balance: Number(a.balance) }));
-  const categories = (categoriesResponse.data ?? []) as {
-    id: string;
-    name: string;
-    color: string;
-  }[];
+  const categories = (categoriesResponse.data ?? []) as SpendingCategory[];
 
   return (
     <Dock
       groups={groups}
       inboxCount={inboxResponse.count ?? 0}
+      brainCount={brainCount}
       accounts={accounts}
       categories={categories}
     />

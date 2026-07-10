@@ -2,8 +2,8 @@
 
 // The universal propose → confirm surface. Capture's `$` flow pins into this
 // card, and the copilot renders every proposed write with it — one confirm
-// grammar for human and AI. Ghost styling (dashed hairline over accent wash)
-// marks "not yet real"; nothing it previews has been written.
+// grammar for human and AI. Ghost styling (dashed hairline, flat page
+// background) marks "not yet real"; nothing it previews has been written.
 
 export function ProposalCard({
   title,
@@ -23,7 +23,7 @@ export function ProposalCard({
   error?: string | null;
 }) {
   return (
-    <div className="border border-dashed border-line-strong bg-accent-wash px-3 py-3 space-y-3">
+    <div className="border border-dashed border-line-strong px-3 py-3 space-y-3">
       <p className="text-label uppercase text-muted">{title}</p>
       <div className="space-y-2">{children}</div>
       {error && <p className="text-action text-danger">{error}</p>}

@@ -118,27 +118,41 @@ export function GroupsClient({
         onClick={() => onNavigate?.()}
         className="block border border-line bg-card hover:bg-card-hover transition-colors"
       >
-        <div className="flex items-center gap-3 px-4 py-4">
+        <div className="flex items-center gap-3 px-4 py-3">
           <span
-            className="w-2 h-10 flex-shrink-0 border-2 border-dashed border-line-subtle"
+            className="w-2 h-6 flex-shrink-0 border-2 border-dashed border-line-subtle"
             aria-hidden
           />
-          <div className="flex-1 min-w-0">
-            <p className="text-fg text-base font-bold">inbox</p>
-            <p className="text-muted text-xs tracking-widest uppercase mt-0.5">
-              unsorted
-            </p>
-          </div>
+          <span className="flex-1 truncate text-fg text-sm font-bold">
+            inbox
+          </span>
           <span className="text-muted text-xs">›</span>
         </div>
       </Link>
       )}
 
+      <ul className="space-y-2">
+        {visibleGroups.map((g) => (
+          <GroupRow
+            key={g.id}
+            group={g}
+            calendars={calendars}
+            editOpen={editingId === g.id}
+            onToggleEdit={() =>
+              setEditingId((current) => (current === g.id ? null : g.id))
+            }
+            onNavigate={onNavigate}
+            onArchive={onArchive}
+            onUpdate={onUpdate}
+          />
+        ))}
+      </ul>
+
       {!focused &&
         (!formOpen ? (
         <button
           onClick={openForm}
-          className="w-full text-left bg-transparent border border-dashed border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-5 px-4 transition-colors"
+          className="w-full text-left bg-transparent border border-dashed border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
         >
           + new group
         </button>
@@ -182,23 +196,6 @@ export function GroupsClient({
           </div>
         </form>
       ))}
-
-      <ul className="space-y-2">
-        {visibleGroups.map((g) => (
-          <GroupRow
-            key={g.id}
-            group={g}
-            calendars={calendars}
-            editOpen={editingId === g.id}
-            onToggleEdit={() =>
-              setEditingId((current) => (current === g.id ? null : g.id))
-            }
-            onNavigate={onNavigate}
-            onArchive={onArchive}
-            onUpdate={onUpdate}
-          />
-        ))}
-      </ul>
     </div>
   );
 }
@@ -226,21 +223,16 @@ function GroupRow({
         <Link
           href={`/tasks?group=${group.id}`}
           onClick={() => onNavigate?.()}
-          className="flex-1 flex items-center gap-3 px-4 py-4 hover:bg-card-hover transition-colors min-w-0"
+          className="flex-1 flex items-center gap-3 px-4 py-3 hover:bg-card-hover transition-colors min-w-0"
         >
           <span
-            className="w-2 h-10 flex-shrink-0"
+            className="w-2 h-6 flex-shrink-0"
             style={{ backgroundColor: group.color }}
             aria-hidden
           />
-          <div className="flex-1 min-w-0">
-            <p className="text-fg text-base font-bold truncate">
-              {group.name}
-            </p>
-            <p className="text-muted text-xs tracking-widest uppercase mt-0.5">
-              {group.type}
-            </p>
-          </div>
+          <span className="flex-1 truncate text-fg text-sm font-bold">
+            {group.name}
+          </span>
           <span className="text-muted text-xs">›</span>
         </Link>
 

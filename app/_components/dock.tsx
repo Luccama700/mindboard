@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { recordBalanceChange } from "@/app/actions/finance";
 import { loadCalendarOptions } from "@/app/actions/groups";
 import { createRecurringTask } from "@/app/actions/recurring-tasks";
@@ -16,31 +16,66 @@ import {
   parseCapture,
 } from "@/app/lib/capture/parse";
 import { formatRecurrence, type TaskRecurrence } from "@/app/lib/recurrence";
+import {
+  MODEL_OPTIONS,
+  readStoredModel,
+  storeModel,
+} from "./assistant-model";
+import { CategoriesSheet } from "./categories-sheet";
+import type { SpendingCategory } from "./finance-types";
 import { formatMoney } from "./money";
 import { ProposalCard } from "./proposal-card";
 import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
 import { formatDue, todayISO } from "./date-utils";
 import type { Task } from "./types";
 
+// Two-hemisphere brain outline in currentColor, so it tints with the tab's
+// active/muted state like the text glyphs around it.
+const BRAIN_ICON = (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className="h-[15px] w-[15px]"
+  >
+    <path d="M12 4a3.5 3.5 0 0 0-3.4 2.7A3.5 3.5 0 0 0 6 10a3.5 3.5 0 0 0 .6 6.4A3.5 3.5 0 0 0 12 19.5Z" />
+    <path d="M12 4a3.5 3.5 0 0 1 3.4 2.7A3.5 3.5 0 0 1 18 10a3.5 3.5 0 0 1-.6 6.4A3.5 3.5 0 0 1 12 19.5Z" />
+  </svg>
+);
+
 const RAIL_TABS: {
   href: string;
-  glyph: string;
+  glyph: ReactNode;
   label: string;
-  mobileOnly?: boolean;
+  // Mobile fits ~5 chars per tab at 7 tabs; "inventory" only fits on lg, so
+  // a tab may show a short alias on small screens via shortLabel.
+  shortLabel?: string;
+  badge?: "inbox" | "brain";
 }[] = [
   { href: "/", glyph: "◆", label: "now" },
-  // Desktop's dashboard already shows the week calendar in its right pane, so
-  // the rail tab is redundant there — mobile keeps it (no dual view), and the
-  // "more" menu carries week for desktop.
-  { href: "/week", glyph: "▦", label: "week", mobileOnly: true },
-  { href: "/plan", glyph: "◇", label: "plan" },
+  { href: "/tasks?group=inbox", glyph: "▽", label: "inbox", badge: "inbox" },
   { href: "/finance", glyph: "$", label: "money" },
-  { href: "/inventory", glyph: "▤", label: "stock" },
+  { href: "/inventory", glyph: "▤", label: "inventory" },
+  { href: "/learn", glyph: "◫", label: "learn" },
+  { href: "/brain", glyph: BRAIN_ICON, label: "brain", badge: "brain" },
 ];
 
-function isActive(pathname: string, href: string) {
-  if (href === "/") return pathname === "/";
-  return pathname === href || pathname.startsWith(`${href}/`);
+function isActive(
+  pathname: string,
+  search: URLSearchParams,
+  href: string,
+) {
+  const [path, query] = href.split("?");
+  if (path === "/") return pathname === "/";
+  if (pathname !== path && !pathname.startsWith(`${path}/`)) return false;
+  if (!query) return true;
+  return query.split("&").every((pair) => {
+    const [key, value] = pair.split("=");
+    return search.get(key) === value;
+  });
 }
 
 export type DockAccount = {
@@ -49,8 +84,6 @@ export type DockAccount = {
   balance: number;
   currency: string;
 };
-
-export type DockCategory = { id: string; name: string; color: string };
 
 type SpendDraft = {
   amount: number;
@@ -62,16 +95,20 @@ type SpendDraft = {
 export function Dock({
   groups,
   inboxCount,
+  brainCount,
   accounts,
   categories,
 }: {
   groups: Group[];
   inboxCount: number;
+  brainCount: number;
   accounts: DockAccount[];
-  categories: DockCategory[];
+  categories: SpendingCategory[];
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const badgeCounts = { inbox: inboxCount, brain: brainCount };
 
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
@@ -82,6 +119,9 @@ export function Dock({
   const [notesOpen, setNotesOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
+  const [groupsTab, setGroupsTab] = useState<"groups" | "categories">(
+    "groups",
+  );
   const [calendarOptions, setCalendarOptions] = useState<
     CalendarListEntry[] | null
   >(null);
@@ -99,6 +139,8 @@ export function Dock({
   const [spendDraft, setSpendDraft] = useState<SpendDraft | null>(null);
   const [spendError, setSpendError] = useState<string | null>(null);
   const [spendBusy, setSpendBusy] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
+  const [assistantModel, setAssistantModel] = useState(readStoredModel);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -149,11 +191,30 @@ export function Dock({
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
+    // Keyboard heuristic built on *changes*, not absolute viewport math
+    // (window.innerHeight/scale semantics differ per browser): an on-screen
+    // keyboard shrinks vv.height sharply while scale and width stay put.
+    // Zoom changes scale and rotation/window-resize changes width — both
+    // rebaseline instead of collapsing the rail.
+    let base = { height: vv.height, width: vv.width, scale: vv.scale };
+    const rebase = () => {
+      base = { height: vv.height, width: vv.width, scale: vv.scale };
+      setKeyboardUp(false);
+    };
     const onResize = () => {
-      setKeyboardUp(window.innerHeight - vv.height > 120);
+      if (vv.scale !== base.scale || vv.width !== base.width) {
+        rebase();
+        return;
+      }
+      base.height = Math.max(base.height, vv.height);
+      setKeyboardUp(base.height - vv.height > 120);
     };
     vv.addEventListener("resize", onResize);
-    return () => vv.removeEventListener("resize", onResize);
+    window.addEventListener("resize", rebase);
+    return () => {
+      vv.removeEventListener("resize", onResize);
+      window.removeEventListener("resize", rebase);
+    };
   }, []);
 
   useEffect(() => {
@@ -247,6 +308,17 @@ export function Dock({
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    // Plan mode: the bar is a copilot prompt — hand off to /plan, which
+    // auto-sends the first message. Model choice rides along via localStorage.
+    if (planMode) {
+      const message = title.trim();
+      if (!message) return;
+      setTitle("");
+      setPlanMode(false);
+      router.push(`/plan?q=${encodeURIComponent(message)}`);
+      return;
+    }
 
     // A pinned spend proposal: Enter again commits it.
     if (spendDraft) {
@@ -371,7 +443,7 @@ export function Dock({
   return (
     <div
       ref={wrapRef}
-      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] rounded-t-[8px] bg-page/95 border border-line p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:left-1/2 lg:right-auto lg:w-[min(44rem,calc(100vw-4rem))] lg:-translate-x-1/2"
+      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] rounded-t-[8px] bg-page/95 border border-line p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:left-1/2 lg:right-auto lg:w-[min(48rem,calc(100vw-4rem))] lg:-translate-x-1/2"
     >
       {moreOpen && (
         <nav className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
@@ -381,9 +453,15 @@ export function Dock({
             className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
           >
             <span>tasks</span>
-            {inboxCount > 0 && (
-              <span className="text-meta text-muted">{inboxCount} inbox</span>
-            )}
+          </Link>
+          {/* "plans" opens /plan without a message, so past conversations are
+              browsable without sending anything first. */}
+          <Link
+            href="/plan"
+            onClick={() => setMoreOpen(false)}
+            className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+          >
+            <span>plans</span>
           </Link>
           <button
             type="button"
@@ -394,10 +472,8 @@ export function Dock({
             <span className="text-meta text-muted">{groups.length}</span>
           </button>
           {[
-            { href: "/week", label: "week", badge: 0 },
-            { href: "/learn", label: "learn", badge: 0 },
-            { href: "/brain", label: "brain", badge: 0 },
-            { href: "/settings", label: "settings", badge: 0 },
+            { href: "/week", label: "week" },
+            { href: "/settings", label: "settings" },
           ].map((item) => (
             <Link
               key={item.href}
@@ -417,7 +493,23 @@ export function Dock({
           className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover shadow-[0_0_28px_rgba(0,0,0,0.65)]"
         >
           <div className="flex items-center justify-between border-b border-line px-3 py-1">
-            <p className="text-label uppercase text-muted">groups</p>
+            <div className="flex items-center gap-4">
+              {(["groups", "categories"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setGroupsTab(tab)}
+                  aria-pressed={groupsTab === tab}
+                  className={`min-h-11 text-label uppercase transition-colors ${
+                    groupsTab === tab
+                      ? "text-fg"
+                      : "text-muted hover:text-fg"
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={() => setGroupsOpen(false)}
@@ -428,13 +520,20 @@ export function Dock({
             </button>
           </div>
           <div className="max-h-[min(60vh,30rem)] overflow-y-auto p-3">
-            <GroupsClient
-              key={groups.map((g) => g.id).join(",")}
-              initial={groups}
-              calendars={calendarOptions ?? []}
-              variant="sheet"
-              onNavigate={() => setGroupsOpen(false)}
-            />
+            {groupsTab === "groups" ? (
+              <GroupsClient
+                key={groups.map((g) => g.id).join(",")}
+                initial={groups}
+                calendars={calendarOptions ?? []}
+                variant="sheet"
+                onNavigate={() => setGroupsOpen(false)}
+              />
+            ) : (
+              <CategoriesSheet
+                key={categories.map((c) => c.id).join(",")}
+                initial={categories}
+              />
+            )}
           </div>
         </section>
       )}
@@ -447,22 +546,47 @@ export function Dock({
       >
         <div className="flex items-stretch" data-tour="dock-rail">
           {RAIL_TABS.map((tab) => {
-            const active = isActive(pathname, tab.href);
+            const active = isActive(pathname, searchParams, tab.href);
+            const badge = tab.badge ? badgeCounts[tab.badge] : 0;
             return (
               <Link
                 key={tab.href}
                 href={tab.href}
                 aria-current={active ? "page" : undefined}
-                className={`${tab.mobileOnly ? "lg:hidden " : ""}flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 transition-colors ${
+                aria-label={badge > 0 ? `${tab.label}, ${badge}` : tab.label}
+                className={`flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 transition-colors ${
                   active
                     ? "border-accent text-fg"
                     : "border-transparent text-muted hover:text-fg"
                 }`}
               >
-                <span className="text-body leading-none" aria-hidden>
+                <span
+                  className="relative inline-flex items-center text-body leading-none"
+                  aria-hidden
+                >
                   {tab.glyph}
+                  {badge > 0 && (
+                    <span
+                      className={`absolute -top-1.5 left-full pl-0.5 text-[9px] leading-none ${
+                        // Inbox is a real notification; the brain count is
+                        // just ambient info and tints like its icon.
+                        tab.badge === "inbox" ? "font-bold text-accent" : ""
+                      }`}
+                    >
+                      {badge > 99 ? "99" : badge}
+                    </span>
+                  )}
                 </span>
-                <span className="text-label uppercase">{tab.label}</span>
+                <span className="text-label uppercase" aria-hidden>
+                  {tab.shortLabel ? (
+                    <>
+                      <span className="lg:hidden">{tab.shortLabel}</span>
+                      <span className="hidden lg:inline">{tab.label}</span>
+                    </>
+                  ) : (
+                    tab.label
+                  )}
+                </span>
               </Link>
             );
           })}
@@ -484,7 +608,9 @@ export function Dock({
       </div>
 
       {spendDraft && (
-        <div className="mb-2">
+        // Solid page-color base: the dock island is bg-page/95, so without
+        // this the page content behind the dock bleeds through the card.
+        <div className="mb-2 bg-page">
           <ProposalCard
             title="log spend"
             confirmLabel={`log ${formatMoney(
@@ -503,75 +629,87 @@ export function Dock({
             <p className="text-body text-fg">
               {spendDraft.description || "uncategorized spend"}
             </p>
-            <div className="flex flex-wrap gap-1">
-              {accounts.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() =>
-                    setSpendDraft({ ...spendDraft, accountId: a.id })
-                  }
-                  aria-pressed={spendDraft.accountId === a.id}
-                  className={`min-h-11 px-3 text-action lowercase border transition-colors ${
-                    spendDraft.accountId === a.id
-                      ? "border-accent text-fg"
-                      : "border-hairline text-muted hover:text-fg"
-                  }`}
-                >
-                  {a.name}
-                </button>
-              ))}
+            <div className="space-y-1">
+              <p className="text-label uppercase text-muted">account</p>
+              <div className="flex flex-wrap gap-1">
+                {accounts.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() =>
+                      setSpendDraft({ ...spendDraft, accountId: a.id })
+                    }
+                    aria-pressed={spendDraft.accountId === a.id}
+                    className={`min-h-11 px-3 text-[10px] tracking-widest uppercase border transition-colors ${
+                      spendDraft.accountId === a.id
+                        ? "bg-accent text-accent-fg border-accent"
+                        : "border-line-strong text-muted hover:border-fg hover:text-fg"
+                    }`}
+                  >
+                    {a.name}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="flex flex-wrap gap-1">
-              <button
-                type="button"
-                onClick={() =>
-                  setSpendDraft({ ...spendDraft, categoryId: null })
-                }
-                aria-pressed={spendDraft.categoryId === null}
-                className={`min-h-11 px-3 text-action lowercase border transition-colors ${
-                  spendDraft.categoryId === null
-                    ? "border-accent text-fg"
-                    : "border-hairline text-muted hover:text-fg"
-                }`}
-              >
-                uncategorized
-              </button>
-              {categories.map((c) => (
+            <div className="space-y-1">
+              <p className="text-label uppercase text-muted">category</p>
+              <div className="flex flex-wrap gap-1">
                 <button
-                  key={c.id}
                   type="button"
                   onClick={() =>
-                    setSpendDraft({ ...spendDraft, categoryId: c.id })
+                    setSpendDraft({ ...spendDraft, categoryId: null })
                   }
-                  aria-pressed={spendDraft.categoryId === c.id}
-                  className={`inline-flex items-center gap-1.5 min-h-11 px-3 text-action lowercase border transition-colors ${
-                    spendDraft.categoryId === c.id
-                      ? "border-accent text-fg"
-                      : "border-hairline text-muted hover:text-fg"
+                  aria-pressed={spendDraft.categoryId === null}
+                  className={`inline-flex items-center gap-2 min-h-11 px-3 text-[10px] tracking-widest uppercase border transition-colors ${
+                    spendDraft.categoryId === null
+                      ? "bg-accent text-accent-fg border-accent"
+                      : "border-line-strong text-muted hover:border-fg hover:text-fg"
                   }`}
                 >
                   <span
-                    className="h-2 w-2"
-                    style={{ backgroundColor: c.color }}
+                    className="h-2.5 w-2.5 flex-shrink-0 border border-muted border-dashed"
                     aria-hidden
                   />
-                  {c.name}
+                  uncategorized
                 </button>
-              ))}
+                {categories.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() =>
+                      setSpendDraft({ ...spendDraft, categoryId: c.id })
+                    }
+                    aria-pressed={spendDraft.categoryId === c.id}
+                    className={`inline-flex items-center gap-2 min-h-11 px-3 text-[10px] tracking-widest uppercase border transition-colors ${
+                      spendDraft.categoryId === c.id
+                        ? "bg-accent text-accent-fg border-accent"
+                        : "border-line-strong text-muted hover:border-fg hover:text-fg"
+                    }`}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 flex-shrink-0"
+                      style={{ backgroundColor: c.color }}
+                      aria-hidden
+                    />
+                    {c.name}
+                  </button>
+                ))}
+              </div>
             </div>
           </ProposalCard>
         </div>
       )}
 
-      {!spendDraft && capture.mode !== "task" && (
+      {!spendDraft && (planMode || capture.mode !== "task") && (
         <p className="mb-2 text-meta text-muted">
-          {capture.mode === "spend"
-            ? spendError ??
-              (capture.amount !== null
-                ? `log spend — enter to review ${capture.description ? `"${capture.description}"` : ""}`
-                : "log spend — add an amount, e.g. $12.50 lunch")
-            : "ask the copilot — enter to open plan"}
+          {planMode
+            ? "plan mode — enter sends this to the copilot"
+            : capture.mode === "spend"
+              ? spendError ??
+                (capture.amount !== null
+                  ? `log spend — enter to review ${capture.description ? `"${capture.description}"` : ""}`
+                  : "log spend — add an amount, e.g. $12.50 lunch")
+              : "ask the copilot — enter to open plan"}
         </p>
       )}
 
@@ -721,9 +859,11 @@ export function Dock({
 
         <div
           className={`flex items-center flex-wrap gap-2 mb-2 ${
-            capture.mode !== "task" ? "hidden" : ""
+            !planMode && capture.mode !== "task" ? "hidden" : ""
           }`}
         >
+          {!planMode && (
+          <>
           <button
             type="button"
             onClick={() => setGroupOpen((v) => !v)}
@@ -859,9 +999,53 @@ export function Dock({
           >
             {priority === "high" ? "!!!" : priority === "low" ? "!" : "!!"}
           </button>
+          </>
+          )}
+
+          <label
+            className={`flex min-h-11 items-center gap-2 border px-3 py-2 text-[10px] tracking-widest uppercase cursor-pointer transition-colors ${
+              planMode
+                ? "bg-accent text-accent-fg border-accent"
+                : "border-line-strong text-muted hover:border-fg hover:text-fg"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={planMode}
+              onChange={(e) => {
+                setPlanMode(e.target.checked);
+                if (e.target.checked) {
+                  setGroupOpen(false);
+                  setRepeatOpen(false);
+                  setNotesOpen(false);
+                }
+                inputRef.current?.focus();
+              }}
+              className="sr-only"
+            />
+            {planMode ? "✓ plan" : "? plan"}
+          </label>
+
+          {planMode && (
+            <select
+              value={assistantModel}
+              onChange={(e) => {
+                setAssistantModel(e.target.value);
+                storeModel(e.target.value);
+              }}
+              aria-label="copilot model"
+              className="min-h-11 bg-card border border-line-strong text-muted text-[10px] tracking-widest uppercase px-2 focus:border-accent focus:outline-none transition-colors"
+            >
+              {MODEL_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
-        {notesOpen && (
+        {notesOpen && !planMode && (
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -879,7 +1063,9 @@ export function Dock({
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="new task…  ($ spend · ? plan)"
+            placeholder={
+              planMode ? "ask the copilot…" : "new task…  ($ spend · ? plan)"
+            }
             autoComplete="off"
             autoCapitalize="sentences"
             enterKeyHint="done"
@@ -891,7 +1077,7 @@ export function Dock({
             disabled={!title.trim() || busy}
             className="bg-accent text-accent-fg text-sm font-bold px-4 py-3 hover:opacity-90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            add
+            {planMode ? "plan" : "add"}
           </button>
         </div>
       </div>

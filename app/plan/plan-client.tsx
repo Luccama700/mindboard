@@ -4,14 +4,13 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { cancelProposal, confirmProposal } from "@/app/actions/assistant";
 import { AssistantKeyForm } from "@/app/_components/assistant-key-form";
+import {
+  MODEL_OPTIONS,
+  readStoredModel,
+  storeModel,
+} from "@/app/_components/assistant-model";
 import { ProposalCard } from "@/app/_components/proposal-card";
 import { INPUT_CLASS } from "@/app/_components/ui";
-
-const MODEL_OPTIONS = [
-  { id: "claude-opus-4-8", label: "opus (default)" },
-  { id: "claude-sonnet-5", label: "sonnet (cheaper)" },
-  { id: "claude-haiku-4-5", label: "haiku (cheapest)" },
-] as const;
 
 type ProposalState = "pending" | "confirming" | "confirmed" | "skipped" | "failed";
 
@@ -29,17 +28,6 @@ type TranscriptItem =
   | { kind: "error"; text: string };
 
 export type InitialMessage = { role: "user" | "assistant"; content: string };
-
-function readStoredModel(): string {
-  if (typeof window === "undefined") return "claude-opus-4-8";
-  try {
-    const stored = localStorage.getItem("assistant-model");
-    if (stored && MODEL_OPTIONS.some((m) => m.id === stored)) return stored;
-  } catch {
-    // ignore
-  }
-  return "claude-opus-4-8";
-}
 
 export function PlanClient({
   hasKey,
@@ -247,7 +235,7 @@ export function PlanClient({
             the copilot plans with your own anthropic api key.
           </p>
           <p className="text-meta text-muted leading-relaxed">
-            it reads your tasks, money, stock, and schedule, and proposes plans
+            it reads your tasks, money, inventory, and schedule, and proposes plans
             you confirm — nothing is ever written without your tap.
           </p>
         </div>
@@ -395,11 +383,7 @@ export function PlanClient({
             value={model}
             onChange={(e) => {
               setModel(e.target.value);
-              try {
-                localStorage.setItem("assistant-model", e.target.value);
-              } catch {
-                // ignore
-              }
+              storeModel(e.target.value);
             }}
             aria-label="model"
             className="bg-surface-0 border border-hairline text-muted text-meta px-2 py-1.5 focus:outline-none focus:border-accent"

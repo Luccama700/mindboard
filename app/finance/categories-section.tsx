@@ -10,6 +10,7 @@ export function CategoriesManager({
   onCreate,
   onUpdate,
   onArchive,
+  variant = "page",
 }: {
   categories: SpendingCategory[];
   onCreate: (input: {
@@ -18,6 +19,9 @@ export function CategoriesManager({
   }) => Promise<SpendingCategory | null>;
   onUpdate: (id: string, patch: Partial<SpendingCategory>) => void;
   onArchive: (id: string) => void;
+  // "sheet" drops the collapsible page chrome so the manager can embed in
+  // the dock's groups sheet as a tab.
+  variant?: "page" | "sheet";
 }) {
   const [formOpen, setFormOpen] = useState(false);
   const [name, setName] = useState("");
@@ -45,8 +49,8 @@ export function CategoriesManager({
     });
   }
 
-  return (
-    <CollapsibleSection title="spending categories" count={categories.length}>
+  const body = (
+    <>
       <ul className="space-y-2">
         {categories.map((c) => (
           <CategoryRow
@@ -100,6 +104,16 @@ export function CategoriesManager({
           </div>
         </form>
       )}
+    </>
+  );
+
+  if (variant === "sheet") {
+    return <div className="space-y-3">{body}</div>;
+  }
+
+  return (
+    <CollapsibleSection title="spending categories" count={categories.length}>
+      {body}
     </CollapsibleSection>
   );
 }

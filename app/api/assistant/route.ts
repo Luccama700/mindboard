@@ -157,9 +157,14 @@ last check-ins (mood/energy 1-5): ${JSON.stringify(logsResult.data ?? [])}`;
           const response = anthropic.messages.stream({
             model,
             max_tokens: 16000,
+            // Haiku 4.5 supports neither adaptive thinking nor the effort
+            // param; the others default to high thinking effort.
             ...(model === "claude-haiku-4-5"
               ? {}
-              : { thinking: { type: "adaptive" as const } }),
+              : {
+                  thinking: { type: "adaptive" as const },
+                  output_config: { effort: "high" as const },
+                }),
             system: [
               {
                 type: "text" as const,
