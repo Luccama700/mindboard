@@ -575,13 +575,13 @@ export function DashboardCalendar({
                 type="button"
                 onClick={() => setSelected(key)}
                 className={`min-h-24 bg-page p-1.5 text-left transition-colors ${
-                  isSelected ? "outline outline-1 outline-accent" : ""
+                  isSelected ? "outline outline-1 outline-accent-ink" : ""
                 } ${inMonth ? "text-fg" : "text-line-subtle"}`}
               >
                 <div className="flex items-center justify-between mb-1">
                   <span
                     className={`text-xs ${
-                      isToday ? "text-accent font-bold" : ""
+                      isToday ? "text-accent-ink font-bold" : ""
                     }`}
                   >
                     {date.getDate()}

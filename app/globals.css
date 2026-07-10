@@ -12,6 +12,7 @@
   --color-fg: var(--fg);
   --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
+  --color-accent-ink: var(--accent-ink);
   --color-danger: var(--danger);
   --color-danger-hover: var(--danger-hover);
   --font-mono: var(--font-geist-mono);
@@ -63,6 +64,10 @@
   --fg: #f5f0e8;
   --accent: #b5ff3c;
   --accent-fg: #0d0d0d;
+  /* Accent color for text/outline ON the page. Tracks --accent for dark
+     backgrounds (readable as-is); light themes override with a darker accent
+     that clears contrast. */
+  --accent-ink: var(--accent);
   --danger: #ff6b6b;
   --danger-hover: #ff8b8b;
   --positive: #4ade80;
@@ -91,6 +96,7 @@ html.theme-cream {
   --fg: #2a2620;
   --accent: #c9a572;
   --accent-fg: #2a2620;
+  --accent-ink: #8b6332;
   --danger: #ff6b6b;
   --danger-hover: #ff8b8b;
   --positive: #3d7a4a;
@@ -159,6 +165,7 @@ html.theme-sand {
   --fg: #2d251a;
   --accent: #d97757;
   --accent-fg: #2d251a;
+  --accent-ink: #9c3f28;
   --danger: #c14b4b;
   --danger-hover: #b03e3e;
   --positive: #2f6b3c;
