@@ -50,9 +50,9 @@ function PeriodPicker({
           key={p}
           type="button"
           onClick={() => onChange(p)}
-          className={`text-xs px-3 py-2 border transition-colors ${
+          className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
             period === p
-              ? "bg-fg text-accent-fg border-fg"
+              ? "bg-fg text-page border-fg"
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
           }`}
         >
@@ -345,9 +345,9 @@ function LimitForm({
               key={s}
               type="button"
               onClick={() => setScope(s)}
-              className={`text-xs px-3 py-2 border transition-colors ${
+              className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
                 scope === s
-                  ? "bg-fg text-accent-fg border-fg"
+                  ? "bg-fg text-page border-fg"
                   : "border-line-strong text-muted hover:border-fg hover:text-fg"
               }`}
             >

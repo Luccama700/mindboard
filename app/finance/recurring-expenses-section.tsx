@@ -71,9 +71,9 @@ function RecurrencePicker({
                 key={f}
                 type="button"
                 onClick={() => onFrequency(f)}
-                className={`text-xs px-3 py-2 border transition-colors ${
+                className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
                   frequency === f
-                    ? "bg-fg text-accent-fg border-fg"
+                    ? "bg-fg text-page border-fg"
                     : "border-line-strong text-muted hover:border-fg hover:text-fg"
                 }`}
               >
@@ -117,9 +117,9 @@ function RecurrencePicker({
                 key={label}
                 type="button"
                 onClick={() => onWeekday(index)}
-                className={`text-[11px] px-2.5 py-2 border transition-colors ${
+                className={`inline-flex items-center min-h-11 text-[11px] px-2.5 py-2 border transition-colors ${
                   weekday === index
-                    ? "bg-fg text-accent-fg border-fg"
+                    ? "bg-fg text-page border-fg"
                     : "border-line-strong text-muted hover:border-fg hover:text-fg"
                 }`}
               >
