@@ -925,7 +925,7 @@ export function Dock({
               type="button"
               onClick={() => setDueDate(null)}
               aria-label="clear date"
-              className="text-muted text-lg leading-none hover:text-fg transition-colors px-1.5 py-1"
+              className="inline-flex items-center justify-center min-h-11 min-w-11 text-muted text-lg leading-none hover:text-fg transition-colors"
             >
               ×
             </button>
