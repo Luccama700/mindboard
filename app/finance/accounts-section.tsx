@@ -44,9 +44,9 @@ function AccountTypePicker({
             key={t}
             type="button"
             onClick={() => onChange(t)}
-            className={`text-xs px-3 py-2 border transition-colors ${
+            className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
               value === t
-                ? "bg-fg text-accent-fg border-fg"
+                ? "bg-fg text-page border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >

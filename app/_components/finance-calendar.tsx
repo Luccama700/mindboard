@@ -198,7 +198,7 @@ export function FinanceCalendar({
           <Link
             href={`/finance?fm=${addMonths(month, -1)}`}
             scroll={false}
-            className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
+            className="flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="previous month"
           >
             ←
@@ -206,7 +206,7 @@ export function FinanceCalendar({
           <Link
             href={`/finance?fm=${addMonths(month, 1)}`}
             scroll={false}
-            className="flex h-9 min-w-9 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
+            className="flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="next month"
           >
             →
@@ -249,13 +249,13 @@ export function FinanceCalendar({
               type="button"
               onClick={() => setSelected(row.dateKey)}
               className={`min-h-24 bg-page p-1.5 text-left transition-colors ${
-                isSelected ? "outline outline-1 outline-accent" : ""
+                isSelected ? "outline outline-1 outline-accent-ink" : ""
               } ${row.inMonth ? "text-fg" : "text-line-subtle"}`}
             >
               <div className="flex items-center justify-between">
                 <span
                   className={`text-xs ${
-                    row.isToday ? "text-accent font-bold" : ""
+                    row.isToday ? "text-accent-ink font-bold" : ""
                   }`}
                 >
                   {dayNumber}
@@ -272,7 +272,7 @@ export function FinanceCalendar({
 
               <div className="mt-1 space-y-0.5">
                 {row.inflow > 0 && (
-                  <p className="text-[10px] tabular-nums text-accent leading-tight">
+                  <p className="text-[10px] tabular-nums text-accent-ink leading-tight">
                     +{formatMoney(row.inflow, currency)}
                   </p>
                 )}
@@ -372,7 +372,7 @@ function EverydaySpendRow({
             setDraft(manual !== null ? String(manual) : "");
             setEditing(true);
           }}
-          className="text-[10px] tracking-widest uppercase text-muted hover:text-accent transition-colors py-2"
+          className="text-[10px] tracking-widest uppercase text-muted hover:text-accent-ink transition-colors py-2"
         >
           {manual !== null ? "edit" : "set estimate"}
         </button>
@@ -500,7 +500,7 @@ function FutureSpendSlider({
                 aria-label={`pin expected spend on ${dateKey} at ${multiplier}× the estimate`}
                 className={`min-h-9 flex-1 border px-1 text-[10px] tabular-nums transition-colors ${
                   active
-                    ? "border-accent text-accent"
+                    ? "border-accent text-accent-ink"
                     : "border-line-strong text-muted hover:border-fg hover:text-fg"
                 }`}
               >
@@ -638,7 +638,7 @@ function SelectedDay({
                       : `${hours}h @ ${formatMoney(source.hourly_wage, currency)}`}
                 </span>
               </p>
-              <p className="text-sm font-bold tabular-nums text-accent whitespace-nowrap">
+              <p className="text-sm font-bold tabular-nums text-accent-ink whitespace-nowrap">
                 +{formatMoney(net, currency)}
               </p>
             </div>

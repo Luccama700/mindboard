@@ -86,9 +86,9 @@ function PaySchedulePicker({
           <button
             type="button"
             onClick={() => onChange({ ...value, payFrequency: null })}
-            className={`text-xs px-3 py-2 border transition-colors ${
+            className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
               value.payFrequency === null
-                ? "bg-fg text-accent-fg border-fg"
+                ? "bg-fg text-page border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
@@ -99,9 +99,9 @@ function PaySchedulePicker({
               key={f}
               type="button"
               onClick={() => onChange({ ...value, payFrequency: f })}
-              className={`text-xs px-3 py-2 border transition-colors ${
+              className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
                 value.payFrequency === f
-                  ? "bg-fg text-accent-fg border-fg"
+                  ? "bg-fg text-page border-fg"
                   : "border-line-strong text-muted hover:border-fg hover:text-fg"
               }`}
             >
