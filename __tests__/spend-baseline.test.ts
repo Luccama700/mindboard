@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeSpendRate,
   estimatedSpendOn,
+  isDiscretionarySpend,
   matchesBill,
   MIN_CONFIDENT_WEEKS,
   MIN_SPEND_FACTOR,
@@ -60,6 +61,35 @@ describe("matchesBill", () => {
     expect(matchesBill({ amount: 100, category_id: "cat-housing" }, [categorized])).toBe(
       true,
     );
+  });
+
+  it("includes the exact 2% boundary and excludes just past it", () => {
+    const rule: BillRule = { amount: 100, category_id: null };
+    expect(matchesBill({ amount: 102, category_id: null }, [rule])).toBe(true); // diff = tolerance
+    expect(matchesBill({ amount: 102.01, category_id: null }, [rule])).toBe(false);
+  });
+
+  it("floors the tolerance at 1 cent for small amounts", () => {
+    const rule: BillRule = { amount: 0.3, category_id: null };
+    // 2% of $0.30 is $0.006 — the 1-cent floor governs, not the percentage.
+    expect(matchesBill({ amount: 0.308, category_id: null }, [rule])).toBe(true);
+    expect(matchesBill({ amount: 0.32, category_id: null }, [rule])).toBe(false);
+  });
+
+  it("matches if ANY rule matches, not just the first", () => {
+    const wrong: BillRule = { amount: 50, category_id: null };
+    expect(matchesBill({ amount: 1400, category_id: null }, [wrong, rentRule])).toBe(true);
+  });
+});
+
+describe("isDiscretionarySpend", () => {
+  it("excludes income, transfers, and bill-matching rows; includes plain spends", () => {
+    expect(isDiscretionarySpend(income("2026-07-01"), [])).toBe(false);
+    expect(
+      isDiscretionarySpend(spend("2026-07-01", 300, { is_transfer: true }), []),
+    ).toBe(false);
+    expect(isDiscretionarySpend(spend("2026-07-01", 1400), [rentRule])).toBe(false);
+    expect(isDiscretionarySpend(spend("2026-07-01", 40), [rentRule])).toBe(true);
   });
 });
 
@@ -143,6 +173,42 @@ describe("computeSpendRate", () => {
     expect(four.confident).toBe(true);
     expect(MIN_CONFIDENT_WEEKS).toBe(4);
   });
+
+  it("sums multiple spends on the same day into that week's total", () => {
+    const history = [
+      income("2026-06-30"),
+      spend("2026-07-02", 30),
+      spend("2026-07-02", 45), // same day as above — should combine to 75
+    ];
+    const r = computeSpendRate({ history, rules: [], today: TODAY });
+    expect(r.dailyRate).toBe(5.36); // matches the single-$75-week case
+  });
+
+  it("averages the two middle weeks when the sampled-week count is even", () => {
+    // weekly totals block0..block3: 10, 40, 20, 30 → sorted [10,20,30,40] →
+    // median = (20+30)/2 = 25 → 25 × 0.5 ÷ 7 = 1.7857… → $1.79/day
+    const history = [
+      income("2026-06-09"), // anchors coverage at block 3's start
+      spend("2026-07-01", 10), // block 0
+      spend("2026-06-25", 40), // block 1
+      spend("2026-06-17", 20), // block 2
+      spend("2026-06-10", 30), // block 3
+    ];
+    const r = computeSpendRate({ history, rules: [], today: TODAY });
+    expect(r.sampledWeeks).toBe(4);
+    expect(r.dailyRate).toBe(1.79);
+  });
+
+  it("a custom weeks cap samples fewer blocks even when more history exists", () => {
+    const history = [
+      income("2026-05-01"), // far more than 2 weeks of coverage
+      spend("2026-07-01", 70), // block 0
+      spend("2026-06-25", 140), // block 1 — would change the median if sampled
+    ];
+    const r = computeSpendRate({ history, rules: [], today: TODAY, weeks: 1 });
+    expect(r.sampledWeeks).toBe(1);
+    expect(r.dailyRate).toBe(5); // block 0 only: 70 × 0.5 ÷ 7
+  });
 });
 
 describe("estimatedSpendOn", () => {
@@ -160,6 +226,17 @@ describe("estimatedSpendOn", () => {
     expect(estimatedSpendOn(confident, 99, {}, "2026-07-11")).toBe(31);
     expect(estimatedSpendOn(thin, 22, {}, "2026-07-11")).toBe(22);
     expect(estimatedSpendOn(thin, null, {}, "2026-07-11")).toBe(0);
+  });
+
+  it("ignores a negative override and falls through to history", () => {
+    expect(
+      estimatedSpendOn(confident, null, { "2026-07-11": -5 }, "2026-07-11"),
+    ).toBe(31);
+  });
+
+  it("treats a non-positive manual value as no manual estimate", () => {
+    expect(estimatedSpendOn(thin, 0, {}, "2026-07-11")).toBe(0);
+    expect(estimatedSpendOn(thin, -10, {}, "2026-07-11")).toBe(0);
   });
 });
 
