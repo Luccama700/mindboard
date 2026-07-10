@@ -133,7 +133,7 @@ export function IntroCarousel({
               type="button"
               aria-label={`go to card ${i + 1}`}
               onClick={() => scrollTo(i)}
-              className="flex h-6 items-center"
+              className="flex h-11 items-center px-1"
             >
               <span
                 aria-hidden
@@ -144,14 +144,17 @@ export function IntroCarousel({
             </button>
           ))}
         </div>
-        <p
-          className={`text-meta text-muted transition-opacity duration-500 ${
-            index === 0 ? "landing-bob opacity-100" : "opacity-0"
-          }`}
-          aria-hidden
-        >
-          scroll ▼
-        </p>
+        {index < last && (
+          <button
+            type="button"
+            onClick={() => scrollTo(index + 1)}
+            className={`pointer-events-auto min-h-11 px-4 text-meta lowercase text-muted hover:text-fg transition-colors ${
+              index === 0 ? "landing-bob" : ""
+            }`}
+          >
+            next ▼
+          </button>
+        )}
       </div>
     </div>
   );
