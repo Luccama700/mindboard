@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# expo (stray CLI runs; not an expo project)
+.expo/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
