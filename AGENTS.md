@@ -64,11 +64,11 @@ danger        #ff6b6b
 cream
 background    #f5f0e8
 foreground    #2a2620
-accent bg     #c9a572 (cream caramel; for filled buttons/chips)
-accent fg     #8b6332 (rich brown; for accent text, borders, outlines)
-muted text    #897e62
+accent bg     #c9a572 (cream caramel; for filled buttons/chips — the --accent token)
+accent fg     #83592b (rich brown; accent text/outlines on the page — the --accent-ink token; clears AA on page/card/popover)
+muted text    #6b6247
 borders       #d4c9b1 and #beb18f
-danger        #ff6b6b (unchanged)
+danger        #c14b4b (darkened from dark's #ff6b6b so danger text is legible on the light bg; hover #b03e3e)
 ```
 
 The active theme palette lives in `app/globals.css` via `@theme inline` tokens such as `bg-page`, `text-fg`, `bg-card`, `border-line`, and `bg-accent`. Add or adjust colors through `app/_components/themes.ts` and the matching CSS variable block in `globals.css`, not by hard-coding old hex-specific Tailwind selectors.

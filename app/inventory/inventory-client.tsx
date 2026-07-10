@@ -1146,7 +1146,7 @@ export function InventoryClient({
         </details>
 
         {selectMode && (
-          <div className="sticky bottom-28 z-30 flex flex-wrap items-center gap-2 border border-line-strong bg-card px-3 py-2 shadow-lg">
+          <div className="sticky bottom-64 z-50 lg:bottom-52 flex flex-wrap items-center gap-2 border border-line-strong bg-card px-3 py-2 shadow-lg">
             <span className="text-label uppercase text-muted tabular-nums">
               {checkedIds.size} selected
             </span>
@@ -1754,7 +1754,7 @@ function ItemTile({
           type="button"
           onClick={() => onAdjust(item.id, -1)}
           aria-label={`decrease ${item.name}`}
-          className="flex-1 min-h-9 flex items-center justify-center border-r border-line text-base leading-none hover:bg-card-hover transition-colors"
+          className="flex-1 min-h-11 flex items-center justify-center border-r border-line text-base leading-none hover:bg-card-hover transition-colors"
         >
           −
         </button>
@@ -1762,7 +1762,7 @@ function ItemTile({
           type="button"
           onClick={() => onAdjust(item.id, 1)}
           aria-label={`increase ${item.name}`}
-          className="flex-1 min-h-9 flex items-center justify-center text-base leading-none hover:bg-card-hover transition-colors"
+          className="flex-1 min-h-11 flex items-center justify-center text-base leading-none hover:bg-card-hover transition-colors"
         >
           +
         </button>
