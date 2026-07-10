@@ -37,6 +37,13 @@ describe("recurring rule landing", () => {
     expect(ruleLandsOn(r, new Date(2026, 2, 31))).toBe(true);
   });
 
+  test("day 29 lands exactly on Feb 29 in a leap year but clamps to 28 otherwise", () => {
+    const r = rule({ frequency: "monthly", day_of_month: 29, amount: 50 });
+    expect(ruleLandsOn(r, new Date(2028, 1, 29))).toBe(true); // 2028 is a leap year
+    expect(ruleLandsOn(r, new Date(2026, 1, 28))).toBe(true); // 2026 is not
+    expect(ruleLandsOn(r, new Date(2026, 1, 27))).toBe(false);
+  });
+
   test("weekly lands on its weekday", () => {
     const r = rule({ frequency: "weekly", weekday: 1, amount: 20 }); // Monday
     expect(ruleLandsOn(r, new Date(2026, 4, 25))).toBe(true); // Mon 2026-05-25
@@ -61,6 +68,18 @@ describe("recurring rule landing", () => {
     expect(ruleLandsOn(r, new Date(2026, 4, 29))).toBe(true); // +28
     expect(ruleLandsOn(r, new Date(2026, 4, 8))).toBe(false); // +7
     expect(ruleLandsOn(r, new Date(2026, 3, 17))).toBe(false); // before start
+  });
+
+  test("custom cadence lands correctly across a leap day", () => {
+    const r = rule({
+      frequency: "custom",
+      interval_days: 7,
+      start_date: "2028-02-01",
+      amount: 40,
+    });
+    expect(ruleLandsOn(r, new Date(2028, 1, 29))).toBe(true); // 28 days elapsed
+    expect(ruleLandsOn(r, new Date(2028, 2, 7))).toBe(true); // 35 days elapsed
+    expect(ruleLandsOn(r, new Date(2028, 2, 6))).toBe(false); // 34 days elapsed
   });
 
   test("sums multiple expenses landing on the same day", () => {
@@ -154,6 +173,37 @@ describe("wage income", () => {
     expect(incomeDetailForDay([salary], {}, "2026-06-14")).toHaveLength(0);
   });
 
+  test("monthly pay_frequency pays a lump on the 1st for the prior month's hours", () => {
+    const salary = source({
+      id: "salary",
+      hourly_wage: 20,
+      tax_rate: 0,
+      pay_frequency: "monthly",
+      anchor_payday: "2026-07-01",
+      period_start: "2026-06-01",
+      period_end: "2026-06-30",
+    });
+    const hours = {
+      salary: { "2026-06-15": 10, "2026-07-10": 5 },
+    };
+    const income = computeIncomeByDate([salary], hours, {
+      start: "2026-06-01",
+      end: "2026-08-31",
+    });
+    expect(income["2026-07-01"]).toBeCloseTo(200, 5); // 10h * $20, paid the month after
+    expect(income["2026-08-01"]).toBeCloseTo(100, 5); // 5h * $20
+    expect(income["2026-06-01"]).toBeUndefined(); // no hours in the period it covers
+  });
+
+  test("fixed day 29 lands exactly on Feb 29 in a leap year", () => {
+    const salary = source({ id: "salary", fixed_amount: 900, fixed_day: 29 });
+    const income = computeIncomeByDate([salary], {}, {
+      start: "2028-02-01",
+      end: "2028-02-29",
+    });
+    expect(income["2028-02-29"]).toBe(900);
+  });
+
   test("fixed day clamps to short months", () => {
     const salary = source({ id: "salary", fixed_amount: 900, fixed_day: 31 });
     const income = computeIncomeByDate([salary], {}, {
@@ -229,5 +279,46 @@ describe("running total projection", () => {
     expect(byDay["2026-05-25"].runningTotal).toBe(1000); // end of the 25th, after the deduction
     expect(byDay["2026-05-25"].outflow).toBe(120);
     expect(byDay["2026-05-24"].runningTotal).toBe(1120); // before the deduction
+  });
+
+  test("layers estimated everyday spend and grocery-trip spend together on future days only", () => {
+    const rows = buildDayRows({
+      gridDays,
+      month: "2026-05",
+      today: "2026-05-26",
+      netWorthToday: 1000,
+      changes: [],
+      expenses: [],
+      incomeByDate: {},
+      estimatedSpendByDate: { "2026-05-27": 20, "2026-05-28": 20 },
+      groceriesByDate: { "2026-05-27": 50 },
+    });
+    const byDay = Object.fromEntries(rows.map((r) => [r.dateKey, r]));
+
+    // today and the past are untouched by either estimate layer
+    expect(byDay["2026-05-26"].estimatedOutflow).toBe(0);
+    expect(byDay["2026-05-26"].estimatedGroceries).toBe(0);
+    expect(byDay["2026-05-25"].estimatedOutflow).toBe(0);
+
+    // 27th: both layers subtract -> 1000 - 20 - 50 = 930
+    expect(byDay["2026-05-27"].estimatedOutflow).toBe(20);
+    expect(byDay["2026-05-27"].estimatedGroceries).toBe(50);
+    expect(byDay["2026-05-27"].runningTotal).toBe(930);
+    // 28th: cumulative -> 930 - 20 = 910
+    expect(byDay["2026-05-28"].estimatedGroceries).toBe(0);
+    expect(byDay["2026-05-28"].runningTotal).toBe(910);
+  });
+
+  test("inMonth reflects each day's own calendar month across a grid spanning two months", () => {
+    const rows = buildDayRows({
+      gridDays: ["2026-04-29", "2026-04-30", "2026-05-01", "2026-05-02"],
+      month: "2026-05",
+      today: "2026-05-01",
+      netWorthToday: 500,
+      changes: [],
+      expenses: [],
+      incomeByDate: {},
+    });
+    expect(rows.map((r) => r.inMonth)).toEqual([false, false, true, true]);
   });
 });

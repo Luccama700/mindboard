@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+  addDaysKey,
   buildProjectionDays,
   dailyRateOf,
+  daysBetween,
   daysUntilEmpty,
   effectiveDailyRate,
   projectedQuantity,
@@ -39,6 +41,9 @@ describe("daily rate conversion", () => {
     ).toBe(0);
     expect(
       dailyRateOf(usage({ amount: 5, period: "custom", interval_days: 0 })),
+    ).toBe(0);
+    expect(
+      dailyRateOf(usage({ amount: 5, period: "custom", interval_days: -3 })),
     ).toBe(0);
   });
 
@@ -78,6 +83,23 @@ describe("days until empty", () => {
   test("zero when already empty", () => {
     expect(daysUntilEmpty(0, 2)).toBe(0);
   });
+
+  test("does not overshoot on an exact division", () => {
+    expect(daysUntilEmpty(10, 2)).toBe(5);
+  });
+});
+
+describe("date-key arithmetic across month, year, and leap-day boundaries", () => {
+  test("addDaysKey rolls over a year boundary", () => {
+    expect(addDaysKey("2026-12-30", 3)).toBe("2027-01-02");
+  });
+
+  test("addDaysKey and daysBetween both account for Feb 29 in a leap year", () => {
+    expect(addDaysKey("2028-02-28", 1)).toBe("2028-02-29");
+    expect(daysBetween("2028-02-28", "2028-03-01")).toBe(2);
+    // 2026 is not a leap year — the same span is one day shorter.
+    expect(daysBetween("2026-02-28", "2026-03-01")).toBe(1);
+  });
 });
 
 describe("run-out date", () => {
@@ -87,6 +109,13 @@ describe("run-out date", () => {
 
   test("null when nothing is consumed", () => {
     expect(runOutDateKey("2026-05-31", 10, 0)).toBeNull();
+  });
+
+  test("lands one calendar day earlier when the span crosses a leap day", () => {
+    // 6 units at 2/day empties in 3 days; starting the count in a leap-year
+    // February means one of those days is the extra Feb 29.
+    expect(runOutDateKey("2028-02-27", 6, 2)).toBe("2028-03-01");
+    expect(runOutDateKey("2026-02-27", 6, 2)).toBe("2026-03-02");
   });
 });
 
@@ -103,6 +132,10 @@ describe("reorder date", () => {
   test("null without a threshold or consumption", () => {
     expect(reorderDateKey("2026-05-31", 20, 2, null)).toBeNull();
     expect(reorderDateKey("2026-05-31", 20, 0, 6)).toBeNull();
+  });
+
+  test("today when quantity exactly equals the threshold, not just below it", () => {
+    expect(reorderDateKey("2026-05-31", 6, 2, 6)).toBe("2026-05-31");
   });
 });
 
@@ -133,5 +166,15 @@ describe("projection grid", () => {
     expect(rows.map((r) => r.quantity)).toEqual([10, 10, 6, 2]);
     expect(rows.map((r) => r.isPast)).toEqual([true, false, false, false]);
     expect(rows.find((r) => r.isToday)?.dateKey).toBe("2026-05-31");
+  });
+
+  test("a grid spanning a leap day projects one extra day of consumption", () => {
+    const rows = buildProjectionDays({
+      gridDays: ["2028-02-27", "2028-02-28", "2028-02-29", "2028-03-01"],
+      today: "2028-02-27",
+      quantityToday: 10,
+      dailyRate: 1,
+    });
+    expect(rows.map((r) => r.quantity)).toEqual([10, 9, 8, 7]);
   });
 });
