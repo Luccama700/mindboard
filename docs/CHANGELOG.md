@@ -5,6 +5,39 @@ in the linked plan docs; this file records exactly what changed and where.
 
 ---
 
+## Onboarding refresh: new-feature tours, global reset, ※ what's new (2026-07-10)
+
+The tours catch up with everything shipped since v0.4.0, everyone's onboarding
+re-offers, and the app gains an in-app patch-notes surface.
+
+- **Tour + intro content** (`app/_components/onboarding/tours.ts`): intro cards
+  for money/inventory/more updated (spend limits, the self-pricing shopping
+  list, brain+learn now on the rail); `now` tour teaches the reworked rail and
+  the `plan` chip; `money` tour gains a "the guardrails" step on the
+  already-stamped `spend-limits` anchor plus grocery-`≈−` and fixed-monthly
+  copy; `stock` tour gains "the shopping list" on a new `data-tour="shopping"`
+  stamp (`app/inventory/inventory-client.tsx`); `tasks` tour gains a "✦ auto
+  sort" step; `plan` tour mentions horizon planning and the model picker.
+- **Global reset**: `supabase/migrations/0034_reset_tours.sql` wipes every
+  user's `completed_tours`, and the localStorage render-guard mirror is
+  version-bumped to `mb-completed-tours-v2` (shared `TOURS_MIRROR_KEY` in
+  `tours.ts`, used by the controller and the settings replay button; the v1 key
+  is cleaned up on read) so stale client mirrors can't suppress the re-offer.
+- **※ what's new**: a second floating button beside the `?`
+  (`onboarding-controller.tsx`) opens a patch-notes panel
+  (`whats-new-panel.tsx`) fed by hand-written, board-voice entries in
+  `whats-new.ts` (newest first). Quiet unread accent dot keyed on
+  `localStorage["mb-news-seen"]` vs the latest entry id; marking seen happens on
+  open; no auto-open. Per-device read-marker — no DB column.
+
+Note: the shopping-list/grocery-forecast, spend-limits, fixed-monthly-income,
+dock-rework, and inbox-auto-sort change sets (commits `2e58488`, `f706991`,
+`4e9adba`, `6e183d6`/`59e9248`, `4ff9869`, 2026-07-08/09) predate this entry and
+are recorded user-facing in `whats-new.ts`; design docs:
+`docs/inventory-redesign-plan.md`, `docs/finance-automation-plan.md`.
+
+---
+
 ## get_snapshot horizon planning read + zone-correct free-time math (2026-07-08)
 
 `get_snapshot` gains a wide planning mode across `today…+horizonDays`, and the

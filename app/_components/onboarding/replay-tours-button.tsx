@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { resetTours } from "@/app/actions/onboarding";
+import { TOURS_MIRROR_KEY } from "./tours";
 
 // Wipes every completed tour and hard-navigates home, where the intro
 // carousel re-triggers. The reload matters: the onboarding controller's
@@ -14,7 +15,7 @@ export function ReplayToursButton() {
     setBusy(true);
     setError(null);
     try {
-      localStorage.removeItem("mb-completed-tours");
+      localStorage.removeItem(TOURS_MIRROR_KEY);
     } catch {
       // ignore
     }

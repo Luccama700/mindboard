@@ -36,6 +36,8 @@ Shipped routes:
 - `/inventory`: stock items grouped, with a per-item depletion-forecast calendar. See the Inventory section.
 - `/learn`: courses + sources + audio overviews (NotebookLM-style study engine); `/learn/[id]/chat` (grounded chat with citations) and `/learn/[id]/study` (flashcards + study-document generators). See the Learn section and `docs/education-plan.md`.
 
+Onboarding lives in `app/_components/onboarding/` (mounted globally via `TourMount` in `app/layout.tsx`): a first-run intro carousel plus per-screen coach-mark tours, all defined as pure data in `tours.ts` and anchored to `[data-tour]` stamps on chrome (never data rows). Completion persists in `user_settings.completed_tours` (jsonb) plus the localStorage mirror `TOURS_MIRROR_KEY`; a floating `?` (top right) replays the current screen's tour. Next to it, a `※` "what's new" button opens hand-written patch notes from `whats-new.ts` (newest first, unread accent dot keyed on `localStorage["mb-news-seen"]` vs the latest entry id — per-device, no DB column). When shipping user-facing features, append a `whats-new.ts` entry and update the affected tour copy in `tours.ts`.
+
 PWA support is shipped:
 
 - `public/manifest.webmanifest`
@@ -121,6 +123,8 @@ Migrations live in `supabase/migrations`.
 `0024_education.sql` creates `courses`, `course_sources`, `course_source_parts` (chunked-MCP-upload staging), adds encrypted `user_settings.google_ai_api_key`/`openai_api_key`, and the private `course-files` bucket. `0026_audio_episodes.sql` creates `audio_episodes` + the private `course-audio` bucket. `0027_worker_jobs.sql` creates `jobs`/`worker_status` + the `claim_next_job()` SKIP-LOCKED claim RPC (service-role only). `0028_course_cards.sql` creates `course_cards` (flashcards with got/miss progress). (`0025` belongs to the onboarding feature.)
 
 `0030_income_fixed_monthly.sql` adds `income_sources.fixed_amount`/`fixed_day` (paired by a CHECK — both set or both null): both set switches the source to a fixed monthly income landing on that day each month; the hourly fields stay stored but dormant so unchecking restores them.
+
+`0034_reset_tours.sql` is a one-shot data reset: `completed_tours = '{}'` for every user, paired with bumping the client mirror key to `mb-completed-tours-v2` (`TOURS_MIRROR_KEY` in `app/_components/onboarding/tours.ts`), so the reworked tours re-offer to everyone. Repeat this pair (reset migration + mirror-key bump) any time the tours are overhauled and should re-show.
 
 `0032_inventory_shopping.sql` adds `inventory_items.shopping_pinned` (manual shopping-list pin), `est_price`/`price_source` ('ai'/'manual')/`price_checked_at` (estimated cost; AI lookups never overwrite 'manual'), and `user_settings.shopping_store`/`shopping_day` (grocery store for AI price lookups; weekly shopping weekday, 0 = Sunday, anchoring projected grocery spend). `0033_inventory_buy_amount.sql` adds `inventory_items.buy_amount`: the planned purchase amount in the item's own unit (null = one typical package) — `est_price` is the estimated **total** for that planned purchase, not per-unit × amount, because stores sell packs that don't map 1:1 to tracked units (the AI lookup does the pack math).
 

@@ -4,6 +4,11 @@
 // forget. Steps anchor to chrome via [data-tour] stamps, never to data rows;
 // a missing/hidden anchor degrades to a centered card.
 
+// localStorage render-guard mirror for completed tours. The version suffix is
+// bumped (paired with a completed_tours reset migration) when the tours are
+// reworked and everyone should see them again — stale v1 mirrors are ignored.
+export const TOURS_MIRROR_KEY = "mb-completed-tours-v2";
+
 export const TOUR_KEYS = [
   "intro",
   "now",
@@ -82,17 +87,17 @@ export const INTRO_CARDS: IntroCard[] = [
   {
     glyph: "$",
     title: "money",
-    body: "your ledger and a forecast of where the balance is headed. no bank hookup — you tell me what happened, i do the math.",
+    body: "your ledger and a forecast of where the balance is headed. set spending limits, teach me your bills — no bank hookup; you tell me what happened, i do the math.",
   },
   {
     glyph: "▤",
     title: "inventory",
-    body: "the shelf. what you have, and when you'll run out of it. milk becomes a plan, not a crisis.",
+    body: "the shelf. what you have, when you'll run out, and a shopping list that writes and prices itself. milk becomes a plan, not a crisis.",
   },
   {
     glyph: "≡",
     title: "more",
-    body: "under 'more': every task list, a notes vault that links like thoughts do (brain), and a study corner that turns lecture pdfs into podcasts (learn).",
+    body: "brain — a notes vault that links like thoughts do — and learn, a study corner that turns lecture pdfs into podcasts, live right on the rail. ≡ more tucks away your week, plans, groups and settings.",
   },
   {
     glyph: "▁",
@@ -138,13 +143,13 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       anchor: "capture-input",
       title: "one bar, three doors",
-      body: "i also read `$4.50 coffee` as a spend and `? what should i do` as a question for the copilot. you type like you think; i sort it out.",
+      body: "i also read `$4.50 coffee` as a spend and `? what should i do` as a question for the copilot. you type like you think; i sort it out. flip the `plan` chip and the bar stays pointed at the copilot until you flip it back.",
       placement: "top",
     },
     {
       anchor: "dock-rail",
       title: "the rail",
-      body: "and this is the whole map, from anywhere. that's the important stuff — the little ? up top replays any of this.",
+      body: "and this is the whole map, from anywhere — money, the shelf, learn, brain. ≡ more holds your week, plans, groups and settings. the little ? up top replays any of this.",
       placement: "top",
     },
   ],
@@ -173,7 +178,7 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       anchor: "plan-thread",
       title: "where we talk",
-      body: "ask me about your own life — i've read the whole board. what's due, what's safe to spend, what you're low on.",
+      body: "ask me about your own life — i've read the whole board. what's due, what's safe to spend, what you're low on, what next week actually looks like.",
     },
     {
       anchor: "plan-input",
@@ -190,7 +195,7 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     },
     {
       title: "one more thing",
-      body: "you can reach me from any screen — type `?` before anything in the bottom bar and it comes straight here.",
+      body: "you can reach me from any screen — type `?` before anything in the bottom bar, or flip its `plan` chip. small question? pick a cheaper model up top.",
     },
   ],
   money: [
@@ -205,14 +210,19 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
       body: "tap an account and every change is a row you can edit, recategorize, or delete. import a bank statement through the copilot and i skip the duplicates.",
     },
     {
+      anchor: "spend-limits",
+      title: "the guardrails",
+      body: "cap a category — or all spending — by day, week, or month. the bar fills as the ledger does; go over and it turns red.",
+    },
+    {
       anchor: "recurring",
       title: "the repeating stuff",
-      body: "rent, subscriptions, your shifts — they live behind configure. teach me once and i use them to see the future.",
+      body: "rent, subscriptions, your shifts — they live behind configure. wages can follow your calendar or just land as a fixed amount each month. teach me once and i use them to see the future.",
     },
     {
       anchor: "finance-calendar",
       title: "the forecast",
-      body: "each day is your projected end-of-day worth. firm numbers are real history; ~ numbers are my floor estimate of your everyday spend.",
+      body: "each day is your projected end-of-day worth. firm numbers are real history; ~ is my floor estimate of your everyday spend; ≈− is a grocery trip i see coming from your shopping list.",
     },
     {
       anchor: "finance-calendar",
@@ -242,6 +252,11 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
       body: "tap an item and teach me how fast you go through it. i'll forecast the run-out day and when to rebuy — milk becomes a plan, not a crisis.",
     },
     {
+      anchor: "shopping",
+      title: "the shopping list",
+      body: "everything worth buying gathers here on its own — out, running low, or pinned. tell me your store and i'll price the list; tell me your shopping day and the money forecast plans for the trip.",
+    },
+    {
       title: "that's the shelf",
       body: "have-first, always. i only flag things you asked me to watch. the ? up top replays this.",
     },
@@ -250,12 +265,17 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       anchor: "task-groups",
       title: "every list, one place",
-      body: "your groups of responsibility — school, work, life, whatever shape yours takes. each gets a color, and a chip up here filters to just that list.",
+      body: "your groups of responsibility — school, work, life, whatever shape yours takes. each gets a color, and a chip up here filters to just that list. lists run soonest-due first.",
     },
     {
       anchor: "task-inbox",
       title: "the inbox",
       body: "tasks you captured without picking a group land here. sort them later — capture first is the whole philosophy.",
+    },
+    {
+      anchor: "task-inbox",
+      title: "✦ auto sort",
+      body: "when the inbox piles up, one tap on ✦ auto sort and i read each task and file it where it belongs. i tell you exactly what moved; anything i'm unsure about stays put.",
     },
     {
       anchor: "task-manage",

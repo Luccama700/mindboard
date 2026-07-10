@@ -913,6 +913,7 @@ export function InventoryClient({
           <div className="flex justify-end gap-2 flex-wrap">
             <button
               type="button"
+              data-tour="shopping"
               onClick={() => (shoppingOpen ? setShoppingOpen(false) : openShopping())}
               aria-pressed={shoppingOpen}
               className={`min-h-9 px-3 text-[10px] tracking-widest uppercase border transition-colors mr-auto ${
