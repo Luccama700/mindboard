@@ -33,6 +33,18 @@ describe("validateBeginUpload", () => {
     expect(validateBeginUpload({ title: "L", page_count: 2.5 }).ok).toBe(false);
     expect(validateBeginUpload({ title: "L", page_count: -3 }).ok).toBe(false);
   });
+
+  it("accepts a title at exactly the length cap", () => {
+    const r = validateBeginUpload({ title: "x".repeat(200) });
+    expect(r.ok).toBe(true);
+  });
+
+  it("enforces the page_count range at its exact boundaries (1-5000)", () => {
+    expect(validateBeginUpload({ title: "L", page_count: 0 }).ok).toBe(false);
+    expect(validateBeginUpload({ title: "L", page_count: 1 }).ok).toBe(true);
+    expect(validateBeginUpload({ title: "L", page_count: 5000 }).ok).toBe(true);
+    expect(validateBeginUpload({ title: "L", page_count: 5001 }).ok).toBe(false);
+  });
 });
 
 describe("validatePart", () => {
@@ -57,6 +69,13 @@ describe("validatePart", () => {
     });
     expect(over.ok).toBe(false);
     if (!over.ok) expect(over.error).toContain(String(SOURCE_PART_MAX_CHARS + 1));
+  });
+
+  it("accepts part_index and markdown length at their exact caps", () => {
+    expect(validatePart({ part_index: SOURCE_MAX_PARTS, markdown: "x" }).ok).toBe(true);
+    expect(
+      validatePart({ part_index: 1, markdown: "y".repeat(SOURCE_PART_MAX_CHARS) }).ok,
+    ).toBe(true);
   });
 });
 
@@ -87,6 +106,16 @@ describe("assembleParts", () => {
     const r = assembleParts([{ part_index: 2, markdown: "b" }]);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("expected part 1");
+  });
+
+  it("treats a duplicate part_index as a contiguity failure, not a silent overwrite", () => {
+    const r = assembleParts([
+      { part_index: 1, markdown: "a" },
+      { part_index: 2, markdown: "b" },
+      { part_index: 2, markdown: "b again" },
+    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("expected part 3");
   });
 });
 
@@ -146,6 +175,19 @@ describe("buildSourceDocument", () => {
       via: "assistant",
     });
     expect(doc).not.toContain("pages:");
+  });
+
+  it("escapes backslashes in YAML frontmatter fields before quotes", () => {
+    const doc = buildSourceDocument({
+      courseName: "C:\\Users\\me",
+      title: "T",
+      kind: "markdown",
+      pageCount: null,
+      markdown: "x",
+      stamp: vancouverStamp(new Date("2026-07-08T20:00:00Z")),
+      via: "assistant",
+    });
+    expect(doc).toContain('course: "C:\\\\Users\\\\me"');
   });
 });
 
