@@ -8,6 +8,7 @@ import {
   formatLongWeekdayMonthDay,
   formatMonthDay,
   formatMonthYear,
+  formatRelativeToNow,
   formatWeekdayMonthDay,
   priorityRank,
   safeTimeZone,
@@ -68,5 +69,68 @@ describe("date utilities", () => {
     expect(priorityRank("high")).toBeLessThan(priorityRank("med"));
     expect(priorityRank("med")).toBeLessThan(priorityRank("low"));
     expect(priorityRank("unexpected")).toBe(priorityRank("med"));
+  });
+
+  test("formatDue formats a past (overdue) date like any other non-today date", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 23, 12));
+    expect(formatDue("2026-05-20")).toBe("May 20");
+  });
+
+  describe("formatRelativeToNow", () => {
+    const NOW = new Date(2026, 4, 23, 12, 0, 0);
+
+    test("a past or already-arrived instant reads as now", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      expect(formatRelativeToNow(NOW.toISOString())).toBe("now"); // diffMs === 0
+      expect(formatRelativeToNow(new Date(NOW.getTime() - 60_000).toISOString())).toBe(
+        "now",
+      );
+    });
+
+    test("an unparseable date also reads as now rather than throwing", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      expect(formatRelativeToNow("not-a-date")).toBe("now");
+    });
+
+    test("under an hour is minutes", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      expect(
+        formatRelativeToNow(new Date(NOW.getTime() + 30 * 60_000).toISOString()),
+      ).toBe("in 30m");
+      expect(
+        formatRelativeToNow(new Date(NOW.getTime() + 59 * 60_000).toISOString()),
+      ).toBe("in 59m");
+    });
+
+    test("exactly 60 minutes crosses into the hour bucket", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      expect(
+        formatRelativeToNow(new Date(NOW.getTime() + 60 * 60_000).toISOString()),
+      ).toBe("in 1h");
+    });
+
+    test("hours round to one decimal place", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      expect(
+        formatRelativeToNow(new Date(NOW.getTime() + 150 * 60_000).toISOString()),
+      ).toBe("in 2.5h");
+    });
+
+    test("exactly 24 hours crosses into the day bucket", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      expect(
+        formatRelativeToNow(new Date(NOW.getTime() + 24 * 60 * 60_000).toISOString()),
+      ).toBe("in 1d");
+      expect(
+        formatRelativeToNow(new Date(NOW.getTime() + 3 * 24 * 60 * 60_000).toISOString()),
+      ).toBe("in 3d");
+    });
   });
 });
