@@ -647,12 +647,12 @@ function EpisodesSection({
       )}
 
       {hasConvertedSources && (
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           <select
             value={flavor}
             onChange={(e) => setFlavor(e.target.value)}
             aria-label="episode flavor"
-            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 focus:outline-none focus:border-accent font-mono"
+            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
           >
             {FLAVOR_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -664,7 +664,7 @@ function EpisodesSection({
             value={engine}
             onChange={(e) => setEngine(e.target.value)}
             aria-label="voice engine"
-            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 focus:outline-none focus:border-accent font-mono"
+            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
           >
             <option value="gemini">gemini (instant)</option>
             <option value="vibevoice">home pc (free)</option>
@@ -777,7 +777,7 @@ function SourceRowItem({
             value={model}
             onChange={(e) => setModel(e.target.value)}
             aria-label="conversion model"
-            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 focus:outline-none focus:border-accent font-mono"
+            className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
           >
             {CONVERT_MODEL_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
