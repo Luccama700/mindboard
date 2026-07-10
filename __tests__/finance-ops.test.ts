@@ -197,6 +197,43 @@ describe("validateFinanceOps", () => {
   });
 });
 
+describe("resolveFinanceOps transfer dedup", () => {
+  const transferLegs: ExistingChange[] = [
+    { id: "t-out", account_id: "acc-chase", occurred_at: "2026-07-05", direction: "out", amount: 200, note: "card payment" },
+    { id: "t-in", account_id: "acc-visa", occurred_at: "2026-07-05", direction: "in", amount: 200, note: "card payment" },
+  ];
+  const dupTransfer: FinanceOp = {
+    op: "transfer",
+    from: "chase",
+    to: "visa",
+    amount: 200,
+    date: "2026-07-05",
+  };
+
+  it("skips a transfer whose both legs already exist (re-import)", () => {
+    const r = resolve([dupTransfer], { existingChanges: transferLegs });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value).toHaveLength(1);
+      expect(r.value[0].kind).toBe("skip_duplicate");
+    }
+  });
+
+  it("records the transfer when forced", () => {
+    const r = resolve([{ ...dupTransfer, force: true }], {
+      existingChanges: transferLegs,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[0].kind).toBe("transfer");
+  });
+
+  it("does not skip when only one leg matches an existing row", () => {
+    const r = resolve([dupTransfer], { existingChanges: [transferLegs[0]] });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[0].kind).toBe("transfer");
+  });
+});
+
 describe("resolveFinanceOps", () => {
   it("resolves accounts by unique substring and categories by name", () => {
     const r = resolve([

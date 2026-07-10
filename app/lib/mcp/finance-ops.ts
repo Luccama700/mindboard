@@ -49,6 +49,7 @@ export type FinanceOp =
       amount: number;
       date: string;
       note?: string;
+      force?: boolean;
     }
   | { op: "reconcile"; account: string; balance: number; asOf: string }
   | { op: "create_category"; name: string; color?: string }
@@ -268,6 +269,7 @@ export function validateFinanceOps(raw: unknown): Result<FinanceOp[]> {
           amount,
           date,
           note: noteString(entry.note) ?? undefined,
+          force: entry.force === true ? true : undefined,
         });
         break;
       }
@@ -506,6 +508,10 @@ export function resolveFinanceOps(
       row.note,
     ]),
   );
+  // Fingerprints of pre-existing rows only (never mutated), so the transfer
+  // dedup checks against what's already stored and not against legs this batch
+  // itself adds.
+  const existingFingerprints = new Set(seenFingerprints);
   const changeById = new Map(existingChanges.map((row) => [row.id, row]));
   const createdCategories = new Set<string>();
   const removedIds = new Set<string>();
@@ -587,14 +593,28 @@ export function resolveFinanceOps(
             error: `transfer on ${op.date} is in the future — transactions must be dated today or earlier`,
           };
         }
+        const fromKey = `${from.value.id}|${changeFingerprint(op.date, "out", op.amount)}`;
+        const toKey = `${to.value.id}|${changeFingerprint(op.date, "in", op.amount)}`;
+        // Re-importing a statement re-sends the same transfer; when BOTH legs
+        // already exist, skip it (visibly) unless forced — like spend/income,
+        // and because both legs move real balances a missed duplicate drifts
+        // two accounts. A single-leg match is left alone (likely a coincidental
+        // real transaction, not the same transfer).
+        if (
+          existingFingerprints.has(fromKey) &&
+          existingFingerprints.has(toKey) &&
+          !op.force
+        ) {
+          body.push({
+            kind: "skip_duplicate",
+            label: `${op.date} ${from.value.name} → ${to.value.name} ${formatMoney(op.amount, from.value.currency)} transfer${op.note ? ` "${op.note}"` : ""} — matches an existing transfer; pass force to import anyway`,
+          });
+          break;
+        }
         // both legs join the fingerprint pool so a later spend/income op in the
         // same batch can't silently double-record the same movement
-        seenFingerprints.add(
-          `${from.value.id}|${changeFingerprint(op.date, "out", op.amount)}`,
-        );
-        seenFingerprints.add(
-          `${to.value.id}|${changeFingerprint(op.date, "in", op.amount)}`,
-        );
+        seenFingerprints.add(fromKey);
+        seenFingerprints.add(toKey);
         body.push({
           kind: "transfer",
           fromId: from.value.id,
