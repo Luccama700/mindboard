@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId, todayKey } from "./config";
+import { todayKey } from "./config";
 import { formatRecurrence } from "@/app/lib/recurrence";
 import { financeSnapshot, type FinanceVitals } from "@/app/lib/snapshots/finance";
 import { tasksSnapshot, type TaskVitals } from "@/app/lib/snapshots/tasks";
@@ -57,10 +57,11 @@ import type {
 } from "@/app/_components/inventory-types";
 import type { TaskWithGroup } from "@/app/_components/types";
 
-// Read layer for the MCP server. Every query goes through the service-role
-// client and is scoped by `.eq("user_id", ownerId)` explicitly (RLS is bypassed
-// on that client). The pure snapshots in app/lib/snapshots/* are reused as-is —
-// only the fetching differs from the cookie-session dashboard path.
+// Read layer for the MCP server. Every function takes the authenticated
+// caller's user id (resolved by the MCP auth layer) and every query goes
+// through the service-role client scoped by `.eq("user_id", userId)` explicitly
+// (RLS is bypassed on that client). The pure snapshots in app/lib/snapshots/*
+// are reused as-is — only the fetching differs from the cookie-session path.
 
 const ACCOUNT_COLUMNS =
   "id, name, type, color, balance, currency, archived, created_at, updated_at";
@@ -77,8 +78,8 @@ const TASK_COLUMNS =
 const SPEND_LIMIT_COLUMNS =
   "id, scope, category_id, period, amount, archived, created_at";
 
-function scoped() {
-  return { supabase: createServiceClient(), ownerId: ownerUserId() };
+function scoped(userId: string) {
+  return { supabase: createServiceClient(), ownerId: userId };
 }
 
 // Supabase can type an embedded relation as either an object or an array; the
@@ -90,8 +91,8 @@ function firstRel<T>(rel: Rel<T>): T | null {
 
 // ---------- snapshot reads (reuse the pure rollups) ----------
 
-export async function getFinanceSnapshot(): Promise<FinanceVitals> {
-  const { supabase, ownerId } = scoped();
+export async function getFinanceSnapshot(userId: string): Promise<FinanceVitals> {
+  const { supabase, ownerId } = scoped(userId);
   const today = await todayKey(supabase, ownerId);
 
   const [accountsRes, recurringRes, changesRes] = await Promise.all([
@@ -120,16 +121,16 @@ export async function getFinanceSnapshot(): Promise<FinanceVitals> {
   });
 }
 
-export async function getTasksSnapshot(): Promise<TaskVitals> {
-  const { supabase, ownerId } = scoped();
-  const tasks = await listTasks({});
+export async function getTasksSnapshot(userId: string): Promise<TaskVitals> {
+  const { supabase, ownerId } = scoped(userId);
+  const tasks = await listTasks(userId, {});
   return tasksSnapshot(tasks, await todayKey(supabase, ownerId));
 }
 
 // ---------- spending limits ----------
 
-export async function listSpendLimits(): Promise<SpendLimit[]> {
-  const { supabase, ownerId } = scoped();
+export async function listSpendLimits(userId: string): Promise<SpendLimit[]> {
+  const { supabase, ownerId } = scoped(userId);
   const { data } = await supabase
     .from("spend_limits")
     .select(SPEND_LIMIT_COLUMNS)
@@ -207,13 +208,13 @@ export async function buildSpendLimitStatus(
   }));
 }
 
-export async function getSpendLimitStatus(): Promise<SpendLimitStatusRead[]> {
-  const { supabase, ownerId } = scoped();
+export async function getSpendLimitStatus(userId: string): Promise<SpendLimitStatusRead[]> {
+  const { supabase, ownerId } = scoped(userId);
   return buildSpendLimitStatus(supabase, ownerId);
 }
 
-export async function getInventorySnapshot(): Promise<InventoryVitals> {
-  const { supabase, ownerId } = scoped();
+export async function getInventorySnapshot(userId: string): Promise<InventoryVitals> {
+  const { supabase, ownerId } = scoped(userId);
 
   const [itemsRes, usagesRes] = await Promise.all([
     supabase
@@ -238,11 +239,11 @@ export async function getInventorySnapshot(): Promise<InventoryVitals> {
 
 // ---------- list reads (also give Claude valid ids for the write tools) ----------
 
-export async function listTasks(filter: {
+export async function listTasks(userId: string, filter: {
   groupId?: string | null;
   status?: "todo" | "doing" | "done";
 }): Promise<TaskWithGroup[]> {
-  const { supabase, ownerId } = scoped();
+  const { supabase, ownerId } = scoped(userId);
 
   let query = supabase
     .from("tasks")
@@ -277,8 +278,8 @@ export async function listTasks(filter: {
 
 // Repeating-task rules with a readable schedule label. The ids feed
 // archive_recurring_task; occurrences themselves are virtual.
-export async function listRecurringTasks(filter?: { includeArchived?: boolean }) {
-  const { supabase, ownerId } = scoped();
+export async function listRecurringTasks(userId: string, filter?: { includeArchived?: boolean }) {
+  const { supabase, ownerId } = scoped(userId);
 
   let query = supabase
     .from("recurring_tasks")
@@ -329,8 +330,8 @@ export async function listRecurringTasks(filter?: { includeArchived?: boolean })
 
 // Items + groups in one payload: the ids feed update_stock, the group list lets
 // a create op target a group by name.
-export async function listInventory(filter?: { includeArchived?: boolean }) {
-  const { supabase, ownerId } = scoped();
+export async function listInventory(userId: string, filter?: { includeArchived?: boolean }) {
+  const { supabase, ownerId } = scoped(userId);
 
   let itemQuery = supabase
     .from("inventory_items")
@@ -394,8 +395,8 @@ export async function listInventory(filter?: { includeArchived?: boolean }) {
 // The derived shopping list: out / low / running-out-soon items plus manual
 // pins, with estimated prices and the projected total. Manage pins and prices
 // via update_stock (pin_shopping / unpin_shopping / set_price).
-export async function getShoppingList() {
-  const { supabase, ownerId } = scoped();
+export async function getShoppingList(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const today = await todayKey(supabase, ownerId);
 
   const [itemsRes, usagesRes, settingsRes] = await Promise.all([
@@ -451,8 +452,8 @@ export async function getShoppingList() {
   };
 }
 
-export async function listGroups() {
-  const { supabase, ownerId } = scoped();
+export async function listGroups(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const { data } = await supabase
     .from("groups")
     .select("id, name, type, color, archived, created_at")
@@ -462,8 +463,8 @@ export async function listGroups() {
   return data ?? [];
 }
 
-export async function listAccounts() {
-  const { supabase, ownerId } = scoped();
+export async function listAccounts(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const { data } = await supabase
     .from("accounts")
     .select("id, name, type, balance, currency, archived")
@@ -473,8 +474,8 @@ export async function listAccounts() {
   return data ?? [];
 }
 
-export async function listCategories() {
-  const { supabase, ownerId } = scoped();
+export async function listCategories(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const { data } = await supabase
     .from("spending_categories")
     .select("id, name, color, archived")
@@ -486,8 +487,8 @@ export async function listCategories() {
 
 // Recurring-expense rules with a readable schedule. Feeds update_finance's
 // create_recurring dedup (Claude checks here before proposing a new rule).
-export async function listRecurringExpenses() {
-  const { supabase, ownerId } = scoped();
+export async function listRecurringExpenses(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const { data } = await supabase
     .from("recurring_expenses")
     .select(RECURRING_COLUMNS)
@@ -513,6 +514,7 @@ export async function listRecurringExpenses() {
 }
 
 export async function listRecentLedger(
+  userId: string,
   limit = 20,
   filter?: {
     accountId?: string;
@@ -522,7 +524,7 @@ export async function listRecentLedger(
     to?: string;
   },
 ) {
-  const { supabase, ownerId } = scoped();
+  const { supabase, ownerId } = scoped(userId);
   const capped = Math.min(Math.max(1, limit), 100);
   let query = supabase
     .from("balance_changes")
@@ -571,8 +573,8 @@ export async function listRecentLedger(
 
 // ---------- schedule + calendar reads ----------
 
-async function readPreferencesRow() {
-  const { supabase, ownerId } = scoped();
+async function readPreferencesRow(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const { data } = await supabase
     .from("user_settings")
     .select(
@@ -593,13 +595,13 @@ async function readPreferencesRow() {
   };
 }
 
-export async function getPreferences() {
-  return readPreferencesRow();
+export async function getPreferences(userId: string) {
+  return readPreferencesRow(userId);
 }
 
-export async function getScheduleSnapshot() {
-  const ownerId = ownerUserId();
-  const prefs = await readPreferencesRow();
+export async function getScheduleSnapshot(userId: string) {
+  const ownerId = userId;
+  const prefs = await readPreferencesRow(userId);
   const now = new Date();
   const dayStart = new Date(now);
   dayStart.setHours(0, 0, 0, 0);
@@ -632,8 +634,8 @@ export async function getScheduleSnapshot() {
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_EVENT_RANGE_DAYS = 62;
 
-export async function listCalendarEvents(filter?: { from?: string; to?: string }) {
-  const { supabase, ownerId } = scoped();
+export async function listCalendarEvents(userId: string, filter?: { from?: string; to?: string }) {
+  const { supabase, ownerId } = scoped(userId);
   const today = await todayKey(supabase, ownerId);
   const from = filter?.from && ISO_DATE_RE.test(filter.from) ? filter.from : today;
   const defaultTo = addDaysKey(from, 7);
@@ -683,8 +685,8 @@ export async function listCalendarEvents(filter?: { from?: string; to?: string }
 
 // ---------- goals / income / logs / audit ----------
 
-export async function listGoals(filter?: { includeClosed?: boolean }) {
-  const { supabase, ownerId } = scoped();
+export async function listGoals(userId: string, filter?: { includeClosed?: boolean }) {
+  const { supabase, ownerId } = scoped(userId);
   let query = supabase
     .from("goals")
     .select("id, title, why, horizon, status, target_date, created_at, completed_at")
@@ -695,8 +697,8 @@ export async function listGoals(filter?: { includeClosed?: boolean }) {
   return data ?? [];
 }
 
-export async function listIncomeSources() {
-  const { supabase, ownerId } = scoped();
+export async function listIncomeSources(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const { data } = await supabase
     .from("income_sources")
     .select(
@@ -744,8 +746,8 @@ export async function listIncomeSources() {
   }));
 }
 
-export async function listDailyLogs(limit = 14) {
-  const { supabase, ownerId } = scoped();
+export async function listDailyLogs(userId: string, limit = 14) {
+  const { supabase, ownerId } = scoped(userId);
   const capped = Math.min(Math.max(1, limit), 60);
   const { data } = await supabase
     .from("daily_logs")
@@ -761,11 +763,11 @@ export async function listDailyLogs(limit = 14) {
   }));
 }
 
-export async function listProposals(filter?: {
+export async function listProposals(userId: string, filter?: {
   status?: "proposed" | "executed" | "rejected" | "error";
   limit?: number;
 }) {
-  const { supabase, ownerId } = scoped();
+  const { supabase, ownerId } = scoped(userId);
   const capped = Math.min(Math.max(1, filter?.limit ?? 20), 100);
   let query = supabase
     .from("ai_audit_log")
@@ -785,8 +787,8 @@ export async function listProposals(filter?: {
 // inventory run-out, and check-in/goal signals. The lean single-domain snapshots
 // above stay separate; this is the wide planning surface. Delegates to the shared
 // assembler with the service client.
-export async function getPlanningSnapshot(opts?: { horizonDays?: number }) {
-  const { supabase, ownerId } = scoped();
+export async function getPlanningSnapshot(userId: string, opts?: { horizonDays?: number }) {
+  const { supabase, ownerId } = scoped(userId);
   return buildPlanningSnapshot({
     supabase,
     userId: ownerId,
@@ -798,11 +800,11 @@ export async function getPlanningSnapshot(opts?: { horizonDays?: number }) {
 
 // Projected end-of-day net worth for the next N days: delegates to the shared
 // cashflow core (app/lib/finance/forecast.ts). `today` and shift-hour bucketing
-// resolve in the owner's zone (user_settings.timezone), which also carries the
+// resolve in the caller's zone (user_settings.timezone), which also carries the
 // manual everyday-spend fallback.
-export async function getFinanceForecast(days = 30) {
-  const { supabase, ownerId } = scoped();
-  const prefs = await readPreferencesRow();
+export async function getFinanceForecast(userId: string, days = 30) {
+  const { supabase, ownerId } = scoped(userId);
+  const prefs = await readPreferencesRow(userId);
   return buildFinanceForecast({
     supabase,
     userId: ownerId,
@@ -815,8 +817,8 @@ export async function getFinanceForecast(days = 30) {
 
 // Per-item depletion forecast: effective daily rate from the usage rules, the
 // projected run-out day, and the reorder-by day when a threshold is set.
-export async function getInventoryForecast() {
-  const { supabase, ownerId } = scoped();
+export async function getInventoryForecast(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const today = await todayKey(supabase, ownerId);
 
   const [itemsRes, usagesRes] = await Promise.all([
@@ -889,8 +891,8 @@ export async function getInventoryForecast() {
 
 // ---------- second-brain reads ----------
 
-export async function listBrainNotes() {
-  const { supabase, ownerId } = scoped();
+export async function listBrainNotes(userId: string) {
+  const { supabase, ownerId } = scoped(userId);
   const credentials = await readVaultCredentials(supabase, ownerId);
   if (!credentials) {
     throw new Error("vault not connected — set it up on /brain first");
@@ -899,9 +901,9 @@ export async function listBrainNotes() {
   return { count: notes.length, notes };
 }
 
-export async function readBrainNote(path: string) {
+export async function readBrainNote(userId: string, path: string) {
   if (typeof path !== "string" || !path.trim()) throw new Error("path is required");
-  const { supabase, ownerId } = scoped();
+  const { supabase, ownerId } = scoped(userId);
   const credentials = await readVaultCredentials(supabase, ownerId);
   if (!credentials) {
     throw new Error("vault not connected — set it up on /brain first");

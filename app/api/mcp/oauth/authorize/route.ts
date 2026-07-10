@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { getPublicOrigin } from "mcp-handler";
 import { createClient } from "@/utils/supabase/server";
-import { ownerUserId } from "@/app/lib/mcp/config";
 import { isAllowedRedirect, issueCode, parseClientId } from "@/app/lib/mcp/oauth";
 
-// OAuth authorization endpoint. Validates the client + PKCE params, then gates on
-// the app's existing Supabase Google session: only the owner can approve. On
-// approval it issues a short-lived authorization code and redirects back to the
-// client. If the owner isn't signed in, it bounces through /login and returns here.
+// OAuth authorization endpoint. Validates the client + PKCE params, then uses
+// the app's existing Supabase Google session as the identity: whoever is signed
+// in authorizes access to THEIR OWN data (the issued token's sub is their user
+// id, and every MCP tool scopes to it). On approval it issues a short-lived
+// authorization code and redirects back to the client. If nobody is signed in,
+// it bounces through /login and returns here.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,7 +47,8 @@ export async function GET(request: Request): Promise<Response> {
     return fail("invalid_request", "PKCE with S256 is required");
   }
 
-  // Owner session gate — reuse the app's Supabase Google login.
+  // Session gate — reuse the app's Supabase Google login. Any signed-in user
+  // may authorize; the code binds to their own user id.
   const supabase = await createClient();
   const {
     data: { user },
@@ -56,9 +58,6 @@ export async function GET(request: Request): Promise<Response> {
     const self = `/api/mcp/oauth/authorize${url.search}`;
     const login = new URL(`/login?next=${encodeURIComponent(self)}`, getPublicOrigin(request));
     return NextResponse.redirect(login, 302);
-  }
-  if (user.id !== ownerUserId()) {
-    return errorPage("this Mindboard account is not the MCP owner", 403);
   }
 
   const code = issueCode({ ownerId: user.id, clientId, redirectUri, codeChallenge });

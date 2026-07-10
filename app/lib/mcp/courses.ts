@@ -2,7 +2,6 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId } from "./config";
 import { readVaultCredentials } from "@/app/lib/brain/vault";
 import {
   createVaultFileWithRetry,
@@ -367,20 +366,20 @@ export async function finalizeSourceFor(
   };
 }
 
-// ---- MCP entry points (service client, owner-scoped) ----
+// ---- MCP entry points (service client, scoped to the authenticated user) ----
 
-export async function listCourses() {
-  return listCoursesFor(createServiceClient(), ownerUserId());
+export async function listCourses(userId: string) {
+  return listCoursesFor(createServiceClient(), userId);
 }
 
-export async function beginSourceUpload(raw: Record<string, unknown>) {
-  return beginSourceUploadFor(createServiceClient(), ownerUserId(), raw);
+export async function beginSourceUpload(userId: string, raw: Record<string, unknown>) {
+  return beginSourceUploadFor(createServiceClient(), userId, raw);
 }
 
-export async function appendSourcePart(raw: Record<string, unknown>) {
-  return appendSourcePartFor(createServiceClient(), ownerUserId(), raw);
+export async function appendSourcePart(userId: string, raw: Record<string, unknown>) {
+  return appendSourcePartFor(createServiceClient(), userId, raw);
 }
 
-export async function finalizeSource(raw: Record<string, unknown>) {
-  return finalizeSourceFor(createServiceClient(), ownerUserId(), raw, "MCP");
+export async function finalizeSource(userId: string, raw: Record<string, unknown>) {
+  return finalizeSourceFor(createServiceClient(), userId, raw, "MCP");
 }

@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId } from "@/app/lib/mcp/config";
+import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
 import { readVaultCredentials } from "@/app/lib/brain/vault";
 import {
   createVaultFileWithRetry,
@@ -284,7 +284,9 @@ export async function POST(request: Request) {
   try {
     if (op === "claim") {
       await markSeen((body.info as Record<string, unknown>) ?? {});
-      const { data, error } = await supabase.rpc("claim_next_job");
+      const { data, error } = await supabase.rpc("claim_next_job", {
+        allowed_users: workerAllowedUserIds(),
+      });
       if (error) return bad(error.message, 500);
       const jobs = (data ?? []) as JobRow[];
       if (jobs.length === 0) return NextResponse.json({ job: null });

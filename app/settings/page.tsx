@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/utils/supabase/server";
@@ -16,6 +17,7 @@ import { KEY_COLUMNS, keyHint } from "@/app/lib/connections/keys";
 import type { KeyProvider } from "@/app/lib/connections/types";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { getVaultSettings } from "@/app/lib/brain/vault";
+import { McpConnectionCard } from "./mcp-connection-card";
 import { PreferencesForm } from "./preferences-form";
 
 // Key saves make one live verification call to the provider.
@@ -42,7 +44,9 @@ export default async function SettingsPage() {
     getVaultSettings(user.id),
     supabase
       .from("user_settings")
-      .select("anthropic_api_key, google_ai_api_key, openai_api_key")
+      .select(
+        "anthropic_api_key, google_ai_api_key, openai_api_key, mcp_token_hash, mcp_token_hint, mcp_token_created_at",
+      )
       .eq("user_id", user.id)
       .maybeSingle(),
     supabase
@@ -70,6 +74,11 @@ export default async function SettingsPage() {
     | Record<string, string | null>
     | null
     | undefined;
+
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "";
+  const proto = h.get("x-forwarded-proto") ?? "https";
+  const mcpUrl = host ? `${proto}://${host}/api/mcp/mcp` : "/api/mcp/mcp";
 
   const keyCards: {
     provider: KeyProvider;
@@ -140,6 +149,13 @@ export default async function SettingsPage() {
             hint={hintFor(row?.[KEY_COLUMNS[card.provider]])}
           />
         ))}
+
+        <McpConnectionCard
+          mcpUrl={mcpUrl}
+          connected={Boolean(row?.mcp_token_hash)}
+          hint={row?.mcp_token_hint ?? null}
+          createdAt={row?.mcp_token_created_at ?? null}
+        />
 
         <ConnectionShell
           title="brain vault"

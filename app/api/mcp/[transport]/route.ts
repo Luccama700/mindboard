@@ -1,7 +1,9 @@
 import { timingSafeEqual } from "node:crypto";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
 import { verifyAccessToken } from "@/app/lib/mcp/oauth";
+import { looksLikePat, resolvePatUserId } from "@/app/lib/mcp/pat";
 import {
   getFinanceForecast,
   getFinanceSnapshot,
@@ -80,8 +82,10 @@ export const maxDuration = 300;
 
 // Remote MCP server exposing Mindboard's data to external Claude clients.
 // Reads are safe; writes go through propose → confirm with an ai_audit_log row
-// (see app/lib/mcp/writes.ts). Every query is scoped to the single owner via the
-// service-role client. Tool names mirror app/lib/agent/registry.ts.
+// (see app/lib/mcp/writes.ts). Multi-tenant: the auth layer resolves every
+// request to a Supabase user id (OAuth token sub, per-user PAT, or the static
+// bearer mapped to the configured owner) and every tool scopes its queries to
+// that user. Tool names mirror app/lib/agent/registry.ts.
 
 type ToolText = { content: { type: "text"; text: string }[]; isError?: boolean };
 
@@ -104,6 +108,17 @@ async function guard(run: () => Promise<ToolText>): Promise<ToolText> {
   }
 }
 
+// The authenticated caller's Supabase user id, resolved by verifyToken below
+// and delivered to every tool via extra.authInfo. Every data access must go
+// through this — there is no default user.
+function uid(extra: { authInfo?: AuthInfo }): string {
+  const userId = extra.authInfo?.extra?.userId;
+  if (typeof userId !== "string" || !userId) {
+    throw new Error("unauthorized: request has no resolved user identity");
+  }
+  return userId;
+}
+
 const mcpHandler = createMcpHandler(
   (server) => {
     // ---------- reads ----------
@@ -115,7 +130,7 @@ const mcpHandler = createMcpHandler(
           "Current net worth (sum of account balances), today's net change, and the next upcoming recurring bill.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await getFinanceSnapshot())),
+      (_args, extra) => guard(async () => ok(await getFinanceSnapshot(uid(extra)))),
     );
 
     server.registerTool(
@@ -126,7 +141,7 @@ const mcpHandler = createMcpHandler(
           "Every active spending limit with actual spend this period vs the cap: amount, spent, remaining, pctUsed, and state ('under' | 'approaching' at >=80% | 'over'). Spend uses the everyday-spend inclusion rules (out-flows only; transfers and recurring bills excluded; category scope respected).",
         inputSchema: {},
       },
-      () => guard(async () => ok(await getSpendLimitStatus())),
+      (_args, extra) => guard(async () => ok(await getSpendLimitStatus(uid(extra)))),
     );
 
     server.registerTool(
@@ -137,7 +152,7 @@ const mcpHandler = createMcpHandler(
           "Active spending limits (budget caps) with their ids — use as the id source for delete_spend_limit. For spent-vs-cap figures use spend_limit_status.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await listSpendLimits())),
+      (_args, extra) => guard(async () => ok(await listSpendLimits(uid(extra)))),
     );
 
     server.registerTool(
@@ -147,7 +162,7 @@ const mcpHandler = createMcpHandler(
         description: "Counts of open tasks that are overdue, due today, or due within the next week.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await getTasksSnapshot())),
+      (_args, extra) => guard(async () => ok(await getTasksSnapshot(uid(extra)))),
     );
 
     server.registerTool(
@@ -157,7 +172,7 @@ const mcpHandler = createMcpHandler(
         description: "How many stock items are low or out, and the item projected to run out soonest.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await getInventorySnapshot())),
+      (_args, extra) => guard(async () => ok(await getInventorySnapshot(uid(extra)))),
     );
 
     server.registerTool(
@@ -171,13 +186,13 @@ const mcpHandler = createMcpHandler(
           status: z.enum(["todo", "doing", "done"]).optional(),
         },
       },
-      (args) => guard(async () => ok(await listTasks(args))),
+      (args, extra) => guard(async () => ok(await listTasks(uid(extra), args))),
     );
 
     server.registerTool(
       "list_groups",
       { title: "List groups", description: "List active task groups (id, name, color, type).", inputSchema: {} },
-      () => guard(async () => ok(await listGroups())),
+      (_args, extra) => guard(async () => ok(await listGroups(uid(extra)))),
     );
 
     server.registerTool(
@@ -187,7 +202,7 @@ const mcpHandler = createMcpHandler(
         description: "List active money accounts (id, name, balance, currency). Use to find an account id for log_spend.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await listAccounts())),
+      (_args, extra) => guard(async () => ok(await listAccounts(uid(extra)))),
     );
 
     server.registerTool(
@@ -197,7 +212,7 @@ const mcpHandler = createMcpHandler(
         description: "List active spending categories (id, name). Use to categorize a log_spend.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await listCategories())),
+      (_args, extra) => guard(async () => ok(await listCategories(uid(extra)))),
     );
 
     server.registerTool(
@@ -208,7 +223,7 @@ const mcpHandler = createMcpHandler(
           "List inventory items (id, name, quantity, unit, group, archived, shoppingPinned, estPrice) plus inventory groups. Use it to find item ids/names before update_stock. Pass includeArchived to also see untracked items (needed before a restore op).",
         inputSchema: { includeArchived: z.boolean().optional() },
       },
-      (args) => guard(async () => ok(await listInventory(args))),
+      (args, extra) => guard(async () => ok(await listInventory(uid(extra), args))),
     );
 
     server.registerTool(
@@ -219,7 +234,7 @@ const mcpHandler = createMcpHandler(
           "The derived shopping list: items that are out, at/below their reorder threshold, projected to run out within ~7 days, or manually pinned — each with a reason, estimated price (AI-looked-up or manual), and the projected total. Manage it via update_stock ops pin_shopping / unpin_shopping / set_price; fetch missing prices with lookup_prices. Also returns the configured grocery store and weekly shopping day (set via update_settings).",
         inputSchema: {},
       },
-      () => guard(async () => ok(await getShoppingList())),
+      (_args, extra) => guard(async () => ok(await getShoppingList(uid(extra)))),
     );
 
     server.registerTool(
@@ -230,7 +245,7 @@ const mcpHandler = createMcpHandler(
           "List recurring-task rules (id, title, schedule like \"mon/wed/fri\", time, group). Occurrences are generated automatically — never create N individual tasks for a habit. Use the id for archive_recurring_task.",
         inputSchema: { includeArchived: z.boolean().optional() },
       },
-      (args) => guard(async () => ok(await listRecurringTasks(args))),
+      (args, extra) => guard(async () => ok(await listRecurringTasks(uid(extra), args))),
     );
 
     server.registerTool(
@@ -248,10 +263,10 @@ const mcpHandler = createMcpHandler(
           to: z.string().optional().describe("YYYY-MM-DD inclusive upper bound."),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
           const { limit, ...filter } = args;
-          return ok(await listRecentLedger(limit, filter));
+          return ok(await listRecentLedger(uid(extra), limit, filter));
         }),
     );
 
@@ -263,7 +278,7 @@ const mcpHandler = createMcpHandler(
           "Recurring bill/subscription rules (id, name, amount, schedule). Check this before proposing a create_recurring op in update_finance so you never duplicate an existing rule.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await listRecurringExpenses())),
+      (_args, extra) => guard(async () => ok(await listRecurringExpenses(uid(extra)))),
     );
 
     server.registerTool(
@@ -274,7 +289,7 @@ const mcpHandler = createMcpHandler(
           "The next timed Google Calendar event, free waking hours left today, and the next free time gaps over the coming 3 days.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await getScheduleSnapshot())),
+      (_args, extra) => guard(async () => ok(await getScheduleSnapshot(uid(extra)))),
     );
 
     server.registerTool(
@@ -285,9 +300,9 @@ const mcpHandler = createMcpHandler(
           "One-call cross-domain planning read over today…+horizonDays (default 7, max 60). Per-day schedule: timed Google events, Mindboard time-blocks and recurring-task occurrences (source-tagged), free gaps, free-hours-before-5pm, and committed minutes. Plus every open task with due time/duration and a scheduled flag; upcoming recurring bills and projected end-of-day net worth per day; inventory run-out estimates; and the recent check-in trend + active goals. Times are in the user's local timezone with explicit ISO offsets. For one lean domain, use finance_snapshot / tasks_snapshot / inventory_snapshot / schedule_snapshot instead.",
         inputSchema: { horizonDays: z.number().int().min(1).max(60).optional() },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () =>
-          ok(await getPlanningSnapshot({ horizonDays: args.horizonDays ?? 7 })),
+          ok(await getPlanningSnapshot(uid(extra), { horizonDays: args.horizonDays ?? 7 })),
         ),
     );
 
@@ -302,7 +317,7 @@ const mcpHandler = createMcpHandler(
           to: z.string().optional().describe("YYYY-MM-DD end, inclusive (default from+7)."),
         },
       },
-      (args) => guard(async () => ok(await listCalendarEvents(args))),
+      (args, extra) => guard(async () => ok(await listCalendarEvents(uid(extra), args))),
     );
 
     server.registerTool(
@@ -315,7 +330,7 @@ const mcpHandler = createMcpHandler(
           days: z.number().int().min(1).max(90).optional(),
         },
       },
-      (args) => guard(async () => ok(await getFinanceForecast(args.days ?? 30))),
+      (args, extra) => guard(async () => ok(await getFinanceForecast(uid(extra), args.days ?? 30))),
     );
 
     server.registerTool(
@@ -326,7 +341,7 @@ const mcpHandler = createMcpHandler(
           "Per-item depletion forecast: effective daily consumption rate from the usage rules, days left, the projected run-out date, and the reorder-by date where a threshold is set. Sorted soonest-out first.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await getInventoryForecast())),
+      (_args, extra) => guard(async () => ok(await getInventoryForecast(uid(extra)))),
     );
 
     server.registerTool(
@@ -337,7 +352,7 @@ const mcpHandler = createMcpHandler(
           "The user's goals (id, title, why, horizon, status, target date). Active and paused by default; includeClosed adds done/archived. Ids feed upsert_goal.",
         inputSchema: { includeClosed: z.boolean().optional() },
       },
-      (args) => guard(async () => ok(await listGoals(args))),
+      (args, extra) => guard(async () => ok(await listGoals(uid(extra), args))),
     );
 
     server.registerTool(
@@ -348,7 +363,7 @@ const mcpHandler = createMcpHandler(
           "Wage jobs (id, name, hourly wage, tax rate, linked calendar, pay schedule). Worked shifts come from the linked Google Calendar. Ids feed manage_finance's update_income op.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await listIncomeSources())),
+      (_args, extra) => guard(async () => ok(await listIncomeSources(uid(extra)))),
     );
 
     server.registerTool(
@@ -359,7 +374,7 @@ const mcpHandler = createMcpHandler(
           "Recent mood/energy/sleep check-ins, newest first (default 14, max 60). Today's entry can be written with log_daily.",
         inputSchema: { limit: z.number().int().positive().max(60).optional() },
       },
-      (args) => guard(async () => ok(await listDailyLogs(args.limit ?? 14))),
+      (args, extra) => guard(async () => ok(await listDailyLogs(uid(extra), args.limit ?? 14))),
     );
 
     server.registerTool(
@@ -370,7 +385,7 @@ const mcpHandler = createMcpHandler(
           "The user's settings: timezone, wake window (start/end hour, drives free-time math), the manual daily-spend estimate fallback, and the grocery store + weekly shopping day behind the shopping list's prices and the finance forecast's grocery layer.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await getPreferences())),
+      (_args, extra) => guard(async () => ok(await getPreferences(uid(extra)))),
     );
 
     server.registerTool(
@@ -384,7 +399,7 @@ const mcpHandler = createMcpHandler(
           limit: z.number().int().positive().max(100).optional(),
         },
       },
-      (args) => guard(async () => ok(await listProposals(args))),
+      (args, extra) => guard(async () => ok(await listProposals(uid(extra), args))),
     );
 
     server.registerTool(
@@ -395,7 +410,7 @@ const mcpHandler = createMcpHandler(
           "Every markdown note in the vault (path, folder, title). Use a path with read_brain_note to read one.",
         inputSchema: {},
       },
-      () => guard(async () => ok(await listBrainNotes())),
+      (_args, extra) => guard(async () => ok(await listBrainNotes(uid(extra)))),
     );
 
     server.registerTool(
@@ -406,7 +421,7 @@ const mcpHandler = createMcpHandler(
           "One vault note's raw markdown by path (case-insensitive; '.md' optional). Paths come from list_brain_notes.",
         inputSchema: { path: z.string() },
       },
-      (args) => guard(async () => ok(await readBrainNote(args.path))),
+      (args, extra) => guard(async () => ok(await readBrainNote(uid(extra), args.path))),
     );
 
     // ---------- writes (propose step) ----------
@@ -426,9 +441,9 @@ const mcpHandler = createMcpHandler(
           priority: z.enum(["low", "med", "high"]).optional(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeCreateTask(args);
+          const r = await proposeCreateTask(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -441,9 +456,9 @@ const mcpHandler = createMcpHandler(
           "Propose marking a task as done. Returns a preview + proposalId; call confirm_action to apply. Find the taskId via list_tasks.",
         inputSchema: { taskId: z.string() },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeCompleteTask(args);
+          const r = await proposeCompleteTask(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -466,9 +481,9 @@ const mcpHandler = createMcpHandler(
           pushToCalendar: z.boolean().optional(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeUpdateTask(args);
+          const r = await proposeUpdateTask(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -481,9 +496,9 @@ const mcpHandler = createMcpHandler(
           "Propose permanently deleting a task (prefer complete_task for finished work — deletion is for mistakes/duplicates). Returns a preview + proposalId; call confirm_action to apply.",
         inputSchema: { taskId: z.string() },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeDeleteTask(args);
+          const r = await proposeDeleteTask(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -509,9 +524,9 @@ const mcpHandler = createMcpHandler(
           durationMin: z.number().int().min(15).nullish(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeUpdateRecurringTask(args);
+          const r = await proposeUpdateRecurringTask(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -524,9 +539,9 @@ const mcpHandler = createMcpHandler(
           "Propose checking off TODAY's occurrence of a repeating task (or un-checking it with undo:true). Only today is completable — missed days skip silently. Find the ruleId via list_recurring_tasks. Returns a preview + proposalId; call confirm_action to apply.",
         inputSchema: { ruleId: z.string(), undo: z.boolean().optional() },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeCompleteRecurring(args);
+          const r = await proposeCompleteRecurring(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -546,9 +561,9 @@ const mcpHandler = createMcpHandler(
           googleCalendarId: z.string().nullish(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeManageGroup(args);
+          const r = await proposeManageGroup(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -568,9 +583,9 @@ const mcpHandler = createMcpHandler(
           targetDate: z.string().optional().describe("YYYY-MM-DD"),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeUpsertGoal(args);
+          const r = await proposeUpsertGoal(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -590,9 +605,9 @@ const mcpHandler = createMcpHandler(
           timeZone: z.string().optional().describe("IANA zone for timed events."),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeRescheduleEvent(args);
+          const r = await proposeRescheduleEvent(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -612,9 +627,9 @@ const mcpHandler = createMcpHandler(
           description: z.string().optional(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeCreateEvent(args);
+          const r = await proposeCreateEvent(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -631,9 +646,9 @@ const mcpHandler = createMcpHandler(
           sleepHours: z.number().min(0).max(24).nullish(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeLogDaily(args);
+          const r = await proposeLogDaily(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -652,9 +667,9 @@ const mcpHandler = createMcpHandler(
           shoppingDay: z.number().int().min(0).max(6).nullish(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeUpdateSettings(args);
+          const r = await proposeUpdateSettings(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -717,9 +732,9 @@ const mcpHandler = createMcpHandler(
             .max(MAX_ADMIN_OPS),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeManageFinance(args);
+          const r = await proposeManageFinance(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -744,9 +759,9 @@ const mcpHandler = createMcpHandler(
           durationMin: z.number().int().min(15).optional(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeCreateRecurringTask(args);
+          const r = await proposeCreateRecurringTask(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -759,9 +774,9 @@ const mcpHandler = createMcpHandler(
           "Propose stopping a repeating task rule (archives it; completion history is kept). Find the ruleId via list_recurring_tasks. Returns a preview + proposalId; call confirm_action to apply.",
         inputSchema: { ruleId: z.string() },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeArchiveRecurringTask(args);
+          const r = await proposeArchiveRecurringTask(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -779,9 +794,9 @@ const mcpHandler = createMcpHandler(
           note: z.string().nullish(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeLogSpend(args);
+          const r = await proposeLogSpend(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -802,9 +817,9 @@ const mcpHandler = createMcpHandler(
           amount: z.number().positive(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeSetSpendLimit(args);
+          const r = await proposeSetSpendLimit(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -819,9 +834,9 @@ const mcpHandler = createMcpHandler(
           limitId: z.string(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeDeleteSpendLimit(args);
+          const r = await proposeDeleteSpendLimit(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -912,9 +927,9 @@ const mcpHandler = createMcpHandler(
             .max(MAX_FINANCE_OPS),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeUpdateFinance(args);
+          const r = await proposeUpdateFinance(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1012,9 +1027,9 @@ const mcpHandler = createMcpHandler(
             .max(MAX_STOCK_OPS),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeUpdateStock(args);
+          const r = await proposeUpdateStock(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1033,9 +1048,9 @@ const mcpHandler = createMcpHandler(
           force: z.boolean().optional(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await lookupShoppingPrices(args);
+          const r = await lookupShoppingPrices(uid(extra), args);
           return r.ok ? ok({ results: r.results }) : fail(r.error);
         }),
     );
@@ -1056,9 +1071,9 @@ const mcpHandler = createMcpHandler(
           topics: z.array(z.string()).optional().describe("Optional reviewer hints for filing."),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await captureToBrain(args);
+          const r = await captureToBrain(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1075,9 +1090,9 @@ const mcpHandler = createMcpHandler(
           "List the user's courses (/learn) with their sources and conversion status. Use this to find a course or source id before uploading markdown.",
         inputSchema: {},
       },
-      () =>
+      (_args, extra) =>
         guard(async () => {
-          const r = await listCourses();
+          const r = await listCourses(uid(extra));
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1105,9 +1120,9 @@ const mcpHandler = createMcpHandler(
           page_count: z.number().int().positive().optional(),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await beginSourceUpload(args);
+          const r = await beginSourceUpload(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1124,9 +1139,9 @@ const mcpHandler = createMcpHandler(
           markdown: z.string().max(SOURCE_PART_MAX_CHARS),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await appendSourcePart(args);
+          const r = await appendSourcePart(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1139,9 +1154,9 @@ const mcpHandler = createMcpHandler(
           "Assemble the uploaded parts and commit the markdown to the vault under Courses/<course>/Sources/. Fails if parts are missing or non-contiguous. Returns the vault path.",
         inputSchema: { source_id: z.string() },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await finalizeSource(args);
+          const r = await finalizeSource(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1165,9 +1180,9 @@ const mcpHandler = createMcpHandler(
             .describe("gemini = instant hosted voices (default); vibevoice = free home-pc render."),
         },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await proposeGenerateAudioOverview(args);
+          const r = await proposeGenerateAudioOverview(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1181,9 +1196,9 @@ const mcpHandler = createMcpHandler(
           "Execute a previously proposed write (any propose-tool: tasks, repeating tasks, groups, goals, calendar events, daily log, settings, stock, finance) by its proposalId. Only call after the user has approved the preview. Pending proposals are visible via list_proposals (status=proposed).",
         inputSchema: { proposalId: z.string() },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await confirmAction(args.proposalId);
+          const r = await confirmAction(uid(extra), args.proposalId);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1195,9 +1210,9 @@ const mcpHandler = createMcpHandler(
         description: "Discard a proposed write by its proposalId without executing it.",
         inputSchema: { proposalId: z.string() },
       },
-      (args) =>
+      (args, extra) =>
         guard(async () => {
-          const r = await cancelAction(args.proposalId);
+          const r = await cancelAction(uid(extra), args.proposalId);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1206,11 +1221,15 @@ const mcpHandler = createMcpHandler(
   { basePath: "/api/mcp", maxDuration: 300, disableSse: true, verboseLogs: false },
 );
 
-// ---------- auth: OAuth access token OR static bearer ----------
+// ---------- auth: OAuth access token, per-user PAT, or static bearer ----------
 // claude.ai authenticates via OAuth (see app/api/mcp/oauth/* + the well-known
-// metadata). Other clients (MCP inspector, curl, Claude Desktop) can still use
-// the static MCP_BEARER_TOKEN. withMcpAuth returns 401 + a WWW-Authenticate that
-// points at the protected-resource metadata, which kicks off the OAuth flow.
+// metadata); the token's sub is the Supabase user id. Non-OAuth clients (MCP
+// inspector, curl, Claude Desktop) use a per-user mbp_ personal access token
+// generated on /settings. The legacy static MCP_BEARER_TOKEN keeps working and
+// maps to the configured owner (MINDBOARD_OWNER_USER_ID). Every path puts the
+// resolved user id in authInfo.extra.userId, which uid() requires per tool call.
+// withMcpAuth returns 401 + a WWW-Authenticate that points at the
+// protected-resource metadata, which kicks off the OAuth flow.
 
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -1219,12 +1238,24 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-function verifyToken(_req: Request, bearer?: string) {
+async function verifyToken(_req: Request, bearer?: string) {
   if (!bearer) return undefined;
 
   const staticToken = process.env.MCP_BEARER_TOKEN;
-  if (staticToken && safeEqual(bearer, staticToken)) {
-    return { token: bearer, clientId: "static", scopes: ["mcp"] };
+  const staticOwner = process.env.MINDBOARD_OWNER_USER_ID;
+  if (staticToken && staticOwner && safeEqual(bearer, staticToken)) {
+    return {
+      token: bearer,
+      clientId: "static",
+      scopes: ["mcp"],
+      extra: { userId: staticOwner },
+    };
+  }
+
+  if (looksLikePat(bearer)) {
+    const userId = await resolvePatUserId(bearer);
+    if (!userId) return undefined;
+    return { token: bearer, clientId: "pat", scopes: ["mcp"], extra: { userId } };
   }
 
   const parsed = verifyAccessToken(bearer);
@@ -1233,7 +1264,7 @@ function verifyToken(_req: Request, bearer?: string) {
       token: bearer,
       clientId: parsed.clientId,
       scopes: ["mcp"],
-      extra: { ownerId: parsed.ownerId },
+      extra: { userId: parsed.ownerId },
     };
   }
 

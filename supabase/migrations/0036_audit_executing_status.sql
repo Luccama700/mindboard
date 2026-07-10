@@ -8,8 +8,8 @@
 --
 -- DEPLOY ORDERING: this migration MUST be applied to the database BEFORE the
 -- code that writes 'executing' is deployed, or every confirm will fail the
--- CHECK constraint. (Not applied to the live DB in the bug-fix cycle — see
--- ~/Documents/agent-ops/logs/mindboard-bugs-2026-07-10.md.)
+-- CHECK constraint. Applied to the live DB 2026-07-10 ahead of this deploy;
+-- renumbered 0035 -> 0036 after the multi-tenant MCP branch claimed 0035.
 
 alter table public.ai_audit_log
   drop constraint if exists ai_audit_log_status_check;

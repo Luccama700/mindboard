@@ -1,7 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId } from "./config";
 import { readVaultCredentials } from "@/app/lib/brain/vault";
 import { runCapture, type CaptureOutcome } from "./capture";
 import type { Result } from "./validate";
@@ -22,7 +21,8 @@ export async function captureToBrainFor(
 }
 
 export async function captureToBrain(
+  userId: string,
   raw: unknown,
 ): Promise<Result<CaptureOutcome>> {
-  return captureToBrainFor(createServiceClient(), ownerUserId(), raw);
+  return captureToBrainFor(createServiceClient(), userId, raw);
 }
