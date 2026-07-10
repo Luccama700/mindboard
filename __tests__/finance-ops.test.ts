@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   financeOpsDateSpan,
+  financeReceiptLine,
+  MAX_FINANCE_OPS,
   renderFinanceReceipt,
   resolveFinanceOps,
   validateFinanceOps,
@@ -9,6 +11,7 @@ import {
   type FinanceOp,
   type ResolvableAccount,
   type ResolvableCategory,
+  type ResolvedFinanceOp,
 } from "@/app/lib/mcp/finance-ops";
 
 const TODAY = "2026-07-07";
@@ -95,6 +98,102 @@ describe("validateFinanceOps", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok && r.value[0].op === "spend") expect(r.value[0].amount).toBe(6.4);
+  });
+
+  it("rejects zero and negative amounts but allows a negative reconcile balance", () => {
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "spend", account: "chase", amount: 0, date: "2026-07-01" }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "spend", account: "chase", amount: -5, date: "2026-07-01" }],
+      }).ok,
+    ).toBe(false);
+    // credit accounts store owed balance as negative
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "reconcile", account: "visa", balance: -250, asOf: "2026-07-01" }],
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("validates create_category name length and hex color format", () => {
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "create_category", name: "x".repeat(65) }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "create_category", name: "snacks", color: "not-a-color" }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "create_category", name: "snacks", color: "#ff8800" }],
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("accepts a note-only adjust with nothing else changed", () => {
+    const r = validateFinanceOps({
+      operations: [{ op: "adjust", changeId: "ch-1", note: "corrected merchant" }],
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("truncates fractional schedule fields and enforces weekday/interval bounds", () => {
+    const monthly = validateFinanceOps({
+      operations: [
+        { op: "create_recurring", name: "gym", amount: 30, frequency: "monthly", dayOfMonth: 15.9 },
+      ],
+    });
+    expect(monthly.ok).toBe(true);
+    if (monthly.ok && monthly.value[0].op === "create_recurring") {
+      expect(monthly.value[0].dayOfMonth).toBe(15);
+    }
+
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "create_recurring", name: "trash", amount: 5, frequency: "weekly", weekday: 7 }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "create_recurring", name: "trash", amount: 5, frequency: "weekly", weekday: 0 }],
+      }).ok,
+    ).toBe(true);
+    expect(
+      validateFinanceOps({
+        operations: [{ op: "create_recurring", name: "x", amount: 5, frequency: "weekly", weekday: 6 }],
+      }).ok,
+    ).toBe(true);
+
+    expect(
+      validateFinanceOps({
+        operations: [
+          { op: "create_recurring", name: "x", amount: 5, frequency: "custom", intervalDays: 367, startDate: "2026-07-01" },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateFinanceOps({
+        operations: [
+          { op: "create_recurring", name: "x", amount: 5, frequency: "custom", intervalDays: 366, startDate: "2026-07-01" },
+        ],
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("enforces the MAX_FINANCE_OPS batch-size limit", () => {
+    const removeOps = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ op: "remove", changeId: `ch-${i}` }));
+    expect(validateFinanceOps({ operations: removeOps(MAX_FINANCE_OPS) }).ok).toBe(true);
+    expect(validateFinanceOps({ operations: removeOps(MAX_FINANCE_OPS + 1) }).ok).toBe(
+      false,
+    );
   });
 });
 
@@ -275,6 +374,96 @@ describe("resolveFinanceOps", () => {
     ]);
     expect(r.ok).toBe(false);
   });
+
+  it("an exact account match wins over a substring collision", () => {
+    // "cash" is an exact match for one account and a substring of another —
+    // the exact match must win without even considering ambiguity.
+    const r = resolveFinanceOps(
+      [{ op: "spend", account: "cash", amount: 5, date: "2026-07-01" }],
+      {
+        accounts: [
+          { id: "a1", name: "cash", currency: "USD" },
+          { id: "a2", name: "cashback rewards", currency: "USD" },
+        ],
+        categories: [],
+        recurring: [],
+        existingChanges: [],
+        today: TODAY,
+      },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok && r.value[0].kind === "spend") expect(r.value[0].accountId).toBe("a1");
+  });
+
+  it("pending-category matching is case-insensitive and keeps the canonical created name", () => {
+    const r = resolve([
+      { op: "create_category", name: "Pharmacy" },
+      {
+        op: "spend",
+        account: "cash",
+        amount: 9.99,
+        date: "2026-07-01",
+        category: "pharmacy", // different case than the batch create
+      },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const spend = r.value.find((o) => o.kind === "spend");
+      expect(spend && spend.kind === "spend" && spend.pendingCategory).toBe("Pharmacy");
+    }
+  });
+
+  it("rejects a duplicate create_category differing only by case", () => {
+    const r = resolve([
+      { op: "create_category", name: "pharmacy" },
+      { op: "create_category", name: "Pharmacy" },
+    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("duplicate");
+  });
+
+  it("scopes duplicate-fingerprint detection per account", () => {
+    const r = resolve([
+      { op: "spend", account: "chase checking", amount: 50, date: "2026-07-01" },
+      { op: "spend", account: "cash", amount: 50, date: "2026-07-01" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value[0].kind).toBe("spend");
+      expect(r.value[1].kind).toBe("spend"); // not a duplicate — different account
+    }
+  });
+
+  it("rejects double-removing or adjusting a row removed earlier in the batch", () => {
+    const doubleRemove = resolve([
+      { op: "remove", changeId: "ch-1" },
+      { op: "remove", changeId: "ch-1" },
+    ]);
+    expect(doubleRemove.ok).toBe(false);
+    if (!doubleRemove.ok) expect(doubleRemove.error).toContain("removed twice");
+
+    const adjustAfterRemove = resolve([
+      { op: "remove", changeId: "ch-1" },
+      { op: "adjust", changeId: "ch-1", amount: 10 },
+    ]);
+    expect(adjustAfterRemove.ok).toBe(false);
+    if (!adjustAfterRemove.ok) {
+      expect(adjustAfterRemove.error).toContain("removed earlier");
+    }
+  });
+
+  it("rejects a future-dated adjust and resolves a category ref on adjust", () => {
+    const future = resolve([{ op: "adjust", changeId: "ch-1", date: "2027-01-01" }]);
+    expect(future.ok).toBe(false);
+
+    const categorized = resolve([
+      { op: "adjust", changeId: "ch-1", category: "housing" },
+    ]);
+    expect(categorized.ok).toBe(true);
+    if (categorized.ok && categorized.value[0].kind === "adjust") {
+      expect(categorized.value[0].categoryId).toBe("cat-housing");
+    }
+  });
 });
 
 describe("receipt + stored-shape round trip", () => {
@@ -340,5 +529,116 @@ describe("financeOpsDateSpan", () => {
       });
       expect(financeOpsDateSpan([parsed.value[2]])).toBeNull();
     }
+  });
+
+  it("a single dated op yields a one-day span", () => {
+    const parsed = validateFinanceOps({
+      operations: [{ op: "spend", account: "cash", amount: 1, date: "2026-06-29" }],
+    });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(financeOpsDateSpan(parsed.value)).toEqual({
+        min: "2026-06-29",
+        max: "2026-06-29",
+      });
+    }
+  });
+});
+
+describe("financeReceiptLine", () => {
+  it("renders a pending category and falls back to uncategorized", () => {
+    const pending: ResolvedFinanceOp = {
+      kind: "spend",
+      accountId: "a1",
+      accountName: "cash",
+      currency: "USD",
+      amount: 10,
+      date: "2026-07-01",
+      categoryId: null,
+      categoryName: null,
+      pendingCategory: "pharmacy",
+      note: null,
+    };
+    expect(financeReceiptLine(pending)).toContain("pharmacy");
+
+    const uncategorized: ResolvedFinanceOp = { ...pending, pendingCategory: null };
+    expect(financeReceiptLine(uncategorized)).toContain("uncategorized");
+  });
+
+  it("renders markTransfer:false as regular spending", () => {
+    const adjust: ResolvedFinanceOp = {
+      kind: "adjust",
+      changeId: "ch-1",
+      accountId: "acc-chase",
+      label: "2026-06-30 −$54.10",
+      amount: null,
+      categoryId: null,
+      pendingCategory: null,
+      date: null,
+      note: null,
+      markTransfer: false,
+    };
+    expect(financeReceiptLine(adjust)).toContain("regular spending");
+  });
+
+  it("renders a pending category on create_recurring", () => {
+    const op: ResolvedFinanceOp = {
+      kind: "create_recurring",
+      name: "spotify",
+      amount: 11.99,
+      frequency: "monthly",
+      dayOfMonth: 3,
+      weekday: null,
+      intervalDays: null,
+      startDate: null,
+      categoryId: null,
+      categoryName: null,
+      pendingCategory: "subscriptions",
+    };
+    expect(financeReceiptLine(op)).toContain("subscriptions");
+  });
+});
+
+describe("validateResolvedFinanceOps malformed shapes", () => {
+  it("rejects a stored spend missing accountId", () => {
+    const r = validateResolvedFinanceOps({
+      operations: [
+        {
+          kind: "spend",
+          accountName: "cash",
+          currency: "USD",
+          amount: 10,
+          date: "2026-07-01",
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects a stored adjust with an invalid amount", () => {
+    const r = validateResolvedFinanceOps({
+      operations: [
+        {
+          kind: "adjust",
+          changeId: "ch-1",
+          accountId: "acc-chase",
+          label: "x",
+          amount: -5,
+          categoryId: null,
+          pendingCategory: null,
+          date: null,
+          note: null,
+          markTransfer: null,
+        },
+      ],
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects an unknown stored operation kind", () => {
+    const r = validateResolvedFinanceOps({
+      operations: [{ kind: "teleport", label: "x" }],
+    });
+    expect(r.ok).toBe(false);
   });
 });
