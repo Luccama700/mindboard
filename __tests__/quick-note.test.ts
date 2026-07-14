@@ -90,6 +90,7 @@ describe("validateQuickNote", () => {
       value: {
         text: "pick up the parcel",
         source: DEFAULT_QUICK_NOTE_SOURCE,
+        title: "Quick note",
         file: null,
       },
     });
@@ -100,7 +101,12 @@ describe("validateQuickNote", () => {
       validateQuickNote({ text: "note", source: " Drafts app " }),
     ).toEqual({
       ok: true,
-      value: { text: "note", source: "Drafts app", file: null },
+      value: {
+        text: "note",
+        source: "Drafts app",
+        title: "Quick note",
+        file: null,
+      },
     });
   });
 
@@ -121,7 +127,7 @@ describe("validateQuickNote", () => {
     expect(validateQuickNote(raw)).toEqual({ ok: false, error });
   });
 
-  test("accepts a file with no text", () => {
+  test("accepts a file with no text, titling the note after it", () => {
     const result = validateQuickNote({
       file_name: "report.pdf",
       file_base64: "aGVsbG8=",
@@ -132,6 +138,7 @@ describe("validateQuickNote", () => {
       value: {
         text: "",
         source: "iOS share",
+        title: "report",
         file: { name: "report.pdf", base64: "aGVsbG8=" },
       },
     });
@@ -139,7 +146,7 @@ describe("validateQuickNote", () => {
 
   test("strips whitespace from Shortcuts-style base64", () => {
     const result = validateQuickNote({
-      file_name: "a.txt",
+      file_name: "a.bin",
       file_base64: "aGVs\nbG8=",
     });
     expect(result.ok && result.value.file?.base64).toBe("aGVsbG8=");
@@ -174,17 +181,49 @@ describe("validateQuickNote", () => {
     expect(validateQuickNote(raw)).toEqual({ ok: false, error });
   });
 
-  test("an extension-less name gets one sniffed from the bytes", () => {
-    // "https://instagram.com/p/abc" as base64 — UTF-8 text, so .txt. Without
-    // the extension the companion note's ![[embed]] would resolve to the note
-    // itself and recurse.
+  test("a textual share inlines into the note instead of attaching", () => {
+    // An Instagram share arrives as an extension-less blob whose bytes are
+    // just the link — it should become note text, not a .txt-in-.md sandwich.
     const result = validateQuickNote({
       file_name: "Instagram",
       file_base64: Buffer.from("https://instagram.com/p/abc").toString(
         "base64",
       ),
+      source: "iOS share",
     });
-    expect(result.ok && result.value.file?.name).toBe("Instagram.txt");
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        text: "https://instagram.com/p/abc",
+        source: "iOS share",
+        title: "Instagram",
+        file: null,
+      },
+    });
+  });
+
+  test("a named .txt inlines too, after any provided text", () => {
+    const result = validateQuickNote({
+      text: "from the meeting",
+      file_name: "notes.txt",
+      file_base64: Buffer.from("agenda item one").toString("base64"),
+    });
+    expect(result.ok && result.value.text).toBe(
+      "from the meeting\n\nagenda item one",
+    );
+    expect(result.ok && result.value.file).toBeNull();
+    expect(result.ok && result.value.title).toBe("notes");
+  });
+
+  test("an oversized textual share stays an attachment", () => {
+    const result = validateQuickNote({
+      file_name: "huge.txt",
+      file_base64: Buffer.from("x".repeat(QUICK_NOTE_TEXT_MAX + 1)).toString(
+        "base64",
+      ),
+    });
+    expect(result.ok && result.value.file?.name).toBe("huge.txt");
+    expect(result.ok && result.value.text).toBe("");
   });
 
   test("a name that already has an extension is left alone", () => {
@@ -301,6 +340,7 @@ describe("buildQuickNoteDocument", () => {
       {
         text: 'remember to email "Sam"',
         source: DEFAULT_QUICK_NOTE_SOURCE,
+        title: "Quick note",
         file: null,
       },
       "2026-07-06 19:30",
@@ -325,6 +365,7 @@ describe("buildQuickNoteDocument", () => {
       {
         text: "the signed lease",
         source: "iOS share",
+        title: "lease",
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       "2026-07-06 19:30",
@@ -340,6 +381,7 @@ describe("buildQuickNoteDocument", () => {
       {
         text: "",
         source: "iOS share",
+        title: "lease",
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       "2026-07-06 19:30",
@@ -357,6 +399,7 @@ describe("createQuickNote", () => {
       {
         text: "buy new headphones",
         source: DEFAULT_QUICK_NOTE_SOURCE,
+        title: "Quick note",
         file: null,
       },
       PDT_NOW,
@@ -394,7 +437,12 @@ describe("createQuickNote", () => {
     const { calls, fetchImpl } = fakeFetch([422, 201]);
     const result = await createQuickNote(
       CREDENTIALS,
-      { text: "note", source: DEFAULT_QUICK_NOTE_SOURCE, file: null },
+      {
+        text: "note",
+        source: DEFAULT_QUICK_NOTE_SOURCE,
+        title: "Quick note",
+        file: null,
+      },
       PDT_NOW,
       fetchImpl,
     );
@@ -412,7 +460,12 @@ describe("createQuickNote", () => {
     const { fetchImpl } = fakeFetch([401]);
     const result = await createQuickNote(
       CREDENTIALS,
-      { text: "note", source: DEFAULT_QUICK_NOTE_SOURCE, file: null },
+      {
+        text: "note",
+        source: DEFAULT_QUICK_NOTE_SOURCE,
+        title: "Quick note",
+        file: null,
+      },
       PDT_NOW,
       fetchImpl,
     );
@@ -429,6 +482,7 @@ describe("createQuickNote", () => {
       {
         text: "the signed lease",
         source: "iOS share",
+        title: "lease",
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       PDT_NOW,
@@ -466,6 +520,7 @@ describe("createQuickNote", () => {
       {
         text: "",
         source: "iOS share",
+        title: "lease",
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       PDT_NOW,
@@ -487,6 +542,7 @@ describe("createQuickNote", () => {
       {
         text: "",
         source: "iOS share",
+        title: "lease",
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       PDT_NOW,
@@ -503,6 +559,7 @@ describe("createQuickNote", () => {
       {
         text: "",
         source: "iOS share",
+        title: "lease",
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       PDT_NOW,

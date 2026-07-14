@@ -59,9 +59,14 @@ export function createRateLimiter(
 
 export type QuickFile = { name: string; base64: string };
 
+type ParsedQuickFile = QuickFile & { asText: string | null };
+
 export type QuickNoteInput = {
   text: string;
   source: string;
+  // The note's filename word: "Quick note" for bare text, the shared file's
+  // base name when a file came along (inlined or attached).
+  title: string;
   file: QuickFile | null;
 };
 
@@ -95,20 +100,24 @@ export function sniffExtension(bytes: Buffer): string {
     return ".mp4";
   }
   if (bytes.subarray(0, 2).toString("latin1") === "PK") return ".zip";
+  return decodeUtf8Text(bytes) != null ? ".txt" : ".bin";
+}
+
+function decodeUtf8Text(bytes: Buffer): string | null {
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     // eslint-disable-next-line no-control-regex
-    if (!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) return ".txt";
+    if (!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) return text;
   } catch {
     // not text
   }
-  return ".bin";
+  return null;
 }
 
 function validateQuickFile(
   rawName: unknown,
   rawBase64: unknown,
-): Result<QuickFile | null> {
+): Result<ParsedQuickFile | null> {
   if (rawName == null && rawBase64 == null) return { ok: true, value: null };
   if (rawName == null || rawBase64 == null) {
     return {
@@ -150,7 +159,10 @@ function validateQuickFile(
   const named = splitExtension(safeName.value).ext
     ? safeName.value
     : safeName.value + sniffExtension(bytes);
-  return { ok: true, value: { name: named, base64 } };
+  return {
+    ok: true,
+    value: { name: named, base64, asText: decodeUtf8Text(bytes) },
+  };
 }
 
 export function validateQuickNote(raw: unknown): Result<QuickNoteInput> {
@@ -170,10 +182,10 @@ export function validateQuickNote(raw: unknown): Result<QuickNoteInput> {
     };
   }
 
-  const file = validateQuickFile(record.file_name, record.file_base64);
-  if (!file.ok) return file;
+  const parsedFile = validateQuickFile(record.file_name, record.file_base64);
+  if (!parsedFile.ok) return parsedFile;
 
-  if (!text && !file.value) {
+  if (!text && !parsedFile.value) {
     return { ok: false, error: "text or a file is required" };
   }
 
@@ -190,7 +202,27 @@ export function validateQuickNote(raw: unknown): Result<QuickNoteInput> {
     };
   }
 
-  return { ok: true, value: { text, source, file: file.value } };
+  // A textual share (a .txt name, or an extension-less blob that sniffed as
+  // text — how share sheets deliver links and selections) inlines into the
+  // note body instead of becoming a .txt attachment embedded in an .md note.
+  let title = "Quick note";
+  let file: QuickFile | null = null;
+  let noteText = text;
+  if (parsedFile.value) {
+    const shared = parsedFile.value;
+    title = splitExtension(shared.name).base;
+    const inlined =
+      shared.name.toLowerCase().endsWith(".txt") && shared.asText != null
+        ? [text, shared.asText.trim()].filter(Boolean).join("\n\n")
+        : "";
+    if (inlined && inlined.length <= QUICK_NOTE_TEXT_MAX) {
+      noteText = inlined;
+    } else {
+      file = { name: shared.name, base64: shared.base64 };
+    }
+  }
+
+  return { ok: true, value: { text: noteText, source, title, file } };
 }
 
 export function quickNotePath(
@@ -273,14 +305,11 @@ export async function createQuickNote(
     };
   }
 
-  const noteTitle = input.file
-    ? splitExtension(input.file.name).base
-    : "Quick note";
   const note = await createVaultFileWithRetry(
     credentials,
-    (attempt) => quickNotePath(stamp, attempt, noteTitle),
+    (attempt) => quickNotePath(stamp, attempt, input.title),
     buildQuickNoteDocument(input, stamp.created, attachment?.fileName),
-    `Capture: ${noteTitle} (${input.source})`,
+    `Capture: ${input.title} (${input.source})`,
     fetchImpl,
   );
   if (!note.ok) {
