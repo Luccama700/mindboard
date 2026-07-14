@@ -14,6 +14,14 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-14-siri-quick-note",
+    date: "2026-07-14",
+    title: "quick notes by voice",
+    items: [
+      "say \"hey siri, quick note\" and whatever you dictate lands in your vault's inbox, word for word — filed and distilled later, on your schedule.",
+    ],
+  },
+  {
     id: "2026-07-09-shelf-shops",
     date: "2026-07-09",
     title: "the shelf learns to shop",

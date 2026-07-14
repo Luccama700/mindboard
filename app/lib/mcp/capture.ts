@@ -130,7 +130,7 @@ export function captureFilePath(
   return `Inbox/${stamp.dateKey} ${stamp.timeKey} ${safeTitle}${suffix}.md`;
 }
 
-function yamlQuote(value: string): string {
+export function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
