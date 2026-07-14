@@ -67,6 +67,44 @@ export type QuickNoteInput = {
 
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
+// An extension-less attachment is a hazard: its companion note embeds it as
+// ![[<name>]], and a wikilink without an extension resolves to the .md note of
+// the same basename first — the note embeds itself, recursively. So when the
+// shared name has no extension (Photos and odd share-sheet items often don't),
+// sniff one from the magic bytes; UTF-8 text falls back to .txt, anything
+// unrecognized to .bin.
+export function sniffExtension(bytes: Buffer): string {
+  if (bytes.subarray(0, 4).toString("latin1") === "%PDF") return ".pdf";
+  if (bytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) {
+    return ".png";
+  }
+  if (bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) {
+    return ".jpg";
+  }
+  if (bytes.subarray(0, 4).toString("latin1") === "GIF8") return ".gif";
+  if (
+    bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
+    bytes.subarray(8, 12).toString("latin1") === "WEBP"
+  ) {
+    return ".webp";
+  }
+  if (bytes.subarray(4, 8).toString("latin1") === "ftyp") {
+    const brand = bytes.subarray(8, 12).toString("latin1");
+    if (brand.startsWith("hei") || brand.startsWith("mif")) return ".heic";
+    if (brand.startsWith("qt")) return ".mov";
+    return ".mp4";
+  }
+  if (bytes.subarray(0, 2).toString("latin1") === "PK") return ".zip";
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // eslint-disable-next-line no-control-regex
+    if (!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) return ".txt";
+  } catch {
+    // not text
+  }
+  return ".bin";
+}
+
 function validateQuickFile(
   rawName: unknown,
   rawBase64: unknown,
@@ -98,18 +136,21 @@ function validateQuickFile(
   if (!base64 || !BASE64_RE.test(base64)) {
     return { ok: false, error: "file_base64 must be base64-encoded data" };
   }
-  const byteLength = Buffer.from(base64, "base64").length;
-  if (byteLength === 0) {
+  const bytes = Buffer.from(base64, "base64");
+  if (bytes.length === 0) {
     return { ok: false, error: "file_base64 decoded to zero bytes" };
   }
-  if (byteLength > QUICK_FILE_MAX_BYTES) {
+  if (bytes.length > QUICK_FILE_MAX_BYTES) {
     return {
       ok: false,
-      error: `file must be at most ${QUICK_FILE_MAX_BYTES} bytes decoded (got ${byteLength})`,
+      error: `file must be at most ${QUICK_FILE_MAX_BYTES} bytes decoded (got ${bytes.length})`,
     };
   }
 
-  return { ok: true, value: { name: safeName.value, base64 } };
+  const named = splitExtension(safeName.value).ext
+    ? safeName.value
+    : safeName.value + sniffExtension(bytes);
+  return { ok: true, value: { name: named, base64 } };
 }
 
 export function validateQuickNote(raw: unknown): Result<QuickNoteInput> {

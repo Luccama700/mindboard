@@ -11,6 +11,7 @@ import {
   createRateLimiter,
   quickFilePath,
   quickNotePath,
+  sniffExtension,
   validateQuickNote,
 } from "@/app/lib/mcp/quick-note";
 import type { CaptureStamp } from "@/app/lib/mcp/capture";
@@ -173,6 +174,27 @@ describe("validateQuickNote", () => {
     expect(validateQuickNote(raw)).toEqual({ ok: false, error });
   });
 
+  test("an extension-less name gets one sniffed from the bytes", () => {
+    // "https://instagram.com/p/abc" as base64 — UTF-8 text, so .txt. Without
+    // the extension the companion note's ![[embed]] would resolve to the note
+    // itself and recurse.
+    const result = validateQuickNote({
+      file_name: "Instagram",
+      file_base64: Buffer.from("https://instagram.com/p/abc").toString(
+        "base64",
+      ),
+    });
+    expect(result.ok && result.value.file?.name).toBe("Instagram.txt");
+  });
+
+  test("a name that already has an extension is left alone", () => {
+    const result = validateQuickNote({
+      file_name: "photo.jpeg",
+      file_base64: Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString("base64"),
+    });
+    expect(result.ok && result.value.file?.name).toBe("photo.jpeg");
+  });
+
   test("rejects a file over the size cap", () => {
     const oversized = Buffer.alloc(QUICK_FILE_MAX_BYTES + 1).toString("base64");
     const result = validateQuickNote({
@@ -227,6 +249,23 @@ describe("quickNotePath", () => {
     expect(quickNotePath(stamp, 1, "report")).toBe(
       "Inbox/2026-07-06 1930 report.md",
     );
+  });
+});
+
+describe("sniffExtension", () => {
+  test.each([
+    [Buffer.from("%PDF-1.7 rest"), ".pdf"],
+    [Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]), ".png"],
+    [Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x00]), ".jpg"],
+    [Buffer.from("GIF89a"), ".gif"],
+    [Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP")]), ".webp"],
+    [Buffer.concat([Buffer.alloc(4), Buffer.from("ftypheic")]), ".heic"],
+    [Buffer.concat([Buffer.alloc(4), Buffer.from("ftypisom")]), ".mp4"],
+    [Buffer.from("PK\x03\x04zipdata"), ".zip"],
+    [Buffer.from("plain shared text\nwith lines"), ".txt"],
+    [Buffer.from([0x00, 0x01, 0x02, 0xfe, 0xff]), ".bin"],
+  ])("case %#: sniffs %s", (bytes, ext) => {
+    expect(sniffExtension(bytes)).toBe(ext);
   });
 });
 
