@@ -169,9 +169,27 @@ export async function createVaultFileWithRetry(
   commitMessage: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Result<{ path: string }>> {
+  return createVaultBase64FileWithRetry(
+    credentials,
+    pathForAttempt,
+    Buffer.from(content, "utf8").toString("base64"),
+    commitMessage,
+    fetchImpl,
+  );
+}
+
+// Same create-only write, but the content is already base64 — the binary
+// attachment path for /api/capture share-sheet files.
+export async function createVaultBase64FileWithRetry(
+  credentials: VaultWriteCredentials,
+  pathForAttempt: (attempt: number) => string,
+  contentBase64: string,
+  commitMessage: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Result<{ path: string }>> {
   const payload = {
     message: commitMessage,
-    content: Buffer.from(content, "utf8").toString("base64"),
+    content: contentBase64,
     // No committer override: GitHub attributes the commit to the owner of the
     // vault token (the user), matching their normal commits.
     branch: credentials.branch,

@@ -14,6 +14,15 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-14-share-capture",
+    date: "2026-07-14",
+    title: "share anything to your vault",
+    items: [
+      "the capture endpoint now takes links and files too — share from any app and it lands in your vault's inbox with a note attached.",
+      "files up to ~3 mb travel as-is; a companion note embeds them so they show up in review.",
+    ],
+  },
+  {
     id: "2026-07-14-siri-quick-note",
     date: "2026-07-14",
     title: "quick notes by voice",

@@ -15,8 +15,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-// Public door for the iOS "Quick Note" Shortcut (Siri dictation → vault
-// Inbox/). The static CAPTURE_SECRET bearer maps to the deployment owner, the
+// Public door for the iOS capture Shortcuts (Siri dictation and share-sheet
+// links/files → vault Inbox/). The static CAPTURE_SECRET bearer maps to the
+// deployment owner, the
 // same way the legacy static MCP token does; vault credentials come from that
 // user's vault_settings, never from env. The write reuses capture_to_brain's
 // create-only Inbox/ writer, so this endpoint can never update or delete
@@ -64,5 +65,9 @@ export async function POST(request: Request) {
   if (!written.ok) {
     return NextResponse.json({ error: written.error }, { status: 502 });
   }
-  return NextResponse.json({ ok: true, path: written.value.path });
+  return NextResponse.json({
+    ok: true,
+    path: written.value.path,
+    ...(written.value.filePath ? { file_path: written.value.filePath } : {}),
+  });
 }

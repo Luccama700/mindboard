@@ -2,12 +2,14 @@ import { describe, expect, test } from "vitest";
 import type { VaultWriteCredentials } from "@/app/lib/mcp/capture";
 import {
   DEFAULT_QUICK_NOTE_SOURCE,
+  QUICK_FILE_MAX_BYTES,
   QUICK_NOTE_SOURCE_MAX,
   QUICK_NOTE_TEXT_MAX,
   bearerAuthorized,
   buildQuickNoteDocument,
   createQuickNote,
   createRateLimiter,
+  quickFilePath,
   quickNotePath,
   validateQuickNote,
 } from "@/app/lib/mcp/quick-note";
@@ -84,7 +86,11 @@ describe("validateQuickNote", () => {
   test("accepts text, trims it, and defaults the source", () => {
     expect(validateQuickNote({ text: "  pick up the parcel  " })).toEqual({
       ok: true,
-      value: { text: "pick up the parcel", source: DEFAULT_QUICK_NOTE_SOURCE },
+      value: {
+        text: "pick up the parcel",
+        source: DEFAULT_QUICK_NOTE_SOURCE,
+        file: null,
+      },
     });
   });
 
@@ -93,7 +99,7 @@ describe("validateQuickNote", () => {
       validateQuickNote({ text: "note", source: " Drafts app " }),
     ).toEqual({
       ok: true,
-      value: { text: "note", source: "Drafts app" },
+      value: { text: "note", source: "Drafts app", file: null },
     });
   });
 
@@ -106,12 +112,75 @@ describe("validateQuickNote", () => {
     [null, "body must be a JSON object"],
     ["note", "body must be a JSON object"],
     [["note"], "body must be a JSON object"],
-    [{}, "text is required"],
-    [{ text: "   " }, "text is required"],
+    [{}, "text or a file is required"],
+    [{ text: "   " }, "text or a file is required"],
     [{ text: 42 }, "text must be a string"],
     [{ text: "note", source: 42 }, "source must be a string"],
   ])("rejects %j", (raw, error) => {
     expect(validateQuickNote(raw)).toEqual({ ok: false, error });
+  });
+
+  test("accepts a file with no text", () => {
+    const result = validateQuickNote({
+      file_name: "report.pdf",
+      file_base64: "aGVsbG8=",
+      source: "iOS share",
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        text: "",
+        source: "iOS share",
+        file: { name: "report.pdf", base64: "aGVsbG8=" },
+      },
+    });
+  });
+
+  test("strips whitespace from Shortcuts-style base64", () => {
+    const result = validateQuickNote({
+      file_name: "a.txt",
+      file_base64: "aGVs\nbG8=",
+    });
+    expect(result.ok && result.value.file?.base64).toBe("aGVsbG8=");
+  });
+
+  test.each([
+    [
+      { file_name: "report.pdf" },
+      "file_name and file_base64 must be provided together",
+    ],
+    [
+      { file_base64: "aGVsbG8=" },
+      "file_name and file_base64 must be provided together",
+    ],
+    [
+      { file_name: 42, file_base64: "aGVsbG8=" },
+      "file_name and file_base64 must be strings",
+    ],
+    [
+      { file_name: "  ", file_base64: "aGVsbG8=" },
+      "file_name is required",
+    ],
+    [
+      { file_name: "../../evil.sh", file_base64: "aGVsbG8=" },
+      "title must not contain path traversal",
+    ],
+    [
+      { file_name: "a.txt", file_base64: "not base64!!" },
+      "file_base64 must be base64-encoded data",
+    ],
+  ])("rejects bad file input %j", (raw, error) => {
+    expect(validateQuickNote(raw)).toEqual({ ok: false, error });
+  });
+
+  test("rejects a file over the size cap", () => {
+    const oversized = Buffer.alloc(QUICK_FILE_MAX_BYTES + 1).toString("base64");
+    const result = validateQuickNote({
+      file_name: "big.bin",
+      file_base64: oversized,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("file must be at most");
   });
 
   test("rejects over-limit text with a clear error", () => {
@@ -153,12 +222,48 @@ describe("quickNotePath", () => {
       "Inbox/2026-07-06 1930 Quick note -3.md",
     );
   });
+
+  test("a custom title replaces Quick note", () => {
+    expect(quickNotePath(stamp, 1, "report")).toBe(
+      "Inbox/2026-07-06 1930 report.md",
+    );
+  });
+});
+
+describe("quickFilePath", () => {
+  const stamp: CaptureStamp = {
+    dateKey: "2026-07-06",
+    timeKey: "1930",
+    created: "2026-07-06 19:30",
+  };
+
+  test("keeps the extension and stamps like notes", () => {
+    expect(quickFilePath(stamp, "report.pdf", 1)).toBe(
+      "Inbox/2026-07-06 1930 report.pdf",
+    );
+  });
+
+  test("collision suffix lands before the extension", () => {
+    expect(quickFilePath(stamp, "report.pdf", 2)).toBe(
+      "Inbox/2026-07-06 1930 report -2.pdf",
+    );
+  });
+
+  test("handles names without an extension", () => {
+    expect(quickFilePath(stamp, "README", 2)).toBe(
+      "Inbox/2026-07-06 1930 README -2",
+    );
+  });
 });
 
 describe("buildQuickNoteDocument", () => {
   test("frontmatter shape with an explicit empty topics list", () => {
     const doc = buildQuickNoteDocument(
-      { text: "remember to email \"Sam\"", source: DEFAULT_QUICK_NOTE_SOURCE },
+      {
+        text: 'remember to email "Sam"',
+        source: DEFAULT_QUICK_NOTE_SOURCE,
+        file: null,
+      },
       "2026-07-06 19:30",
     );
     expect(doc).toBe(
@@ -175,6 +280,34 @@ describe("buildQuickNoteDocument", () => {
       ].join("\n"),
     );
   });
+
+  test("embeds the attachment after the text", () => {
+    const doc = buildQuickNoteDocument(
+      {
+        text: "the signed lease",
+        source: "iOS share",
+        file: { name: "lease.pdf", base64: "aGVsbG8=" },
+      },
+      "2026-07-06 19:30",
+      "2026-07-06 1930 lease.pdf",
+    );
+    expect(doc).toContain(
+      "the signed lease\n\n![[2026-07-06 1930 lease.pdf]]",
+    );
+  });
+
+  test("an attachment with no text embeds alone", () => {
+    const doc = buildQuickNoteDocument(
+      {
+        text: "",
+        source: "iOS share",
+        file: { name: "lease.pdf", base64: "aGVsbG8=" },
+      },
+      "2026-07-06 19:30",
+      "2026-07-06 1930 lease.pdf",
+    );
+    expect(doc).toContain("---\n\n![[2026-07-06 1930 lease.pdf]]\n");
+  });
 });
 
 describe("createQuickNote", () => {
@@ -182,7 +315,11 @@ describe("createQuickNote", () => {
     const { calls, fetchImpl } = fakeFetch([201]);
     const result = await createQuickNote(
       CREDENTIALS,
-      { text: "buy new headphones", source: DEFAULT_QUICK_NOTE_SOURCE },
+      {
+        text: "buy new headphones",
+        source: DEFAULT_QUICK_NOTE_SOURCE,
+        file: null,
+      },
       PDT_NOW,
       fetchImpl,
     );
@@ -218,7 +355,7 @@ describe("createQuickNote", () => {
     const { calls, fetchImpl } = fakeFetch([422, 201]);
     const result = await createQuickNote(
       CREDENTIALS,
-      { text: "note", source: DEFAULT_QUICK_NOTE_SOURCE },
+      { text: "note", source: DEFAULT_QUICK_NOTE_SOURCE, file: null },
       PDT_NOW,
       fetchImpl,
     );
@@ -236,7 +373,7 @@ describe("createQuickNote", () => {
     const { fetchImpl } = fakeFetch([401]);
     const result = await createQuickNote(
       CREDENTIALS,
-      { text: "note", source: DEFAULT_QUICK_NOTE_SOURCE },
+      { text: "note", source: DEFAULT_QUICK_NOTE_SOURCE, file: null },
       PDT_NOW,
       fetchImpl,
     );
@@ -244,5 +381,99 @@ describe("createQuickNote", () => {
       ok: false,
       error: "vault token was rejected by GitHub",
     });
+  });
+
+  test("a shared file commits the attachment, then a note embedding it", async () => {
+    const { calls, fetchImpl } = fakeFetch([201, 201]);
+    const result = await createQuickNote(
+      CREDENTIALS,
+      {
+        text: "the signed lease",
+        source: "iOS share",
+        file: { name: "lease.pdf", base64: "aGVsbG8=" },
+      },
+      PDT_NOW,
+      fetchImpl,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        path: "Inbox/2026-07-06 1930 lease.md",
+        filePath: "Inbox/2026-07-06 1930 lease.pdf",
+      },
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toContain(
+      encodeURIComponent("2026-07-06 1930 lease.pdf"),
+    );
+    const fileBody = JSON.parse(String(calls[0].init.body));
+    // Binary passthrough: the client's base64 goes to GitHub untouched.
+    expect(fileBody.content).toBe("aGVsbG8=");
+    expect(fileBody.sha).toBeUndefined();
+    expect(fileBody.message).toBe("Capture: lease.pdf (iOS share)");
+
+    const noteBody = JSON.parse(String(calls[1].init.body));
+    const document = Buffer.from(noteBody.content, "base64").toString("utf8");
+    expect(document).toContain("the signed lease");
+    expect(document).toContain("![[2026-07-06 1930 lease.pdf]]");
+  });
+
+  test("the note embeds the collision-suffixed attachment name", async () => {
+    const { calls, fetchImpl } = fakeFetch([422, 201, 201]);
+    const result = await createQuickNote(
+      CREDENTIALS,
+      {
+        text: "",
+        source: "iOS share",
+        file: { name: "lease.pdf", base64: "aGVsbG8=" },
+      },
+      PDT_NOW,
+      fetchImpl,
+    );
+
+    expect(result.ok && result.value.filePath).toBe(
+      "Inbox/2026-07-06 1930 lease -2.pdf",
+    );
+    const noteBody = JSON.parse(String(calls[2].init.body));
+    const document = Buffer.from(noteBody.content, "base64").toString("utf8");
+    expect(document).toContain("![[2026-07-06 1930 lease -2.pdf]]");
+  });
+
+  test("a failed file write stops before the note", async () => {
+    const { calls, fetchImpl } = fakeFetch([403]);
+    const result = await createQuickNote(
+      CREDENTIALS,
+      {
+        text: "",
+        source: "iOS share",
+        file: { name: "lease.pdf", base64: "aGVsbG8=" },
+      },
+      PDT_NOW,
+      fetchImpl,
+    );
+    expect(result.ok).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a failed note write reports the already-saved file", async () => {
+    const { fetchImpl } = fakeFetch([201, 500]);
+    const result = await createQuickNote(
+      CREDENTIALS,
+      {
+        text: "",
+        source: "iOS share",
+        file: { name: "lease.pdf", base64: "aGVsbG8=" },
+      },
+      PDT_NOW,
+      fetchImpl,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(
+        "the shared file itself was saved to Inbox/2026-07-06 1930 lease.pdf",
+      );
+    }
   });
 });
