@@ -445,14 +445,14 @@ export function Dock({
     <div
       ref={wrapRef}
       data-capture-dock
-      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] rounded-t-[8px] bg-page/95 border border-line p-3 shadow-[0_0_28px_rgba(0,0,0,0.65)] lg:left-1/2 lg:right-auto lg:w-[min(48rem,calc(100vw-4rem))] lg:-translate-x-1/2"
+      className="fixed z-40 left-4 right-4 bottom-[max(env(safe-area-inset-bottom),1rem)] glass rounded-dock p-3 lg:left-1/2 lg:right-auto lg:w-[min(48rem,calc(100vw-4rem))] lg:-translate-x-1/2"
     >
       {moreOpen && (
-        <nav className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
+        <nav className="absolute left-0 right-0 bottom-full mb-2 glass-pop glass-rise rounded-pop p-2">
           <Link
             href="/tasks"
             onClick={() => setMoreOpen(false)}
-            className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+            className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-action lowercase text-fg hover:bg-card transition-colors"
           >
             <span>tasks</span>
           </Link>
@@ -461,14 +461,14 @@ export function Dock({
           <Link
             href="/plan"
             onClick={() => setMoreOpen(false)}
-            className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+            className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-action lowercase text-fg hover:bg-card transition-colors"
           >
             <span>plans</span>
           </Link>
           <button
             type="button"
             onClick={openGroupsSheet}
-            className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+            className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-action lowercase text-fg hover:bg-card transition-colors"
           >
             <span>groups</span>
             <span className="text-meta text-muted">{groups.length}</span>
@@ -481,7 +481,7 @@ export function Dock({
               key={item.href}
               href={item.href}
               onClick={() => setMoreOpen(false)}
-              className="flex min-h-11 w-full items-center justify-between px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+              className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-action lowercase text-fg hover:bg-card transition-colors"
             >
               <span>{item.label}</span>
             </Link>
@@ -492,7 +492,7 @@ export function Dock({
       {groupsOpen && (
         <section
           aria-label="manage groups"
-          className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover shadow-[0_0_28px_rgba(0,0,0,0.65)]"
+          className="absolute left-0 right-0 bottom-full mb-2 glass-pop glass-rise rounded-pop overflow-hidden"
         >
           <div className="flex items-center justify-between border-b border-line px-3 py-1">
             <div className="flex items-center gap-4">
@@ -556,10 +556,10 @@ export function Dock({
                 href={tab.href}
                 aria-current={active ? "page" : undefined}
                 aria-label={badge > 0 ? `${tab.label}, ${badge}` : tab.label}
-                className={`flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 transition-colors ${
+                className={`flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl transition-colors ${
                   active
-                    ? "border-accent text-fg"
-                    : "border-transparent text-muted hover:text-fg"
+                    ? "bg-accent-wash text-fg"
+                    : "text-muted hover:text-fg"
                 }`}
               >
                 <span
@@ -597,8 +597,8 @@ export function Dock({
             onClick={() => setMoreOpen((v) => !v)}
             aria-expanded={moreOpen}
             aria-label="more"
-            className={`flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 border-b-2 border-transparent transition-colors ${
-              moreOpen ? "text-fg" : "text-muted hover:text-fg"
+            className={`flex-1 flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-xl transition-colors ${
+              moreOpen ? "bg-accent-wash text-fg" : "text-muted hover:text-fg"
             }`}
           >
             <span className="text-body leading-none" aria-hidden>
@@ -610,9 +610,7 @@ export function Dock({
       </div>
 
       {spendDraft && (
-        // Solid page-color base: the dock island is bg-page/95, so without
-        // this the page content behind the dock bleeds through the card.
-        <div className="mb-2 bg-page">
+        <div className="mb-2">
           <ProposalCard
             title="log spend"
             confirmLabel={`log ${formatMoney(
@@ -642,7 +640,7 @@ export function Dock({
                       setSpendDraft({ ...spendDraft, accountId: a.id })
                     }
                     aria-pressed={spendDraft.accountId === a.id}
-                    className={`min-h-11 px-3 text-[10px] tracking-widest uppercase border transition-colors ${
+                    className={`min-h-11 px-3 text-[10px] tracking-widest uppercase border rounded-full transition-colors ${
                       spendDraft.accountId === a.id
                         ? "bg-accent text-accent-fg border-accent"
                         : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -662,7 +660,7 @@ export function Dock({
                     setSpendDraft({ ...spendDraft, categoryId: null })
                   }
                   aria-pressed={spendDraft.categoryId === null}
-                  className={`inline-flex items-center gap-2 min-h-11 px-3 text-[10px] tracking-widest uppercase border transition-colors ${
+                  className={`inline-flex items-center gap-2 min-h-11 px-3 text-[10px] tracking-widest uppercase border rounded-full transition-colors ${
                     spendDraft.categoryId === null
                       ? "bg-accent text-accent-fg border-accent"
                       : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -682,7 +680,7 @@ export function Dock({
                       setSpendDraft({ ...spendDraft, categoryId: c.id })
                     }
                     aria-pressed={spendDraft.categoryId === c.id}
-                    className={`inline-flex items-center gap-2 min-h-11 px-3 text-[10px] tracking-widest uppercase border transition-colors ${
+                    className={`inline-flex items-center gap-2 min-h-11 px-3 text-[10px] tracking-widest uppercase border rounded-full transition-colors ${
                       spendDraft.categoryId === c.id
                         ? "bg-accent text-accent-fg border-accent"
                         : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -717,7 +715,7 @@ export function Dock({
 
       <div>
         {groupOpen && (
-          <div className="absolute left-0 right-0 bottom-full mb-2 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
+          <div className="absolute left-0 right-0 bottom-full mb-2 glass-pop glass-rise rounded-pop p-2">
             <div className="max-h-56 overflow-y-auto">
               <button
                 type="button"
@@ -726,7 +724,7 @@ export function Dock({
                   setGroupOpen(false);
                   inputRef.current?.focus();
                 }}
-                className={`flex min-h-11 w-full items-center gap-2 px-3 text-left text-xs tracking-widest uppercase transition-colors ${
+                className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-xs tracking-widest uppercase transition-colors ${
                   selectedGroupId === null
                     ? "bg-accent text-accent-fg"
                     : "text-fg hover:bg-card"
@@ -747,7 +745,7 @@ export function Dock({
                     setGroupOpen(false);
                     inputRef.current?.focus();
                   }}
-                  className={`flex min-h-11 w-full items-center gap-2 px-3 text-left text-xs tracking-widest uppercase transition-colors ${
+                  className={`flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-xs tracking-widest uppercase transition-colors ${
                     selectedGroupId === group.id
                       ? "bg-accent text-accent-fg"
                       : "text-fg hover:bg-card"
@@ -766,7 +764,7 @@ export function Dock({
         )}
 
         {repeatOpen && !effectiveRule && capture.mode === "task" && (
-          <div className="mb-2 border border-line bg-popover p-3 space-y-3">
+          <div className="mb-2 glass-panel rounded-pop p-3 space-y-3">
             <button
               type="button"
               onClick={() => {
@@ -779,7 +777,7 @@ export function Dock({
                 });
                 setRepeatOpen(false);
               }}
-              className="min-h-11 w-full border border-line-strong px-3 text-[10px] tracking-widest uppercase text-fg hover:border-accent transition-colors"
+              className="min-h-11 w-full border border-line-strong rounded-full px-3 text-[10px] tracking-widest uppercase text-fg hover:border-accent transition-colors"
             >
               every day
             </button>
@@ -808,7 +806,7 @@ export function Dock({
                           : null,
                       );
                     }}
-                    className={`min-h-11 flex-1 border text-[10px] tracking-widest uppercase transition-colors ${
+                    className={`min-h-11 flex-1 border rounded-full text-[10px] tracking-widest uppercase transition-colors ${
                       active
                         ? "bg-accent text-accent-fg border-accent"
                         : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -834,7 +832,7 @@ export function Dock({
                   )
                 }
                 aria-label="repeat every N days"
-                className="w-16 bg-card border border-line-strong text-fg text-sm px-2 py-2 focus:border-accent focus:outline-none transition-colors"
+                className="w-16 bg-glass-well rounded-field border border-line-strong text-fg text-sm px-2 py-2 focus:border-accent focus:outline-none transition-colors"
               />
               <span className="text-[10px] tracking-widest uppercase text-muted">
                 days
@@ -851,7 +849,7 @@ export function Dock({
                   });
                   setRepeatOpen(false);
                 }}
-                className="min-h-11 border border-line-strong px-3 text-[10px] tracking-widest uppercase text-muted hover:border-fg hover:text-fg transition-colors"
+                className="min-h-11 border border-line-strong rounded-full px-3 text-[10px] tracking-widest uppercase text-muted hover:border-fg hover:text-fg transition-colors"
               >
                 set
               </button>
@@ -873,7 +871,7 @@ export function Dock({
             type="button"
             onClick={() => setGroupOpen((v) => !v)}
             aria-expanded={groupOpen}
-            className={`flex min-h-11 max-w-[55vw] sm:max-w-full items-center gap-2 border px-3 py-2 text-[10px] tracking-widest uppercase transition-colors ${
+            className={`flex min-h-11 max-w-[55vw] sm:max-w-full items-center gap-2 border rounded-full px-3 py-2 text-[10px] tracking-widest uppercase transition-colors ${
               selectedGroup
                 ? "border-line-strong text-fg hover:border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -894,7 +892,7 @@ export function Dock({
           <button
             type="button"
             onClick={() => setDueDate(isToday ? null : today)}
-            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors ${
+            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full transition-colors ${
               isToday
                 ? "bg-accent text-accent-fg border-accent"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -906,7 +904,7 @@ export function Dock({
           <button
             type="button"
             onClick={openDatePicker}
-            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors ${
+            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full transition-colors ${
               isCustomDate
                 ? "bg-accent text-accent-fg border-accent"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -940,7 +938,7 @@ export function Dock({
             type="button"
             onClick={() => setNotesOpen((v) => !v)}
             aria-expanded={notesOpen}
-            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors ${
+            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full transition-colors ${
               notesOpen || hasNotes
                 ? "bg-accent text-accent-fg border-accent"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -955,7 +953,7 @@ export function Dock({
               onClick={() => setTimeDisabledFor(parsedTime.matched)}
               aria-label={`remove time ${parsedTime.time}`}
               title="tap to keep the time words as part of the title"
-              className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border bg-accent text-accent-fg border-accent transition-colors"
+              className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full bg-accent text-accent-fg border-accent transition-colors"
             >
               ⌚ {parsedTime.time} ×
             </button>
@@ -973,7 +971,7 @@ export function Dock({
               }}
               aria-label={`remove repeat ${formatRecurrence(effectiveRule)}`}
               title="tap to remove the repeat"
-              className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border bg-accent text-accent-fg border-accent transition-colors"
+              className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full bg-accent text-accent-fg border-accent transition-colors"
             >
               ↻ {formatRecurrence(effectiveRule)} ×
             </button>
@@ -996,7 +994,7 @@ export function Dock({
               )
             }
             aria-label={`priority: ${priority}`}
-            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border transition-colors font-bold ${
+            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full transition-colors font-bold ${
               priority === "high"
                 ? "border-danger text-danger hover:bg-danger hover:text-white"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -1008,7 +1006,7 @@ export function Dock({
           )}
 
           <label
-            className={`flex min-h-11 items-center gap-2 border px-3 py-2 text-[10px] tracking-widest uppercase cursor-pointer transition-colors ${
+            className={`flex min-h-11 items-center gap-2 border rounded-full px-3 py-2 text-[10px] tracking-widest uppercase cursor-pointer transition-colors ${
               planMode
                 ? "bg-accent text-accent-fg border-accent"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -1039,7 +1037,7 @@ export function Dock({
                 storeModel(e.target.value);
               }}
               aria-label="copilot model"
-              className="min-h-11 bg-card border border-line-strong text-muted text-[10px] tracking-widest uppercase px-2 focus:border-accent focus:outline-none transition-colors"
+              className="min-h-11 bg-glass-well rounded-field border border-line-strong text-muted text-[10px] tracking-widest uppercase px-2 focus:border-accent focus:outline-none transition-colors"
             >
               {MODEL_OPTIONS.map((option) => (
                 <option key={option.id} value={option.id}>
@@ -1058,7 +1056,7 @@ export function Dock({
             aria-label="task notes markdown"
             maxLength={5000}
             rows={4}
-            className="mb-2 w-full resize-y bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
+            className="mb-2 w-full resize-y bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
           />
         )}
 
@@ -1075,12 +1073,12 @@ export function Dock({
             autoCapitalize="sentences"
             enterKeyHint="done"
             maxLength={200}
-            className="flex-1 bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-base px-3 py-3 focus:outline-none transition-colors"
+            className="flex-1 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-base px-3 py-3 focus:outline-none transition-colors"
           />
           <button
             type="submit"
             disabled={!title.trim() || busy}
-            className="bg-accent text-accent-fg text-sm font-bold px-4 py-3 hover:opacity-90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="bg-accent text-accent-fg text-sm font-bold rounded-full px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 active:scale-[.98] transition-[color,background-color,transform,opacity] disabled:opacity-30 disabled:cursor-not-allowed"
           >
             {planMode ? "plan" : "add"}
           </button>
