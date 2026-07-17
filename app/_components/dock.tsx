@@ -859,8 +859,11 @@ export function Dock({
           </div>
         )}
 
+        {/* One side-scrolling chip row on mobile (the dock must stay short);
+            desktop has the width to wrap instead. shrink-0 keeps every chip
+            at its natural width so the row scrolls rather than squeezes. */}
         <div
-          className={`flex items-center flex-wrap gap-2 mb-2 ${
+          className={`flex items-center gap-2 mb-2 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-x-visible [&>*]:shrink-0 ${
             !planMode && capture.mode !== "task" ? "hidden" : ""
           }`}
         >
@@ -870,7 +873,7 @@ export function Dock({
             type="button"
             onClick={() => setGroupOpen((v) => !v)}
             aria-expanded={groupOpen}
-            className={`flex min-h-11 max-w-full items-center gap-2 border px-3 py-2 text-[10px] tracking-widest uppercase transition-colors ${
+            className={`flex min-h-11 max-w-[55vw] sm:max-w-full items-center gap-2 border px-3 py-2 text-[10px] tracking-widest uppercase transition-colors ${
               selectedGroup
                 ? "border-line-strong text-fg hover:border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
