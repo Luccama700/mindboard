@@ -107,7 +107,7 @@
   --glass-border: color-mix(in srgb, var(--fg) 14%, transparent);
   --glass-specular: rgba(255, 255, 255, 0.1);
   --glass-shadow: rgba(0, 0, 0, 0.5);
-  --texture-opacity: 0.05;
+  --texture-opacity: 0.1;
 }
 
 /* Light-glass themes: brighter specular rim, warm soft shadow. */
@@ -117,7 +117,7 @@ html.theme-sand {
   --glass-specular: rgba(255, 255, 255, 0.55);
   --glass-shadow: rgba(61, 47, 26, 0.18);
   --glass-border: color-mix(in srgb, var(--fg) 16%, transparent);
-  --texture-opacity: 0.06;
+  --texture-opacity: 0.11;
 }
 
 html.theme-cream {
