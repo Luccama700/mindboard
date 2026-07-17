@@ -228,6 +228,16 @@ describe("validateUpdateTask", () => {
     expect(validateUpdateTask({ taskId: "t1", durationMin: 5 }).ok).toBe(false);
     expect(validateUpdateTask({ taskId: "t1", title: "  " }).ok).toBe(false);
   });
+
+  test("aiState: agent states pass, 'approved' is user-only, junk rejected", async () => {
+    const { validateUpdateTask } = await import("@/app/lib/mcp/validate");
+    expect(validateUpdateTask({ taskId: "t1", aiState: "planned" }).ok).toBe(true);
+    expect(validateUpdateTask({ taskId: "t1", aiState: "built" }).ok).toBe(true);
+    expect(validateUpdateTask({ taskId: "t1", aiState: null }).ok).toBe(true);
+    // The human approval gate is server-enforced, not just UI convention.
+    expect(validateUpdateTask({ taskId: "t1", aiState: "approved" }).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1", aiState: "shipped" }).ok).toBe(false);
+  });
 });
 
 describe("validateManageGroup", () => {

@@ -52,3 +52,7 @@ next-env.d.ts
 
 # local voice reference sample (lives in ComfyUI input, not the repo)
 Exurb1a Voice.mp3
+
+# overnight agent local state (PAT + logs)
+overnight/.env
+overnight/logs/

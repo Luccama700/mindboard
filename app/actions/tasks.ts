@@ -251,6 +251,35 @@ export async function pushTaskToCalendar(id: string) {
   return { error: null };
 }
 
+// User-side control of the overnight-agent lifecycle
+// (docs/overnight-agent-plan.md): approve a plan, send a build back to
+// planned, or clear the state entirely. The orchestrator's own transitions
+// (planned/building/built/failed) go through the MCP propose → confirm rails.
+export async function setTaskAiState(
+  id: string,
+  state: "approved" | "planned" | null,
+) {
+  if (state !== null && state !== "approved" && state !== "planned") {
+    return { error: "invalid state" };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase
+    .from("tasks")
+    .update({ ai_state: state })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
 export async function deleteTask(id: string) {
   const supabase = await createClient();
   const {

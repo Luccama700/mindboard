@@ -414,6 +414,7 @@ export function Dock({
       gcal_calendar_id: null,
       status: "todo",
       priority,
+      ai_state: null,
       notes: markdownNotes,
       group_id: selectedGroupId,
       created_at: new Date().toISOString(),

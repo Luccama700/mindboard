@@ -46,7 +46,7 @@ export default async function TasksPage({
   let tasksQuery = supabase
     .from("tasks")
     .select(
-      "id, title, due_date, due_time, duration_min, status, priority, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at",
+      "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at",
     )
     // Soonest due date first; undated tasks sink to the bottom, newest-captured
     // first among ties/undated.

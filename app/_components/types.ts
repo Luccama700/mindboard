@@ -6,6 +6,8 @@ export type Task = {
   duration_min: number | null;
   status: "todo" | "doing" | "done";
   priority: "low" | "med" | "high";
+  // Overnight-agent lifecycle (null = not an AI task); see docs/overnight-agent-plan.md.
+  ai_state: "planned" | "approved" | "building" | "built" | "failed" | null;
   notes: string | null;
   group_id: string | null;
   gcal_event_id: string | null;
@@ -20,4 +22,4 @@ export type TaskWithGroup = Task & {
 };
 
 export const TASK_COLUMNS =
-  "id, title, due_date, due_time, duration_min, status, priority, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at";
+  "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at";

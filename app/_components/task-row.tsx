@@ -1,9 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { pushTaskToCalendar } from "@/app/actions/tasks";
+import { pushTaskToCalendar, setTaskAiState } from "@/app/actions/tasks";
 import { formatDue, todayISO } from "./date-utils";
 import type { Task, TaskWithGroup } from "./types";
+
+// Overnight-agent badge copy per lifecycle state (docs/overnight-agent-plan.md).
+const AI_BADGE: Record<NonNullable<Task["ai_state"]>, { label: string; tone: string }> = {
+  planned: { label: "✦ plan ready", tone: "text-accent" },
+  approved: { label: "✦ build queued", tone: "text-muted" },
+  building: { label: "✦ building…", tone: "text-muted" },
+  built: { label: "✦ built", tone: "text-accent" },
+  failed: { label: "✦ build failed", tone: "text-danger" },
+};
 
 export type GroupOption = {
   id: string;
@@ -66,7 +75,8 @@ export function TaskRow({
 
   const showDate = task.due_date && !isDone && !hideDate;
   const hasNotes = Boolean(task.notes?.trim());
-  const showSubtitle = hasGroupInfo || showDate || hasNotes;
+  const aiBadge = task.ai_state ? AI_BADGE[task.ai_state] : null;
+  const showSubtitle = hasGroupInfo || showDate || hasNotes || Boolean(aiBadge);
 
   return (
     <div className="border-b border-line">
@@ -142,6 +152,10 @@ export function TaskRow({
                 <span className="text-line-subtle">·</span>
               )}
               {hasNotes && <span className="text-muted">notes</span>}
+              {(hasGroupInfo || showDate || hasNotes) && aiBadge && (
+                <span className="text-line-subtle">·</span>
+              )}
+              {aiBadge && <span className={aiBadge.tone}>{aiBadge.label}</span>}
             </p>
           )}
         </button>
@@ -177,6 +191,8 @@ function EditPanel({
   const [notesDraft, setNotesDraft] = useState(task.notes ?? "");
   const [pushState, setPushState] = useState<string | null>(null);
   const [pushing, startPush] = useTransition();
+  const [aiState, setAiState] = useState(task.ai_state);
+  const [aiPending, startAi] = useTransition();
   const dateInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -198,6 +214,13 @@ function EditPanel({
       window.scrollBy({ top: overshoot, behavior: "smooth" });
     }
   }, []);
+
+  function changeAiState(next: "approved" | "planned" | null) {
+    startAi(async () => {
+      const result = await setTaskAiState(task.id, next);
+      if (!result.error) setAiState(next);
+    });
+  }
 
   const today = todayISO();
   const isToday = task.due_date === today;
@@ -410,6 +433,69 @@ function EditPanel({
           ))}
         </select>
       </div>
+
+      {aiState && (
+        <div className="flex items-center flex-wrap gap-2">
+          <label className="text-[10px] tracking-widest uppercase text-muted">
+            ai build
+          </label>
+          <span
+            className={`text-[10px] tracking-widest uppercase ${AI_BADGE[aiState].tone}`}
+          >
+            {AI_BADGE[aiState].label}
+          </span>
+          {aiState === "planned" && (
+            <>
+              <button
+                type="button"
+                disabled={aiPending}
+                onClick={() => changeAiState("approved")}
+                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
+              >
+                approve build
+              </button>
+              <button
+                type="button"
+                disabled={aiPending}
+                onClick={() => changeAiState(null)}
+                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              >
+                dismiss
+              </button>
+            </>
+          )}
+          {aiState === "approved" && (
+            <button
+              type="button"
+              disabled={aiPending}
+              onClick={() => changeAiState("planned")}
+              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+            >
+              un-approve
+            </button>
+          )}
+          {aiState === "failed" && (
+            <button
+              type="button"
+              disabled={aiPending}
+              onClick={() => changeAiState("approved")}
+              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+            >
+              retry tonight
+            </button>
+          )}
+          {(aiState === "built" || aiState === "failed" || aiState === "building") && (
+            <button
+              type="button"
+              disabled={aiPending}
+              onClick={() => changeAiState(null)}
+              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+            >
+              clear
+            </button>
+          )}
+        </div>
+      )}
 
       {!hideNotes && (
         <div className="space-y-1.5">

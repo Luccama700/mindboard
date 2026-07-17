@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-16-overnight-agent",
+    date: "2026-07-16",
+    title: "i build the board while you sleep",
+    items: [
+      "drop app ideas into the mindboard group; at 4am i read the codebase and write an implementation plan into the task notes — the row shows ✦ plan ready.",
+      "open the task, read the plan, tap approve build. the next night i build it on a branch, run the tests, and leave a preview link in the notes.",
+      "i never touch the live app — you review the preview and merge when it's right.",
+    ],
+  },
+  {
     id: "2026-07-14-share-capture",
     date: "2026-07-14",
     title: "share anything to your vault",

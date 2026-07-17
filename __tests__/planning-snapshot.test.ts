@@ -21,6 +21,7 @@ function task(over: Partial<TaskWithGroup>): TaskWithGroup {
     duration_min: null,
     status: "todo",
     priority: "med",
+    ai_state: null,
     notes: null,
     group_id: null,
     gcal_event_id: null,

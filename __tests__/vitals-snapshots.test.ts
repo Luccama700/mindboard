@@ -117,6 +117,7 @@ function task(partial: Partial<TaskWithGroup>): TaskWithGroup {
     gcal_calendar_id: null,
     status: "todo",
     priority: "med",
+    ai_state: null,
     notes: null,
     group_id: null,
     created_at: "2026-01-01T00:00:00Z",

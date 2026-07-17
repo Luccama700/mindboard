@@ -74,7 +74,7 @@ const ITEM_COLUMNS =
 const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
 const TASK_COLUMNS =
-  "id, title, due_date, status, priority, notes, group_id, created_at, completed_at";
+  "id, title, due_date, status, priority, ai_state, notes, group_id, created_at, completed_at";
 const SPEND_LIMIT_COLUMNS =
   "id, scope, category_id, period, amount, archived, created_at";
 
@@ -274,6 +274,49 @@ export async function listTasks(userId: string, filter: {
       group_color: group?.color ?? null,
     };
   });
+}
+
+// Overnight-agent feed (docs/overnight-agent-plan.md): open tasks in the
+// user's "mindboard" group — app-improvement ideas the nightly orchestrator
+// plans and, once approved, builds. Optional aiState narrows the lifecycle
+// stage ("none" = not yet touched by the agent).
+export async function listCodeTasks(userId: string, filter?: {
+  aiState?: "none" | "planned" | "approved" | "building" | "built" | "failed";
+}) {
+  const { supabase, ownerId } = scoped(userId);
+
+  // ilike with no wildcards = case-insensitive exact match; if the user has
+  // several case variants, the oldest wins rather than erroring out.
+  const { data: groups } = await supabase
+    .from("groups")
+    .select("id, name")
+    .eq("user_id", ownerId)
+    .eq("archived", false)
+    .ilike("name", "mindboard")
+    .order("created_at", { ascending: true })
+    .limit(1);
+  const group = (groups ?? [])[0] as { id: string; name: string } | undefined;
+  if (!group) {
+    return { group: null, tasks: [], note: "no active group named 'mindboard'" };
+  }
+
+  let query = supabase
+    .from("tasks")
+    .select(TASK_COLUMNS)
+    .eq("user_id", ownerId)
+    .eq("group_id", (group as { id: string }).id)
+    .neq("status", "done");
+  if (filter?.aiState === "none") query = query.is("ai_state", null);
+  else if (filter?.aiState) query = query.eq("ai_state", filter.aiState);
+
+  const { data } = await query
+    .order("created_at", { ascending: true })
+    .limit(100);
+
+  return {
+    group: { id: group.id, name: group.name },
+    tasks: data ?? [],
+  };
 }
 
 // Repeating-task rules with a readable schedule label. The ids feed

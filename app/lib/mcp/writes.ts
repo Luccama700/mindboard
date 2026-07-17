@@ -1641,6 +1641,7 @@ async function executeUpdateTask(
   if (v.groupId !== undefined) updates.group_id = v.groupId;
   if (v.notes !== undefined) updates.notes = v.notes;
   if (v.priority !== undefined) updates.priority = v.priority;
+  if (v.aiState !== undefined) updates.ai_state = v.aiState;
 
   if (Object.keys(updates).length === 0 && !v.pushToCalendar) {
     return { ok: false, error: "nothing to change" };

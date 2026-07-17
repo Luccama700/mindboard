@@ -19,6 +19,7 @@ function task(over: Partial<TaskWithGroup> & { id: string }): TaskWithGroup {
     gcal_calendar_id: null,
     status: "todo",
     priority: "med",
+    ai_state: null,
     notes: null,
     group_id: "g1",
     created_at: "2026-07-01T10:00:00.000Z",

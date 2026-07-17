@@ -255,7 +255,12 @@ export type UpdateTaskInput = {
   notes?: string | null;
   priority?: Priority;
   pushToCalendar?: boolean;
+  aiState?: AiState | null;
 };
+
+// Overnight-agent lifecycle states (docs/overnight-agent-plan.md).
+export const AI_STATES = ["planned", "approved", "building", "built", "failed"] as const;
+export type AiState = (typeof AI_STATES)[number];
 
 export function validateUpdateTask(raw: Record<string, unknown>): Result<UpdateTaskInput> {
   if (typeof raw.taskId !== "string" || !raw.taskId) {
@@ -315,6 +320,21 @@ export function validateUpdateTask(raw: Record<string, unknown>): Result<UpdateT
     }
     out.pushToCalendar = raw.pushToCalendar;
   }
+  if (raw.aiState !== undefined) {
+    if (raw.aiState !== null && !AI_STATES.includes(raw.aiState as AiState)) {
+      return { ok: false, error: `aiState must be ${AI_STATES.join(", ")}, or null` };
+    }
+    // The human approval gate: 'approved' is only ever granted by the user in
+    // the app (setTaskAiState). An AI client that could set it would be
+    // approving its own builds.
+    if (raw.aiState === "approved") {
+      return {
+        ok: false,
+        error: "aiState 'approved' can only be set by the user in the app",
+      };
+    }
+    out.aiState = raw.aiState as AiState | null;
+  }
 
   if (Object.keys(out).length === 1) {
     return { ok: false, error: "nothing to change" };
@@ -346,6 +366,9 @@ export function summarizeUpdateTask(
   }
   if (value.priority !== undefined) bits.push(`priority ${value.priority}`);
   if (value.pushToCalendar) bits.push("push to Google Calendar");
+  if (value.aiState !== undefined) {
+    bits.push(value.aiState === null ? "clear the AI state" : `AI state → ${value.aiState}`);
+  }
   return `Update task "${currentTitle}": ${bits.join(", ")}.`;
 }
 

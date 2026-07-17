@@ -29,6 +29,7 @@ import {
   listRecurringTasks,
   listSpendLimits,
   getSpendLimitStatus,
+  listCodeTasks,
   listTasks,
   readBrainNote,
 } from "@/app/lib/mcp/reads";
@@ -187,6 +188,21 @@ const mcpHandler = createMcpHandler(
         },
       },
       (args, extra) => guard(async () => ok(await listTasks(uid(extra), args))),
+    );
+
+    server.registerTool(
+      "list_code_tasks",
+      {
+        title: "List code tasks (overnight agent)",
+        description:
+          "Open tasks in the user's 'mindboard' group — app-improvement ideas the overnight agent plans and builds. Each carries ai_state (null=untouched, planned=plan in notes awaiting approval, approved=cleared to build, building, built, failed) plus the notes holding the plan. Filter with aiState ('none' = untouched). Advance states via update_task's aiState field.",
+        inputSchema: {
+          aiState: z
+            .enum(["none", "planned", "approved", "building", "built", "failed"])
+            .optional(),
+        },
+      },
+      (args, extra) => guard(async () => ok(await listCodeTasks(uid(extra), args))),
     );
 
     server.registerTool(
@@ -479,6 +495,12 @@ const mcpHandler = createMcpHandler(
           notes: z.string().nullish(),
           priority: z.enum(["low", "med", "high"]).optional(),
           pushToCalendar: z.boolean().optional(),
+          aiState: z
+            .enum(["planned", "building", "built", "failed"])
+            .nullish()
+            .describe(
+              "Overnight-agent lifecycle (see list_code_tasks); null clears it. 'approved' is user-only, set in the app.",
+            ),
         },
       },
       (args, extra) =>
