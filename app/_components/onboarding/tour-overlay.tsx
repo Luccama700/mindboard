@@ -172,7 +172,7 @@ export function TourOverlay({
       ) : (
         <div
           aria-hidden
-          className="pointer-events-none fixed inset-0 bg-black/70"
+          className="pointer-events-none fixed inset-0 glass-scrim"
         />
       )}
 

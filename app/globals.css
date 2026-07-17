@@ -67,6 +67,7 @@
 }
 
 :root {
+  color-scheme: dark;
   --bg: #0d0d0d;
   --bg-popover: #101010;
   --bg-card: #141414;
@@ -114,6 +115,7 @@
 /* Light-glass themes: brighter specular rim, warm soft shadow. */
 html.theme-cream,
 html.theme-sand {
+  color-scheme: light;
   --glass-specular: rgba(255, 255, 255, 0.55);
   --glass-shadow: rgba(61, 47, 26, 0.18);
   --glass-border: color-mix(in srgb, var(--fg) 16%, transparent);

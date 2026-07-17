@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-17-liquid-glass",
+    date: "2026-07-17",
+    title: "the board turned to glass",
+    items: [
+      "a full liquid-glass redesign: translucent layered surfaces, specular edges, and a soft ambient glow behind everything — every page, both dark and light themes.",
+      "the dock floats as a frosted capsule now; chips, buttons, and pickers are pills; sheets and popovers blur what's behind them.",
+      "your themes and custom palettes carry over untouched — the glass tints itself from whatever colors you've set.",
+      "if your device prefers reduced transparency or motion, everything falls back to calm solid surfaces automatically.",
+    ],
+  },
+  {
     id: "2026-07-17-life-agent",
     date: "2026-07-17",
     title: "the agent works your whole board now",
