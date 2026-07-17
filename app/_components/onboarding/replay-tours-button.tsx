@@ -34,7 +34,7 @@ export function ReplayToursButton() {
         type="button"
         onClick={onClick}
         disabled={busy}
-        className="min-h-11 px-3 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors disabled:opacity-50"
+        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors disabled:opacity-50"
       >
         {busy ? "resetting…" : "replay all tours"}
       </button>

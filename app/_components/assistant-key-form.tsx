@@ -42,12 +42,12 @@ export function AssistantKeyForm({ connected }: { connected: boolean }) {
           }
           autoComplete="off"
           spellCheck={false}
-          className="flex-1 min-w-0 bg-surface-0 border border-line-strong focus:border-accent text-fg placeholder-muted text-body px-3 py-2 focus:outline-none transition-colors font-mono"
+          className="flex-1 min-w-0 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-body px-3 py-2 focus:outline-none transition-colors font-mono"
         />
         <button
           type="button"
           onClick={() => setReveal((v) => !v)}
-          className="px-2 border border-l-0 border-line-strong text-label uppercase text-muted hover:text-fg transition-colors"
+          className="px-2 border rounded-r-field border-line-strong text-label uppercase text-muted hover:text-fg transition-colors"
         >
           {reveal ? "hide" : "show"}
         </button>

@@ -49,7 +49,7 @@ export function GrammarDoors() {
               className={`landing-reveal ${inView ? "landing-in" : ""}`}
               style={{ transitionDelay: `${index * 140}ms` }}
             >
-              <div className="flex items-center gap-3 border border-line bg-popover px-4 py-3">
+              <div className="flex items-center gap-3 glass-panel px-4 py-3">
                 <span className="text-accent" aria-hidden>
                   ›
                 </span>
@@ -58,7 +58,7 @@ export function GrammarDoors() {
                   {door.chips.map((chip) => (
                     <span
                       key={chip}
-                      className="px-2 py-1 text-[10px] tracking-widest uppercase bg-accent text-accent-fg whitespace-nowrap"
+                      className="px-2 py-1 text-[10px] tracking-widest uppercase rounded-full bg-accent text-accent-fg whitespace-nowrap"
                     >
                       {chip}
                     </span>

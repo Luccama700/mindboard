@@ -83,7 +83,7 @@ export function SettingsSections() {
           </select>
           <span
             aria-hidden
-            className="w-6 h-6 shrink-0 border border-line-strong"
+            className="w-6 h-6 shrink-0 rounded-full border border-line-strong"
             style={{ backgroundColor: getTheme(theme).palette.accent }}
           />
         </div>
@@ -94,7 +94,7 @@ export function SettingsSections() {
           type="button"
           onClick={() => setShowColors((v) => !v)}
           aria-expanded={showColors}
-          className="flex items-center justify-between w-full min-h-11 border border-line px-3 py-2 hover:bg-card-hover transition-colors"
+          className="flex items-center justify-between w-full min-h-11 glass-panel rounded-field px-3 py-2 hover:bg-card-hover transition-colors"
         >
           <span className="text-[10px] tracking-widest uppercase text-muted">
             customize colors
@@ -139,7 +139,7 @@ function PaletteEditor({ theme }: { theme: ThemeName }) {
         <p className="text-[10px] tracking-widest uppercase text-muted">
           colors
         </p>
-        <div className="border border-line">
+        <div className="glass-panel overflow-hidden">
           {PALETTE_GROUPS.map((group) => (
             <div
               key={group.label}
@@ -171,7 +171,7 @@ function PaletteEditor({ theme }: { theme: ThemeName }) {
                         </span>
                         <span
                           aria-hidden
-                          className="w-6 h-6 border border-line-strong"
+                          className="w-6 h-6 rounded-full border border-line-strong"
                           style={{ backgroundColor: value }}
                         />
                       </div>

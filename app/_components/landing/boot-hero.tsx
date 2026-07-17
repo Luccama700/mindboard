@@ -124,7 +124,7 @@ export function BootHero() {
               <Link
                 href="/login"
                 onClick={(e) => e.stopPropagation()}
-                className="inline-flex min-h-12 items-center bg-accent text-accent-fg text-sm font-bold px-6 hover:opacity-90 transition-opacity"
+                className="inline-flex min-h-12 items-center rounded-full bg-accent text-accent-fg text-sm font-bold px-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-opacity"
               >
                 $ get started
                 <span className="landing-caret ml-1" aria-hidden>

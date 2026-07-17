@@ -217,7 +217,7 @@ export default async function SettingsPage() {
         <form action={signOut}>
           <button
             type="submit"
-            className="min-h-11 px-3 text-action lowercase border border-hairline text-danger hover:border-danger transition-colors"
+            className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-danger hover:border-danger transition-colors"
           >
             sign out
           </button>

@@ -90,14 +90,14 @@ export function IntroCarousel({
                     <button
                       type="button"
                       onClick={() => onFinish(true)}
-                      className="flex-1 min-h-12 px-4 text-action lowercase font-bold bg-accent text-accent-fg hover:opacity-90 transition-opacity"
+                      className="flex-1 min-h-12 px-4 text-action lowercase font-bold rounded-full bg-accent text-accent-fg shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-opacity"
                     >
                       show me →
                     </button>
                     <button
                       type="button"
                       onClick={() => onFinish(false)}
-                      className="flex-1 min-h-12 px-4 text-action lowercase border border-line-strong text-muted hover:text-fg hover:border-fg transition-colors"
+                      className="flex-1 min-h-12 px-4 text-action lowercase border rounded-full border-line-strong text-muted hover:text-fg hover:border-fg transition-colors"
                     >
                       i&apos;ll wander
                     </button>

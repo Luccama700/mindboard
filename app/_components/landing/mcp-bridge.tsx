@@ -47,7 +47,7 @@ export function McpBridge() {
           mention you bought milk and the shelf updates.
         </p>
 
-        <div className="border border-line bg-popover p-4 space-y-4">
+        <div className="glass-panel p-4 space-y-4">
           <p
             className={reveal("text-label uppercase text-muted")}
             style={delay(inView, 200)}
@@ -70,7 +70,7 @@ export function McpBridge() {
           </p>
 
           <div
-            className={reveal("border border-line bg-card px-3 py-2.5")}
+            className={reveal("glass-panel rounded-xl px-3 py-2.5")}
             style={delay(inView, 900)}
           >
             <div className="flex items-center justify-between gap-3">
@@ -78,7 +78,7 @@ export function McpBridge() {
                 <p className="text-sm text-fg">inventory: +2 milk · +12 eggs</p>
                 <p>spend: −$34.20 · groceries</p>
               </div>
-              <span className="px-3 py-2 text-[10px] tracking-widest uppercase bg-accent text-accent-fg whitespace-nowrap">
+              <span className="px-3 py-2 text-[10px] tracking-widest uppercase rounded-full bg-accent text-accent-fg whitespace-nowrap">
                 ✓ confirm
               </span>
             </div>
@@ -107,7 +107,7 @@ export function McpBridge() {
           {TOOL_CHIPS.map((tool) => (
             <span
               key={tool}
-              className="px-2 py-1 text-[10px] tracking-widest lowercase border border-line text-muted whitespace-nowrap"
+              className="px-2 py-1 text-[10px] tracking-widest lowercase border rounded-full border-line text-muted whitespace-nowrap"
             >
               {tool}
             </span>

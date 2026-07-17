@@ -18,7 +18,7 @@ function CopyRow({ value, mono = true }: { value: string; mono?: boolean }) {
         readOnly
         value={value}
         onFocus={(e) => e.currentTarget.select()}
-        className={`flex-1 min-w-0 bg-surface-0 border border-line-strong text-fg text-body px-3 py-2 focus:outline-none ${mono ? "font-mono" : ""}`}
+        className={`flex-1 min-w-0 bg-glass-well rounded-field border border-line-strong text-fg text-body px-3 py-2 focus:outline-none ${mono ? "font-mono" : ""}`}
       />
       <button
         type="button"

@@ -49,7 +49,7 @@ export default function LoginPage() {
         <button
           onClick={signInWithGoogle}
           disabled={loading}
-          className="w-full bg-accent text-accent-fg text-sm font-bold px-6 py-4 hover:opacity-90 transition-colors disabled:opacity-50"
+          className="w-full bg-accent text-accent-fg text-sm font-bold rounded-full px-6 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-colors disabled:opacity-50"
         >
           {loading ? "redirecting..." : "continue with google →"}
         </button>

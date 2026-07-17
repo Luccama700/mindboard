@@ -126,7 +126,7 @@ export function TourOverlay({
 
   const cardStyle: React.CSSProperties = {};
   let cardClass =
-    "pointer-events-auto fixed border border-line-strong bg-popover p-4 shadow-[0_0_28px_rgba(0,0,0,0.65)] max-h-[70svh] overflow-y-auto";
+    "pointer-events-auto fixed glass-pop rounded-pop p-4 max-h-[70svh] overflow-y-auto";
   if (spot && desktop) {
     const pos = cardPlacement(spot, viewport, CARD_WIDTH, step.placement);
     cardStyle.left = pos.left;
@@ -162,7 +162,7 @@ export function TourOverlay({
             left: spot.left,
             width: spot.width,
             height: spot.height,
-            borderRadius: 4,
+            borderRadius: 12,
             boxShadow: "0 0 0 100vmax rgba(0,0,0,0.72)",
             transition: reduced
               ? "none"
@@ -190,7 +190,7 @@ export function TourOverlay({
               <button
                 type="button"
                 onClick={() => setIndex((i) => clampStep(i - 1, steps.length))}
-                className="min-h-11 px-3 text-action lowercase border border-line-strong text-muted hover:text-fg hover:border-fg transition-colors"
+                className="min-h-11 px-3 text-action lowercase border rounded-full border-line-strong text-muted hover:text-fg hover:border-fg transition-colors"
               >
                 ← back
               </button>
@@ -200,7 +200,7 @@ export function TourOverlay({
               onClick={() =>
                 last ? onFinish() : setIndex((i) => clampStep(i + 1, steps.length))
               }
-              className="min-h-11 px-4 text-action lowercase font-bold bg-accent text-accent-fg hover:opacity-90 transition-opacity"
+              className="min-h-11 px-4 text-action lowercase font-bold rounded-full bg-accent text-accent-fg shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-opacity"
             >
               {last ? "done ✓" : "next →"}
             </button>

@@ -164,14 +164,14 @@ export function OnboardingController({
         <div className="fixed top-[max(env(safe-area-inset-top),0.5rem)] right-2 z-30 lg:top-1 lg:right-1">
           {newsOpen && <WhatsNewPanel onClose={() => setNewsOpen(false)} />}
           {menuOpen && pathname === "/" && (
-            <div className="absolute right-0 top-full mt-1 w-52 border border-line bg-popover p-2 shadow-[0_0_28px_rgba(0,0,0,0.65)]">
+            <div className="absolute right-0 top-full mt-1 w-52 glass-pop glass-rise rounded-pop p-2">
               <button
                 type="button"
                 onClick={() => {
                   setMenuOpen(false);
                   setActive({ key: "now", startedOn: pathname });
                 }}
-                className="flex min-h-11 w-full items-center px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+                className="flex min-h-11 w-full items-center rounded-lg px-3 text-action lowercase text-fg hover:bg-card transition-colors"
               >
                 tour this screen
               </button>
@@ -181,7 +181,7 @@ export function OnboardingController({
                   setMenuOpen(false);
                   setIntroOpen(true);
                 }}
-                className="flex min-h-11 w-full items-center px-3 text-action lowercase text-fg hover:bg-card transition-colors"
+                className="flex min-h-11 w-full items-center rounded-lg px-3 text-action lowercase text-fg hover:bg-card transition-colors"
               >
                 replay the full intro
               </button>

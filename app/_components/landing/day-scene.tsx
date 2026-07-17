@@ -42,7 +42,7 @@ function StreamRow({
   accentMeta?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 bg-card px-3 py-2.5" style={rise(t)}>
+    <div className="flex items-center gap-3 bg-card rounded-xl px-3 py-2.5" style={rise(t)}>
       <span
         className={`inline-flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center border text-[9px] leading-none ${
           done
@@ -86,7 +86,7 @@ function CaptureBar({
         {chips.map((chip) => (
           <span
             key={chip.label}
-            className="px-2 py-1 text-[10px] tracking-widest uppercase bg-accent text-accent-fg"
+            className="px-2 py-1 text-[10px] tracking-widest uppercase rounded-full bg-accent text-accent-fg"
             style={{
               opacity: chip.t,
               transform: `scale(${0.85 + chip.t * 0.15})`,
@@ -97,14 +97,14 @@ function CaptureBar({
         ))}
       </div>
       <div className="flex items-center gap-2">
-        <div className="flex-1 bg-card border border-line-strong px-3 py-2.5 text-sm text-fg min-h-[2.6rem]">
+        <div className="flex-1 bg-glass-well rounded-field border border-line-strong px-3 py-2.5 text-sm text-fg min-h-[2.6rem]">
           {text}
           {text.length > 0 && text.length < full.length && (
             <span className="landing-caret text-accent">▮</span>
           )}
           {text.length === 0 && <span className="text-muted">new task…</span>}
         </div>
-        <span className="bg-accent text-accent-fg text-sm font-bold px-3 py-2.5">
+        <span className="rounded-full bg-accent text-accent-fg text-sm font-bold px-3 py-2.5">
           add
         </span>
       </div>
@@ -226,7 +226,7 @@ function ChapterContent({ index, local }: { index: number; local: number }) {
                   </span>
                 )}
               </div>
-              <div className="h-2 bg-card border border-line">
+              <div className="h-2 bg-card border border-line rounded-full overflow-hidden">
                 <div
                   className="h-full bg-accent origin-left"
                   style={{
@@ -311,7 +311,7 @@ function Board({
 }) {
   const nightDim = CHAPTERS[index].key === "night" ? 1 - seg(local, 0, 0.25) * 0.55 : 1;
   return (
-    <div className="w-[min(24rem,92vw)] border border-line bg-popover p-4">
+    <div className="w-[min(24rem,92vw)] glass-panel p-4">
       <div
         className="flex items-baseline justify-between mb-4"
         style={{ opacity: nightDim }}
