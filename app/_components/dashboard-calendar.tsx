@@ -438,10 +438,10 @@ export function DashboardCalendar({
   }
 
   const navArrowClass =
-    "flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg";
+    "flex min-h-11 min-w-11 items-center justify-center border rounded-full border-line-strong text-muted transition-colors hover:border-fg hover:text-fg";
 
   return (
-    <section className="border border-line bg-popover p-3 lg:min-h-[calc(100vh-4rem)]">
+    <section className="glass-panel p-3 lg:min-h-[calc(100vh-4rem)]">
       <header className="flex items-center justify-between gap-3 mb-3">
         <div>
           <p className="text-[10px] tracking-widest uppercase text-muted">
@@ -506,7 +506,7 @@ export function DashboardCalendar({
         </div>
       </header>
 
-      <div className="mb-3 ml-auto grid w-56 grid-cols-2 gap-px border border-line bg-line">
+      <div className="mb-3 ml-auto grid w-56 grid-cols-2 gap-px border border-line bg-line rounded-full overflow-hidden">
         {(["month", "week"] as const).map((option) => (
           <button
             key={option}
@@ -524,7 +524,7 @@ export function DashboardCalendar({
       </div>
 
       {status !== "connected" && (
-        <div className="border border-line-strong px-3 py-2 mb-4">
+        <div className="border border-line-strong rounded-field px-3 py-2 mb-4">
           <p className="text-xs text-muted leading-relaxed">
             {status === "connect"
               ? "connect google calendar by signing out and back in."
@@ -534,7 +534,7 @@ export function DashboardCalendar({
       )}
 
       {errorMessage && (
-        <div className="border border-danger px-3 py-2 mb-4 flex items-start justify-between gap-2">
+        <div className="border border-danger rounded-field px-3 py-2 mb-4 flex items-start justify-between gap-2">
           <p className="text-xs text-danger leading-relaxed">
             {errorMessage}
           </p>
@@ -550,7 +550,7 @@ export function DashboardCalendar({
       )}
 
       {view === "month" ? (
-        <div className="grid grid-cols-7 gap-px bg-line border border-line">
+        <div className="grid grid-cols-7 gap-px bg-line border border-line rounded-xl overflow-hidden">
           {WEEKDAYS.map((day) => (
             <div
               key={day}
@@ -667,7 +667,7 @@ export function DashboardCalendar({
               return (
                 <div
                   key={itemKey}
-                  className="border border-line"
+                  className="border border-line rounded-xl overflow-hidden"
                 >
                   <button
                     type="button"

@@ -201,7 +201,7 @@ function TimedTaskBlock({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`absolute left-1 right-1 overflow-hidden border-2 bg-page/85 px-1.5 py-0.5 cursor-grab z-10 ${
+      className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 bg-page/85 px-1.5 py-0.5 cursor-grab z-10 ${
         isDragging ? "opacity-30" : ""
       }`}
       style={{
@@ -235,7 +235,7 @@ function RecurringTaskBlock({ item }: { item: RtaskItem }) {
   const minutes = rtaskMinutes(item);
   return (
     <div
-      className={`absolute left-1 right-1 overflow-hidden border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
+      className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
         item.done ? "opacity-50" : ""
       }`}
       style={{
@@ -314,7 +314,7 @@ function TimedEventBlock({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`absolute left-1 right-1 overflow-hidden px-1.5 py-1 text-accent-fg shadow-[inset_2px_0_0_rgba(0,0,0,0.35)] ${
+      className={`absolute left-1 right-1 overflow-hidden rounded-lg px-1.5 py-1 text-accent-fg shadow-[inset_2px_0_0_rgba(0,0,0,0.35)] ${
         isWritable ? "cursor-grab" : "cursor-default opacity-60"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{
@@ -678,7 +678,7 @@ export function WeekView({
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveItem(null)}
     >
-      <div className="overflow-x-auto border border-line">
+      <div className="overflow-x-auto border border-line rounded-xl">
         <div className="min-w-[43rem] bg-page">
           <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-line">
             <div className="border-r border-line" />
@@ -756,7 +756,7 @@ export function WeekView({
                       ),
                     )}
                     {allDayItems.length > 2 && (
-                      <span className="inline-flex h-5 items-center border border-line-subtle px-2 text-[10px] text-muted">
+                      <span className="inline-flex h-5 items-center border border-line-subtle rounded-full px-2 text-[10px] text-muted">
                         +{allDayItems.length - 2} more
                       </span>
                     )}

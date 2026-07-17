@@ -94,8 +94,8 @@ export default async function TasksPage({
   }
 
   const chipBase =
-    "inline-flex items-center gap-2 min-h-11 px-3 text-action lowercase border transition-colors whitespace-nowrap";
-  const chipOn = "border-accent text-fg";
+    "inline-flex items-center gap-2 min-h-11 px-3 text-action lowercase border rounded-full transition-colors whitespace-nowrap";
+  const chipOn = "border-accent bg-accent-wash text-fg";
   const chipOff = "border-hairline text-muted hover:text-fg";
 
   return (

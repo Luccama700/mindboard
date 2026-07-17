@@ -89,7 +89,7 @@ export function EventEditPanel({
   return (
     <form
       onSubmit={handleSubmit}
-      className="border-t border-line bg-page p-3 space-y-3"
+      className="border-t border-line p-3 space-y-3"
     >
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] tracking-widest uppercase text-muted">
@@ -115,7 +115,7 @@ export function EventEditPanel({
             type="date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
-            className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none"
+            className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none"
             required
           />
         </label>
@@ -128,7 +128,7 @@ export function EventEditPanel({
               type="time"
               value={startTime}
               onChange={(e) => setStartTime(e.target.value)}
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none"
+              className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none"
               required
             />
           </label>
@@ -141,7 +141,7 @@ export function EventEditPanel({
             type="date"
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
-            className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none"
+            className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none"
             required
           />
         </label>
@@ -154,7 +154,7 @@ export function EventEditPanel({
               type="time"
               value={endTime}
               onChange={(e) => setEndTime(e.target.value)}
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none"
+              className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none"
               required
             />
           </label>

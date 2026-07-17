@@ -116,7 +116,7 @@ export function GroupsClient({
       <Link
         href="/tasks?group=inbox"
         onClick={() => onNavigate?.()}
-        className="block border border-line bg-card hover:bg-card-hover transition-colors"
+        className="block glass-panel hover:bg-card-hover transition-colors overflow-hidden"
       >
         <div className="flex items-center gap-3 px-4 py-3">
           <span
@@ -152,7 +152,7 @@ export function GroupsClient({
         (!formOpen ? (
         <button
           onClick={openForm}
-          className="w-full text-left bg-transparent border border-dashed border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
+          className="w-full text-left bg-transparent border border-dashed rounded-panel border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
         >
           + new group
         </button>
@@ -160,7 +160,7 @@ export function GroupsClient({
         <form
           ref={formRef}
           action={onSubmit}
-          className="border border-line bg-card p-4 space-y-5"
+          className="glass-panel p-4 space-y-5"
         >
           <input
             ref={nameRef}
@@ -218,7 +218,7 @@ function GroupRow({
   onUpdate: (id: string, patch: Partial<Group>) => void;
 }) {
   return (
-    <li className="border border-line bg-card">
+    <li className="glass-panel overflow-hidden">
       <div className="flex items-stretch">
         <Link
           href={`/tasks?group=${group.id}`}
@@ -348,7 +348,7 @@ function TypePicker({
             key={t}
             type="button"
             onClick={() => onChange(t)}
-            className={`text-xs px-3 py-2 border transition-colors ${
+            className={`text-xs px-3 py-2 border rounded-full transition-colors ${
               value === t
                 ? "bg-fg text-page border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -400,7 +400,7 @@ function CalendarLinkPicker({
             value={value ?? ""}
             onChange={(e) => onChange(e.target.value || null)}
             aria-label="link google calendar"
-            className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
+            className="flex-1 min-w-0 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
           >
             <option value="">none</option>
             {linkedMissing && value && (

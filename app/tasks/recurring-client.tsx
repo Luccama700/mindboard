@@ -61,7 +61,7 @@ function RuleRow({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-h-11 items-center gap-3 px-1 py-2 text-left hover:bg-card transition-colors"
+        className="flex w-full min-h-11 items-center gap-3 rounded-lg px-1 py-2 text-left hover:bg-card transition-colors"
       >
         <span className="text-muted" aria-hidden>
           ↻
@@ -84,7 +84,7 @@ function RuleRow({
             onKeyDown={(e) => e.key === "Enter" && commitTitle()}
             aria-label="rule title"
             maxLength={200}
-            className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+            className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
           />
 
           {rule.frequency === "weekly" && (
@@ -123,7 +123,7 @@ function RuleRow({
               value={timeDraft}
               onChange={(e) => setTimeDraft(e.target.value)}
               onBlur={commitTime}
-              className="bg-card border border-line-strong focus:border-accent text-fg text-sm px-2 py-2 focus:outline-none transition-colors"
+              className="bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-2 py-2 focus:outline-none transition-colors"
             />
             {timeDraft && (
               <button
@@ -144,7 +144,7 @@ function RuleRow({
                 onUpdate(rule.id, { id: rule.id, groupId: e.target.value || null })
               }
               aria-label="group"
-              className="ml-auto bg-card border border-line-strong text-fg text-sm px-2 py-2 focus:border-accent focus:outline-none transition-colors"
+              className="ml-auto bg-glass-well rounded-field border border-line-strong text-fg text-sm px-2 py-2 focus:border-accent focus:outline-none transition-colors"
             >
               <option value="">inbox</option>
               {groups.map((g) => (
@@ -158,7 +158,7 @@ function RuleRow({
           <button
             type="button"
             onClick={() => onArchive(rule.id)}
-            className="min-h-11 border border-line-strong px-3 text-[10px] tracking-widest uppercase text-muted hover:border-danger hover:text-danger transition-colors"
+            className="min-h-11 border border-line-strong rounded-full px-3 text-[10px] tracking-widest uppercase text-muted hover:border-danger hover:text-danger transition-colors"
           >
             stop repeating
           </button>

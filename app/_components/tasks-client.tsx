@@ -175,7 +175,7 @@ export function TasksClient({
             type="button"
             onClick={onAutoSort}
             disabled={sorting}
-            className="inline-flex items-center min-h-11 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors disabled:opacity-50"
+            className="inline-flex items-center min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors disabled:opacity-50"
           >
             {sorting ? "sorting…" : "✦ auto sort"}
           </button>

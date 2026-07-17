@@ -30,7 +30,7 @@ export function AgentRunButton() {
       type="button"
       onClick={request}
       disabled={pending}
-      className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50 whitespace-nowrap"
+      className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50 whitespace-nowrap"
     >
       {pending ? "requesting…" : state === "error" ? "retry: run agent now" : "✦ run agent now"}
     </button>
