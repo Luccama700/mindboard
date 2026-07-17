@@ -40,9 +40,11 @@ Register-ScheduledTask `
 # --if-requested, which exits immediately unless the user tapped
 # "run agent now" in the app since the last poll.
 $pollAction = New-ScheduledTaskAction -Execute $node -Argument "`"$script`" --if-requested" -WorkingDirectory $repo
+# [TimeSpan]::MaxValue serializes to an out-of-range XML duration; ten years
+# of repetition is effectively indefinite.
 $pollTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
   -RepetitionInterval (New-TimeSpan -Minutes $PollMinutes) `
-  -RepetitionDuration ([TimeSpan]::MaxValue)
+  -RepetitionDuration (New-TimeSpan -Days 3650)
 $pollSettings = New-ScheduledTaskSettingsSet `
   -StartWhenAvailable `
   -ExecutionTimeLimit (New-TimeSpan -Hours 5) `
