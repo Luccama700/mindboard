@@ -50,6 +50,20 @@
 
   /* Motion — the only easing and the three durations. */
   --ease-signal: cubic-bezier(0.2, 0, 0, 1);
+  /* Liquid glass entrance easing — springy settle for sheets/popovers. */
+  --ease-glass: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Liquid glass radius scale → rounded-panel / rounded-pop / rounded-sheet /
+     rounded-field / rounded-dock utilities. */
+  --radius-panel: 16px;
+  --radius-pop: 16px;
+  --radius-sheet: 28px;
+  --radius-field: 12px;
+  --radius-dock: 26px;
+
+  /* Glass fills exposed as bg-* utilities. */
+  --color-glass-panel: var(--glass-panel);
+  --color-glass-well: var(--glass-well);
 }
 
 :root {
@@ -82,6 +96,30 @@
   --dur-micro: 120ms;
   --dur-panel: 200ms;
   --dur-resolve: 280ms;
+
+  /* Liquid glass — every value derives from the live palette vars so theme
+     flips and user palette overrides recolor the glass automatically. */
+  --glass-panel: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  --glass-chrome: color-mix(in srgb, var(--bg-popover) 78%, transparent);
+  --glass-pop: color-mix(in srgb, var(--bg-popover) 86%, transparent);
+  --glass-well: color-mix(in srgb, var(--bg) 55%, transparent);
+  --glass-border: color-mix(in srgb, var(--fg) 14%, transparent);
+  --glass-specular: rgba(255, 255, 255, 0.1);
+  --glass-shadow: rgba(0, 0, 0, 0.5);
+  --aura-1: color-mix(in srgb, var(--accent) 14%, transparent);
+  --aura-2: color-mix(in srgb, var(--accent) 7%, transparent);
+  --aura-fg: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+
+/* Light-glass themes: brighter specular rim, warm soft shadow. */
+html.theme-cream,
+html.theme-sand {
+  --glass-specular: rgba(255, 255, 255, 0.55);
+  --glass-shadow: rgba(61, 47, 26, 0.18);
+  --glass-border: color-mix(in srgb, var(--fg) 16%, transparent);
+  --aura-1: color-mix(in srgb, var(--accent) 20%, transparent);
+  --aura-2: color-mix(in srgb, var(--accent) 10%, transparent);
+  --aura-fg: color-mix(in srgb, var(--fg) 4%, transparent);
 }
 
 html.theme-cream {
@@ -181,10 +219,126 @@ html {
 }
 
 body {
-  background: var(--bg);
+  /* The page color lives on <html>; body stays transparent so the fixed
+     ambient aura layer below paints between the page color and content. */
+  background: transparent;
   color: var(--fg);
   font-family: var(--font-geist-mono), "Courier New", monospace;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Ambient auras — the light the glass refracts. One fixed, static layer
+   (position:fixed, not background-attachment:fixed, which iOS Safari won't
+   composite); zero scroll cost. Derived from theme vars via color-mix. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 42rem at 12% -8%, var(--aura-1), transparent 62%),
+    radial-gradient(50rem 38rem at 105% 28%, var(--aura-fg), transparent 65%),
+    radial-gradient(48rem 42rem at 45% 112%, var(--aura-2), transparent 62%);
+}
+
+/* ---- Liquid glass elevation kit ------------------------------------- */
+/* Tier 1 (panel): in-flow cards — translucent fill + specular rim, NO
+   backdrop-filter (nothing scrolls beneath an in-flow card, so a plain
+   alpha fill composites identically for free — the Safari perf budget).
+   Tier 2 (.glass, chrome): floats over scrolling content — real blur.
+   Tier 3 (.glass-pop, popover): strongest fill + blur.
+   Defined in @layer components so Tailwind utilities still override. */
+@layer components {
+  .glass-panel {
+    position: relative;
+    background: var(--glass-panel);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-panel);
+    box-shadow:
+      inset 0 1px 0 var(--glass-specular),
+      0 4px 20px -6px var(--glass-shadow);
+  }
+
+  .glass {
+    position: relative;
+    background: var(--glass-chrome);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-panel);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    backdrop-filter: blur(20px) saturate(160%);
+    box-shadow:
+      inset 0 1px 0 var(--glass-specular),
+      0 12px 40px -12px var(--glass-shadow);
+  }
+
+  .glass-pop {
+    position: relative;
+    background: var(--glass-pop);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-pop);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    box-shadow:
+      inset 0 1px 0 var(--glass-specular),
+      0 16px 48px -12px var(--glass-shadow);
+  }
+
+  .glass-scrim {
+    background: rgba(0, 0, 0, 0.35);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+  }
+
+  .glass-chip {
+    border-radius: 9999px;
+    border: 1px solid var(--glass-border);
+    background: color-mix(in srgb, var(--bg-card) 55%, transparent);
+  }
+}
+
+@keyframes glass-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+.glass-rise {
+  animation: glass-rise 200ms var(--ease-glass) both;
+}
+
+/* Fallbacks: no backdrop-filter support, or the user asked for opacity. */
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  .glass,
+  .glass-pop {
+    background: var(--bg-popover);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  body::before {
+    display: none;
+  }
+  .glass,
+  .glass-pop {
+    background: var(--bg-popover);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .glass-panel {
+    background: var(--bg-card);
+  }
+  .glass-chip {
+    background: var(--bg-card);
+  }
+  .glass-scrim {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(0, 0, 0, 0.55);
+  }
 }
 
 /* landing — all colors come from theme tokens so the live theme flip
