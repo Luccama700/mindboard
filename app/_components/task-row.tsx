@@ -6,12 +6,14 @@ import { formatDue, todayISO } from "./date-utils";
 import type { Task, TaskWithGroup } from "./types";
 
 // Overnight-agent badge copy per lifecycle state (docs/overnight-agent-plan.md).
+// Copy is track-agnostic: code tasks (mindboard group) build on branches,
+// life tasks get research/drafts — the lifecycle is the same either way.
 const AI_BADGE: Record<NonNullable<Task["ai_state"]>, { label: string; tone: string }> = {
   planned: { label: "✦ plan ready", tone: "text-accent" },
-  approved: { label: "✦ build queued", tone: "text-muted" },
-  building: { label: "✦ building…", tone: "text-muted" },
-  built: { label: "✦ built", tone: "text-accent" },
-  failed: { label: "✦ build failed", tone: "text-danger" },
+  approved: { label: "✦ queued", tone: "text-muted" },
+  building: { label: "✦ working…", tone: "text-muted" },
+  built: { label: "✦ done", tone: "text-accent" },
+  failed: { label: "✦ failed", tone: "text-danger" },
 };
 
 export type GroupOption = {
@@ -452,7 +454,7 @@ function EditPanel({
                 onClick={() => changeAiState("approved")}
                 className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
               >
-                approve build
+                approve
               </button>
               <button
                 type="button"

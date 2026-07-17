@@ -3,8 +3,43 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
+import { isAgentModelId } from "@/app/_components/agent-models";
 
 const TIMEZONE_RE = /^[A-Za-z_+-]+(?:\/[A-Za-z0-9_+-]+){0,2}$/;
+
+// Which models the overnight agent uses (docs/overnight-agent-plan.md): one
+// for planning, one for implementation (code builds + life-task execution).
+// Null = the orchestrator's defaults. Whitelisted so the PC never receives an
+// arbitrary string as a CLI argument.
+export async function saveAgentModels(input: {
+  planModel: string | null;
+  buildModel: string | null;
+}): Promise<{ error: string | null }> {
+  const valid = (value: string | null) => value === null || isAgentModelId(value);
+  if (!valid(input.planModel) || !valid(input.buildModel)) {
+    return { error: "unknown model" };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase.from("user_settings").upsert(
+    {
+      user_id: user.id,
+      agent_plan_model: input.planModel,
+      agent_build_model: input.buildModel,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" },
+  );
+  if (error) return { error: error.message };
+
+  revalidatePath("/settings");
+  return { error: null };
+}
 
 export async function savePreferences(input: {
   timezone: string;

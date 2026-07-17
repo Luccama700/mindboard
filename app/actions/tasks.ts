@@ -280,6 +280,35 @@ export async function setTaskAiState(
   return { error: null };
 }
 
+// "Run agent now": stamp a request the PC's 5-minute poll picks up via the
+// claim_agent_run MCP tool (docs/overnight-agent-plan.md). Session-authed and
+// idempotent — re-tapping just refreshes the timestamp. Owner-gated to match
+// the UI: only the owner's PAT is polled, so anyone else's request would sit
+// unclaimed forever.
+export async function requestAgentRun() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  try {
+    const { ownerUserId } = await import("@/app/lib/mcp/config");
+    if (ownerUserId() !== user.id) {
+      return { error: "no agent PC serves this account" };
+    }
+  } catch {
+    return { error: "agent runs are not configured on this deployment" };
+  }
+
+  const { error } = await supabase.from("user_settings").upsert(
+    { user_id: user.id, agent_run_requested_at: new Date().toISOString() },
+    { onConflict: "user_id" },
+  );
+  if (error) return { error: error.message };
+  return { error: null };
+}
+
 export async function deleteTask(id: string) {
   const supabase = await createClient();
   const {

@@ -56,3 +56,4 @@ Exurb1a Voice.mp3
 # overnight agent local state (PAT + logs)
 overnight/.env
 overnight/logs/
+overnight/state.json

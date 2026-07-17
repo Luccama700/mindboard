@@ -35,6 +35,7 @@ import {
 } from "@/app/lib/mcp/reads";
 import {
   cancelAction,
+  claimAgentRun,
   confirmAction,
   lookupShoppingPrices,
   proposeArchiveRecurringTask,
@@ -1221,6 +1222,21 @@ const mcpHandler = createMcpHandler(
       (args, extra) =>
         guard(async () => {
           const r = await confirmAction(uid(extra), args.proposalId);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "claim_agent_run",
+      {
+        title: "Claim a pending agent-run request",
+        description:
+          "Operational tool for the overnight orchestrator's poll: atomically clears a pending 'run agent now' request (stamped by the in-app button) and reports whether one existed. Not useful to chat clients.",
+        inputSchema: {},
+      },
+      (_args, extra) =>
+        guard(async () => {
+          const r = await claimAgentRun(uid(extra));
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );

@@ -18,6 +18,7 @@ import type { KeyProvider } from "@/app/lib/connections/types";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { getVaultSettings } from "@/app/lib/brain/vault";
 import { McpConnectionCard } from "./mcp-connection-card";
+import { AgentModelsForm } from "./agent-models-form";
 import { PreferencesForm } from "./preferences-form";
 
 // Key saves make one live verification call to the provider.
@@ -45,7 +46,7 @@ export default async function SettingsPage() {
     supabase
       .from("user_settings")
       .select(
-        "anthropic_api_key, google_ai_api_key, openai_api_key, mcp_token_hash, mcp_token_hint, mcp_token_created_at",
+        "anthropic_api_key, google_ai_api_key, openai_api_key, mcp_token_hash, mcp_token_hint, mcp_token_created_at, agent_plan_model, agent_build_model",
       )
       .eq("user_id", user.id)
       .maybeSingle(),
@@ -128,6 +129,18 @@ export default async function SettingsPage() {
           initialTimezone={prefs.timezone}
           initialWakeStart={prefs.wake_start_hour}
           initialWakeEnd={prefs.wake_end_hour}
+        />
+      </section>
+
+      <section className="space-y-4">
+        <SectionRuler label="overnight agent" />
+        <AgentModelsForm
+          initialPlanModel={
+            (settingsRow.data?.agent_plan_model as string | null) ?? null
+          }
+          initialBuildModel={
+            (settingsRow.data?.agent_build_model as string | null) ?? null
+          }
         />
       </section>
 

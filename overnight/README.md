@@ -1,7 +1,9 @@
 # Overnight agent
 
-The nightly orchestrator (design: `docs/overnight-agent-plan.md`). At 4am it
-pulls open tasks from the **mindboard** group over MCP and:
+The nightly orchestrator (design: `docs/overnight-agent-plan.md`). At 4am —
+or on demand — it works the user's board over MCP, two tracks:
+
+**Track A — code (the mindboard group):**
 
 - **plans** untouched ideas — headless Claude Code in plan mode (read-only),
   plan appended to the task notes, badge flips to `✦ plan ready`;
@@ -9,8 +11,28 @@ pulls open tasks from the **mindboard** group over MCP and:
   edit permissions, then an authoritative `lint → test → build` gate, a push
   to `ai/<slug>`, and the Vercel preview URL written back into the notes.
 
+**Track B — life (every other task):**
+
+- **triages** untouched tasks in one cheap model call against
+  `capabilities.md`; feasible ones get an `## AI approach` written into the
+  notes + the same `✦ plan ready` badge; infeasible ones are cached in
+  `state.json` (a retitle re-triages).
+- **executes** approved ones with **WebSearch/WebFetch only** — no shell, no
+  file edits, and a hard draft-never-submit rule. Summary lands in the task
+  notes, the full result in the brain vault.
+
 Approve/dismiss happens on the task row in the app (the `ai build` controls
-in the edit panel). The agent never touches `main`.
+in the edit panel) — same button for both tracks. The agent never touches
+`main`, and never submits anything anywhere.
+
+## On-demand runs
+
+- **From the app**: the `✦ run agent now` button on /tasks stamps a request;
+  the `Mindboard Agent Poll` scheduled task (every 5 min,
+  `run.mjs --if-requested`) claims it via the `claim_agent_run` MCP tool and
+  fires a full run.
+- **From Claude Code**: the `/overnight` skill, or directly, e.g.
+  `node overnight\run.mjs --life-only --plan-only` (triage + propose only).
 
 ## Setup (once)
 
@@ -21,11 +43,18 @@ in the edit panel). The agent never touches `main`.
    MINDBOARD_PAT=mbp_...            # settings → MCP connection → personal token
    # optional:
    # OVERNIGHT_PREVIEW_TEMPLATE=https://mindboard-git-{branch}-<team>.vercel.app
-   # OVERNIGHT_MODEL=claude-opus-4-8
+   # OVERNIGHT_PLAN_MODEL=fable-5   # fable-5 | opus-4.8 | gpt-5.6-sol (app setting wins)
+   # OVERNIGHT_BUILD_MODEL=gpt-5.6-sol
+   # OVERNIGHT_EFFORT=high
+   # OVERNIGHT_PROXY_URL=http://127.0.0.1:8317   # claudex / CLIProxyAPI
+   # OVERNIGHT_PROXY_EXE=C:\path\to\cli-proxy-api.exe  # auto-start when down
    # OVERNIGHT_MAX_PLANS=3          # plans per night
    # OVERNIGHT_MAX_BUILDS=2         # builds per night
    # OVERNIGHT_PLAN_BUDGET_USD=3    # per plan run
    # OVERNIGHT_BUILD_BUDGET_USD=15  # per build run
+   # OVERNIGHT_MAX_LIFE=3           # life-task executions per run
+   # OVERNIGHT_LIFE_BUDGET_USD=5    # per life-task run
+   # OVERNIGHT_TRIAGE_MODEL=haiku   # cheap triage model
    # OVERNIGHT_CLAUDE_BIN=claude    # or a proxy shim, e.g. claudex for gpt-5.6-sol
    ```
 

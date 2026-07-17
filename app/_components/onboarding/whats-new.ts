@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-17-life-agent",
+    date: "2026-07-17",
+    title: "the agent works your whole board now",
+    items: [
+      "every task — not just app ideas — gets looked at: if i can research, plan, draft, or prep it, i write my approach into the notes and the row shows ✦ plan ready.",
+      "approve it and i do the work web-only: findings land in the notes, the full write-up in your brain vault. i never submit, buy, or send anything — everything's a draft for you.",
+      "impatient? tap ✦ run agent now on the tasks page and the pc picks it up within minutes — no waiting for 4am.",
+      "pick which models plan and build for you in settings → overnight agent — fable 5 plans and gpt-5.6-sol implements by default, opus 4.8 one tap away.",
+    ],
+  },
+  {
     id: "2026-07-16-overnight-agent",
     date: "2026-07-16",
     title: "i build the board while you sleep",

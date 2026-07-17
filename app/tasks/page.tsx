@@ -9,7 +9,9 @@ import {
 import { TasksClient, type TaskFilter } from "@/app/_components/tasks-client";
 import type { Task } from "@/app/_components/types";
 import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
+import { ownerUserId } from "@/app/lib/mcp/config";
 import type { Group } from "./groups-types";
+import { AgentRunButton } from "./agent-run-button";
 import { GroupsClient } from "./groups-client";
 import { RecurringClient } from "./recurring-client";
 
@@ -81,6 +83,16 @@ export default async function TasksPage({
       ? (groups.find((g) => g.id === filter) ?? null)
       : null;
 
+  // "Run agent now" only renders for the owner: the PC's poll runs on the
+  // owner's PAT alone, so for anyone else (worker allowlist included) the
+  // "picks it up in ~5 min" promise would be false.
+  let agentServiced = false;
+  try {
+    agentServiced = ownerUserId() === user.id;
+  } catch {
+    // env unset (e.g. local dev) — keep the button hidden
+  }
+
   const chipBase =
     "inline-flex items-center gap-2 min-h-11 px-3 text-action lowercase border transition-colors whitespace-nowrap";
   const chipOn = "border-accent text-fg";
@@ -89,7 +101,10 @@ export default async function TasksPage({
   return (
     <main className="min-h-screen px-5 pt-6 pb-64 max-w-2xl mx-auto">
       <header className="mb-6">
-        <h1 className="text-label uppercase text-muted mb-4">tasks</h1>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h1 className="text-label uppercase text-muted">tasks</h1>
+          {agentServiced && <AgentRunButton />}
+        </div>
         <div className="flex gap-2 overflow-x-auto pb-1" data-tour="task-groups">
           <Link
             href="/tasks"

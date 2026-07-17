@@ -2757,6 +2757,24 @@ export async function cancelAction(
   return { ok: true, value: { cancelled: true } };
 }
 
+// Fenced direct write (same class as capture_to_brain): the overnight
+// orchestrator's 5-minute poll claims a pending "run agent now" request —
+// clear-and-report on low-stakes operational state, no proposal needed. The
+// atomic UPDATE ... WHERE not-null means concurrent polls can't both claim.
+export async function claimAgentRun(
+  userId: string,
+): Promise<Result<{ requested: boolean }>> {
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("user_settings")
+    .update({ agent_run_requested_at: null })
+    .eq("user_id", userId)
+    .not("agent_run_requested_at", "is", null)
+    .select("user_id");
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, value: { requested: (data ?? []).length > 0 } };
+}
+
 // Best-effort refresh of the web UI's cached pages after an MCP write. Guarded
 // so importing this module outside a Next request context (e.g. tests) never throws.
 async function revalidateWeb(): Promise<void> {

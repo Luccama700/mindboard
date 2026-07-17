@@ -1,16 +1,24 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  MODEL_CHOICES,
   appendSection,
   branchNameFor,
   clip,
+  execPrompt,
   extractPlan,
+  extractSection,
   parseToolResult,
+  parseTriage,
   pickBuildTasks,
+  pickExecTasks,
+  pickLifeTasks,
   pickPlanTasks,
   previewUrl,
   quoteArg,
+  resolveModel,
   slugify,
+  triagePrompt,
 } from "../overnight/lib.mjs";
 
 describe("slugify / branchNameFor", () => {
@@ -158,6 +166,136 @@ describe("extractPlan", () => {
   test("null when no plan section exists", () => {
     expect(extractPlan("just notes")).toBeNull();
     expect(extractPlan(null)).toBeNull();
+  });
+});
+
+describe("extractSection (Track B approach)", () => {
+  test("reads the approach section independently of a plan section", () => {
+    const notes =
+      "idea\n\n---\n\n## AI plan — d\n\ncode plan\n\n---\n\n## AI approach — d\n\nresearch approach";
+    expect(extractSection(notes, "AI approach")).toBe("research approach");
+    expect(extractSection(notes, "AI plan")).toBe("code plan");
+  });
+});
+
+describe("Track B task picking", () => {
+  type Life = {
+    id: string;
+    title: string;
+    status: string;
+    ai_state: string | null;
+    group_id: string | null;
+    group_name?: string | null;
+    notes?: string | null;
+  };
+  const CODE = "g-code";
+  const tasks: Life[] = [
+    { id: "1", title: "find apartment", status: "todo", ai_state: null, group_id: null },
+    { id: "2", title: "mindboard idea", status: "todo", ai_state: null, group_id: CODE },
+    { id: "3", title: "compare gyms", status: "todo", ai_state: "planned", group_id: "g-life" },
+    { id: "4", title: "plan trip", status: "todo", ai_state: "approved", group_id: "g-life" },
+    { id: "5", title: "done thing", status: "done", ai_state: null, group_id: null },
+    { id: "6", title: "take out trash", status: "todo", ai_state: null, group_id: null },
+    { id: "7", title: "stale claim", status: "todo", ai_state: "building", group_id: "g-life" },
+    { id: "8", title: "approved code", status: "todo", ai_state: "approved", group_id: CODE },
+  ];
+
+  test("pickLifeTasks: untouched, open, non-code, not cached infeasible", () => {
+    const cache = { "6": { title: "take out trash", reason: "reminder" } };
+    expect(pickLifeTasks(tasks, CODE, cache).map((t: Life) => t.id)).toEqual(["1"]);
+  });
+
+  test("pickLifeTasks: a retitled task escapes the infeasible cache", () => {
+    const cache = { "6": { title: "old title", reason: "reminder" } };
+    expect(pickLifeTasks(tasks, CODE, cache).map((t: Life) => t.id)).toEqual(["1", "6"]);
+  });
+
+  test("pickExecTasks: approved + stale building, never code-group tasks, capped", () => {
+    expect(pickExecTasks(tasks, CODE, 5).map((t: Life) => t.id)).toEqual(["4", "7"]);
+    expect(pickExecTasks(tasks, CODE, 1).map((t: Life) => t.id)).toEqual(["4"]);
+  });
+});
+
+describe("parseTriage", () => {
+  const ids = ["a", "b", "c"];
+
+  test("parses a clean array and keeps only valid entries", () => {
+    const text = JSON.stringify([
+      { id: "a", feasible: true, approach: "research it" },
+      { id: "b", feasible: false, reason: "physical task" },
+      { id: "zzz", feasible: true, approach: "unknown id" },
+      { id: "c", feasible: true }, // feasible without approach → dropped
+    ]);
+    const parsed = parseTriage(text, ids);
+    expect(parsed?.map((v: { id: string }) => v.id)).toEqual(["a", "b"]);
+  });
+
+  test("tolerates prose and code fences around the array", () => {
+    const text = 'Here you go:\n```json\n[{"id":"a","feasible":false,"reason":"r"}]\n```';
+    expect(parseTriage(text, ids)?.length).toBe(1);
+  });
+
+  test("bracketed prose after the array does not break the parse", () => {
+    const text =
+      '[{"id":"a","feasible":true,"approach":"look [into] it"}]\n\nLet me know [if you need more].';
+    const parsed = parseTriage(text, ids);
+    expect(parsed?.length).toBe(1);
+    expect(parsed?.[0].approach).toBe("look [into] it");
+  });
+
+  test("null on garbage", () => {
+    expect(parseTriage("no json here", ids)).toBeNull();
+    expect(parseTriage('["not-an-object"]', ids)).toEqual([]);
+  });
+});
+
+describe("Track B prompts", () => {
+  test("triage prompt carries ids, notes excerpt, and the manifest", () => {
+    const prompt = triagePrompt(
+      [{ id: "t1", title: "find apartment", group_name: null, notes: "2 bed, near campus" }],
+      "MANIFEST BODY",
+    );
+    expect(prompt).toContain("id: t1");
+    expect(prompt).toContain("2 bed, near campus");
+    expect(prompt).toContain("MANIFEST BODY");
+    expect(prompt).toContain("ONLY a JSON array");
+  });
+
+  test("exec prompt embeds the hard rules and the approved approach", () => {
+    const prompt = execPrompt({ title: "find apartment", notes: null }, "compare listings");
+    expect(prompt).toContain("never submit, send, purchase");
+    expect(prompt).toContain("compare listings");
+  });
+});
+
+describe("resolveModel", () => {
+  test("maps choices to CLI models", () => {
+    expect(resolveModel("fable-5", false)).toMatchObject({ id: "fable-5", model: "fable" });
+    expect(resolveModel("opus-4.8", false)).toMatchObject({ id: "opus-4.8", model: "opus" });
+    expect(resolveModel("gpt-5.6-sol", true)).toMatchObject({
+      id: "gpt-5.6-sol",
+      model: "gpt-5.6-sol",
+      proxy: true,
+    });
+  });
+
+  test("proxy model with the proxy down degrades to opus, flagged", () => {
+    expect(resolveModel("gpt-5.6-sol", false)).toMatchObject({
+      id: "opus-4.8",
+      model: "opus",
+      fellBack: true,
+    });
+  });
+
+  test("unknown ids take the phase default", () => {
+    expect(resolveModel("gpt-9000", false, "fable-5").id).toBe("fable-5");
+    expect(resolveModel(null, true, "gpt-5.6-sol").id).toBe("gpt-5.6-sol");
+  });
+
+  test("choice ids stay in sync with the app's whitelist", () => {
+    expect(Object.keys(MODEL_CHOICES).sort()).toEqual(
+      ["fable-5", "gpt-5.6-sol", "opus-4.8"].sort(),
+    );
   });
 });
 

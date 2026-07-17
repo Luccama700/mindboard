@@ -51,15 +51,50 @@ transport, no database key on the PC (same posture as `worker/worker.py`).
    `ai_state='built'`. Red or over budget → `ai_state='failed'` with a short
    diagnosis in the notes; the worktree is kept for inspection.
 
-### Track B — general-task triage (v2, not yet built)
+### Track B — life tasks (shipped 2026-07-17)
 
-A cheap triage call (Haiku, task list + a checked-in
-`overnight/capabilities.md` manifest) marks which non-code tasks the agent
-can advance and how (research, drafting, browser via Playwright MCP with a
-persistent logged-in profile). Each feasible task gets its own bounded
-`claude -p` (or `codex exec`) run. Output contract: short summary into the
-task notes, long output as a vault note, one "Night Report — {date}" via
-`capture_to_brain`.
+Every open task outside the mindboard group flows through the same
+`ai_state` lifecycle:
+
+1. **Triage.** One cheap model call (default haiku) over all untouched life
+   tasks against the checked-in `overnight/capabilities.md` manifest
+   (CAN: research/plan/draft/prep · CANNOT: accounts, physical actions,
+   reminders · NEVER: submit/send/purchase, graded academic work). Feasible
+   tasks get an `## AI approach` section in the notes + `ai_state='planned'`
+   — the same badge and approve button as code tasks. Infeasible verdicts are
+   cached in `overnight/state.json` (gitignored; a retitle re-triages).
+2. **Approve.** Same user-only gate.
+3. **Execute.** Per approved task, a bounded `claude -p` with
+   **WebSearch/WebFetch only** (`dontAsk` mode — shell and file edits are
+   denied), cwd in a workspace outside the repo so no project context loads.
+   Deliverable: summary into the task notes (`## AI result`), full text into
+   the brain vault via `capture_to_brain`, `ai_state='built'`.
+
+### Models (shipped 2026-07-17)
+
+Per-phase, per-user (settings → overnight agent; `user_settings.
+agent_plan_model` / `agent_build_model`, migration 0039; ids in
+`app/_components/agent-models.ts`, mirrored by `MODEL_CHOICES` in
+`overnight/lib.mjs`): **plan** defaults to `fable-5`, **implementation**
+(code builds + life execution) to `gpt-5.6-sol` through the local
+claudex/CLIProxyAPI proxy — the orchestrator health-checks the proxy,
+auto-starts it (`OVERNIGHT_PROXY_EXE`) and degrades to `opus-4.8` if it stays
+down. All runs pass `--effort high` (triage: haiku, effort low). The app
+setting wins over the env defaults; unknown ids fall back safely.
+
+### On-demand runs (shipped 2026-07-17)
+
+Besides 4am, runs can be triggered any time, still pull-based:
+
+- **In-app**: the `✦ run agent now` button on /tasks (`requestAgentRun`
+  server action) stamps `user_settings.agent_run_requested_at` (migration
+  0038). A second scheduled task polls every 5 minutes with
+  `run.mjs --if-requested`, which claims the request through the fenced
+  `claim_agent_run` MCP tool (atomic clear-and-report) and exits silently
+  when there is none.
+- **From Claude Code on the PC**: the `/overnight` skill
+  (`.claude/skills/overnight/SKILL.md`) or `node overnight/run.mjs` with
+  `--code-only / --life-only / --plan-only / --build-only / --dry`.
 
 ## Safety rails (non-negotiable)
 

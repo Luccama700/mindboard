@@ -621,7 +621,7 @@ async function readPreferencesRow(userId: string) {
   const { data } = await supabase
     .from("user_settings")
     .select(
-      "timezone, wake_start_hour, wake_end_hour, daily_spend_estimate, shopping_store, shopping_day",
+      "timezone, wake_start_hour, wake_end_hour, daily_spend_estimate, shopping_store, shopping_day, agent_plan_model, agent_build_model",
     )
     .eq("user_id", ownerId)
     .maybeSingle();
@@ -635,6 +635,9 @@ async function readPreferencesRow(userId: string) {
         : Number(data.daily_spend_estimate),
     shoppingStore: (data?.shopping_store as string | null) ?? null,
     shoppingDay: typeof data?.shopping_day === "number" ? data.shopping_day : null,
+    // Overnight-agent model choices (null = orchestrator defaults).
+    agentPlanModel: (data?.agent_plan_model as string | null) ?? null,
+    agentBuildModel: (data?.agent_build_model as string | null) ?? null,
   };
 }
 
