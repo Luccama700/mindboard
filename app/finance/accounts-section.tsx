@@ -44,7 +44,7 @@ function AccountTypePicker({
             key={t}
             type="button"
             onClick={() => onChange(t)}
-            className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
+            className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border rounded-full transition-colors ${
               value === t
                 ? "bg-fg text-page border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -161,7 +161,7 @@ export function AccountRow({
       </div>
 
       {panel === "update" && (
-        <div className="mb-3 border border-hairline bg-card p-4">
+        <div className="mb-3 glass-panel p-4">
           <BalanceUpdatePanel
             account={account}
             categories={categories}
@@ -176,7 +176,7 @@ export function AccountRow({
       )}
 
       {panel === "history" && (
-        <div className="mb-3 border border-hairline bg-card">
+        <div className="mb-3 glass-panel overflow-hidden">
           {changes.length === 0 ? (
             <p className="px-4 py-3 text-meta text-muted">no changes yet</p>
           ) : (
@@ -208,7 +208,7 @@ export function AccountRow({
       )}
 
       {panel === "edit" && (
-        <div className="mb-3 border border-hairline bg-card">
+        <div className="mb-3 glass-panel overflow-hidden">
           <AccountEditPanel
             account={account}
             onUpdate={onUpdateAccount}
@@ -443,7 +443,7 @@ export function BalanceUpdatePanel({
           step="any"
           value={amountDraft}
           onChange={(e) => setAmountDraft(e.target.value)}
-          className="w-full bg-card border border-line-strong focus:border-accent text-fg text-lg font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
+          className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-lg font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
         />
       </div>
 
@@ -509,7 +509,7 @@ export function BalanceUpdatePanel({
                   value={s.amount}
                   onChange={(e) => setSplitAmount(i, e.target.value)}
                   aria-label="split amount"
-                  className="w-24 bg-card border border-line-strong focus:border-accent text-fg text-sm tabular-nums px-2 py-2 focus:outline-none transition-colors"
+                  className="w-24 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm tabular-nums px-2 py-2 focus:outline-none transition-colors"
                 />
                 <button
                   type="button"
@@ -568,7 +568,7 @@ export function BalanceUpdatePanel({
           type="date"
           value={occurredAt}
           onChange={(e) => setOccurredAt(e.target.value || todayISO())}
-          className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+          className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
         />
       </div>
 
@@ -586,7 +586,7 @@ export function BalanceUpdatePanel({
           onChange={(e) => setNote(e.target.value)}
           placeholder="optional"
           maxLength={200}
-          className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+          className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
         />
       </div>
 
@@ -596,7 +596,7 @@ export function BalanceUpdatePanel({
         <button
           type="submit"
           disabled={isDeduction && !!splits && !splitBalanced}
-          className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors disabled:opacity-50"
+          className="flex-1 bg-accent text-accent-fg text-sm font-bold rounded-full py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-colors disabled:opacity-50"
         >
           record
         </button>
@@ -659,7 +659,7 @@ function CategoryField({
           value={value ?? ""}
           onChange={(e) => onChange(e.target.value || null)}
           aria-label="spending category"
-          className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
+          className="flex-1 min-w-0 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
         >
           <option value="">uncategorized</option>
           {categories.map((c) => (
@@ -672,14 +672,14 @@ function CategoryField({
           type="button"
           onClick={() => setNewOpen((v) => !v)}
           aria-expanded={newOpen}
-          className="px-3 py-2 border border-dashed border-line-strong text-muted text-xs hover:border-accent hover:text-accent transition-colors"
+          className="px-3 py-2 border border-dashed rounded-full border-line-strong text-muted text-xs hover:border-accent hover:text-accent transition-colors"
         >
           + new
         </button>
       </div>
 
       {newOpen && (
-        <div className="border border-line p-3 space-y-3">
+        <div className="glass-panel p-3 space-y-3">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -694,7 +694,7 @@ function CategoryField({
             type="button"
             onClick={createNew}
             disabled={isPending}
-            className="text-xs tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
+            className="text-xs tracking-widest uppercase px-3 py-2 border rounded-full border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
           >
             add category
           </button>
@@ -768,7 +768,7 @@ function HistoryRow({
                   })
                 }
                 aria-label="change category"
-                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
+                className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
               >
                 <option value="">uncategorized</option>
                 {categories.map((c) => (
@@ -805,7 +805,7 @@ function HistoryRow({
                   }
                 }}
                 aria-label="amount"
-                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm tabular-nums px-3 py-2 focus:outline-none transition-colors"
+                className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm tabular-nums px-3 py-2 focus:outline-none transition-colors"
               />
             </div>
             <div className="flex-1 space-y-1">
@@ -822,7 +822,7 @@ function HistoryRow({
                   }
                 }}
                 aria-label="date"
-                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+                className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
               />
             </div>
           </div>
@@ -841,7 +841,7 @@ function HistoryRow({
               }}
               placeholder="optional"
               maxLength={200}
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+              className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
             />
           </div>
           <div className="flex items-center justify-between">
@@ -932,7 +932,7 @@ export function AddAccountForm({
   }
 
   return (
-    <form onSubmit={submit} className="border border-line bg-card p-4 space-y-5">
+    <form onSubmit={submit} className="glass-panel p-4 space-y-5">
       <p className="text-[10px] tracking-widest uppercase text-muted">
         new account
       </p>
@@ -965,7 +965,7 @@ export function AddAccountForm({
             step="any"
             value={balance}
             onChange={(e) => setBalance(e.target.value)}
-            className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
+            className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
           />
         </div>
         <div className="w-24 space-y-2">
@@ -981,7 +981,7 @@ export function AddAccountForm({
             value={currency}
             onChange={(e) => setCurrency(e.target.value)}
             maxLength={3}
-            className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base uppercase px-3 py-2 focus:outline-none transition-colors"
+            className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base uppercase px-3 py-2 focus:outline-none transition-colors"
           />
         </div>
       </div>
@@ -991,7 +991,7 @@ export function AddAccountForm({
       <div className="flex gap-2 pt-2">
         <button
           type="submit"
-          className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors"
+          className="flex-1 bg-accent text-accent-fg text-sm font-bold rounded-full py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-colors"
         >
           create
         </button>

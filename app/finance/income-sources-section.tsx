@@ -35,7 +35,7 @@ function CalendarSelect({
           value={value ?? ""}
           onChange={(e) => onChange(e.target.value || null)}
           aria-label="worked-hours calendar"
-          className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
+          className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
         >
           <option value="">none</option>
           {calendars.map((c) => (
@@ -86,7 +86,7 @@ function PaySchedulePicker({
           <button
             type="button"
             onClick={() => onChange({ ...value, payFrequency: null })}
-            className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
+            className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border rounded-full transition-colors ${
               value.payFrequency === null
                 ? "bg-fg text-page border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -99,7 +99,7 @@ function PaySchedulePicker({
               key={f}
               type="button"
               onClick={() => onChange({ ...value, payFrequency: f })}
-              className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
+              className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border rounded-full transition-colors ${
                 value.payFrequency === f
                   ? "bg-fg text-page border-fg"
                   : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -123,7 +123,7 @@ function PaySchedulePicker({
               onChange={(e) =>
                 onChange({ ...value, anchorPayday: e.target.value || todayISO() })
               }
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+              className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
             />
           </div>
           <div className="flex gap-3">
@@ -140,7 +140,7 @@ function PaySchedulePicker({
                     periodStart: e.target.value || value.periodStart,
                   })
                 }
-                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+                className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
               />
             </div>
             <div className="flex-1 space-y-2">
@@ -156,7 +156,7 @@ function PaySchedulePicker({
                     periodEnd: e.target.value || value.periodEnd,
                   })
                 }
-                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+                className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
               />
             </div>
           </div>
@@ -233,7 +233,7 @@ export function IncomeManager({
       {!formOpen ? (
         <button
           onClick={() => setFormOpen(true)}
-          className="w-full text-left bg-transparent border border-dashed border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
+          className="w-full text-left bg-transparent border border-dashed rounded-panel border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
         >
           + new income source
         </button>
@@ -341,7 +341,7 @@ function IncomeForm({
   }
 
   return (
-    <form onSubmit={submit} className="border border-line bg-card p-4 space-y-5">
+    <form onSubmit={submit} className="glass-panel p-4 space-y-5">
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -376,7 +376,7 @@ function IncomeForm({
             step="any"
             min={0}
             placeholder="0.00"
-            className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
+            className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
           />
         </div>
         {fixed ? (
@@ -392,7 +392,7 @@ function IncomeForm({
               step={1}
               min={1}
               max={31}
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
+              className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
             />
           </div>
         ) : (
@@ -408,7 +408,7 @@ function IncomeForm({
               step="any"
               min={0}
               max={100}
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
+              className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
             />
           </div>
         )}
@@ -434,7 +434,7 @@ function IncomeForm({
         <button
           type="submit"
           disabled={isPending}
-          className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors disabled:opacity-50"
+          className="flex-1 bg-accent text-accent-fg text-sm font-bold rounded-full py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-colors disabled:opacity-50"
         >
           create
         </button>
@@ -549,7 +549,7 @@ function IncomeRow({
   }
 
   return (
-    <li className="border border-line bg-card">
+    <li className="glass-panel overflow-hidden">
       <div className="flex items-stretch">
         <div className="flex flex-1 items-center gap-3 px-4 py-3 min-w-0">
           <span
@@ -634,7 +634,7 @@ function IncomeRow({
                 value={wageDraft}
                 onChange={(e) => setWageDraft(e.target.value)}
                 onBlur={commitWage}
-                className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
+                className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
               />
             </div>
             {isFixed ? (
@@ -651,7 +651,7 @@ function IncomeRow({
                   value={dayDraft}
                   onChange={(e) => setDayDraft(e.target.value)}
                   onBlur={commitDay}
-                  className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
+                  className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
                 />
               </div>
             ) : (
@@ -668,7 +668,7 @@ function IncomeRow({
                   value={taxDraft}
                   onChange={(e) => setTaxDraft(e.target.value)}
                   onBlur={commitTax}
-                  className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
+                  className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base tabular-nums px-3 py-2 focus:outline-none transition-colors"
                 />
               </div>
             )}

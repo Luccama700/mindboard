@@ -65,14 +65,14 @@ export function CategoriesManager({
       {!formOpen ? (
         <button
           onClick={() => setFormOpen(true)}
-          className="w-full text-left bg-transparent border border-dashed border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
+          className="w-full text-left bg-transparent border border-dashed rounded-panel border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
         >
           + new category
         </button>
       ) : (
         <form
           onSubmit={createCat}
-          className="border border-line bg-card p-4 space-y-5"
+          className="glass-panel p-4 space-y-5"
         >
           <input
             value={name}
@@ -90,7 +90,7 @@ export function CategoriesManager({
             <button
               type="submit"
               disabled={isPending}
-              className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors disabled:opacity-50"
+              className="flex-1 bg-accent text-accent-fg text-sm font-bold rounded-full py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-colors disabled:opacity-50"
             >
               create
             </button>
@@ -140,7 +140,7 @@ function CategoryRow({
   }
 
   return (
-    <li className="border border-line bg-card">
+    <li className="glass-panel overflow-hidden">
       <div className="flex items-stretch">
         <div className="flex flex-1 items-center gap-3 px-4 py-3 min-w-0">
           <span

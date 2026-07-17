@@ -184,7 +184,7 @@ export function FinanceCalendar({
   const incomeLinked = incomeSources.some((s) => s.calendar_id);
 
   return (
-    <section className="border border-line bg-popover p-3 lg:min-h-[calc(100vh-4rem)]">
+    <section className="glass-panel p-3 lg:min-h-[calc(100vh-4rem)]">
       <header className="flex items-center justify-between gap-3 mb-3">
         <div>
           <p className="text-[10px] tracking-widest uppercase text-muted">
@@ -198,7 +198,7 @@ export function FinanceCalendar({
           <Link
             href={`/finance?fm=${addMonths(month, -1)}`}
             scroll={false}
-            className="flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
+            className="flex min-h-11 min-w-11 items-center justify-center border rounded-full border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="previous month"
           >
             ←
@@ -206,7 +206,7 @@ export function FinanceCalendar({
           <Link
             href={`/finance?fm=${addMonths(month, 1)}`}
             scroll={false}
-            className="flex min-h-11 min-w-11 items-center justify-center border border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
+            className="flex min-h-11 min-w-11 items-center justify-center border rounded-full border-line-strong text-muted transition-colors hover:border-fg hover:text-fg"
             aria-label="next month"
           >
             →
@@ -221,7 +221,7 @@ export function FinanceCalendar({
       />
 
       {incomeLinked && googleStatus !== "connected" && (
-        <div className="border border-line-strong px-3 py-2 mb-3">
+        <div className="border border-line-strong rounded-field px-3 py-2 mb-3">
           <p className="text-xs text-muted leading-relaxed">
             {googleStatus === "connect"
               ? "connect google calendar (sign out and back in) to project wage income from your shifts."
@@ -230,7 +230,7 @@ export function FinanceCalendar({
         </div>
       )}
 
-      <div className="grid grid-cols-7 gap-px bg-line border border-line">
+      <div className="grid grid-cols-7 gap-px bg-line border border-line rounded-xl overflow-hidden">
         {WEEKDAYS.map((day) => (
           <div
             key={day}
@@ -399,7 +399,7 @@ function EverydaySpendRow({
         onChange={(e) => setDraft(e.target.value)}
         placeholder="expected spend per day"
         aria-label="expected daily spend"
-        className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm tabular-nums px-3 py-2 focus:outline-none transition-colors"
+        className="flex-1 min-w-0 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm tabular-nums px-3 py-2 focus:outline-none transition-colors"
       />
       <button
         type="submit"
@@ -462,7 +462,7 @@ function FutureSpendSlider({
   }
 
   return (
-    <div className="border border-line border-dashed px-3 py-2 space-y-2">
+    <div className="border border-line border-dashed rounded-xl px-3 py-2 space-y-2">
       <div className="flex items-center gap-2">
         <p className="flex-1 min-w-0 truncate text-sm text-muted">
           everyday spending
@@ -615,7 +615,7 @@ function SelectedDay({
           {projectedIncome.map(({ source, hours, net, periodStart, periodEnd, fixed }) => (
             <div
               key={`income-${source.id}`}
-              className="flex items-center gap-2 border border-line px-3 py-2"
+              className="flex items-center gap-2 border border-line rounded-xl px-3 py-2"
             >
               <span
                 className="h-3 w-3 flex-shrink-0"
@@ -645,7 +645,7 @@ function SelectedDay({
           ))}
 
           {!row.isPast && groceryTrip && (
-            <div className="flex items-center gap-2 border border-line border-dashed px-3 py-2">
+            <div className="flex items-center gap-2 border border-line border-dashed rounded-xl px-3 py-2">
               <span className="h-3 w-3 flex-shrink-0 border border-danger" aria-hidden />
               <p className="flex-1 min-w-0 text-sm text-fg">
                 grocery trip
@@ -674,7 +674,7 @@ function SelectedDay({
           {projectedExpenses.map((expense) => (
             <div
               key={`expense-${expense.id}`}
-              className="flex items-center gap-2 border border-line px-3 py-2"
+              className="flex items-center gap-2 border border-line rounded-xl px-3 py-2"
             >
               <span
                 className="h-3 w-3 flex-shrink-0 bg-danger"
@@ -693,7 +693,7 @@ function SelectedDay({
           {recorded.map((change) => (
             <div
               key={`recorded-${change.id}`}
-              className="flex items-center gap-2 border border-line px-3 py-2"
+              className="flex items-center gap-2 border border-line rounded-xl px-3 py-2"
             >
               <span
                 className="h-3 w-3 flex-shrink-0"

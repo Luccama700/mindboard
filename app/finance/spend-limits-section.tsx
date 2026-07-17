@@ -50,7 +50,7 @@ function PeriodPicker({
           key={p}
           type="button"
           onClick={() => onChange(p)}
-          className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
+          className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border rounded-full transition-colors ${
             period === p
               ? "bg-fg text-page border-fg"
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -117,7 +117,7 @@ export function SpendLimitsSection({
         {!formOpen ? (
           <button
             onClick={() => setFormOpen(true)}
-            className="w-full text-left bg-transparent border border-dashed border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
+            className="w-full text-left bg-transparent border border-dashed rounded-panel border-line-strong hover:border-accent hover:text-accent text-muted text-sm font-bold py-4 px-4 transition-colors"
           >
             + new limit
           </button>
@@ -175,7 +175,7 @@ function LimitRow({
   }
 
   return (
-    <li className="border border-line bg-card">
+    <li className="glass-panel overflow-hidden">
       <div className="flex items-stretch">
         <div className="min-w-0 flex-1 space-y-2 px-4 py-3">
           <div className="flex items-baseline justify-between gap-3">
@@ -247,7 +247,7 @@ function LimitRow({
               onChange={(e) => setAmountDraft(e.target.value)}
               onBlur={commitAmount}
               aria-label="limit amount"
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
+              className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
             />
           </div>
 
@@ -334,7 +334,7 @@ function LimitForm({
   }
 
   return (
-    <form onSubmit={submit} className="border border-line bg-card p-4 space-y-5">
+    <form onSubmit={submit} className="glass-panel p-4 space-y-5">
       <div className="space-y-2">
         <p className="text-[10px] uppercase tracking-widest text-muted">
           applies to
@@ -345,7 +345,7 @@ function LimitForm({
               key={s}
               type="button"
               onClick={() => setScope(s)}
-              className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border transition-colors ${
+              className={`inline-flex items-center min-h-11 text-xs px-3 py-2 border rounded-full transition-colors ${
                 scope === s
                   ? "bg-fg text-page border-fg"
                   : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -366,7 +366,7 @@ function LimitForm({
             value={categoryId ?? ""}
             onChange={(e) => setCategoryId(e.target.value || null)}
             aria-label="limit category"
-            className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
+            className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
           >
             {categories.length === 0 && <option value="">no categories</option>}
             {categories.map((c) => (
@@ -394,7 +394,7 @@ function LimitForm({
           min={0}
           placeholder="0.00"
           autoFocus
-          className="w-full bg-card border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
+          className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-base font-bold tabular-nums px-3 py-2 focus:outline-none transition-colors"
         />
       </div>
 
@@ -404,7 +404,7 @@ function LimitForm({
         <button
           type="submit"
           disabled={isPending}
-          className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors disabled:opacity-50"
+          className="flex-1 bg-accent text-accent-fg text-sm font-bold rounded-full py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-colors disabled:opacity-50"
         >
           create
         </button>

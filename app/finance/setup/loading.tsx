@@ -5,13 +5,13 @@ export default function FinanceSetupLoading() {
       aria-hidden
     >
       <div className="mb-8 flex items-center justify-between">
-        <div className="h-3 w-16 bg-card" />
-        <div className="h-3 w-16 bg-card" />
+        <div className="h-3 w-16 bg-card rounded-md" />
+        <div className="h-3 w-16 bg-card rounded-md" />
       </div>
       <div className="space-y-8">
-        <div className="h-10 bg-card" />
-        <div className="h-10 bg-card" />
-        <div className="h-10 bg-card" />
+        <div className="h-10 bg-card rounded-xl" />
+        <div className="h-10 bg-card rounded-xl" />
+        <div className="h-10 bg-card rounded-xl" />
       </div>
     </main>
   );
