@@ -119,7 +119,7 @@ export function InventoryCalendar({
     <div className="space-y-4">
       <p className="text-[10px] tracking-widest uppercase text-muted">forecast</p>
 
-      <div className="border border-line bg-page px-3 py-3 text-sm">
+      <div className="rounded-field border border-line bg-page px-3 py-3 text-sm">
         {dailyRate <= 0 ? (
           <p className="text-muted">
             add a usage below to project when this runs out.
@@ -160,7 +160,7 @@ export function InventoryCalendar({
         )}
       </div>
 
-      <div className="border border-line bg-card">
+      <div className="glass-panel overflow-hidden">
         <div className="flex items-center justify-between border-b border-line px-3 py-2">
           <button
             type="button"
@@ -309,7 +309,7 @@ function UsagesEditor({
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="w-full border border-dashed border-line-strong text-muted text-xs px-3 py-2 hover:border-accent-ink hover:text-accent-ink transition-colors"
+          className="w-full rounded-full border border-dashed border-line-strong text-muted text-xs px-3 py-2 hover:border-accent-ink hover:text-accent-ink transition-colors"
         >
           + add usage
         </button>
@@ -355,7 +355,7 @@ function UsageRowEditor({
   }
 
   return (
-    <div className="flex items-stretch gap-px bg-line">
+    <div className="flex items-stretch gap-px rounded-full overflow-hidden bg-line">
       <input
         type="number"
         inputMode="decimal"
@@ -481,7 +481,7 @@ function ThresholdField({
             }
           }}
           placeholder="none"
-          className="w-24 bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm text-center px-2 py-2 focus:outline-none transition-colors"
+          className="w-24 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm text-center px-2 py-2 focus:outline-none transition-colors"
         />
         <span className="text-muted text-xs">
           {unit ? `${unit} — flag as low at or below this` : "flag as low at or below this"}

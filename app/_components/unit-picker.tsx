@@ -64,7 +64,7 @@ export function UnitPicker({
         value={selectValue}
         onChange={(e) => onSelect(e.target.value)}
         aria-label={label}
-        className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
+        className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
       >
         <option value="">—</option>
         {recentExtra.length > 0 && (
@@ -104,7 +104,7 @@ export function UnitPicker({
           maxLength={32}
           aria-label="custom unit"
           autoFocus
-          className="w-full bg-card border border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+          className="w-full bg-glass-well rounded-field border border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
         />
       )}
     </div>

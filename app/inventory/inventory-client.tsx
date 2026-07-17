@@ -866,7 +866,7 @@ export function InventoryClient({
       <section className="min-w-0 space-y-6">
         <form onSubmit={onOmniSubmit} className="space-y-1">
           <div
-            className="flex items-stretch border border-line-strong bg-card focus-within:border-accent transition-colors"
+            className="flex items-stretch overflow-hidden bg-glass-well rounded-field border border-line-strong focus-within:border-accent transition-colors"
             data-tour="omnibox"
           >
             <input
@@ -916,7 +916,7 @@ export function InventoryClient({
               data-tour="shopping"
               onClick={() => (shoppingOpen ? setShoppingOpen(false) : openShopping())}
               aria-pressed={shoppingOpen}
-              className={`min-h-9 px-3 text-[10px] tracking-widest uppercase border transition-colors mr-auto ${
+              className={`min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors mr-auto ${
                 shoppingOpen
                   ? "border-accent bg-accent text-accent-fg"
                   : "border-line bg-page text-muted hover:text-fg"
@@ -928,7 +928,7 @@ export function InventoryClient({
               type="button"
               onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
               aria-pressed={selectMode}
-              className={`min-h-9 px-3 text-[10px] tracking-widest uppercase border transition-colors ${
+              className={`min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors ${
                 selectMode
                   ? "border-accent bg-accent text-accent-fg"
                   : "border-line bg-page text-muted hover:text-fg"
@@ -937,7 +937,7 @@ export function InventoryClient({
               select
             </button>
             {view === "list" && (
-              <div className="flex gap-px border border-line bg-line">
+              <div className="flex gap-px rounded-full overflow-hidden border border-line bg-line">
                 {(["items", "totals"] as CountMode[]).map((m) => (
                   <button
                     key={m}
@@ -955,7 +955,7 @@ export function InventoryClient({
                 ))}
               </div>
             )}
-            <div className="flex gap-px border border-line bg-line">
+            <div className="flex gap-px rounded-full overflow-hidden border border-line bg-line">
               {(["list", "grid"] as ViewMode[]).map((m) => (
                 <button
                   key={m}
@@ -1026,7 +1026,7 @@ export function InventoryClient({
                       : summarizeByUnit(section.items)}
                   </span>
                 </div>
-                <ul className="border-y border-hairline divide-y divide-hairline">
+                <ul className="glass-panel overflow-hidden divide-y divide-hairline">
                   {section.items.map((it) => {
                     const hint = hints.get(it.id) ?? {
                       status: "ok" as StockStatus,
@@ -1065,7 +1065,7 @@ export function InventoryClient({
             <button
               type="button"
               onClick={() => onSetArchived(suggestion.item.id, true)}
-              className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+              className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
             >
               stop tracking
             </button>
@@ -1086,13 +1086,13 @@ export function InventoryClient({
         <button
           type="button"
           onClick={startAdd}
-          className="flex w-full min-h-11 items-center px-3 text-action lowercase border border-hairline text-muted hover:text-fg hover:border-accent transition-colors"
+          className="flex w-full min-h-11 items-center px-3 rounded-full text-action lowercase border border-hairline text-muted hover:text-fg hover:border-accent transition-colors"
         >
           + add item
         </button>
 
         {archivedItems.length > 0 && (
-          <details className="border border-hairline px-3 py-2">
+          <details className="glass-panel px-3 py-2">
             <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center list-none [&::-webkit-details-marker]:hidden">
               not tracking · {archivedItems.length} ▸
             </summary>
@@ -1115,7 +1115,7 @@ export function InventoryClient({
           </details>
         )}
 
-        <details className="border border-hairline px-3 py-2">
+        <details className="glass-panel px-3 py-2">
           <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center list-none [&::-webkit-details-marker]:hidden">
             groups · {groups.length} ▸
           </summary>
@@ -1137,7 +1137,7 @@ export function InventoryClient({
               <button
                 type="button"
                 onClick={() => setGroupFormOpen(true)}
-                className="flex w-full min-h-11 items-center px-3 text-action lowercase border border-dashed border-hairline text-muted hover:text-fg hover:border-accent transition-colors"
+                className="flex w-full min-h-11 items-center px-3 rounded-full text-action lowercase border border-dashed border-hairline text-muted hover:text-fg hover:border-accent transition-colors"
               >
                 + new group
               </button>
@@ -1146,7 +1146,7 @@ export function InventoryClient({
         </details>
 
         {selectMode && (
-          <div className="sticky bottom-64 z-50 lg:bottom-52 flex flex-wrap items-center gap-2 border border-line-strong bg-card px-3 py-2 shadow-lg">
+          <div className="sticky bottom-64 z-50 lg:bottom-52 flex flex-wrap items-center gap-2 glass rounded-2xl px-3 py-2">
             <span className="text-label uppercase text-muted tabular-nums">
               {checkedIds.size} selected
             </span>
@@ -1154,7 +1154,7 @@ export function InventoryClient({
               type="button"
               onClick={bulkArchive}
               disabled={checkedIds.size === 0}
-              className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
+              className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
             >
               stop tracking
             </button>
@@ -1166,7 +1166,7 @@ export function InventoryClient({
               }}
               disabled={checkedIds.size === 0}
               aria-label="move selected to group"
-              className="min-h-9 bg-card border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
+              className="min-h-9 bg-glass-well rounded-field border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
             >
               <option value="">move to…</option>
               <option value="__none">ungrouped</option>
@@ -1233,7 +1233,7 @@ export function InventoryClient({
             onDeleteUsage={onDeleteUsage}
           />
         ) : (
-          <p className="border border-line text-muted text-sm px-4 py-16 text-center">
+          <p className="glass-panel text-muted text-sm px-4 py-16 text-center">
             select an item to see its details, or add a new one.
           </p>
         )}
@@ -1282,7 +1282,7 @@ function GroupForm({
   return (
     <form
       onSubmit={submit}
-      className="border border-line bg-card p-4 space-y-5"
+      className="glass-panel p-4 space-y-5"
     >
       <input
         ref={nameRef}
@@ -1300,7 +1300,7 @@ function GroupForm({
         <button
           type="submit"
           disabled={isPending}
-          className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors disabled:opacity-50"
+          className="flex-1 rounded-full shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors disabled:opacity-50"
         >
           create
         </button>
@@ -1329,7 +1329,7 @@ function GroupManageRow({
 
   return (
     <div>
-      <div className="flex items-stretch border border-line bg-card">
+      <div className="flex items-stretch glass-panel overflow-hidden">
         <div className="flex-1 flex items-center gap-3 px-3 py-2 min-w-0">
           <span
             className="w-2 h-8 flex-shrink-0"
@@ -1384,7 +1384,7 @@ function GroupEditPanel({
   }
 
   return (
-    <div className="border-x border-b border-line p-4 space-y-5">
+    <div className="glass-panel p-4 space-y-5">
       <input
         type="text"
         value={nameDraft}
@@ -1665,7 +1665,7 @@ function ArchivedRow({
       <button
         type="button"
         onClick={() => onRestore(item.id)}
-        className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+        className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
       >
         restore
       </button>
@@ -1696,8 +1696,8 @@ function ItemTile({
   const out = Number(item.quantity) <= 0;
   return (
     <div
-      className={`relative flex aspect-square flex-col overflow-hidden border bg-card transition-colors ${
-        selected ? "border-accent ring-1 ring-accent" : "border-line hover:border-fg"
+      className={`relative flex aspect-square flex-col overflow-hidden glass-panel transition-colors ${
+        selected ? "border-accent ring-1 ring-accent" : "hover:border-fg"
       }`}
       style={color ? { backgroundColor: hexToRgba(color, 0.1) } : undefined}
     >
@@ -1740,7 +1740,7 @@ function ItemTile({
               !
             </span>
           )}
-          <span className="absolute bottom-1 right-1 border border-line bg-page/85 px-1 py-0.5 text-[10px] leading-none text-fg tabular-nums">
+          <span className="absolute bottom-1 right-1 rounded-full border border-line bg-page/85 px-1 py-0.5 text-[10px] leading-none text-fg tabular-nums">
             {formatQty(item.quantity)}
             {item.unit ? ` ${item.unit}` : ""}
           </span>
@@ -1808,7 +1808,7 @@ function QuantityField({
         type="button"
         onClick={() => step(-1)}
         aria-label="decrease quantity"
-        className="min-h-11 w-11 border border-line-strong text-fg text-lg leading-none hover:border-fg hover:bg-card-hover transition-colors"
+        className="min-h-11 w-11 rounded-l-full border border-line-strong text-fg text-lg leading-none hover:border-fg hover:bg-card-hover transition-colors"
       >
         −
       </button>
@@ -1827,13 +1827,13 @@ function QuantityField({
           }
         }}
         aria-label="quantity"
-        className="min-h-11 w-24 text-center bg-card border-y border-line-strong focus:border-accent text-fg text-base focus:outline-none transition-colors"
+        className="min-h-11 w-24 text-center bg-glass-well border-y border-line-strong focus:border-accent text-fg text-base focus:outline-none transition-colors"
       />
       <button
         type="button"
         onClick={() => step(1)}
         aria-label="increase quantity"
-        className="min-h-11 w-11 border border-line-strong text-fg text-lg leading-none hover:border-fg hover:bg-card-hover transition-colors"
+        className="min-h-11 w-11 rounded-r-full border border-line-strong text-fg text-lg leading-none hover:border-fg hover:bg-card-hover transition-colors"
       >
         +
       </button>
@@ -1855,7 +1855,7 @@ function GroupSelect({
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value || null)}
       aria-label="inventory group"
-      className="w-full bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
+      className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-2 focus:outline-none transition-colors"
     >
       <option value="">ungrouped</option>
       {groups.map((g) => (
@@ -1909,7 +1909,7 @@ function AddItemForm({
   return (
     <form
       onSubmit={submit}
-      className="border border-line bg-card p-4 space-y-5"
+      className="glass-panel p-4 space-y-5"
     >
       <p className="text-[10px] tracking-widest uppercase text-muted">
         new item
@@ -1946,7 +1946,7 @@ function AddItemForm({
       <div className="flex gap-2 pt-2">
         <button
           type="submit"
-          className="flex-1 bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors"
+          className="flex-1 rounded-full shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] bg-accent text-accent-fg text-sm font-bold py-3 hover:opacity-90 transition-colors"
         >
           add
         </button>
@@ -2064,7 +2064,7 @@ function ItemDetail({
   }
 
   return (
-    <div className="border border-line bg-card p-4 space-y-5">
+    <div className="glass-panel p-4 space-y-5">
       <div className="space-y-2 border-b border-hairline pb-4">
         <p className="text-[10px] tracking-widest uppercase text-muted">icon</p>
         <div className="flex gap-3">
@@ -2110,14 +2110,14 @@ function ItemDetail({
               placeholder="describe the icon…"
               maxLength={300}
               aria-label="icon prompt"
-              className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+              className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
             />
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={onGenerate}
                 disabled={busy}
-                className="text-[10px] tracking-widest uppercase px-3 py-2 border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
+                className="text-[10px] tracking-widest uppercase px-3 py-2 rounded-full border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
               >
                 {busy ? "working…" : "generate"}
               </button>
@@ -2125,7 +2125,7 @@ function ItemDetail({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={busy}
-                className="text-[10px] tracking-widest uppercase px-3 py-2 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                className="text-[10px] tracking-widest uppercase px-3 py-2 rounded-full border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
               >
                 upload
               </button>
@@ -2208,7 +2208,7 @@ function ItemDetail({
               key={p}
               type="button"
               onClick={() => onUpdate(item.id, { priority: p })}
-              className={`min-h-11 text-[10px] tracking-widest uppercase px-3 border transition-colors ${
+              className={`min-h-11 rounded-full text-[10px] tracking-widest uppercase px-3 border transition-colors ${
                 item.priority === p
                   ? p === "high"
                     ? "bg-danger text-white border-danger"
@@ -2243,7 +2243,7 @@ function ItemDetail({
           placeholder="add details…"
           maxLength={5000}
           rows={4}
-          className="w-full resize-y bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
+          className="w-full resize-y bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
         />
       </div>
 
@@ -2258,7 +2258,7 @@ function ItemDetail({
               onUpdate(item.id, { shopping_pinned: !item.shopping_pinned })
             }
             aria-pressed={item.shopping_pinned}
-            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 border transition-colors ${
+            className={`min-h-11 rounded-full text-[10px] tracking-widest uppercase px-3 border transition-colors ${
               item.shopping_pinned
                 ? "bg-accent text-accent-fg border-accent"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -2278,7 +2278,7 @@ function ItemDetail({
         <button
           type="button"
           onClick={() => onArchive(item.id)}
-          className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+          className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
         >
           stop tracking
         </button>
@@ -2398,7 +2398,7 @@ function ShoppingListPanel({
   }
 
   return (
-    <div className="border border-line bg-card p-4 space-y-4">
+    <div className="glass-panel p-4 space-y-4">
       <h2 className="text-title text-fg border-b border-hairline pb-2">
         shopping list
       </h2>
@@ -2424,7 +2424,7 @@ function ShoppingListPanel({
           }}
           placeholder='e.g. "Save-On-Foods Wesbrook, Vancouver"'
           maxLength={200}
-          className="w-full bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+          className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
         />
         <div className="flex items-center gap-2">
           <label
@@ -2441,7 +2441,7 @@ function ShoppingListPanel({
                 shoppingDay: e.target.value === "" ? null : Number(e.target.value),
               })
             }
-            className="min-h-9 bg-card border border-line-strong text-[10px] uppercase tracking-widest text-fg px-2 focus:outline-none focus:border-accent transition-colors"
+            className="min-h-9 bg-glass-well rounded-field border border-line-strong text-[10px] uppercase tracking-widest text-fg px-2 focus:outline-none focus:border-accent transition-colors"
           >
             <option value="">not set</option>
             {DAY_LABELS.map((label, day) => (
@@ -2539,7 +2539,7 @@ function ShoppingListPanel({
             type="button"
             onClick={refreshPrices}
             disabled={lookingUp}
-            className="ml-auto min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-50"
+            className="ml-auto min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-50"
           >
             {lookingUp ? "looking up…" : "look up prices"}
           </button>
@@ -2555,11 +2555,11 @@ function ShoppingListPanel({
             onChange={(e) => setAddDraft(e.target.value)}
             placeholder="pin an item by name…"
             aria-label="pin an item to the shopping list"
-            className="flex-1 min-w-0 bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
+            className="flex-1 min-w-0 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm px-3 py-2 focus:outline-none transition-colors"
           />
           <button
             type="submit"
-            className="min-h-9 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+            className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
           >
             pin
           </button>
@@ -2642,7 +2642,7 @@ function BuyQty({
       placeholder="qty"
       title={`how many ${entry.unit || "of this"} you'll buy`}
       aria-label={`planned buy amount for ${entry.name}`}
-      className="w-12 min-h-9 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors disabled:opacity-50"
+      className="w-12 min-h-9 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors disabled:opacity-50"
     />
   );
 }
@@ -2692,7 +2692,7 @@ function RowPrice({
           if (e.key === "Escape") setEditing(false);
         }}
         aria-label={`price for ${entry.name}`}
-        className="w-20 min-h-9 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center focus:outline-none transition-colors"
+        className="w-20 min-h-9 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm text-center focus:outline-none transition-colors"
       />
     );
   }
@@ -2839,7 +2839,7 @@ function PriceField({
           }}
           placeholder="qty"
           aria-label="planned buy amount"
-          className="w-16 min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors"
+          className="w-16 min-h-11 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors"
         />
         {item.unit && (
           <span className="text-meta text-muted">{item.unit}</span>
@@ -2869,14 +2869,14 @@ function PriceField({
           }}
           placeholder="price"
           aria-label="estimated price per package"
-          className="w-24 min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors"
+          className="w-24 min-h-11 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm text-center placeholder-muted focus:outline-none transition-colors"
         />
       </span>
       <button
         type="button"
         onClick={lookUp}
         disabled={looking}
-        className="min-h-11 px-3 text-[10px] tracking-widest uppercase border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+        className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
       >
         {looking ? "looking…" : "look up"}
       </button>
