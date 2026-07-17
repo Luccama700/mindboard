@@ -18,7 +18,7 @@ export const NEWS: NewsEntry[] = [
     date: "2026-07-17",
     title: "the board turned to glass",
     items: [
-      "a full liquid-glass redesign: translucent layered surfaces, specular edges, and a soft ambient glow behind everything — every page, both dark and light themes.",
+      "a full liquid-glass redesign: translucent layered surfaces, specular edges, and a whisper of grain behind everything — every page, both dark and light themes.",
       "the dock floats as a frosted capsule now; chips, buttons, and pickers are pills; sheets and popovers blur what's behind them.",
       "your themes and custom palettes carry over untouched — the glass tints itself from whatever colors you've set.",
       "if your device prefers reduced transparency or motion, everything falls back to calm solid surfaces automatically.",

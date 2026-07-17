@@ -107,9 +107,7 @@
   --glass-border: color-mix(in srgb, var(--fg) 14%, transparent);
   --glass-specular: rgba(255, 255, 255, 0.1);
   --glass-shadow: rgba(0, 0, 0, 0.5);
-  --aura-1: color-mix(in srgb, var(--accent) 14%, transparent);
-  --aura-2: color-mix(in srgb, var(--accent) 7%, transparent);
-  --aura-fg: color-mix(in srgb, var(--fg) 5%, transparent);
+  --texture-opacity: 0.05;
 }
 
 /* Light-glass themes: brighter specular rim, warm soft shadow. */
@@ -119,9 +117,7 @@ html.theme-sand {
   --glass-specular: rgba(255, 255, 255, 0.55);
   --glass-shadow: rgba(61, 47, 26, 0.18);
   --glass-border: color-mix(in srgb, var(--fg) 16%, transparent);
-  --aura-1: color-mix(in srgb, var(--accent) 20%, transparent);
-  --aura-2: color-mix(in srgb, var(--accent) 10%, transparent);
-  --aura-fg: color-mix(in srgb, var(--fg) 4%, transparent);
+  --texture-opacity: 0.06;
 }
 
 html.theme-cream {
@@ -229,19 +225,20 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Ambient auras — the light the glass refracts. One fixed, static layer
-   (position:fixed, not background-attachment:fixed, which iOS Safari won't
-   composite); zero scroll cost. Derived from theme vars via color-mix. */
+/* Ambient texture — a tiled grayscale SVG grain at a few percent opacity,
+   so the glass has material to sit on without tinting the page. One fixed,
+   static layer (position:fixed, not background-attachment:fixed, which iOS
+   Safari won't composite); zero scroll cost. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  background:
-    radial-gradient(60rem 42rem at 12% -8%, var(--aura-1), transparent 62%),
-    radial-gradient(50rem 38rem at 105% 28%, var(--aura-fg), transparent 65%),
-    radial-gradient(48rem 42rem at 45% 112%, var(--aura-2), transparent 62%);
+  opacity: var(--texture-opacity);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 160px 160px;
 }
 
 /* ---- Liquid glass elevation kit ------------------------------------- */
