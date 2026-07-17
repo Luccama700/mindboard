@@ -46,7 +46,7 @@ export default async function BrainGraphPage() {
       </header>
 
       {connectionError || !data ? (
-        <p className="text-sm text-muted border border-line px-4 py-3 mx-5">
+        <p className="text-sm text-muted glass-panel px-4 py-3 mx-5">
           vault unavailable —{" "}
           {(connectionError ?? "no data").toLowerCase()}
         </p>

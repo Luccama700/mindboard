@@ -50,7 +50,7 @@ export function VaultSettingsForm({
         e.preventDefault();
         submit();
       }}
-      className="border border-line px-4 py-4 space-y-4"
+      className="glass-panel px-4 py-4 space-y-4"
     >
       <div>
         <p className="text-[10px] tracking-widest uppercase text-muted mb-1.5">
@@ -64,7 +64,7 @@ export function VaultSettingsForm({
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
-          className="w-full bg-page border border-line-strong focus:border-accent text-fg placeholder-muted text-xs px-2 py-2 focus:outline-none transition-colors font-mono"
+          className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-xs px-2 py-2 focus:outline-none transition-colors font-mono"
         />
       </div>
 
@@ -80,7 +80,7 @@ export function VaultSettingsForm({
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
-          className="w-full bg-page border border-line-strong focus:border-accent text-fg placeholder-muted text-xs px-2 py-2 focus:outline-none transition-colors font-mono"
+          className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-xs px-2 py-2 focus:outline-none transition-colors font-mono"
         />
       </div>
 
@@ -100,7 +100,7 @@ export function VaultSettingsForm({
             }
             autoComplete="off"
             spellCheck={false}
-            className="flex-1 min-w-0 bg-page border border-line-strong focus:border-accent text-fg placeholder-muted text-xs px-2 py-2 focus:outline-none transition-colors font-mono"
+            className="flex-1 min-w-0 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-xs px-2 py-2 focus:outline-none transition-colors font-mono"
           />
           <button
             type="button"
@@ -133,7 +133,7 @@ export function VaultSettingsForm({
             type="button"
             onClick={disconnect}
             disabled={pending}
-            className="min-h-11 px-4 text-xs tracking-widest uppercase border border-line text-danger hover:border-danger transition-colors disabled:opacity-50"
+            className="min-h-11 px-4 text-xs tracking-widest uppercase border rounded-full border-line text-danger hover:border-danger transition-colors disabled:opacity-50"
           >
             disconnect
           </button>

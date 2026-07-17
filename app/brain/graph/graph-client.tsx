@@ -104,7 +104,7 @@ export function GraphClient({ data }: { data: GraphData }) {
               key={folder}
               type="button"
               onClick={() => toggleFolder(folder)}
-              className={`flex items-center gap-1.5 min-h-11 px-3 text-xs tracking-widest uppercase border transition-colors whitespace-nowrap ${
+              className={`flex items-center gap-1.5 min-h-11 px-3 text-xs tracking-widest uppercase border rounded-full transition-colors whitespace-nowrap ${
                 hidden
                   ? "border-line text-muted"
                   : "border-line-strong text-fg"

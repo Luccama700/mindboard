@@ -23,7 +23,7 @@ export function Callout({
 }) {
   const style = KIND_STYLES[kind] ?? "border-line-strong";
   return (
-    <aside className={`border-l-4 ${style} bg-card px-4 py-3 my-4`}>
+    <aside className={`border-l-4 ${style} bg-card rounded-r-xl px-4 py-3 my-4`}>
       <p className="text-xs tracking-widest uppercase mb-1">
         {kind}
         {title ? ` · ${title}` : ""}

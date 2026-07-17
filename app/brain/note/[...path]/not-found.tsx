@@ -12,7 +12,7 @@ export default function BrainNoteNotFound() {
         </Link>
         <h1 className="text-xs tracking-widest uppercase text-muted">note</h1>
       </header>
-      <p className="text-sm text-muted border border-line px-4 py-3">
+      <p className="text-sm text-muted glass-panel px-4 py-3">
         this note does not exist in the vault.
       </p>
     </main>

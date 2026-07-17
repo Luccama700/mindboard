@@ -230,7 +230,7 @@ export function PlanClient({
   if (!hasKey) {
     return (
       <div className="space-y-6">
-        <div className="border border-hairline px-4 py-6 space-y-2">
+        <div className="glass-panel px-4 py-6 space-y-2">
           <p className="text-body text-fg">
             the copilot plans with your own anthropic api key.
           </p>
@@ -247,7 +247,7 @@ export function PlanClient({
   return (
     <div className="flex flex-col gap-4">
       {goals.length > 0 && (
-        <details className="border border-hairline px-3 py-2">
+        <details className="glass-panel rounded-xl px-3 py-2">
           <summary className="text-label uppercase text-muted cursor-pointer min-h-11 flex items-center">
             goals · {goals.length}
           </summary>
@@ -343,7 +343,7 @@ export function PlanClient({
           <button
             type="button"
             onClick={confirmAll}
-            className="min-h-11 px-4 text-action lowercase border border-accent text-fg hover:bg-accent hover:text-accent-fg transition-colors"
+            className="min-h-11 px-4 text-action lowercase border rounded-full border-accent text-fg hover:bg-accent hover:text-accent-fg transition-colors"
           >
             confirm all ({pendingProposals.length})
           </button>
@@ -373,7 +373,7 @@ export function PlanClient({
           <button
             type="submit"
             disabled={busy || !input.trim()}
-            className="min-h-11 px-4 text-action lowercase border border-accent bg-accent text-accent-fg hover:opacity-90 transition-opacity disabled:opacity-40"
+            className="min-h-11 px-4 text-action lowercase border rounded-full border-accent bg-accent text-accent-fg shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-opacity disabled:opacity-40"
           >
             send
           </button>
@@ -386,7 +386,7 @@ export function PlanClient({
               storeModel(e.target.value);
             }}
             aria-label="model"
-            className="bg-surface-0 border border-hairline text-muted text-meta px-2 py-1.5 focus:outline-none focus:border-accent"
+            className="bg-glass-well rounded-field border border-hairline text-muted text-meta px-2 py-1.5 focus:outline-none focus:border-accent"
           >
             {MODEL_OPTIONS.map((option) => (
               <option key={option.id} value={option.id}>

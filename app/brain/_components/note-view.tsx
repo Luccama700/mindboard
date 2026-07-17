@@ -125,12 +125,12 @@ const markdownComponents: Components = {
   ),
   hr: () => <hr className="border-line my-6" />,
   code: ({ children, className }) => (
-    <code className={`bg-card px-1 py-0.5 text-[0.85em] ${className ?? ""}`}>
+    <code className={`bg-card rounded-md px-1 py-0.5 text-[0.85em] ${className ?? ""}`}>
       {children}
     </code>
   ),
   pre: ({ children }) => (
-    <pre className="bg-card border border-line p-3 my-4 overflow-x-auto text-xs leading-relaxed">
+    <pre className="glass-panel rounded-xl p-3 my-4 overflow-x-auto text-xs leading-relaxed">
       {children}
     </pre>
   ),
@@ -169,7 +169,7 @@ export function NoteView({
   return (
     <article>
       {metaEntries.length > 0 && (
-        <dl className="flex flex-wrap gap-x-5 gap-y-1 mb-6 border border-line px-4 py-3">
+        <dl className="flex flex-wrap gap-x-5 gap-y-1 mb-6 glass-panel px-4 py-3">
           {metaEntries.map(([key, value]) => (
             <div key={key} className="flex items-baseline gap-2">
               <dt className="text-[10px] tracking-widest uppercase text-muted">

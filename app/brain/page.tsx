@@ -146,7 +146,7 @@ export default async function BrainPage() {
 
       {connectionError ? (
         <div className="space-y-6">
-          <p className="text-sm text-muted border border-line px-4 py-3">
+          <p className="text-sm text-muted glass-panel px-4 py-3">
             vault unavailable — {connectionError.toLowerCase()}
           </p>
           <VaultSettingsForm

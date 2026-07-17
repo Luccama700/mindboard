@@ -60,7 +60,7 @@ export default async function BrainNotePage(props: {
       </header>
 
       {connectionError ? (
-        <p className="text-sm text-muted border border-line px-4 py-3">
+        <p className="text-sm text-muted glass-panel px-4 py-3">
           vault unavailable — {connectionError.toLowerCase()}
         </p>
       ) : note && corpus ? (
