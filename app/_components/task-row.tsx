@@ -86,7 +86,7 @@ export function TaskRow({
         <button
           onClick={() => onToggle(task)}
           aria-label={isDone ? "mark as todo" : "mark as done"}
-          className={`flex-shrink-0 w-7 h-7 border-2 transition-all flex items-center justify-center ${
+          className={`flex-shrink-0 w-7 h-7 border-2 rounded-full transition-all flex items-center justify-center ${
             isDone
               ? "bg-accent border-accent"
               : isOverdue
@@ -278,14 +278,14 @@ function EditPanel({
         }}
         maxLength={200}
         aria-label="task title"
-        className="w-full min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
+        className="w-full min-h-11 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
       />
 
       <div className="flex items-center flex-wrap gap-2">
         <button
           type="button"
           onClick={() => onUpdate(task.id, { dueDate: isToday ? null : today })}
-          className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border transition-colors ${
+          className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
             isToday
               ? "bg-accent text-accent-fg border-accent"
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -297,7 +297,7 @@ function EditPanel({
         <button
           type="button"
           onClick={openDatePicker}
-          className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border transition-colors ${
+          className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
             isCustomDate
               ? "bg-accent text-accent-fg border-accent"
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -343,7 +343,7 @@ function EditPanel({
               onUpdate(task.id, { dueTime: e.target.value || null })
             }
             aria-label="due time"
-            className="min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
+            className="min-h-11 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
           />
           {task.due_time && (
             <>
@@ -353,7 +353,7 @@ function EditPanel({
                   onUpdate(task.id, { durationMin: Number(e.target.value) })
                 }
                 aria-label="duration"
-                className="min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
+                className="min-h-11 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
               >
                 {[15, 30, 45, 60, 90, 120, 180, 240].map((m) => (
                   <option key={m} value={m}>
@@ -378,7 +378,7 @@ function EditPanel({
                       );
                     })
                   }
-                  className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                  className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
                 >
                   {pushing ? "pushing…" : "→ calendar event"}
                 </button>
@@ -400,7 +400,7 @@ function EditPanel({
             key={p}
             type="button"
             onClick={() => onUpdate(task.id, { priority: p })}
-            className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border transition-colors ${
+            className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
               task.priority === p
                 ? p === "high"
                   ? "bg-danger text-white border-danger"
@@ -425,7 +425,7 @@ function EditPanel({
             onUpdate(task.id, { groupId: e.target.value || null })
           }
           aria-label="task group"
-          className="flex-1 min-w-0 min-h-11 bg-card border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
+          className="flex-1 min-w-0 min-h-11 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs uppercase tracking-widest px-2 py-1.5 focus:outline-none transition-colors"
         >
           <option value="">inbox</option>
           {groups.map((g) => (
@@ -452,7 +452,7 @@ function EditPanel({
                 type="button"
                 disabled={aiPending}
                 onClick={() => changeAiState("approved")}
-                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
+                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
               >
                 approve
               </button>
@@ -460,7 +460,7 @@ function EditPanel({
                 type="button"
                 disabled={aiPending}
                 onClick={() => changeAiState(null)}
-                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
               >
                 dismiss
               </button>
@@ -471,7 +471,7 @@ function EditPanel({
               type="button"
               disabled={aiPending}
               onClick={() => changeAiState("planned")}
-              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
             >
               un-approve
             </button>
@@ -481,7 +481,7 @@ function EditPanel({
               type="button"
               disabled={aiPending}
               onClick={() => changeAiState("approved")}
-              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
             >
               retry tonight
             </button>
@@ -491,7 +491,7 @@ function EditPanel({
               type="button"
               disabled={aiPending}
               onClick={() => changeAiState(null)}
-              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
             >
               clear
             </button>
@@ -515,7 +515,7 @@ function EditPanel({
             placeholder="add details..."
             maxLength={5000}
             rows={4}
-            className="w-full resize-y bg-card border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
+            className="w-full resize-y bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
           />
         </div>
       )}

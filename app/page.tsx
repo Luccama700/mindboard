@@ -296,12 +296,12 @@ async function WeekPaneSection({
 function WeekPaneSkeleton() {
   return (
     <div
-      className="animate-pulse border border-line bg-popover p-3 min-h-[calc(100vh-4rem)]"
+      className="animate-pulse glass-panel p-3 min-h-[calc(100vh-4rem)]"
       aria-hidden
     >
-      <div className="h-3 w-16 bg-card mb-2" />
-      <div className="h-6 w-32 bg-card mb-6" />
-      <div className="h-full max-h-[36rem] bg-card" />
+      <div className="h-3 w-16 bg-card rounded-md mb-2" />
+      <div className="h-6 w-32 bg-card rounded-md mb-6" />
+      <div className="h-full max-h-[36rem] bg-card rounded-panel" />
     </div>
   );
 }
@@ -310,15 +310,15 @@ function StreamSkeleton() {
   return (
     <div className="animate-pulse" aria-hidden>
       <div className="flex items-center justify-between mb-8">
-        <div className="h-4 w-40 bg-card" />
-        <div className="h-4 w-48 bg-card" />
+        <div className="h-4 w-40 bg-card rounded-md" />
+        <div className="h-4 w-48 bg-card rounded-md" />
       </div>
       {[3, 2, 2].map((rows, section) => (
         <div key={section} className="mb-8">
-          <div className="h-3 w-full bg-card mb-2" />
+          <div className="h-3 w-full bg-card rounded-md mb-2" />
           <div className="space-y-px">
             {Array.from({ length: rows }).map((_, i) => (
-              <div key={i} className="h-16 bg-card" />
+              <div key={i} className="h-16 bg-card rounded-panel" />
             ))}
           </div>
         </div>

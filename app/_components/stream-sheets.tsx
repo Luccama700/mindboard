@@ -21,9 +21,9 @@ export function Sheet({
         type="button"
         aria-label="close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/50"
+        className="absolute inset-0 glass-scrim"
       />
-      <div className="absolute left-0 right-0 bottom-0 rounded-t-[8px] border border-line bg-popover p-4 pb-[max(env(safe-area-inset-bottom),1rem)] max-h-[80vh] overflow-y-auto lg:left-1/2 lg:right-auto lg:w-[28rem] lg:-translate-x-1/2">
+      <div className="absolute left-0 right-0 bottom-0 glass rounded-t-sheet rounded-b-none border-b-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] max-h-[80vh] overflow-y-auto lg:left-1/2 lg:right-auto lg:w-[28rem] lg:-translate-x-1/2">
         <div className="flex items-center justify-between mb-4">
           <p className="text-label uppercase text-muted">{title}</p>
           <button
@@ -60,7 +60,7 @@ function ScaleRow({
             type="button"
             onClick={() => onChange(n)}
             aria-pressed={value === n}
-            className={`flex-1 min-h-11 border text-action transition-colors ${
+            className={`flex-1 min-h-11 border rounded-full text-action transition-colors ${
               value !== null && n <= value
                 ? "border-accent bg-accent text-accent-fg"
                 : "border-line-strong text-muted hover:text-fg"
@@ -217,7 +217,7 @@ export function SpendSheet({
                 type="button"
                 onClick={() => setAccountId(a.id)}
                 aria-pressed={accountId === a.id}
-                className={`flex w-full items-center justify-between min-h-11 px-3 text-action transition-colors border ${
+                className={`flex w-full items-center justify-between min-h-11 px-3 text-action transition-colors border rounded-xl ${
                   accountId === a.id
                     ? "border-accent text-fg"
                     : "border-hairline text-muted hover:text-fg"
@@ -244,7 +244,7 @@ export function SpendSheet({
               type="button"
               onClick={() => setCategoryId("")}
               aria-pressed={categoryId === ""}
-              className={`min-h-11 px-3 text-action lowercase border transition-colors ${
+              className={`min-h-11 px-3 text-action lowercase border rounded-full transition-colors ${
                 categoryId === ""
                   ? "border-accent text-fg"
                   : "border-hairline text-muted hover:text-fg"
@@ -258,7 +258,7 @@ export function SpendSheet({
                 type="button"
                 onClick={() => setCategoryId(c.id)}
                 aria-pressed={categoryId === c.id}
-                className={`inline-flex items-center gap-1.5 min-h-11 px-3 text-action lowercase border transition-colors ${
+                className={`inline-flex items-center gap-1.5 min-h-11 px-3 text-action lowercase border rounded-full transition-colors ${
                   categoryId === c.id
                     ? "border-accent text-fg"
                     : "border-hairline text-muted hover:text-fg"

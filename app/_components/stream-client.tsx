@@ -130,7 +130,7 @@ function CardRow({
         key="done"
         type="button"
         onClick={() => onDone(card)}
-        className="min-h-11 px-3 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors"
+        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         done
       </button>,
@@ -139,12 +139,12 @@ function CardRow({
           type="button"
           onClick={() => setSnoozeOpen((v) => !v)}
           aria-expanded={snoozeOpen}
-          className="min-h-11 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors"
+          className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
         >
           later ▾
         </button>
         {snoozeOpen && (
-          <div className="absolute left-0 top-full mt-1 z-30 border border-line bg-popover shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+          <div className="absolute left-0 top-full mt-1 z-30 glass-pop glass-rise rounded-pop overflow-hidden">
             {snoozeOptions(today).map((opt) => (
               <button
                 key={opt.dateKey}
@@ -168,12 +168,12 @@ function CardRow({
           type="button"
           onClick={() => setScheduleOpen((v) => !v)}
           aria-expanded={scheduleOpen}
-          className="min-h-11 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors"
+          className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
         >
           schedule ▾
         </button>
         {scheduleOpen && (
-          <div className="absolute left-0 top-full mt-1 z-30 border border-line bg-popover shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+          <div className="absolute left-0 top-full mt-1 z-30 glass-pop glass-rise rounded-pop overflow-hidden">
             {gaps.map((gap) => (
               <button
                 key={`${gap.dateKey}-${gap.start}`}
@@ -206,7 +206,7 @@ function CardRow({
           type="button"
           onClick={() => setGroupOpen((v) => !v)}
           aria-expanded={groupOpen}
-          className="flex min-h-11 min-w-0 max-w-40 items-center gap-2 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors"
+          className="flex min-h-11 min-w-0 max-w-40 items-center gap-2 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
         >
           <span
             className={`h-2.5 w-2.5 flex-shrink-0 ${
@@ -218,7 +218,7 @@ function CardRow({
           <span className="truncate">{taskGroupName ?? "inbox"} ▾</span>
         </button>
         {groupOpen && (
-          <div className="absolute left-0 top-full mt-1 z-30 max-h-56 overflow-y-auto border border-line bg-popover shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+          <div className="absolute left-0 top-full mt-1 z-30 max-h-56 overflow-y-auto glass-pop glass-rise rounded-pop">
             <button
               type="button"
               onClick={() => {
@@ -263,7 +263,7 @@ function CardRow({
         key="done"
         type="button"
         onClick={() => onDone(card)}
-        className="min-h-11 px-3 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors"
+        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         done
       </button>,
@@ -274,7 +274,7 @@ function CardRow({
         key="log"
         type="button"
         onClick={() => onLogBill(card)}
-        className="min-h-11 px-3 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors"
+        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         log it
       </button>,
@@ -287,11 +287,11 @@ function CardRow({
         type="button"
         disabled={bought}
         onClick={() => onBuyTask(card)}
-        className="min-h-11 px-3 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors disabled:opacity-60"
+        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors disabled:opacity-60"
       >
         {bought ? "task ✓" : "buy task"}
       </button>,
-      <div key="adjust" className="inline-flex items-stretch border border-hairline">
+      <div key="adjust" className="inline-flex items-stretch border rounded-full overflow-hidden border-hairline">
         <button
           type="button"
           onClick={() => onAdjust(card, -1)}
@@ -316,7 +316,7 @@ function CardRow({
         key="log-day"
         type="button"
         onClick={onOpenLog}
-        className="min-h-11 px-3 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors"
+        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         log day
       </button>,
@@ -326,7 +326,7 @@ function CardRow({
       <Link
         key="open"
         href={card.entity.href}
-        className="inline-flex items-center min-h-11 px-3 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors"
+        className="inline-flex items-center min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         {card.entity.href.startsWith("/plan") ? "plan ◇" : "sort →"}
       </Link>,
@@ -336,7 +336,7 @@ function CardRow({
       <Link
         key="week"
         href="/week"
-        className="inline-flex items-center min-h-11 px-3 text-action lowercase border border-hairline text-muted hover:text-fg transition-colors"
+        className="inline-flex items-center min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
       >
         open week ▦
       </Link>,
@@ -749,7 +749,7 @@ export function StreamClient({
 
       {empty ? (
         <div
-          className="border border-hairline px-4 py-10 text-center mb-8"
+          className="glass-panel px-4 py-10 text-center mb-8"
           data-tour="stream"
         >
           <p className="text-label uppercase text-muted mb-3">— clear —</p>
@@ -759,13 +759,13 @@ export function StreamClient({
           <div className="flex items-center justify-center gap-2">
             <Link
               href="/plan"
-              className="inline-flex items-center min-h-11 px-4 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors"
+              className="inline-flex items-center min-h-11 px-4 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
             >
               plan tomorrow ◇
             </Link>
             <Link
               href="/week"
-              className="inline-flex items-center min-h-11 px-4 text-action lowercase border border-hairline text-fg hover:border-accent transition-colors"
+              className="inline-flex items-center min-h-11 px-4 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
             >
               open week ▦
             </Link>
