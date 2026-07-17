@@ -42,6 +42,7 @@ import {
   execPrompt,
   extractPlan,
   extractSection,
+  ensureProxy,
   parseToolResult,
   parseTriage,
   MODEL_CHOICES,
@@ -265,39 +266,6 @@ async function freshNotes(taskId, fallback) {
 // Resolved once per run in main(): the app's per-user choice, else env
 // defaults. Proxy models degrade to opus if claudex is unreachable.
 const ENGINES = { plan: null, build: null };
-
-async function proxyReachable() {
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`${CONFIG.proxyUrl}/v1/models`, { signal: controller.signal });
-    clearTimeout(timer);
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-async function ensureProxy() {
-  if (await proxyReachable()) return true;
-  if (!CONFIG.proxyExe || DRY) return false;
-  log("claudex proxy down — starting it");
-  try {
-    const child = spawn(CONFIG.proxyExe, [], {
-      cwd: dirname(CONFIG.proxyExe),
-      detached: true,
-      stdio: "ignore",
-      // Long-lived process — it must never inherit the PAT.
-      env: CHILD_ENV,
-    });
-    child.unref();
-  } catch (error) {
-    log(`  proxy start failed: ${clip(String(error), 200)}`);
-    return false;
-  }
-  await new Promise((resolve) => setTimeout(resolve, 5000));
-  return proxyReachable();
-}
 
 // ---------- single-runner lock ----------
 
@@ -739,7 +707,24 @@ async function main() {
   const planChoice = prefs.agentPlanModel ?? CONFIG.planModel;
   const buildChoice = prefs.agentBuildModel ?? CONFIG.buildModel;
   const needsProxy = [planChoice, buildChoice].some((c) => MODEL_CHOICES[c]?.proxy);
-  const proxyOk = needsProxy ? await ensureProxy() : false;
+  const proxyOk = needsProxy
+    ? await ensureProxy({
+        proxyUrl: CONFIG.proxyUrl,
+        proxyExe: CONFIG.proxyExe,
+        dry: DRY,
+        log,
+        startProxy: (executable) => {
+          const child = spawn(executable, [], {
+            cwd: dirname(executable),
+            detached: true,
+            stdio: "ignore",
+            // Long-lived process — it must never inherit the PAT.
+            env: CHILD_ENV,
+          });
+          child.unref();
+        },
+      })
+    : false;
   ENGINES.plan = resolveModel(planChoice, proxyOk, "fable-5");
   ENGINES.build = resolveModel(buildChoice, proxyOk, "gpt-5.6-sol");
   log(

@@ -57,3 +57,5 @@ Exurb1a Voice.mp3
 overnight/.env
 overnight/logs/
 overnight/state.json
+overnight/persona/auth-state.json
+overnight/persona/screenshots/

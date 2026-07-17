@@ -8,6 +8,7 @@ import {
   execPrompt,
   extractPlan,
   extractSection,
+  ensureProxy,
   parseToolResult,
   parseTriage,
   pickBuildTasks,
@@ -296,6 +297,38 @@ describe("resolveModel", () => {
     expect(Object.keys(MODEL_CHOICES).sort()).toEqual(
       ["fable-5", "gpt-5.6-sol", "opus-4.8"].sort(),
     );
+  });
+});
+
+describe("ensureProxy", () => {
+  test("returns immediately when the proxy is reachable", async () => {
+    let starts = 0;
+    const reachable = await ensureProxy({
+      proxyUrl: "http://proxy.test",
+      fetchImpl: async () => ({ ok: true }),
+      startProxy: async () => {
+        starts += 1;
+      },
+    });
+    expect(reachable).toBe(true);
+    expect(starts).toBe(0);
+  });
+
+  test("starts a configured proxy and checks it again", async () => {
+    let checks = 0;
+    let starts = 0;
+    const reachable = await ensureProxy({
+      proxyUrl: "http://proxy.test",
+      proxyExe: "proxy.exe",
+      fetchImpl: async () => ({ ok: ++checks > 1 }),
+      startProxy: async () => {
+        starts += 1;
+      },
+      wait: async () => {},
+    });
+    expect(reachable).toBe(true);
+    expect(starts).toBe(1);
+    expect(checks).toBe(2);
   });
 });
 

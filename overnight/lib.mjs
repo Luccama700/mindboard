@@ -1,6 +1,6 @@
-// Pure helpers for the overnight orchestrator (docs/overnight-agent-plan.md).
-// Everything here is deterministic and unit-tested in __tests__/overnight-lib.test.ts;
-// process spawning, MCP calls, and git live in run.mjs.
+// Shared helpers for the overnight orchestrator (docs/overnight-agent-plan.md).
+// Logic is deterministic and unit-tested; proxy startup is dependency-injected.
+// MCP calls and git live in run.mjs.
 
 export function slugify(title) {
   const slug = String(title ?? "")
@@ -150,6 +150,46 @@ export function resolveModel(choice, proxyUp, defaultId = "fable-5") {
     return { id: "opus-4.8", ...MODEL_CHOICES["opus-4.8"], fellBack: true };
   }
   return { id, ...def };
+}
+
+async function proxyReachable(proxyUrl, fetchImpl, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(`${proxyUrl}/v1/models`, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Shared by the overnight orchestrator and browser persona runner. Process
+// spawning stays in the callers so this helper remains deterministic in tests.
+export async function ensureProxy({
+  proxyUrl,
+  proxyExe = "",
+  dry = false,
+  fetchImpl = fetch,
+  startProxy,
+  wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  timeoutMs = 3000,
+  startupWaitMs = 5000,
+  log = () => {},
+}) {
+  if (await proxyReachable(proxyUrl, fetchImpl, timeoutMs)) return true;
+  if (!proxyExe || dry || typeof startProxy !== "function") return false;
+
+  log("claudex proxy down — starting it");
+  try {
+    await startProxy(proxyExe);
+  } catch (error) {
+    log(`  proxy start failed: ${clip(String(error), 200)}`);
+    return false;
+  }
+  await wait(startupWaitMs);
+  return proxyReachable(proxyUrl, fetchImpl, timeoutMs);
 }
 
 // ---------- Track B: life tasks ----------

@@ -70,6 +70,36 @@ in the edit panel) — same button for both tracks. The agent never touches
    .\overnight\install-task.ps1
    ```
 
+## Onboarding persona audit
+
+The separate persona runner exercises onboarding in a mobile Playwright browser.
+`gpt-5.6-sol` sees each screenshot plus a numbered list of safe controls, acts
+as an impatient teenager, and can quit early when attention is lost. It cannot
+type or click account-mutating controls. A run resets tours through the existing
+settings button, keeps a 40-step total cap across two scenarios, writes
+`logs/persona-<date>.md`, captures the report to the brain, and files one
+`mindboard` task per new finding through MCP's propose → confirm audit rail.
+
+One-time browser and authenticated-session setup (the state file is gitignored):
+
+```powershell
+npx playwright install chromium
+node overnight\persona\save-auth.mjs
+```
+
+Run it headless, visibly, or without browser/model/network writes:
+
+```powershell
+node overnight\persona\run.mjs
+node overnight\persona\run.mjs --headed --scenario=first-minute
+node overnight\persona\run.mjs --dry-run
+```
+
+Optional environment settings are `PERSONA_URL`, `PERSONA_MODEL` (kept at
+`gpt-5.6-sol`), `PERSONA_MAX_STEPS`, `PERSONA_MODEL_TIMEOUT_SEC`, and
+`PERSONA_AUTH_FILE`. Use `--no-file-tasks` or `--no-brain-capture` when auditing
+locally without publishing those outputs.
+
 ## Day-to-day
 
 - Capture app ideas into the **mindboard** group from your phone.
