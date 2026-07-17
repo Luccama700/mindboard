@@ -333,4 +333,43 @@ export function setActiveTheme(name: ThemeName) {
   applyThemeClass(name);
   storeTheme(name);
   applyPaletteOverrides(readStoredPalette(name));
+  applyTextureOverride(readStoredTexture());
+}
+
+// Background texture (the fixed grain layer) — one global knob, stored as a
+// 0..MAX opacity; null means "use the theme's default" (--texture-opacity in
+// globals.css: 0.10 dark themes, 0.11 light).
+export const TEXTURE_MAX = 0.3;
+
+export function textureDefaultFor(theme: ThemeName): number {
+  return theme === "cream" || theme === "sand" ? 0.11 : 0.1;
+}
+
+export function readStoredTexture(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem("texture-opacity");
+    if (raw === null) return null;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return null;
+    return Math.min(TEXTURE_MAX, Math.max(0, value));
+  } catch {
+    return null;
+  }
+}
+
+export function storeTexture(value: number | null) {
+  try {
+    if (value === null) localStorage.removeItem("texture-opacity");
+    else localStorage.setItem("texture-opacity", String(value));
+  } catch {
+    // ignore
+  }
+}
+
+export function applyTextureOverride(value: number | null) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (value === null) root.style.removeProperty("--texture-opacity");
+  else root.style.setProperty("--texture-opacity", String(value));
 }

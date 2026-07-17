@@ -22,6 +22,7 @@ export const NEWS: NewsEntry[] = [
       "the dock floats as a frosted capsule now; chips, buttons, and pickers are pills; sheets and popovers blur what's behind them.",
       "your themes and custom palettes carry over untouched — the glass tints itself from whatever colors you've set.",
       "if your device prefers reduced transparency or motion, everything falls back to calm solid surfaces automatically.",
+      "the background grain is yours to tune — settings → appearance has a texture slider, 0% to fully gritty.",
     ],
   },
   {

@@ -6,14 +6,19 @@ import { INPUT_CLASS } from "./ui";
 import {
   PALETTE_GROUPS,
   PALETTE_LABELS,
+  TEXTURE_MAX,
   THEMES,
   applyPaletteOverrides,
+  applyTextureOverride,
   getTheme,
   readStoredPalette,
+  readStoredTexture,
   readStoredTheme,
   resolvedPalette,
   setActiveTheme,
   storePalette,
+  storeTexture,
+  textureDefaultFor,
   type Palette,
   type ThemeName,
 } from "./themes";
@@ -89,6 +94,8 @@ export function SettingsSections() {
         </div>
       </section>
 
+      <TextureSlider theme={theme} />
+
       <section className="space-y-3">
         <button
           type="button"
@@ -106,6 +113,58 @@ export function SettingsSections() {
         {showColors && <PaletteEditor key={theme} theme={theme} />}
       </section>
     </div>
+  );
+}
+
+function TextureSlider({ theme }: { theme: ThemeName }) {
+  const [override, setOverride] = useState<number | null>(() =>
+    readStoredTexture(),
+  );
+
+  const effective = override ?? textureDefaultFor(theme);
+  const percent = Math.round(effective * 100);
+
+  function setTexture(value: number) {
+    setOverride(value);
+    storeTexture(value);
+    applyTextureOverride(value);
+  }
+
+  function resetTexture() {
+    setOverride(null);
+    storeTexture(null);
+    applyTextureOverride(null);
+  }
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="text-[10px] tracking-widest uppercase text-muted">
+          background texture
+        </p>
+        <span className="font-mono text-[10px] text-muted">{percent}%</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="range"
+          min={0}
+          max={TEXTURE_MAX * 100}
+          step={1}
+          value={percent}
+          onChange={(e) => setTexture(Number(e.target.value) / 100)}
+          aria-label="background texture intensity"
+          className="w-full min-h-11 accent-accent"
+        />
+        <button
+          type="button"
+          onClick={resetTexture}
+          disabled={override === null}
+          className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors py-1.5 px-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted"
+        >
+          reset
+        </button>
+      </div>
+    </section>
   );
 }
 
