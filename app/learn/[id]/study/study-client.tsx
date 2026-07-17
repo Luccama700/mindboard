@@ -143,7 +143,7 @@ export function StudyClient({
               : "convert a source first, then generate cards from it."}
           </p>
         ) : current ? (
-          <div className="border border-hairline p-4 space-y-4">
+          <div className="glass-panel rounded-2xl p-4 space-y-4">
             <p className="text-meta text-muted">
               {position + 1} / {deck.length}
               {sessionMisses.length > 0 && ` · ${sessionMisses.length} missed`}
@@ -191,7 +191,7 @@ export function StudyClient({
             )}
           </div>
         ) : (
-          <div className="border border-hairline p-4 space-y-3">
+          <div className="glass-panel rounded-2xl p-4 space-y-3">
             <p className="text-body text-fg">
               deck done — {deck.length - sessionMisses.length}/{deck.length} on
               the first try.
@@ -252,7 +252,7 @@ export function StudyClient({
               value={artifactKind}
               onChange={(e) => setArtifactKind(e.target.value)}
               aria-label="artifact kind"
-              className="bg-surface-0 border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
+              className="bg-glass-well rounded-field border border-line-strong text-meta text-muted px-1 py-2 min-w-0 min-h-11 focus:outline-none focus:border-accent font-mono"
             >
               {ARTIFACT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>

@@ -172,7 +172,7 @@ export function CourseChatClient({
               type="button"
               onClick={() => toggle(source.id)}
               aria-pressed={on}
-              className={`inline-flex items-center min-h-11 px-2 text-meta lowercase border transition-colors ${
+              className={`inline-flex items-center min-h-11 px-2 rounded-full text-meta lowercase border transition-colors ${
                 on
                   ? "border-accent-ink text-fg bg-accent-wash"
                   : "border-hairline text-muted hover:text-fg"
@@ -242,7 +242,7 @@ export function CourseChatClient({
           e.preventDefault();
           void send();
         }}
-        className="flex items-stretch gap-1"
+        className="glass-panel p-2 flex items-stretch gap-1"
       >
         <input
           value={input}
