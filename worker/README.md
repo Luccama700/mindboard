@@ -1,7 +1,8 @@
 # Mindboard home worker
 
 The always-on PC's job runner: free PDF→markdown conversion (MinerU) and free
-podcast rendering (VibeVoice) for `/learn`. Pull-based — it polls the app's
+podcast rendering (VibeVoice) for `/learn`, and reel transcription (yt-dlp +
+whisper + a local VLM) for the second brain. Pull-based — it polls the app's
 `/api/worker` endpoint with a bearer token, so **no inbound ports, no tunnels,
 and no database key on this machine**. If the PC is off, jobs simply wait in
 the queue; the settings → connections card shows online/offline from the
@@ -49,6 +50,37 @@ audio output, so no VibeVoice.)
 
    The `{text}` and `{wav}` placeholders are filled by the worker. TTS jobs
    fail with a clear message until this is set — OCR works without it.
+
+3b. **Reel capture** (optional; `docs/reel-capture-plan.md`) — transcribe +
+   describe Instagram reels the user shares into the vault. Three pieces:
+
+   ```bash
+   # download + transcription (ffmpeg is already installed):
+   pip install -U yt-dlp
+   pip install -U whisper-ctranslate2      # or any whisper CLI
+
+   # visuals (frame description + on-screen-text OCR) via a local VLM.
+   # Qwen3-VL is the current best fit for reels — strong OCR on stylized
+   # overlays, ~6 GB at Q4, and Ollama unloads it between jobs:
+   ollama pull qwen3-vl:8b                  # or qwen3-vl:4b on tighter VRAM
+   ```
+
+   Env the worker reads (all have defaults):
+
+   ```bash
+   # WHISPER_CMD is REQUIRED for reel jobs (like VIBEVOICE_CMD for TTS).
+   # {audio} and {out} are filled; the worker reads the largest .txt in {out}.
+   export WHISPER_CMD='whisper-ctranslate2 {audio} --model large-v3 --output_format txt --output_dir {out}'
+   export YTDLP_CMD='yt-dlp --no-playlist --no-warnings --write-info-json -o {out}/reel.%(ext)s {url}'
+   export VISION_MODEL='qwen3-vl:8b'        # "" → transcript only, no visuals
+   export OLLAMA_URL='http://localhost:11434'
+   export REEL_MAX_FRAMES=10
+   ```
+
+   Transcript is the core deliverable (fails clearly without `WHISPER_CMD`);
+   visuals are additive and skipped when `VISION_MODEL` is empty or Ollama
+   isn't reachable. Private-account reels that yt-dlp can't fetch fail the job
+   with a clear message — no Instagram login is ever used.
 
 4. **The worker itself** (pure stdlib, Python ≥ 3.10):
 

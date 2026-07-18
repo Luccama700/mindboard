@@ -63,6 +63,7 @@ import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
 import { MAX_FINANCE_OPS } from "@/app/lib/mcp/finance-ops";
 import { MAX_ADMIN_OPS } from "@/app/lib/mcp/finance-admin-ops";
 import { captureToBrain } from "@/app/lib/mcp/brain";
+import { queueReel } from "@/app/lib/mcp/reels";
 import { CAPTURE_SUMMARY_MAX, CAPTURE_TITLE_MAX } from "@/app/lib/mcp/capture";
 import {
   appendSourcePart,
@@ -1222,6 +1223,24 @@ const mcpHandler = createMcpHandler(
       (args, extra) =>
         guard(async () => {
           const r = await confirmAction(uid(extra), args.proposalId);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "process_reel",
+      {
+        title: "Process a saved reel",
+        description:
+          "Queue an Instagram reel saved in the vault for the home worker to download, transcribe, and describe/OCR its frames — the record lands back in the vault as a new Reels/ note. Pass a vault notePath (a note whose body holds the reel link) or a direct Instagram url. Requires the home worker.",
+        inputSchema: {
+          notePath: z.string().optional().describe("Vault note path holding the reel link."),
+          url: z.string().optional().describe("Instagram reel/post URL, if not via a note."),
+        },
+      },
+      (args, extra) =>
+        guard(async () => {
+          const r = await queueReel(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );

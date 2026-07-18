@@ -5,9 +5,19 @@ import { createServiceClient } from "@/utils/supabase/service";
 import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
 import { readVaultCredentials } from "@/app/lib/brain/vault";
 import {
+  createVaultBase64FileWithRetry,
   createVaultFileWithRetry,
   VAULT_NOT_CONFIGURED_MESSAGE,
 } from "@/app/lib/mcp/capture";
+import {
+  buildReelDocument,
+  buildReelFailureDocument,
+  embedFor,
+  reelFailureNotePath,
+  reelNotePath,
+  reelThumbnailPath,
+  type ReelFrame,
+} from "@/app/lib/reels/detect";
 import {
   buildSourceDocument,
   courseSourcePath,
@@ -33,7 +43,7 @@ export const maxDuration = 60;
 type JobRow = {
   id: string;
   user_id: string;
-  kind: "ocr" | "tts";
+  kind: "ocr" | "tts" | "reel";
   payload: Record<string, unknown>;
   status: string;
   attempts: number;
@@ -95,10 +105,46 @@ async function failJob(job: JobRow, message: string) {
       .eq("id", job.payload.episode_id)
       .eq("user_id", job.user_id);
   }
+  // A reel has no DB row to mark; instead a dead-letter gets a visible,
+  // create-only failure note in the vault (the plan's "reported outcome").
+  // Best-effort: the jobs.error column records it regardless.
+  if (job.kind === "reel") {
+    try {
+      const credentials = await readVaultCredentials(supabase, job.user_id);
+      if (credentials) {
+        const shortcode = String(job.payload.shortcode ?? "");
+        await createVaultFileWithRetry(
+          credentials,
+          (attempt) => reelFailureNotePath(shortcode, attempt),
+          buildReelFailureDocument({
+            url: String(job.payload.url ?? ""),
+            error: message,
+            stampIso: vancouverStamp(new Date()).created,
+          }),
+          `Reel failed: ${shortcode}`,
+        );
+      }
+    } catch {
+      // best-effort — the job row still carries the error
+    }
+  }
 }
 
 async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
   const supabase = createServiceClient();
+
+  if (job.kind === "reel") {
+    // The worker downloads the reel itself (yt-dlp); it only needs the URL.
+    // Transcript + frame notes + a cover thumbnail come back in the complete
+    // body — no signed URL to hand out.
+    return {
+      job: { id: job.id, kind: job.kind },
+      reel: {
+        url: String(job.payload.url ?? ""),
+        shortcode: String(job.payload.shortcode ?? ""),
+      },
+    };
+  }
 
   if (job.kind === "ocr") {
     const sourceId = String(job.payload.source_id ?? "");
@@ -268,6 +314,94 @@ async function completeTts(
   return { episode_id: episodeId };
 }
 
+const REEL_THUMB_EXT = new Set(["jpg", "jpeg", "png", "webp"]);
+
+async function completeReel(
+  job: JobRow,
+  body: {
+    title?: unknown;
+    caption?: unknown;
+    author?: unknown;
+    duration_sec?: unknown;
+    transcript?: unknown;
+    frames?: unknown;
+    thumbnail_base64?: unknown;
+    thumbnail_ext?: unknown;
+  },
+): Promise<Record<string, unknown>> {
+  const supabase = createServiceClient();
+  const transcript = typeof body.transcript === "string" ? body.transcript.trim() : "";
+  const caption = typeof body.caption === "string" ? body.caption.trim() : "";
+  // A reel with neither speech nor caption yielded nothing usable — fail so a
+  // retry can run rather than committing an empty record.
+  if (!transcript && !caption) throw new Error("no transcript or caption produced");
+
+  const url = String(job.payload.url ?? "");
+  const shortcode = String(job.payload.shortcode ?? "");
+  const author = typeof body.author === "string" ? body.author.trim() : null;
+  const durationSec =
+    Number.isFinite(Number(body.duration_sec)) && Number(body.duration_sec) > 0
+      ? Number(body.duration_sec)
+      : null;
+  const rawTitle = typeof body.title === "string" ? body.title.trim() : "";
+  const title = rawTitle || (author ? `Reel by ${author}` : `Reel ${shortcode}`).slice(0, 120);
+
+  const frames: ReelFrame[] = Array.isArray(body.frames)
+    ? body.frames
+        .filter((f): f is Record<string, unknown> => Boolean(f) && typeof f === "object")
+        .map((f) => ({
+          at: typeof f.at === "string" ? f.at : undefined,
+          describe: typeof f.describe === "string" ? f.describe : undefined,
+          text: typeof f.text === "string" ? f.text : undefined,
+        }))
+    : [];
+
+  const credentials = await readVaultCredentials(supabase, job.user_id);
+  if (!credentials) throw new Error(VAULT_NOT_CONFIGURED_MESSAGE);
+
+  // Cover thumbnail: committed to the vault as an attachment (like shared
+  // images), so the note embed resolves with no signed-URL expiry.
+  let thumbnailEmbed: string | null = null;
+  const thumbB64 = typeof body.thumbnail_base64 === "string" ? body.thumbnail_base64 : "";
+  const thumbExtRaw = typeof body.thumbnail_ext === "string" ? body.thumbnail_ext : "jpg";
+  const thumbExt = REEL_THUMB_EXT.has(thumbExtRaw.toLowerCase()) ? thumbExtRaw.toLowerCase() : "jpg";
+  if (thumbB64) {
+    const thumbWritten = await createVaultBase64FileWithRetry(
+      credentials,
+      (attempt) => reelThumbnailPath(title, thumbExt, attempt),
+      thumbB64,
+      `Reel thumbnail: ${title}`,
+    );
+    // Only embed a thumbnail that actually committed — a failed write must not
+    // leave a broken image link in the note.
+    thumbnailEmbed = thumbWritten.ok ? embedFor(thumbWritten.value.path) : null;
+  }
+
+  const document = buildReelDocument({
+    url,
+    title,
+    author,
+    caption: caption || null,
+    durationSec,
+    transcript,
+    frames,
+    thumbnailEmbed,
+    stampIso: vancouverStamp(new Date()).created,
+    via: "home worker",
+  });
+
+  const firstPath = reelNotePath(title, 1);
+  const written = await createVaultFileWithRetry(
+    credentials,
+    (attempt) => reelNotePath(title, attempt),
+    document,
+    `Reel record: ${title} (via home worker)`,
+  );
+  if (!written.ok) throw new Error(written.error);
+
+  return { vault_path: written.value?.path ?? firstPath };
+}
+
 export async function POST(request: Request) {
   if (!authorized(request)) return bad("unauthorized", 401);
 
@@ -321,7 +455,9 @@ export async function POST(request: Request) {
       const result =
         job.kind === "ocr"
           ? await completeOcr(job, body)
-          : await completeTts(job, body);
+          : job.kind === "reel"
+            ? await completeReel(job, body)
+            : await completeTts(job, body);
 
       await supabase
         .from("jobs")

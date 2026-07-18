@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-18-reel-capture",
+    date: "2026-07-18",
+    title: "reels become notes",
+    items: [
+      "share an instagram reel into mindboard and the home pc watches it for you — a full transcript, a description of what's on screen, and the caption text, all written into a new note in your brain.",
+      "already saved some reels? ask the copilot to process them — or just re-share them in.",
+      "runs entirely on your own pc, and never logs into instagram — it only reads reels you've shared in yourself.",
+    ],
+  },
+  {
     id: "2026-07-17-liquid-glass",
     date: "2026-07-17",
     title: "the board turned to glass",

@@ -28,6 +28,7 @@ import {
   spendLimitWarningBlock,
 } from "@/app/lib/mcp/writes";
 import { buildSpendLimitStatus } from "@/app/lib/mcp/reads";
+import { queueReel } from "@/app/lib/mcp/reels";
 import { lookupPricesByRefs } from "@/app/lib/shopping/price-lookup";
 import {
   buildShoppingList,
@@ -520,6 +521,19 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
         },
       },
       required: ["title", "summary_markdown", "source"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "process_reel",
+    description:
+      "Queue an Instagram reel the user saved into their second brain for the home worker to download, transcribe, and describe/OCR — the record lands as a new Reels/ note. Pass notePath (a vault note whose body holds the reel link) or a direct Instagram url. Requires the home worker. Executes immediately (queues a job; no confirm).",
+    input_schema: {
+      type: "object",
+      properties: {
+        notePath: { type: "string", description: "Vault note path holding the reel link." },
+        url: { type: "string", description: "Instagram reel/post URL, if not via a note." },
+      },
       additionalProperties: false,
     },
   },
@@ -1139,6 +1153,11 @@ export async function runAssistantTool(
       }
       case "capture_to_brain": {
         const outcome = await captureToBrainFor(supabase, userId, input);
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "result", content: outcome.value };
+      }
+      case "process_reel": {
+        const outcome = await queueReel(userId, input as { notePath?: string; url?: string });
         if (!outcome.ok) return { type: "error", error: outcome.error };
         return { type: "result", content: outcome.value };
       }

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId } from "@/app/lib/mcp/config";
+import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
+import { extractInstagramUrl } from "@/app/lib/reels/detect";
 import { readVaultCredentials } from "@/app/lib/brain/vault";
 import { VAULT_NOT_CONFIGURED_MESSAGE } from "@/app/lib/mcp/capture";
 import {
@@ -65,9 +66,32 @@ export async function POST(request: Request) {
   if (!written.ok) {
     return NextResponse.json({ error: written.error }, { status: 502 });
   }
+
+  // A shared Instagram reel/post link gets queued for the home worker to
+  // download + transcribe (docs/reel-capture-plan.md). Best-effort: a failed
+  // enqueue never fails the capture — the note (with the link) is already
+  // saved. Only when the worker serves this owner.
+  const reel = extractInstagramUrl(parsed.value.text);
+  let reelQueued = false;
+  if (reel && workerAllowedUserIds().includes(ownerUserId())) {
+    const { error } = await createServiceClient()
+      .from("jobs")
+      .insert({
+        user_id: ownerUserId(),
+        kind: "reel",
+        payload: {
+          url: reel.url,
+          shortcode: reel.shortcode,
+          source_note: written.value.path,
+        },
+      });
+    reelQueued = !error;
+  }
+
   return NextResponse.json({
     ok: true,
     path: written.value.path,
     ...(written.value.filePath ? { file_path: written.value.filePath } : {}),
+    ...(reelQueued ? { reel_queued: true } : {}),
   });
 }

@@ -19,6 +19,7 @@ Env:
   WORKER_POLL_SECONDS  default 30
 """
 
+import base64
 import json
 import os
 import platform
@@ -39,6 +40,24 @@ MINERU_CMD = os.environ.get("MINERU_CMD", "mineru -p {pdf} -o {outdir} -b hybrid
 VIBEVOICE_CMD = os.environ.get("VIBEVOICE_CMD", "")
 POLL_SECONDS = int(os.environ.get("WORKER_POLL_SECONDS", "30"))
 HEARTBEAT_SECONDS = 30
+
+# --- Reel capture (docs/reel-capture-plan.md) ---
+# yt-dlp download + whisper transcript are command templates (file in/out,
+# like MINERU_CMD). Vision (frame describe + OCR) runs through a local Ollama
+# VLM over HTTP — set VISION_MODEL empty to skip visuals and keep transcripts.
+FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+YTDLP_CMD = os.environ.get(
+    "YTDLP_CMD",
+    "yt-dlp --no-playlist --no-warnings --write-info-json -o {out}/reel.%(ext)s {url}",
+)
+# Transcript is the reel's core deliverable — required for reel jobs.
+WHISPER_CMD = os.environ.get(
+    "WHISPER_CMD",
+    "whisper-ctranslate2 {audio} --model large-v3 --output_format txt --output_dir {out}",
+)
+VISION_MODEL = os.environ.get("VISION_MODEL", "qwen3-vl:8b")  # "" disables visuals
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+REEL_MAX_FRAMES = int(os.environ.get("REEL_MAX_FRAMES", "10"))
 
 
 def log(message: str) -> None:
@@ -75,10 +94,13 @@ def upload_put(url: str, data: bytes, content_type: str) -> None:
         response.read()
 
 
-def run_command(template: str, **paths: str) -> None:
+def run_command(template: str, timeout: int | None = None, **paths: str) -> None:
     command = template.format(**paths)
     log(f"  $ {command}")
-    subprocess.run(command, shell=True, check=True)
+    # A timeout keeps a stuck child (a hung download/transcode) from blocking
+    # the single-worker queue forever; the killed child surfaces as a
+    # retryable failure. subprocess.run terminates the child on timeout.
+    subprocess.run(command, shell=True, check=True, timeout=timeout)
 
 
 def wav_duration_seconds(path: Path) -> int:
@@ -138,6 +160,141 @@ def handle_tts(claim: dict, workdir: Path) -> dict:
     return {"duration_sec": wav_duration_seconds(wav_file)}
 
 
+def ollama_describe(image_path: Path) -> dict:
+    """Ask the local VLM to describe a keyframe and read its on-screen text.
+    Returns {'describe': str, 'text': str}; empty dict on any failure so one
+    bad frame never sinks the job."""
+    prompt = (
+        "This is one frame from a short vertical video (an Instagram reel). "
+        "Reply with ONLY a JSON object: "
+        '{"describe": "<one sentence on what is happening visually>", '
+        '"text": "<all on-screen/overlay text, verbatim; empty string if none>"}'
+    )
+    body = json.dumps(
+        {
+            "model": VISION_MODEL,
+            "prompt": prompt,
+            "images": [base64.b64encode(image_path.read_bytes()).decode()],
+            "stream": False,
+            "format": "json",
+            "keep_alive": "30s",  # unload between jobs to free VRAM
+        }
+    ).encode()
+    try:
+        request = urllib.request.Request(
+            f"{OLLAMA_URL}/api/generate",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=180) as response:
+            payload = json.loads(response.read().decode())
+        parsed = json.loads(payload.get("response", "{}"))
+        return {
+            "describe": str(parsed.get("describe", "")).strip(),
+            "text": str(parsed.get("text", "")).strip(),
+        }
+    except Exception as error:  # noqa: BLE001 — visuals are best-effort
+        log(f"    vision frame failed: {str(error)[:120]}")
+        return {}
+
+
+def handle_reel(claim: dict, workdir: Path) -> dict:
+    if not WHISPER_CMD:
+        raise RuntimeError("WHISPER_CMD is not configured on this worker")
+    reel = claim["reel"]
+    url = reel["url"]
+    outdir = workdir / "out"
+    outdir.mkdir()
+    log(f"  downloading reel {reel.get('shortcode', '')}…")
+    run_command(YTDLP_CMD, timeout=300, out=str(outdir), url=url)
+
+    videos = [
+        p for p in outdir.iterdir()
+        if p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov")
+    ]
+    if not videos:
+        raise RuntimeError("yt-dlp downloaded no video (private or unavailable reel?)")
+    video = videos[0]
+
+    # Metadata from yt-dlp's info json (caption = the post's description).
+    title = author = caption = ""
+    duration_sec = 0
+    info_files = list(outdir.glob("*.info.json"))
+    if info_files:
+        try:
+            info = json.loads(info_files[0].read_text(encoding="utf-8"))
+            caption = str(info.get("description") or "").strip()
+            author = str(info.get("uploader") or info.get("channel") or "").strip()
+            duration_sec = int(info.get("duration") or 0)
+            title = str(info.get("title") or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Audio -> transcript (the core deliverable).
+    audio = workdir / "audio.wav"
+    run_command(
+        FFMPEG + " -y -i {video} -vn -ac 1 -ar 16000 {audio}",
+        timeout=300,
+        video=str(video),
+        audio=str(audio),
+    )
+    log("  transcribing…")
+    run_command(WHISPER_CMD, timeout=1800, audio=str(audio), out=str(outdir))
+    txts = sorted(outdir.glob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
+    transcript = txts[0].read_text(encoding="utf-8").strip() if txts else ""
+
+    # Keyframes are ADDITIVE: a valid transcript already exists, so a
+    # frame-extraction failure (odd codec, filter, platform quirk) must never
+    # sink the job — fall back, then give up on visuals and ship transcript-only.
+    frames_dir = workdir / "frames"
+    frames_dir.mkdir()
+    frame_files: list[Path] = []
+    try:
+        run_command(
+            FFMPEG + " -y -i {video} -vf select='gt(scene\\,0.3)',scale=512:-1 "
+            "-vsync vfr -frames:v {n} {frames}/f%03d.jpg",
+            timeout=300,
+            video=str(video),
+            n=str(REEL_MAX_FRAMES),
+            frames=str(frames_dir),
+        )
+        frame_files = sorted(frames_dir.glob("*.jpg"))
+        if not frame_files:  # static/short reel: no scene changes — sample evenly
+            run_command(
+                FFMPEG + " -y -i {video} -vf fps=1/2,scale=512:-1 -frames:v {n} {frames}/f%03d.jpg",
+                timeout=300,
+                video=str(video),
+                n=str(REEL_MAX_FRAMES),
+                frames=str(frames_dir),
+            )
+            frame_files = sorted(frames_dir.glob("*.jpg"))
+    except Exception as error:  # noqa: BLE001 — visuals are best-effort
+        log(f"  keyframe extraction failed, continuing transcript-only: {str(error)[:120]}")
+        frame_files = sorted(frames_dir.glob("*.jpg"))
+
+    frames: list[dict] = []
+    if VISION_MODEL and frame_files:
+        log(f"  reading {len(frame_files)} frame(s) with {VISION_MODEL}…")
+        for index, frame in enumerate(frame_files, start=1):
+            described = ollama_describe(frame)
+            if described.get("describe") or described.get("text"):
+                frames.append({"at": f"frame {index}", **described})
+
+    result: dict = {
+        "title": (title or (caption.split("\n")[0][:80] if caption else ""))[:120],
+        "caption": caption,
+        "author": author,
+        "duration_sec": duration_sec,
+        "transcript": transcript,
+        "frames": frames,
+    }
+    if frame_files:
+        result["thumbnail_base64"] = base64.b64encode(frame_files[0].read_bytes()).decode()
+        result["thumbnail_ext"] = "jpg"
+    return result
+
+
 def process(claim: dict) -> None:
     job = claim["job"]
     job_id, kind = job["id"], job["kind"]
@@ -149,7 +306,12 @@ def process(claim: dict) -> None:
 
     workdir = Path(tempfile.mkdtemp(prefix="mindboard-"))
     try:
-        result = handle_ocr(claim, workdir) if kind == "ocr" else handle_tts(claim, workdir)
+        if kind == "ocr":
+            result = handle_ocr(claim, workdir)
+        elif kind == "reel":
+            result = handle_reel(claim, workdir)
+        else:
+            result = handle_tts(claim, workdir)
         api({"op": "complete", "job_id": job_id, **result})
         log(f"done: {kind} job {job_id}")
     except Exception as error:  # noqa: BLE001 — report every failure to the app
