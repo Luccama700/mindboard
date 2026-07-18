@@ -49,6 +49,20 @@ try {
     throw new Error("Mindboard still appears to be on the login flow; authentication state was not saved");
   }
 
+  // The logged-out landing also lives at "/", so the pathname alone can't
+  // prove a session. The real proof is Supabase's session cookie (the
+  // code-verifier cookie is just an unfinished login attempt's breadcrumb).
+  const cookies = await context.cookies();
+  const hasSession = cookies.some(
+    (c) => /^sb-.+-auth-token(\.\d+)?$/.test(c.name) && !c.name.includes("code-verifier"),
+  );
+  if (!hasSession) {
+    throw new Error(
+      "no Supabase session cookie in this profile — the Google sign-in didn't complete. " +
+        "You should be seeing your live board (your tasks + the capture dock), not the landing page.",
+    );
+  }
+
   await context.storageState({ path: AUTH_FILE });
   console.log(`Saved Playwright auth state to ${AUTH_FILE}`);
 } finally {
