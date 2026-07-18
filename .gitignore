@@ -57,3 +57,9 @@ Exurb1a Voice.mp3
 overnight/.env
 overnight/logs/
 overnight/state.json
+
+# home worker local secrets
+worker/worker.env
+
+# home worker runtime logs
+worker/logs/

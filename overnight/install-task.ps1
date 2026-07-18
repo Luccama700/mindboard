@@ -1,5 +1,6 @@
 # Registers the nightly overnight-agent run in Windows Task Scheduler.
-# Run once from an elevated PowerShell:  .\overnight\install-task.ps1
+# Run once from a normal (non-elevated) PowerShell:  .\overnight\install-task.ps1
+# Runs windowless via VBScript wrappers, so no admin and no console flash.
 # Re-running replaces the existing task. Remove with:
 #   Unregister-ScheduledTask -TaskName "Mindboard Overnight Agent" -Confirm:$false
 
@@ -11,14 +12,16 @@ param(
 )
 
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$node = (Get-Command node -ErrorAction Stop).Source
-$script = Join-Path $repo "overnight\run.mjs"
+$wscript = "$env:SystemRoot\System32\wscript.exe"
 
 if (-not (Test-Path (Join-Path $repo "overnight\.env"))) {
   Write-Warning "overnight\.env not found - create it first (see overnight\README.md)."
 }
 
-$action = New-ScheduledTaskAction -Execute $node -Argument "`"$script`"" -WorkingDirectory $repo
+# Actions launch through windowless VBScript wrappers (agent-hidden.vbs /
+# poll-hidden.vbs) so a scheduled run never flashes a console window on the
+# desktop. The .vbs just Run(..., 0, False) the run-detached.cmd launcher.
+$action = New-ScheduledTaskAction -Execute $wscript -Argument "`"$repo\overnight\agent-hidden.vbs`"" -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Daily -At $Time
 # WakeToRun: the PC may be asleep at 4am; StartWhenAvailable catches a missed
 # slot if the machine was off entirely.
@@ -39,7 +42,7 @@ Register-ScheduledTask `
 # Second task: the on-demand poll. Every $PollMinutes minutes it runs
 # --if-requested, which exits immediately unless the user tapped
 # "run agent now" in the app since the last poll.
-$pollAction = New-ScheduledTaskAction -Execute $node -Argument "`"$script`" --if-requested" -WorkingDirectory $repo
+$pollAction = New-ScheduledTaskAction -Execute $wscript -Argument "`"$repo\overnight\poll-hidden.vbs`"" -WorkingDirectory $repo
 # [TimeSpan]::MaxValue serializes to an out-of-range XML duration; ten years
 # of repetition is effectively indefinite.
 $pollTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
