@@ -313,9 +313,20 @@ async function ensureProxy() {
 // guessed), stale takeover built in, and compromise detection — if this
 // process somehow loses the lock, the run aborts rather than double-running.
 const LOCK_FILE = join(HERE, ".lock");
+// The heartbeat is a timer, and every child command here runs through
+// spawnSync — a 90-minute build blocks the event loop for the whole call, so
+// no touch happens and the lock's mtime ages the full length of the longest
+// sync child. `stale` must exceed that, or an idle 5-minute poll "takes over"
+// the healthy lock mid-build and the holder aborts as compromised right
+// before finalization (exactly the 2026-07-17 double-build). Cost of the
+// margin: a genuinely crashed holder delays the next takeover by ~the same
+// window — the polls pick it up afterward.
+const LOCK_STALE_MS =
+  Math.max(CONFIG.buildTimeoutMs, CONFIG.planTimeoutMs, CONFIG.lifeTimeoutMs, 20 * 60_000) +
+  15 * 60_000;
 const LOCK_OPTS = {
   lockfilePath: LOCK_FILE,
-  stale: 10 * 60 * 1000, // heartbeat-refreshed; only a crashed holder goes stale
+  stale: LOCK_STALE_MS,
   update: 60 * 1000,
   onCompromised: (error) => {
     log(`FATAL: lock compromised (${error.message}) — aborting to avoid a double run`);
