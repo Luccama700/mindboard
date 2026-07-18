@@ -23,9 +23,19 @@ function loadDotEnv() {
 loadDotEnv();
 
 const url = (process.env.PERSONA_URL ?? process.env.MINDBOARD_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
-const browser = await chromium.launch({ headless: false });
-const context = await browser.newContext();
-const page = await context.newPage();
+// Google refuses OAuth in Playwright's bundled Chromium ("this browser or app
+// may not be secure"): it detects the automation banner. Sign in through the
+// real installed Chrome with that banner stripped, in a dedicated persistent
+// profile kept next to the auth file (never the user's own profile). The
+// captured cookies replay fine in the bundled headless engine afterwards.
+const PROFILE_DIR = join(HERE, "chrome-profile");
+const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+  channel: "chrome",
+  headless: false,
+  viewport: null,
+  ignoreDefaultArgs: ["--enable-automation"],
+});
+const page = context.pages()[0] ?? (await context.newPage());
 const prompt = createInterface({ input, output });
 
 try {
@@ -43,5 +53,5 @@ try {
   console.log(`Saved Playwright auth state to ${AUTH_FILE}`);
 } finally {
   prompt.close();
-  await browser.close();
+  await context.close();
 }

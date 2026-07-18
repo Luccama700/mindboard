@@ -58,4 +58,5 @@ overnight/.env
 overnight/logs/
 overnight/state.json
 overnight/persona/auth-state.json
+overnight/persona/chrome-profile/
 overnight/persona/screenshots/
