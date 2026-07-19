@@ -24,6 +24,14 @@ export function isInstagramUrl(text: string): boolean {
   return extractInstagramUrl(text) !== null;
 }
 
+// The first ![[embed]] target in markdown (dropping any |alias or #heading).
+// Older link captures store the shared URL in an embedded attachment rather
+// than the note body, so the reel resolver follows this to the attachment.
+export function firstEmbed(markdown: string): string | null {
+  const match = String(markdown ?? "").match(/!\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/);
+  return match ? match[1].trim() : null;
+}
+
 // Vault note path for a reel record: Reels/<safe title>[ -N].md, sharing the
 // create-only writer + traversal-safe sanitizer with capture_to_brain.
 export function reelNotePath(title: string, attempt = 1): string {

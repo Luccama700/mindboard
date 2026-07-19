@@ -8,11 +8,12 @@ import { createServiceClient } from "@/utils/supabase/service";
 import { workerAllowedUserIds } from "@/app/lib/mcp/config";
 import type { Result } from "@/app/lib/mcp/validate";
 import {
+  readVaultAttachmentText,
   readVaultCredentials,
   readVaultNoteRaw,
   vaultTag,
 } from "@/app/lib/brain/vault";
-import { extractInstagramUrl } from "@/app/lib/reels/detect";
+import { extractInstagramUrl, firstEmbed } from "@/app/lib/reels/detect";
 
 // Queue a reel for the home worker. Pass a direct `url`, or a `notePath` to
 // a vault note whose body holds the reel link (the backlog / retry path).
@@ -34,6 +35,15 @@ export async function queueReel(
     const note = await readVaultNoteRaw(credentials, vaultTag(userId), input.notePath.trim());
     if (!note) return { ok: false, error: `no note at "${input.notePath}"` };
     ref = extractInstagramUrl(note.markdown);
+    // Older captures embed the shared link as a .txt attachment rather than
+    // inlining it; follow the embed to the attachment to recover the URL.
+    if (!ref) {
+      const embed = firstEmbed(note.markdown);
+      if (embed) {
+        const attachment = await readVaultAttachmentText(credentials, embed);
+        if (attachment) ref = extractInstagramUrl(attachment);
+      }
+    }
     sourceNote = note.path;
   }
 

@@ -5,6 +5,7 @@ import {
   buildReelFailureDocument,
   embedFor,
   extractInstagramUrl,
+  firstEmbed,
   isInstagramUrl,
   reelFailureNotePath,
   reelNotePath,
@@ -35,6 +36,20 @@ describe("extractInstagramUrl", () => {
   test("finds the link inside a longer captured note body", () => {
     const note = "Saved from Instagram\n\nhttps://www.instagram.com/reel/GfX_1/\n\n#cooking";
     expect(extractInstagramUrl(note)?.shortcode).toBe("GfX_1");
+  });
+});
+
+describe("firstEmbed (attachment fallback)", () => {
+  test("pulls the embed target from an older attachment-style capture", () => {
+    expect(firstEmbed("---\ntype: capture\n---\n\n![[2026-07-14 0524 Instagram.txt]]\n")).toBe(
+      "2026-07-14 0524 Instagram.txt",
+    );
+    expect(firstEmbed("![[2026-07-14 0517 Instagram]]")).toBe("2026-07-14 0517 Instagram");
+  });
+
+  test("drops an alias or heading and returns null when there's no embed", () => {
+    expect(firstEmbed("![[clip.txt|my clip]]")).toBe("clip.txt");
+    expect(firstEmbed("just a note with no embed")).toBeNull();
   });
 });
 

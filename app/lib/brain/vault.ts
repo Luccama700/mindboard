@@ -258,6 +258,36 @@ export async function readVaultNoteRaw(
   return { path: entry.path, markdown: await fetchBlob(credentials, entry.sha) };
 }
 
+// Read a non-markdown attachment's text by its embed basename (![[name]]).
+// fetchTree filters to markdown, so this does its own unfiltered tree fetch
+// and matches the basename exactly or as a text file (an extension-less embed
+// resolves to a sniffed .txt). Restricted to text extensions so a same-named
+// image/video is never pulled. Used to recover a reel URL that an older
+// capture stored in a .txt attachment beside the note.
+export async function readVaultAttachmentText(
+  credentials: VaultCredentials,
+  embedName: string,
+): Promise<string | null> {
+  const target = embedName.trim().toLowerCase();
+  if (!target) return null;
+  const candidates = [target, `${target}.txt`, `${target}.text`, `${target}.md`];
+
+  const url = `https://api.github.com/repos/${credentials.repo}/git/trees/${encodeURIComponent(credentials.branch)}?recursive=1`;
+  const response = await fetch(url, {
+    headers: githubHeaders(credentials.token),
+    cache: "no-store",
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { tree?: TreeEntry[] };
+  const entry = (payload.tree ?? []).find((e) => {
+    if (e.type !== "blob") return false;
+    const base = (e.path.split("/").pop() ?? "").toLowerCase();
+    return candidates.includes(base);
+  });
+  if (!entry) return null;
+  return fetchBlob(credentials, entry.sha);
+}
+
 export function findNote(
   corpus: VaultCorpus,
   path: string,
