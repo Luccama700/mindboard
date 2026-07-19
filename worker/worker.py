@@ -170,26 +170,37 @@ def ollama_describe(image_path: Path) -> dict:
         '{"describe": "<one sentence on what is happening visually>", '
         '"text": "<all on-screen/overlay text, verbatim; empty string if none>"}'
     )
+    # Vision-language models on Ollama must use /api/chat with images in the
+    # message — /api/generate returns an empty response for them.
     body = json.dumps(
         {
             "model": VISION_MODEL,
-            "prompt": prompt,
-            "images": [base64.b64encode(image_path.read_bytes()).decode()],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [base64.b64encode(image_path.read_bytes()).decode()],
+                }
+            ],
             "stream": False,
             "format": "json",
             "keep_alive": "30s",  # unload between jobs to free VRAM
+            # qwen3-vl defaults to a 128K context whose KV cache overflows a
+            # 16 GB GPU (→ slow CPU offload). One image + a short prompt needs
+            # only a few K tokens, so cap it and keep the model fully on GPU.
+            "options": {"num_ctx": 8192},
         }
     ).encode()
     try:
         request = urllib.request.Request(
-            f"{OLLAMA_URL}/api/generate",
+            f"{OLLAMA_URL}/api/chat",
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=180) as response:
             payload = json.loads(response.read().decode())
-        parsed = json.loads(payload.get("response", "{}"))
+        parsed = json.loads(payload.get("message", {}).get("content") or "{}")
         return {
             "describe": str(parsed.get("describe", "")).strip(),
             "text": str(parsed.get("text", "")).strip(),
@@ -244,34 +255,36 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     txts = sorted(outdir.glob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
     transcript = txts[0].read_text(encoding="utf-8").strip() if txts else ""
 
-    # Keyframes are ADDITIVE: a valid transcript already exists, so a
-    # frame-extraction failure (odd codec, filter, platform quirk) must never
-    # sink the job — fall back, then give up on visuals and ship transcript-only.
+    # Keyframes are ADDITIVE: a valid transcript already exists, so frame
+    # extraction must never sink the job. Try scene-change first (best frames),
+    # then even-spaced sampling — the scene filter chokes on some codecs
+    # (variable frame rate etc.) that fps handles fine, so a FAILURE of one
+    # method falls through to the next, not just a zero-frame result.
     frames_dir = workdir / "frames"
     frames_dir.mkdir()
     frame_files: list[Path] = []
-    try:
-        run_command(
-            FFMPEG + " -y -i {video} -vf select='gt(scene\\,0.3)',scale=512:-1 "
-            "-vsync vfr -frames:v {n} {frames}/f%03d.jpg",
-            timeout=300,
-            video=str(video),
-            n=str(REEL_MAX_FRAMES),
-            frames=str(frames_dir),
-        )
-        frame_files = sorted(frames_dir.glob("*.jpg"))
-        if not frame_files:  # static/short reel: no scene changes — sample evenly
+    keyframe_methods = (
+        FFMPEG + " -y -i {video} -vf select='gt(scene\\,0.3)',scale=512:-1 "
+        "-vsync vfr -frames:v {n} {frames}/f%03d.jpg",
+        FFMPEG + " -y -i {video} -vf fps=1/2,scale=512:-1 -frames:v {n} {frames}/f%03d.jpg",
+    )
+    for method in keyframe_methods:
+        try:
             run_command(
-                FFMPEG + " -y -i {video} -vf fps=1/2,scale=512:-1 -frames:v {n} {frames}/f%03d.jpg",
+                method,
                 timeout=300,
                 video=str(video),
                 n=str(REEL_MAX_FRAMES),
                 frames=str(frames_dir),
             )
-            frame_files = sorted(frames_dir.glob("*.jpg"))
-    except Exception as error:  # noqa: BLE001 — visuals are best-effort
-        log(f"  keyframe extraction failed, continuing transcript-only: {str(error)[:120]}")
+        except Exception as error:  # noqa: BLE001 — visuals are best-effort
+            log(f"  keyframe method failed, trying next: {str(error)[:100]}")
+            continue
         frame_files = sorted(frames_dir.glob("*.jpg"))
+        if frame_files:
+            break
+    if not frame_files:
+        log("  no keyframes extracted — continuing transcript-only")
 
     frames: list[dict] = []
     if VISION_MODEL and frame_files:
