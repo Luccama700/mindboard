@@ -6,7 +6,12 @@ import { useMemo, useState } from "react";
 import type { CalendarEvent } from "@/utils/google/calendar";
 import { rescheduleEvent } from "@/app/actions/calendar";
 import { updateTask } from "@/app/actions/tasks";
+import { freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
 import type { ScheduleVitals } from "@/app/lib/snapshots/schedule";
+import {
+  busyFromDayItems,
+  planUntimedOccurrences,
+} from "@/app/lib/snapshots/gap-plan";
 import type { CalendarRecurringTask } from "@/app/lib/data/dashboard";
 import { formatRecurrence, taskRuleLandsOn } from "@/app/lib/recurrence";
 import type { CalendarItem } from "./calendar-types";
@@ -272,10 +277,59 @@ export function DashboardCalendar({
             color: rule.group_color ?? "#b5ff3c",
             dueTime: rule.due_time,
             durationMin: rule.duration_min,
+            plannedStart: null,
+            plannedMinutes: null,
             scheduleLabel: formatRecurrence(rule),
             done: completed.has(`${rule.id}:${key}`),
           });
           map.set(key, items);
+        }
+      }
+
+      // Soft-placement pass: advisory only, never touches busy/free math. For
+      // each day from today forward, drop that day's untimed, not-done
+      // occurrences into its free gaps and stamp plannedStart/plannedMinutes on
+      // the matching rtask items. Past days stay unplaced (null).
+      const ruleById = new Map(recurringTasks.map((r) => [r.id, r]));
+      const now = new Date();
+      for (const date of grid) {
+        const key = toDateKey(date);
+        if (key < today) continue;
+        const dayItems = map.get(key);
+        if (!dayItems) continue;
+        const untimed = dayItems.filter(
+          (item): item is Extract<CalendarItem, { kind: "rtask" }> =>
+            item.kind === "rtask" &&
+            item.dueTime === null &&
+            !item.done,
+        );
+        if (untimed.length === 0) continue;
+        const intervals = freeIntervalsForDay({
+          events: busyFromDayItems(key, dayItems),
+          dateKey: key,
+          now,
+          wakeStartHour,
+          wakeEndHour,
+        });
+        const slots = planUntimedOccurrences({
+          rules: untimed.map((item) => {
+            const rule = ruleById.get(item.ruleId);
+            return {
+              id: item.ruleId,
+              priority: rule?.priority ?? "med",
+              duration_min: item.durationMin,
+              created_at: rule?.created_at ?? "",
+            };
+          }),
+          intervals,
+          dateKey: key,
+        });
+        for (const slot of slots) {
+          const item = untimed.find((i) => i.ruleId === slot.ruleId);
+          if (item) {
+            item.plannedStart = `${slot.start}:00`;
+            item.plannedMinutes = slot.minutes;
+          }
         }
       }
     }
@@ -291,6 +345,9 @@ export function DashboardCalendar({
     recurringTasks,
     recurringCompletions,
     grid,
+    today,
+    wakeStartHour,
+    wakeEndHour,
   ]);
 
   async function commitEventReschedule(
@@ -702,7 +759,13 @@ export function DashboardCalendar({
                         : item.kind === "finance"
                           ? `${item.category} · ${formatSignedChange(item.amount, item.direction, item.currency)}`
                           : item.kind === "rtask"
-                            ? `↻ ${item.scheduleLabel} · ${item.dueTime.slice(0, 5)}${item.done ? " · done" : ""}`
+                            ? `↻ ${item.scheduleLabel} · ${
+                                item.dueTime
+                                  ? `⌚ ${item.dueTime.slice(0, 5)}`
+                                  : item.plannedStart
+                                    ? `~${item.plannedStart.slice(0, 5)}`
+                                    : "anytime"
+                              }${item.done ? " · done" : ""}`
                             : `${item.calendar} · ${formatEventRange(item)}`}
                     </p>
                   </button>

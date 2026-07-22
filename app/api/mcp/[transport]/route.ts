@@ -562,7 +562,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: edit a repeating task",
         description:
-          "Propose editing a repeating-task rule: rename, reschedule (pass frequency plus its fields — weekly needs weekdays, monthly dayOfMonth, custom intervalDays), change/clear the time block (dueTime null clears), group, notes, priority. Find the ruleId via list_recurring_tasks. Returns a preview + proposalId; call confirm_action to apply.",
+          "Propose editing a repeating-task rule: rename, reschedule (pass frequency plus its fields — weekly needs weekdays, monthly dayOfMonth, custom intervalDays), change/clear the time block (dueTime null clears the time only), set/clear durationMin (independent of dueTime — a duration on an untimed routine lets the planner auto-place it into a free gap), group, notes, priority. Find the ruleId via list_recurring_tasks. Returns a preview + proposalId; call confirm_action to apply.",
         inputSchema: {
           ruleId: z.string(),
           title: z.string().optional(),
@@ -805,7 +805,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: create a repeating task",
         description:
-          "Propose a repeating task rule for habits like \"lunch every day 12:30\" or \"gym mon/wed/fri 17:00\" — do NOT create N individual tasks. Occurrences appear automatically each day they land; missed days skip silently. weekly needs weekdays (0=sun … 6=sat, several allowed); monthly needs dayOfMonth; custom needs intervalDays (startDate defaults to today). dueTime (HH:MM) makes it a calendar block that counts against free time. Returns a preview + proposalId; call confirm_action to apply.",
+          "Propose a repeating task rule for habits like \"lunch every day 12:30\" or \"gym mon/wed/fri 17:00\" — do NOT create N individual tasks. Occurrences appear automatically each day they land; missed days skip silently. weekly needs weekdays (0=sun … 6=sat, several allowed); monthly needs dayOfMonth; custom needs intervalDays (startDate defaults to today). dueTime (HH:MM) makes it a calendar block that counts against free time; durationMin is independent — set it on an untimed routine and the planner uses it to auto-place the chore into a free gap. Returns a preview + proposalId; call confirm_action to apply.",
         inputSchema: {
           title: z.string(),
           groupId: z.string().nullish(),

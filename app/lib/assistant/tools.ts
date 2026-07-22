@@ -182,7 +182,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "propose_create_recurring_task",
     description:
-      "Propose a repeating task rule for habits like 'lunch every day 12:30' or 'gym mon/wed/fri at 5pm' — do NOT create N individual tasks for a recurring ask. Occurrences appear automatically; missed days skip silently. weekly needs weekdays (0=sun … 6=sat, several allowed); monthly needs dayOfMonth; custom needs intervalDays. dueTime makes it a calendar block that counts against free time. User must confirm.",
+      "Propose a repeating task rule for habits like 'lunch every day 12:30' or 'gym mon/wed/fri at 5pm' — do NOT create N individual tasks for a recurring ask. Occurrences appear automatically; missed days skip silently. weekly needs weekdays (0=sun … 6=sat, several allowed); monthly needs dayOfMonth; custom needs intervalDays. dueTime makes it a calendar block that counts against free time; durationMin is independent — set it on an untimed routine and the planner uses it to auto-place the chore into a free gap. User must confirm.",
     input_schema: {
       type: "object",
       properties: {

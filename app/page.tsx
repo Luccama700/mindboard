@@ -31,10 +31,12 @@ import {
   getRecurringCompletions,
 } from "./lib/data/recurring-tasks";
 import { getUserPreferences } from "./lib/data/settings";
-import { occurrenceBusyEvents } from "./lib/recurrence";
+import { occurrenceBusyEvents, taskRuleLandsOn } from "./lib/recurrence";
 import { financeSnapshot } from "./lib/snapshots/finance";
+import { planUntimedOccurrences } from "./lib/snapshots/gap-plan";
 import {
   freeGaps,
+  freeIntervalsForDay,
   scheduleSnapshot,
   type FreeGap,
 } from "./lib/snapshots/schedule";
@@ -153,6 +155,39 @@ const getStreamData = cache(
       timeZone,
     });
 
+    // Advisory soft placement: virtually drop today's untimed, not-done
+    // recurring occurrences into today's free gaps. Display only — never fed
+    // back into the busy/free math above.
+    const completedRecurringToday = new Set(
+      recurringCompletions.map((c) => c.rule_id),
+    );
+    const todayDate = new Date(`${today}T00:00:00`);
+    const untimedTodayRules = recurringTasks.filter(
+      (r) =>
+        r.due_time === null &&
+        taskRuleLandsOn(r, todayDate) &&
+        !completedRecurringToday.has(r.id),
+    );
+    const plannedStartByRule = new Map(
+      planUntimedOccurrences({
+        rules: untimedTodayRules.map((r) => ({
+          id: r.id,
+          priority: r.priority,
+          duration_min: r.duration_min,
+          created_at: r.created_at,
+        })),
+        intervals: freeIntervalsForDay({
+          events: busyEvents,
+          dateKey: today,
+          now,
+          wakeStartHour: prefs.wake_start_hour,
+          wakeEndHour: prefs.wake_end_hour,
+          timeZone,
+        }),
+        dateKey: today,
+      }).map((slot) => [slot.ruleId, slot.start]),
+    );
+
     const bills: StreamBillInput[] = recurringExpenses.map((expense) => ({
       id: expense.id,
       name: expense.name,
@@ -190,9 +225,8 @@ const getStreamData = cache(
       })),
       bills,
       recurringTasks,
-      completedRecurringToday: new Set(
-        recurringCompletions.map((c) => c.rule_id),
-      ),
+      completedRecurringToday,
+      plannedStartByRule,
       items: items.map((item) => ({
         id: item.id,
         name: item.name,

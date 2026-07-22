@@ -9,7 +9,12 @@ import {
   updateTask,
 } from "@/app/actions/tasks";
 import { updateInventoryItem } from "@/app/actions/inventory";
-import { completeRecurringOccurrence } from "@/app/actions/recurring-tasks";
+import {
+  archiveRecurringTask,
+  completeRecurringOccurrence,
+  updateRecurringTask,
+  type RecurringTaskInput,
+} from "@/app/actions/recurring-tasks";
 import type { FreeGap } from "@/app/lib/snapshots/schedule";
 import {
   formatEstimate,
@@ -27,6 +32,7 @@ import {
   type SpendAccount,
   type SpendCategory,
 } from "./stream-sheets";
+import { RecurringEditPanel } from "./recurring-edit-panel";
 import type { Task } from "./types";
 
 type SectionKey = "now" | "next" | "later" | "loose";
@@ -74,6 +80,8 @@ function CardRow({
   onBuyTask,
   onAdjust,
   onOpenLog,
+  onRtaskUpdate,
+  onRtaskArchive,
   boughtIds,
 }: {
   card: StreamCard;
@@ -92,11 +100,14 @@ function CardRow({
   onBuyTask: (card: StreamCard) => void;
   onAdjust: (card: StreamCard, delta: number) => void;
   onOpenLog: () => void;
+  onRtaskUpdate: (card: StreamCard, patch: Partial<RecurringTaskInput>) => void;
+  onRtaskArchive: (card: StreamCard) => void;
   boughtIds: Set<string>;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [dx, setDx] = useState(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const today = todayISO();
@@ -111,7 +122,7 @@ function CardRow({
     cardTask.due_date < today;
 
   function onTouchStart(e: React.TouchEvent) {
-    if (!isTask) return;
+    if (!isTask || editOpen) return;
     touchStart.current = {
       x: e.touches[0].clientX,
       y: e.touches[0].clientY,
@@ -119,7 +130,7 @@ function CardRow({
   }
 
   function onTouchMove(e: React.TouchEvent) {
-    if (!isTask || !touchStart.current) return;
+    if (!isTask || editOpen || !touchStart.current) return;
     const deltaX = e.touches[0].clientX - touchStart.current.x;
     const deltaY = e.touches[0].clientY - touchStart.current.y;
     if (Math.abs(deltaY) > Math.abs(deltaX)) return;
@@ -127,7 +138,7 @@ function CardRow({
   }
 
   function onTouchEnd() {
-    if (!isTask) return;
+    if (!isTask || editOpen) return;
     if (dx > 80) onDone(card);
     else if (dx < -80 && card.entity.kind === "task") setSnoozeOpen(true);
     setDx(0);
@@ -401,7 +412,7 @@ function CardRow({
   }
   const factStruck = leaving === "done";
 
-  const restMax = isFocus ? "max-h-[40rem]" : "max-h-40";
+  const restMax = isFocus || editOpen ? "max-h-[40rem]" : "max-h-40";
   const leaveClass =
     leaving === "missed"
       ? "overflow-hidden max-h-0 opacity-0 translate-y-1 scale-[.98] duration-[400ms]"
@@ -416,6 +427,22 @@ function CardRow({
   const innerClass = isFocus
     ? `glass-panel rounded-panel ${tick} p-4 ${swipeBg}`
     : `${tick} pl-3 pr-1 py-2 ${swipeBg}`;
+
+  const rtaskRule =
+    card.entity.kind === "rtask"
+      ? {
+          id: card.entity.ruleId,
+          title: card.entity.title,
+          due_time: card.entity.dueTime,
+          duration_min: card.entity.durationMin,
+          priority: card.entity.priority,
+          frequency: card.entity.frequency,
+          weekdays: card.entity.weekdays,
+          day_of_month: card.entity.day_of_month,
+          interval_days: card.entity.interval_days,
+          group_id: card.entity.group_id,
+        }
+      : null;
 
   return (
     <div
@@ -465,17 +492,38 @@ function CardRow({
               <span className="text-muted shrink-0" aria-hidden>
                 {card.glyph}
               </span>
-              <span
-                className={`${factStruck ? "line-through text-muted" : ""} ${
-                  taskTier === 2 ? "font-medium" : ""
-                } truncate`}
-              >
-                {card.fact}
-              </span>
+              {rtaskRule ? (
+                <button
+                  type="button"
+                  onClick={() => setEditOpen((v) => !v)}
+                  aria-expanded={editOpen}
+                  className={`min-w-0 text-left truncate ${
+                    factStruck ? "line-through text-muted" : ""
+                  } ${editOpen ? "text-accent" : ""}`}
+                >
+                  {card.fact}
+                </button>
+              ) : (
+                <span
+                  className={`${factStruck ? "line-through text-muted" : ""} ${
+                    taskTier === 2 ? "font-medium" : ""
+                  } truncate`}
+                >
+                  {card.fact}
+                </span>
+              )}
               {card.meta && (
                 <span className="text-meta text-muted shrink-0">{card.meta}</span>
               )}
             </p>
+            {rtaskRule && editOpen && (
+              <RecurringEditPanel
+                rule={rtaskRule}
+                groups={groups}
+                onUpdate={(patch) => onRtaskUpdate(card, patch)}
+                onArchive={() => onRtaskArchive(card)}
+              />
+            )}
             {actions.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 mt-1.5">
                 {actions}
@@ -530,6 +578,10 @@ export function StreamClient({
   const [regrouped, setRegrouped] = useState<
     Record<string, { name: string; color: string } | null>
   >({});
+  // Optimistic rtask title: the card's fact re-labels the moment a new title
+  // commits, before the revalidated snapshot lands. Other rtask edits (time,
+  // duration, frequency, priority, group) settle via that snapshot refresh.
+  const [retitled, setRetitled] = useState<Record<string, string>>({});
   const [, startTransition] = useTransition();
 
   // Entrance stagger runs on the first client mount only — later snapshot
@@ -572,6 +624,7 @@ export function StreamClient({
     setPrevSnapshot(snapshot);
     if (Object.keys(retimed).length > 0) setRetimed({});
     if (Object.keys(regrouped).length > 0) setRegrouped({});
+    if (Object.keys(retitled).length > 0) setRetitled({});
     // Drop optimistic captures the server snapshot now owns, so the temporary
     // card doesn't linger beside the real one.
     if (extraNext.some((c) => snapshotIds.has(c.id))) {
@@ -720,6 +773,29 @@ export function StreamClient({
     });
   }
 
+  function onRtaskUpdate(card: StreamCard, patch: Partial<RecurringTaskInput>) {
+    if (card.entity.kind !== "rtask") return;
+    const { ruleId } = card.entity;
+    if (patch.title) {
+      const title = patch.title;
+      setRetitled((prev) => ({ ...prev, [card.id]: title }));
+    }
+    startTransition(async () => {
+      await updateRecurringTask({ id: ruleId, ...patch });
+    });
+  }
+
+  function onRtaskArchive(section: SectionKey) {
+    return (card: StreamCard) => {
+      if (card.entity.kind !== "rtask") return;
+      const { ruleId } = card.entity;
+      setHidden((prev) => new Set(prev).add(`${section}:${card.id}`));
+      startTransition(async () => {
+        await archiveRecurringTask(ruleId);
+      });
+    };
+  }
+
   function onBuyTask(card: StreamCard) {
     if (card.entity.kind !== "item") return;
     const name = card.entity.name;
@@ -767,6 +843,7 @@ export function StreamClient({
       .filter((c) => !hidden.has(`${section}:${c.id}`))
       .map((c) => {
         let card = retimed[c.id] ? { ...c, meta: retimed[c.id] } : c;
+        if (retitled[c.id]) card = { ...card, fact: retitled[c.id] };
         const override = regrouped[c.id];
         if (override !== undefined && card.entity.kind === "task") {
           card = {
@@ -832,6 +909,8 @@ export function StreamClient({
               onBuyTask={onBuyTask}
               onAdjust={onAdjust}
               onOpenLog={() => setLogOpen(true)}
+              onRtaskUpdate={onRtaskUpdate}
+              onRtaskArchive={onRtaskArchive(key)}
               boughtIds={bought}
             />
           ))}

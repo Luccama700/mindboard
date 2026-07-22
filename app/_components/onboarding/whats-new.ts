@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-22-routines-in-place",
+    date: "2026-07-22",
+    title: "your routines find their own slot",
+    items: [
+      "give a repeating task a duration but no fixed time and i look for a free stretch in your day to fit it — a ghost block shows up on the week grid where it could land, and the stream tags it with a ~⌚ hint.",
+      "editing what repeats no longer means a trip to the tasks page — tap a repeating card right in the stream and the full editor opens in place: time, duration, how often, priority, group, or stop it entirely.",
+      "the duration you set is what drives the auto-placement, so a 45m routine reserves 45m of free time.",
+    ],
+  },
+  {
     id: "2026-07-22-missed-and-history",
     date: "2026-07-22",
     title: "nothing due-today slips past you",

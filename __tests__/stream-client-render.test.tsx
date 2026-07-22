@@ -2,7 +2,7 @@
 // must actually appear. Server actions and sheets are stubbed — this tests
 // the client rendering pipeline (visible(), overrides, sections), not writes.
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { StreamCard, StreamSnapshot } from "@/app/lib/snapshots/stream";
 import type { Task } from "@/app/_components/types";
 
@@ -16,6 +16,8 @@ vi.mock("@/app/actions/inventory", () => ({
 }));
 vi.mock("@/app/actions/recurring-tasks", () => ({
   completeRecurringOccurrence: vi.fn(async () => ({ error: null })),
+  updateRecurringTask: vi.fn(async () => ({ error: null })),
+  archiveRecurringTask: vi.fn(async () => ({ error: null })),
 }));
 vi.mock("@/app/_components/stream-sheets", () => ({
   DailyLogSheet: () => null,
@@ -62,6 +64,34 @@ function taskCard(
         group_name: group?.name ?? null,
         group_color: group?.color ?? null,
       },
+    },
+  } as StreamCard;
+}
+
+function rtaskCard(id: string, title: string): StreamCard {
+  return {
+    id: `rtask:${id}:2026-07-08`,
+    domain: "task",
+    glyph: "↻",
+    fact: title,
+    meta: "today · every day",
+    entity: {
+      kind: "rtask",
+      ruleId: id,
+      dateKey: "2026-07-08",
+      title,
+      dueTime: null,
+      durationMin: 45,
+      frequency: "daily",
+      weekdays: null,
+      day_of_month: null,
+      interval_days: null,
+      start_date: null,
+      priority: "med",
+      group_id: null,
+      group_name: null,
+      hasNotes: false,
+      plannedStart: null,
     },
   } as StreamCard;
 }
@@ -153,6 +183,18 @@ describe("StreamClient rendering", () => {
       next: [],
     });
     expect(screen.queryByText("incomplete")).toBeNull();
+  });
+
+  test("an rtask card title toggle opens the edit panel with stop repeating", () => {
+    renderStream({
+      ...snapshot,
+      now: [],
+      next: [rtaskCard("r1", "morning stretch")],
+    });
+    // Collapsed: no panel yet.
+    expect(screen.queryByText("stop repeating")).toBeNull();
+    fireEvent.click(screen.getByText("morning stretch"));
+    expect(screen.getByText("stop repeating")).toBeTruthy();
   });
 
   test("a tier-3 task renders the focus treatment (glass panel + effort/lateness meta)", () => {

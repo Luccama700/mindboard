@@ -35,15 +35,19 @@ export type CalendarItem =
       category: string;
     }
   | {
-      // A virtual occurrence of a timed recurring task: rendered as a dashed,
-      // non-draggable block; untimed rules never enter the calendar.
+      // A virtual occurrence of a recurring task. Timed rules render as a
+      // dashed, non-draggable block; untimed rules ride the due row (and are
+      // soft-placed by the gap planner). plannedStart/plannedMinutes are filled
+      // by that planner — always null until it lands.
       kind: "rtask";
       id: string; // `rtask:${ruleId}:${dateKey}`
       ruleId: string;
       title: string;
       color: string;
-      dueTime: string; // "HH:MM:SS"
+      dueTime: string | null; // "HH:MM:SS"; null = untimed
       durationMin: number | null;
+      plannedStart: string | null; // "HH:MM:SS" advisory placement
+      plannedMinutes: number | null;
       scheduleLabel: string; // "every day", "mon/wed/fri", …
       done: boolean;
     };

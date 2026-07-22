@@ -55,7 +55,10 @@ export type StreamRecurringTaskInput = TaskRecurrence & {
   due_time: string | null;
   duration_min: number | null;
   priority: "low" | "med" | "high";
+  group_id: string | null;
   group_name: string | null;
+  group_color: string | null;
+  notes: string | null;
 };
 
 export type StreamSection = "now" | "next" | "later" | "loose";
@@ -77,6 +80,16 @@ export type StreamEntity =
       title: string;
       dueTime: string | null;
       durationMin: number | null;
+      frequency: TaskRecurrence["frequency"];
+      weekdays: number[] | null;
+      day_of_month: number | null;
+      interval_days: number | null;
+      start_date: string | null;
+      priority: "low" | "med" | "high";
+      group_id: string | null;
+      group_name: string | null;
+      hasNotes: boolean;
+      plannedStart: string | null;
     }
   | { kind: "event"; id: string; summary: string; start: string; end: string }
   | { kind: "bill"; id: string; name: string; amount: number; dateKey: string }
@@ -127,6 +140,10 @@ export type StreamInput = {
   bills: StreamBillInput[];
   recurringTasks: StreamRecurringTaskInput[];
   completedRecurringToday: Set<string>; // rule ids checked off today
+  // Advisory soft placements for untimed occurrences (rule id -> "HH:MM"),
+  // computed by the gap planner. Display only: a planned time never escalates a
+  // card to NOW (that stays keyed on real due_time).
+  plannedStartByRule?: Map<string, string>;
   items: StreamItemInput[];
   usagesByItem: Record<string, UsageRule[]>;
   goals: StreamGoalInput[];
@@ -274,11 +291,16 @@ function taskCard(task: TaskWithGroup, today: string): StreamCard {
 function rtaskCard(
   rule: StreamRecurringTaskInput,
   today: string,
+  plannedStart: string | null = null,
 ): StreamCard {
-  const parts: string[] = [
-    rule.due_time ? `today ⌚ ${shortTime(rule.due_time)}` : "today",
-    formatRecurrence(rule),
-  ];
+  // Timed rules show their fixed time; an untimed rule that the gap planner
+  // soft-placed shows an advisory "~⌚"; a bare untimed rule just reads "today".
+  const timeLabel = rule.due_time
+    ? `today ⌚ ${shortTime(rule.due_time)}`
+    : plannedStart
+      ? `today ~⌚ ${shortTime(plannedStart)}`
+      : "today";
+  const parts: string[] = [timeLabel, formatRecurrence(rule)];
   if (rule.priority === "high") parts.push("!!!");
   if (rule.group_name) parts.push(rule.group_name);
   return {
@@ -294,6 +316,16 @@ function rtaskCard(
       title: rule.title,
       dueTime: rule.due_time,
       durationMin: rule.duration_min,
+      frequency: rule.frequency,
+      weekdays: rule.weekdays,
+      day_of_month: rule.day_of_month,
+      interval_days: rule.interval_days,
+      start_date: rule.start_date,
+      priority: rule.priority,
+      group_id: rule.group_id,
+      group_name: rule.group_name,
+      hasNotes: (rule.notes ?? "").trim().length > 0,
+      plannedStart: rule.due_time ? null : plannedStart,
     },
   };
 }
@@ -384,6 +416,7 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     bills,
     recurringTasks,
     completedRecurringToday,
+    plannedStartByRule,
     items,
     usagesByItem,
     goals,
@@ -578,7 +611,7 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
         dueTime: r.due_time,
         priority: r.priority,
         created: "",
-        card: rtaskCard(r, today),
+        card: rtaskCard(r, today, plannedStartByRule?.get(r.id) ?? null),
       }),
     ),
   ]

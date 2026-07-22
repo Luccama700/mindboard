@@ -308,7 +308,10 @@ describe("recurring tasks", () => {
     due_time: null,
     duration_min: null,
     priority: "med" as const,
+    group_id: null,
     group_name: null,
+    group_color: null,
+    notes: null,
     ...over,
   });
 
@@ -365,6 +368,40 @@ describe("recurring tasks", () => {
       }),
     );
     expect(ids(snap.later)).toEqual([]);
+  });
+
+  test("an untimed rule with a planned slot shows an advisory ~⌚ meta + entity.plannedStart", () => {
+    const snap = streamSnapshot(
+      base({
+        recurringTasks: [rule({ id: "teeth" })],
+        plannedStartByRule: new Map([["teeth", "16:30"]]),
+      }),
+    );
+    const card = snap.next.find((c) => c.id === `rtask:teeth:${TODAY}`)!;
+    expect(card.meta).toContain("today ~⌚ 16:30");
+    expect(card.entity).toMatchObject({ kind: "rtask", plannedStart: "16:30" });
+  });
+
+  test("an untimed rule with no planned slot stays a plain 'today'", () => {
+    const snap = streamSnapshot(
+      base({ recurringTasks: [rule({ id: "teeth" })] }),
+    );
+    const card = snap.next.find((c) => c.id === `rtask:teeth:${TODAY}`)!;
+    expect(card.meta).toContain("today");
+    expect(card.meta).not.toContain("~⌚");
+    expect(card.entity).toMatchObject({ kind: "rtask", plannedStart: null });
+  });
+
+  test("a planned time in the past does NOT escalate an untimed rule to NOW", () => {
+    const snap = streamSnapshot(
+      base({
+        recurringTasks: [rule({ id: "teeth" })],
+        // 08:00 is well before noon, but a planned slot is advisory only.
+        plannedStartByRule: new Map([["teeth", "08:00"]]),
+      }),
+    );
+    expect(ids(snap.now)).toEqual([]);
+    expect(ids(snap.next)).toEqual([`rtask:teeth:${TODAY}`]);
   });
 });
 

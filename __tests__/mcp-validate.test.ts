@@ -7,6 +7,7 @@ import {
   validateCreateRecurringTask,
   validateCreateTask,
   validateLogSpend,
+  validateUpdateRecurringTask,
 } from "@/app/lib/mcp/validate";
 
 describe("validateCreateRecurringTask", () => {
@@ -53,7 +54,7 @@ describe("validateCreateRecurringTask", () => {
     ).toBe(true);
   });
 
-  test("rejects bad dueTime and durationMin without a time", () => {
+  test("rejects a bad dueTime; accepts a timed block", () => {
     expect(
       validateCreateRecurringTask({
         title: "lunch",
@@ -65,17 +66,30 @@ describe("validateCreateRecurringTask", () => {
       validateCreateRecurringTask({
         title: "lunch",
         frequency: "daily",
-        durationMin: 30,
-      }).ok,
-    ).toBe(false);
-    expect(
-      validateCreateRecurringTask({
-        title: "lunch",
-        frequency: "daily",
         dueTime: "12:30",
         durationMin: 30,
       }).ok,
     ).toBe(true);
+  });
+
+  test("duration is decoupled from dueTime: a duration alone is valid", () => {
+    const r = validateCreateRecurringTask({
+      title: "vacuum",
+      frequency: "daily",
+      durationMin: 45,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.durationMin).toBe(45);
+      expect(r.value.dueTime).toBeNull();
+    }
+    expect(
+      validateCreateRecurringTask({
+        title: "vacuum",
+        frequency: "daily",
+        durationMin: 10,
+      }).ok,
+    ).toBe(false);
   });
 
   test("summary reads like a schedule and names the first landing day", () => {
@@ -95,6 +109,30 @@ describe("validateCreateRecurringTask", () => {
     expect(summary).toContain("at 17:00 (60min)");
     expect(summary).toContain('group "health"');
     expect(summary).toContain("First lands 2026-07-08"); // Tue -> Wed
+  });
+});
+
+describe("validateUpdateRecurringTask", () => {
+  test("accepts a lone durationMin patch (no dueTime required)", () => {
+    const r = validateUpdateRecurringTask({ ruleId: "r1", durationMin: 45 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.durationMin).toBe(45);
+      expect(r.value.dueTime).toBeUndefined();
+    }
+  });
+
+  test("accepts a frequency patch carrying a durationMin but no dueTime", () => {
+    const r = validateUpdateRecurringTask({
+      ruleId: "r1",
+      frequency: "daily",
+      durationMin: 30,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.recurrence?.frequency).toBe("daily");
+      expect(r.value.durationMin).toBe(30);
+    }
   });
 });
 

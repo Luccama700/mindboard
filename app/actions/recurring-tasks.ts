@@ -76,32 +76,36 @@ function recurrenceColumns(input: {
   return { error: null, columns };
 }
 
+// due_time and duration_min are independent: a patch touches a column only when
+// its field is present. Clearing the time (dueTime: null) leaves duration alone,
+// so an untimed rule can still carry a duration for the gap planner to place.
 function timingColumns(input: {
   dueTime?: string | null;
   durationMin?: number | null;
 }): { error: string } | { error: null; columns: Record<string, unknown> } {
-  const dueTime = input.dueTime ?? null;
-  if (dueTime !== null && !TIME_RE.test(dueTime)) {
-    return { error: "invalid time" };
+  const columns: Record<string, unknown> = {};
+  if (input.dueTime !== undefined) {
+    const dueTime = input.dueTime;
+    if (dueTime !== null && !TIME_RE.test(dueTime)) {
+      return { error: "invalid time" };
+    }
+    columns.due_time =
+      dueTime === null
+        ? null
+        : dueTime.length === 5
+          ? `${dueTime}:00`
+          : dueTime;
   }
-  let durationMin: number | null = null;
-  if (input.durationMin !== undefined && input.durationMin !== null) {
-    const d = Math.trunc(Number(input.durationMin));
-    if (!Number.isFinite(d) || d < 15) return { error: "duration must be 15+ minutes" };
-    durationMin = d;
+  if (input.durationMin !== undefined) {
+    if (input.durationMin === null) {
+      columns.duration_min = null;
+    } else {
+      const d = Math.trunc(Number(input.durationMin));
+      if (!Number.isFinite(d) || d < 15) return { error: "duration must be 15+ minutes" };
+      columns.duration_min = d;
+    }
   }
-  return {
-    error: null,
-    columns: {
-      due_time:
-        dueTime === null
-          ? null
-          : dueTime.length === 5
-            ? `${dueTime}:00`
-            : dueTime,
-      duration_min: dueTime === null ? null : durationMin,
-    },
-  };
+  return { error: null, columns };
 }
 
 export async function createRecurringTask(input: RecurringTaskInput) {

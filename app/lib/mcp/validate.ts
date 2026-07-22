@@ -179,9 +179,6 @@ export function validateCreateRecurringTask(raw: {
     if (!Number.isFinite(d) || d < 15) {
       return { ok: false, error: "durationMin must be 15 or more" };
     }
-    if (dueTime === null) {
-      return { ok: false, error: "durationMin needs a dueTime" };
-    }
     durationMin = d;
   }
 

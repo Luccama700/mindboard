@@ -11,13 +11,17 @@ import type { FinanceChange } from "@/app/_components/dashboard-calendar";
 import type { TaskWithGroup } from "@/app/_components/types";
 import type { TaskRecurrence } from "@/app/lib/recurrence";
 
-// Timed recurring-task rules for the calendar: occurrences are computed
-// client-side per grid day; completions mark them done/struck.
+// Recurring-task rules for the calendar: occurrences are computed client-side
+// per grid day; completions mark them done/struck. Untimed rules also reach the
+// calendar (rendered in the due row / soft-placed by the gap planner), so
+// due_time is nullable and priority/created_at ride along for that planner.
 export type CalendarRecurringTask = TaskRecurrence & {
   id: string;
   title: string;
-  due_time: string; // timed rules only — untimed never reach the calendar
+  due_time: string | null;
   duration_min: number | null;
+  priority: "low" | "med" | "high";
+  created_at: string;
   group_name: string | null;
   group_color: string | null;
 };
@@ -240,10 +244,9 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
     supabase
       .from("recurring_tasks")
       .select(
-        "id, title, frequency, weekdays, day_of_month, interval_days, start_date, due_time, duration_min, groups(name, color)",
+        "id, title, frequency, weekdays, day_of_month, interval_days, start_date, due_time, duration_min, priority, created_at, groups(name, color)",
       )
-      .eq("archived", false)
-      .not("due_time", "is", null),
+      .eq("archived", false),
     supabase
       .from("recurring_task_completions")
       .select("rule_id, occurred_on")

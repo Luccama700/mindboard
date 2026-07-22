@@ -12,10 +12,8 @@ import {
 } from "@dnd-kit/core";
 import Link from "next/link";
 import { useRef, useState } from "react";
-import {
-  freeIntervalsForDay,
-  type ScheduleEvent,
-} from "@/app/lib/snapshots/schedule";
+import { freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
+import { busyFromDayItems } from "@/app/lib/snapshots/gap-plan";
 import type { CalendarItem } from "./calendar-types";
 import { formatClockTime, formatHourLabel } from "./date-utils";
 import { formatSignedChange } from "./money";
@@ -101,9 +99,22 @@ function taskMinutes(item: TaskItem): { start: number; end: number } | null {
   return { start, end: start + (item.durationMin ?? DEFAULT_TASK_MINUTES) };
 }
 
-function rtaskMinutes(item: RtaskItem): { start: number; end: number } {
+// Timed occurrences. Soft-placed (plannedStart) rules render as advisory ghosts
+// via plannedRtaskMinutes; an untimed rule with no placement yields no block.
+function rtaskMinutes(item: RtaskItem): { start: number; end: number } | null {
+  if (!item.dueTime) return null;
   const start = timeToMinutes(item.dueTime.slice(0, 5));
   return { start, end: start + (item.durationMin ?? DEFAULT_TASK_MINUTES) };
+}
+
+function plannedRtaskMinutes(
+  item: RtaskItem,
+): { start: number; end: number } | null {
+  if (!item.plannedStart) return null;
+  const start = timeToMinutes(item.plannedStart.slice(0, 5));
+  const minutes =
+    item.plannedMinutes ?? item.durationMin ?? DEFAULT_TASK_MINUTES;
+  return { start, end: start + minutes };
 }
 
 type DragData =
@@ -229,14 +240,46 @@ function TimedTaskBlock({
   );
 }
 
-// A recurring occurrence: dashed hollow block, never draggable — the rule owns
-// its schedule. Dimmed and struck once completed today.
+// A recurring occurrence, never draggable — the rule owns its schedule. Timed
+// rules render as a bold, border-2 dashed hollow block. A soft-placed untimed
+// rule (plannedStart) renders as a lighter advisory ghost — 1px dashed border,
+// dimmed, muted title, an "auto" time line — so it reads as a suggestion, not a
+// commitment. Both strike + dim once completed today.
 function RecurringTaskBlock({ item }: { item: RtaskItem }) {
-  const minutes = rtaskMinutes(item);
+  const timed = item.dueTime !== null;
+  const minutes = timed ? rtaskMinutes(item) : plannedRtaskMinutes(item);
+  if (!minutes) return null;
+
+  if (timed) {
+    return (
+      <div
+        className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
+          item.done ? "opacity-50" : ""
+        }`}
+        style={{
+          ...blockStyle(minutes.start, minutes.end),
+          borderColor: item.color,
+        }}
+      >
+        <p
+          className={`truncate text-[11px] font-bold text-fg ${
+            item.done ? "line-through" : ""
+          }`}
+        >
+          <span aria-hidden>↻ </span>
+          {item.title}
+        </p>
+        <p className="truncate text-[10px] text-muted">
+          {minutesToTime(minutes.start)} – {minutesToTime(minutes.end)}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div
-      className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
-        item.done ? "opacity-50" : ""
+      className={`absolute left-1 right-1 overflow-hidden rounded-lg border border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
+        item.done ? "opacity-50" : "opacity-70"
       }`}
       style={{
         ...blockStyle(minutes.start, minutes.end),
@@ -244,7 +287,7 @@ function RecurringTaskBlock({ item }: { item: RtaskItem }) {
       }}
     >
       <p
-        className={`truncate text-[11px] font-bold text-fg ${
+        className={`truncate text-[11px] text-muted ${
           item.done ? "line-through" : ""
         }`}
       >
@@ -252,7 +295,7 @@ function RecurringTaskBlock({ item }: { item: RtaskItem }) {
         {item.title}
       </p>
       <p className="truncate text-[10px] text-muted">
-        {minutesToTime(minutes.start)} – {minutesToTime(minutes.end)}
+        ~{minutesToTime(minutes.start)} – {minutesToTime(minutes.end)} · auto
       </p>
     </div>
   );
@@ -283,6 +326,22 @@ function AllDayEventChip({
       } ${isDragging ? "opacity-30" : ""}`}
       style={{ backgroundColor: item.color }}
     >
+      {item.title}
+    </div>
+  );
+}
+
+// An untimed recurring occurrence in the due row: dashed outline, ↻ prefix,
+// non-draggable and non-clickable. Struck + dimmed once done today.
+function RtaskDueChip({ item }: { item: RtaskItem }) {
+  return (
+    <div
+      className={`truncate rounded border border-dashed px-1.5 py-1 text-[10px] font-bold ${
+        item.done ? "line-through opacity-50" : ""
+      }`}
+      style={{ color: item.color, borderColor: item.color }}
+    >
+      <span aria-hidden>↻ </span>
       {item.title}
     </div>
   );
@@ -402,35 +461,14 @@ function FreeGapUnderlay({
   wakeStartHour: number;
   wakeEndHour: number;
 }) {
-  const busy: ScheduleEvent[] = [
-    ...events.map((e) => ({
-      summary: e.title,
-      start: e.start,
-      end: e.end,
-      allDay: false,
-    })),
-    ...timedTasks.flatMap((t) => {
-      const minutes = taskMinutes(t);
-      if (!minutes) return [];
-      return [
-        {
-          summary: t.title,
-          start: `${dateKey}T${minutesToTime(minutes.start)}:00`,
-          end: `${dateKey}T${minutesToTime(minutes.end)}:00`,
-          allDay: false,
-        },
-      ];
-    }),
-    ...recurring.map((r) => {
-      const minutes = rtaskMinutes(r);
-      return {
-        summary: r.title,
-        start: `${dateKey}T${minutesToTime(minutes.start)}:00`,
-        end: `${dateKey}T${minutesToTime(minutes.end)}:00`,
-        allDay: false,
-      };
-    }),
-  ];
+  // Shared busy-builder so the underlay and the gap planner can't drift. It
+  // counts timed events, time-blocked tasks, and TIMED recurring only — planned
+  // ghosts (dueTime null) never enter the busy math.
+  const busy = busyFromDayItems(dateKey, [
+    ...events,
+    ...timedTasks,
+    ...recurring,
+  ]);
 
   const intervals = freeIntervalsForDay({
     events: busy,
@@ -725,6 +763,12 @@ export function WeekView({
                   item.kind === "finance" ||
                   (item.kind === "event" && item.allDay),
               );
+              const dueRtasks = (itemsByDate.get(key) ?? []).filter(
+                (item): item is RtaskItem =>
+                  item.kind === "rtask" &&
+                  item.dueTime === null &&
+                  item.plannedStart === null,
+              );
 
               return (
                 <div
@@ -760,6 +804,9 @@ export function WeekView({
                         +{allDayItems.length - 2} more
                       </span>
                     )}
+                    {dueRtasks.map((item) => (
+                      <RtaskDueChip key={`rtask-${item.id}`} item={item} />
+                    ))}
                   </div>
                 </div>
               );
@@ -795,7 +842,9 @@ export function WeekView({
                   item.kind === "task" && item.dueTime !== null,
               );
               const recurringItems = dayItems.filter(
-                (item): item is RtaskItem => item.kind === "rtask",
+                (item): item is RtaskItem =>
+                  item.kind === "rtask" &&
+                  (item.dueTime !== null || item.plannedStart !== null),
               );
               const isToday = key === today;
               const nowTop =

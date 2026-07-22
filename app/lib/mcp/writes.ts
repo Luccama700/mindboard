@@ -1928,9 +1928,8 @@ async function executeUpdateRecurringTask(
   }
   if (v.dueTime !== undefined) {
     updates.due_time = v.dueTime === null ? null : `${v.dueTime}:00`;
-    if (v.dueTime === null) updates.duration_min = null;
   }
-  if (v.durationMin !== undefined && updates.duration_min === undefined) {
+  if (v.durationMin !== undefined) {
     updates.duration_min = v.durationMin;
   }
 
