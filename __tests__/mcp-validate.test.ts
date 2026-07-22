@@ -143,6 +143,15 @@ describe("validateCreateTask", () => {
     expect(validateCreateTask({ title: "x", priority: "urgent" }).ok).toBe(false);
     expect(validateCreateTask({ title: "x", groupId: 5 }).ok).toBe(false);
   });
+
+  test("accepts a positive integer estimatedMinutes and rejects junk", () => {
+    const r = validateCreateTask({ title: "x", estimatedMinutes: 90 });
+    expect(r.ok && r.value.estimatedMinutes).toBe(90);
+    expect(validateCreateTask({ title: "x", estimatedMinutes: 0 }).ok).toBe(false);
+    expect(validateCreateTask({ title: "x", estimatedMinutes: -5 }).ok).toBe(false);
+    expect(validateCreateTask({ title: "x", estimatedMinutes: 2.5 }).ok).toBe(false);
+    expect(validateCreateTask({ title: "x", estimatedMinutes: "2h" }).ok).toBe(false);
+  });
 });
 
 describe("summarizeCreateTask", () => {
@@ -229,6 +238,16 @@ describe("validateUpdateTask", () => {
     expect(validateUpdateTask({ taskId: "t1", title: "  " }).ok).toBe(false);
   });
 
+  test("estimatedMinutes accepts a positive integer or null and rejects junk", async () => {
+    const { validateUpdateTask } = await import("@/app/lib/mcp/validate");
+    expect(validateUpdateTask({ taskId: "t1", estimatedMinutes: 90 }).ok).toBe(true);
+    expect(validateUpdateTask({ taskId: "t1", estimatedMinutes: null }).ok).toBe(true);
+    expect(validateUpdateTask({ taskId: "t1", estimatedMinutes: 0 }).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1", estimatedMinutes: -5 }).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1", estimatedMinutes: 2.5 }).ok).toBe(false);
+    expect(validateUpdateTask({ taskId: "t1", estimatedMinutes: "2h" }).ok).toBe(false);
+  });
+
   test("aiState: agent states pass, 'approved' is user-only, junk rejected", async () => {
     const { validateUpdateTask } = await import("@/app/lib/mcp/validate");
     expect(validateUpdateTask({ taskId: "t1", aiState: "planned" }).ok).toBe(true);
@@ -307,5 +326,14 @@ describe("validateDailyLog / validateUpdateSettings", () => {
     expect(validateUpdateSettings({ timezone: "America/New_York" }).ok).toBe(true);
     expect(validateUpdateSettings({ wakeStartHour: 9, wakeEndHour: 8 }).ok).toBe(false);
     expect(validateUpdateSettings({ wakeStartHour: 7, wakeEndHour: 23 }).ok).toBe(true);
+  });
+
+  test("bounds streamMaxTasks to 3-15", async () => {
+    const { validateUpdateSettings } = await import("@/app/lib/mcp/validate");
+    expect(validateUpdateSettings({ streamMaxTasks: 3 }).ok).toBe(true);
+    expect(validateUpdateSettings({ streamMaxTasks: 15 }).ok).toBe(true);
+    expect(validateUpdateSettings({ streamMaxTasks: 2 }).ok).toBe(false);
+    expect(validateUpdateSettings({ streamMaxTasks: 16 }).ok).toBe(false);
+    expect(validateUpdateSettings({ streamMaxTasks: 2.5 }).ok).toBe(false);
   });
 });

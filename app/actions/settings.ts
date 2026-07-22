@@ -45,6 +45,7 @@ export async function savePreferences(input: {
   timezone: string;
   wakeStartHour: number;
   wakeEndHour: number;
+  streamMaxTasks: number;
 }): Promise<{ error: string | null }> {
   const timezone = input.timezone?.trim() || "UTC";
   if (timezone.length > 64 || !TIMEZONE_RE.test(timezone)) {
@@ -61,6 +62,10 @@ export async function savePreferences(input: {
   if (wakeEndHour <= wakeStartHour) {
     return { error: "wake end must be after wake start" };
   }
+  const streamMaxTasks = Math.trunc(input.streamMaxTasks);
+  if (!Number.isFinite(streamMaxTasks) || streamMaxTasks < 3 || streamMaxTasks > 15) {
+    return { error: "board tasks must be 3–15" };
+  }
 
   const supabase = await createClient();
   const {
@@ -74,6 +79,7 @@ export async function savePreferences(input: {
       timezone,
       wake_start_hour: wakeStartHour,
       wake_end_hour: wakeEndHour,
+      stream_max_tasks: streamMaxTasks,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id" },

@@ -138,6 +138,11 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
         dueTime: { type: "string", description: "HH:MM 24h, optional" },
         priority: { type: "string", enum: ["low", "med", "high"] },
         notes: { type: "string" },
+        estimatedMinutes: {
+          type: "integer",
+          minimum: 1,
+          description: "expected effort in minutes",
+        },
       },
       required: ["title"],
       additionalProperties: false,
@@ -146,6 +151,17 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "propose_complete_task",
     description: "Propose marking a task done (by id). User must confirm.",
+    input_schema: {
+      type: "object",
+      properties: { taskId: { type: "string" } },
+      required: ["taskId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_miss_task",
+    description:
+      "Propose marking an overdue/open task as missed (incomplete) — an accountability record, distinct from done. User must confirm.",
     input_schema: {
       type: "object",
       properties: { taskId: { type: "string" } },
@@ -655,19 +671,22 @@ async function proposeScheduleTask(
   if (typeof dueTime !== "string" || !TIME_RE.test(dueTime)) {
     return { ok: false, error: "dueTime must be HH:MM" };
   }
-  const durationMin =
-    input.durationMin === undefined ? 30 : Number(input.durationMin);
-  if (!Number.isFinite(durationMin) || durationMin < 15) {
-    return { ok: false, error: "durationMin must be >= 15" };
-  }
-
   const { data: task } = await supabase
     .from("tasks")
-    .select("id, title")
+    .select("id, title, estimated_minutes")
     .eq("id", taskId)
     .eq("user_id", userId)
     .maybeSingle();
   if (!task) return { ok: false, error: "task not found" };
+
+  const estimate = (task as { estimated_minutes: number | null }).estimated_minutes;
+  const durationMin =
+    input.durationMin === undefined
+      ? (estimate ?? 30)
+      : Number(input.durationMin);
+  if (!Number.isFinite(durationMin) || durationMin < 15) {
+    return { ok: false, error: "durationMin must be >= 15" };
+  }
 
   const push = input.pushToCalendar === true;
   const summary = `Schedule "${(task as { title: string }).title}" on ${dueDate} at ${dueTime} for ${durationMin}min${push ? " and push it to Google Calendar" : ""}.`;
@@ -764,6 +783,7 @@ export async function runAssistantTool(
             dueTime: t.due_time,
             priority: t.priority,
             group: t.group_name,
+            estimatedMinutes: t.estimated_minutes,
           })),
         };
       }
@@ -899,6 +919,36 @@ export async function runAssistantTool(
           supabase,
           userId,
           "complete_task",
+          { taskId },
+          summary,
+          { source: "assistant", conversationId },
+        );
+        return { type: "proposal", proposalId, preview: summary };
+      }
+      case "propose_miss_task": {
+        const taskId = input.taskId;
+        if (typeof taskId !== "string" || !taskId) {
+          return { type: "error", error: "taskId is required" };
+        }
+        const { data } = await supabase
+          .from("tasks")
+          .select("id, title, status")
+          .eq("id", taskId)
+          .eq("user_id", userId)
+          .maybeSingle();
+        if (!data) return { type: "error", error: "task not found" };
+        const task = data as { title: string; status: string };
+        if (task.status === "done") {
+          return { type: "error", error: `"${task.title}" is already done` };
+        }
+        if (task.status === "missed") {
+          return { type: "error", error: `"${task.title}" is already missed` };
+        }
+        const summary = `Mark task "${task.title}" as missed.`;
+        const proposalId = await recordProposal(
+          supabase,
+          userId,
+          "miss_task",
           { taskId },
           summary,
           { source: "assistant", conversationId },

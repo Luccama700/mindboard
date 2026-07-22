@@ -3,17 +3,20 @@
 import { startTransition, useEffect, useOptimistic, useState } from "react";
 import {
   deleteTask,
+  markTaskMissed,
   toggleTaskStatus,
   updateTask,
 } from "@/app/actions/tasks";
 import { autoSortInbox } from "@/app/actions/auto-sort";
 import { subscribeCapture } from "./capture-bus";
+import { todayISO } from "./date-utils";
 import { TaskRow, type GroupOption } from "./task-row";
 import type { Task } from "./types";
 
 type UpdatePatch = {
   title?: string;
   dueDate?: string | null;
+  estimatedMinutes?: number | null;
   groupId?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
@@ -30,6 +33,8 @@ function applyPatch(task: Task, patch: UpdatePatch): Task {
   let next = task;
   if (patch.title !== undefined) next = { ...next, title: patch.title };
   if (patch.dueDate !== undefined) next = { ...next, due_date: patch.dueDate };
+  if (patch.estimatedMinutes !== undefined)
+    next = { ...next, estimated_minutes: patch.estimatedMinutes };
   if (patch.groupId !== undefined) next = { ...next, group_id: patch.groupId };
   if (patch.notes !== undefined) next = { ...next, notes: patch.notes };
   if (patch.priority !== undefined) next = { ...next, priority: patch.priority };
@@ -122,6 +127,13 @@ export function TasksClient({
     });
   }
 
+  function onMiss(id: string) {
+    startTransition(async () => {
+      dispatch({ kind: "delete", id });
+      await markTaskMissed(id);
+    });
+  }
+
   function onUpdate(id: string, patch: UpdatePatch) {
     startTransition(async () => {
       dispatch({ kind: "update", id, patch });
@@ -162,7 +174,10 @@ export function TasksClient({
     });
   }
 
-  const active = tasks.filter((t) => t.status !== "done");
+  const today = todayISO();
+  const active = tasks.filter(
+    (t) => t.status !== "done" && t.status !== "missed",
+  );
   const done = tasks.filter((t) => t.status === "done");
   const showAutoSort =
     filter === null && groups.length > 0 && (active.length > 0 || !!sortNote);
@@ -196,6 +211,12 @@ export function TasksClient({
           onToggle={onToggle}
           onDelete={onDelete}
           onUpdate={onUpdate}
+          onMiss={onMiss}
+          variant={
+            t.due_date && t.due_date < today && t.status === "todo"
+              ? "overdue"
+              : "default"
+          }
         />
       ))}
 

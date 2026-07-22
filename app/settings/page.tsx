@@ -129,6 +129,7 @@ export default async function SettingsPage() {
           initialTimezone={prefs.timezone}
           initialWakeStart={prefs.wake_start_hour}
           initialWakeEnd={prefs.wake_end_hour}
+          initialStreamMaxTasks={prefs.stream_max_tasks}
         />
       </section>
 

@@ -506,6 +506,41 @@ body::before {
   animation: tour-rise 280ms var(--ease-signal) both;
 }
 
+/* Stream card entrance: a gentle decelerating rise, staggered per-card by an
+   inline animationDelay. fill:backwards holds the from-state through the delay,
+   then reverts cleanly so the leave transition and swipe transform own the
+   element again (no held transform). */
+@keyframes stream-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.stream-rise {
+  animation: stream-rise var(--dur-resolve) var(--ease-glass) backwards;
+}
+
+/* One-time accent glow on a focus (tier-3) card, delayed so it lands just after
+   the rise. Applied to the outer wrapper, which carries no resting box-shadow. */
+@keyframes focus-pop {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 24px 0 color-mix(in srgb, var(--accent) 15%, transparent);
+  }
+}
+
+.focus-pop {
+  animation: focus-pop 600ms var(--ease-glass) 200ms backwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

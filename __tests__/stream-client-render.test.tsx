@@ -1,8 +1,8 @@
 // Rendering regression test for the dashboard stream: task cards due today
 // must actually appear. Server actions and sheets are stubbed — this tests
 // the client rendering pipeline (visible(), overrides, sections), not writes.
-import { describe, expect, test, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 import type { StreamCard, StreamSnapshot } from "@/app/lib/snapshots/stream";
 import type { Task } from "@/app/_components/types";
 
@@ -31,6 +31,7 @@ function task(id: string, title: string): Task {
     due_date: "2026-07-08",
     due_time: null,
     duration_min: null,
+    estimated_minutes: null,
     gcal_event_id: null,
     gcal_calendar_id: null,
     status: "todo",
@@ -39,6 +40,7 @@ function task(id: string, title: string): Task {
     group_id: null,
     created_at: "2026-07-08T09:00:00Z",
     completed_at: null,
+    missed_at: null,
   } as Task;
 }
 
@@ -67,6 +69,7 @@ function taskCard(
 const snapshot: StreamSnapshot = {
   pulse: { todayDelta: 0, currency: "CAD", toClear: 0, freeHours: 4, mood: null },
   now: [taskCard("t0", "overdue thing")],
+  nowOverflow: 0,
   next: [
     taskCard("t1", "Log Flavio Class", {
       name: "English Classes",
@@ -81,22 +84,50 @@ const snapshot: StreamSnapshot = {
   nextUp: null,
 };
 
+const GROUPS = [
+  { id: "g1", name: "Personal", color: "#3CD9FF" },
+  { id: "g2", name: "English Classes", color: "#9E44F8" },
+];
+
+function renderStream(snap: StreamSnapshot) {
+  return render(
+    <StreamClient
+      snapshot={snap}
+      accounts={[]}
+      categories={[]}
+      gaps={[]}
+      groups={GROUPS}
+      weekDone={0}
+      weekMissed={0}
+      todayLabel="tuesday, jul 8"
+      clockLabel="9:41 am"
+    />,
+  );
+}
+
+// A NOW task card with explicit overrides for the fields tier/overdue logic
+// reads. due_date "2020-01-01" is always overdue; "2999-01-01" never is.
+function nowCard(
+  id: string,
+  over: Partial<StreamCard> & { taskOver?: Partial<Task> } = {},
+): StreamCard {
+  const { taskOver, ...cardOver } = over;
+  const base = taskCard(id, `task ${id}`);
+  return {
+    ...base,
+    ...cardOver,
+    entity: {
+      kind: "task",
+      task: { ...(base.entity as { task: Task }).task, ...taskOver },
+    },
+  } as StreamCard;
+}
+
+afterEach(cleanup);
+
 describe("StreamClient rendering", () => {
   test("renders task cards in now and next sections", () => {
-    render(
-      <StreamClient
-        snapshot={snapshot}
-        accounts={[]}
-        categories={[]}
-        gaps={[]}
-        groups={[
-          { id: "g1", name: "Personal", color: "#3CD9FF" },
-          { id: "g2", name: "English Classes", color: "#9E44F8" },
-        ]}
-        todayLabel="tuesday, jul 8"
-        clockLabel="9:41 am"
-      />,
-    );
+    renderStream(snapshot);
 
     expect(screen.getByText("overdue thing")).toBeTruthy();
     expect(screen.getByText("Log Flavio Class")).toBeTruthy();
@@ -104,5 +135,40 @@ describe("StreamClient rendering", () => {
     // The group button wears the task's own group; inbox for the ungrouped.
     expect(screen.getByText("English Classes ▾")).toBeTruthy();
     expect(screen.getAllByText("inbox ▾").length).toBe(2);
+  });
+
+  test("an overdue task card shows the incomplete button", () => {
+    renderStream({
+      ...snapshot,
+      now: [nowCard("late", { taskOver: { due_date: "2020-01-01" } })],
+      next: [],
+    });
+    expect(screen.getByText("incomplete")).toBeTruthy();
+  });
+
+  test("a non-overdue task card has no incomplete button", () => {
+    renderStream({
+      ...snapshot,
+      now: [nowCard("soon", { taskOver: { due_date: "2999-01-01" } })],
+      next: [],
+    });
+    expect(screen.queryByText("incomplete")).toBeNull();
+  });
+
+  test("a tier-3 task renders the focus treatment (glass panel + effort/lateness meta)", () => {
+    const { container } = renderStream({
+      ...snapshot,
+      now: [
+        nowCard("focus", {
+          tier: 3,
+          taskOver: { due_date: "2020-01-01", estimated_minutes: 120 },
+        }),
+      ],
+      next: [],
+    });
+    expect(container.querySelector(".glass-panel")).toBeTruthy();
+    // focus meta: effort + lateness (danger tint on the lateness)
+    expect(screen.getByText("~2h")).toBeTruthy();
+    expect(screen.getByText(/d late/)).toBeTruthy();
   });
 });

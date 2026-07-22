@@ -250,7 +250,9 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
   const dayKeys: string[] = [];
   for (let d = today; d <= horizonEnd; d = addDaysKey(d, 1)) dayKeys.push(d);
 
-  const openTasks = tasks.filter((t) => t.status !== "done");
+  const openTasks = tasks.filter(
+    (t) => t.status !== "done" && t.status !== "missed",
+  );
 
   // ---- schedule: materialize timed items, then per-day free/committed ----
   const timedEvents = events.filter((e) => !e.allDay && e.start && e.end);

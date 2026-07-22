@@ -27,6 +27,7 @@ type ScheduleRow = {
   due_date: string | null;
   due_time: string | null;
   duration_min: number | null;
+  estimated_minutes: number | null;
   gcal_event_id: string | null;
   gcal_calendar_id: string | null;
 };
@@ -40,7 +41,10 @@ async function syncPushedTask(userId: string, task: ScheduleRow) {
     const prefs = await getUserPreferences(userId);
     const timeZone = prefs.timezone ?? "UTC";
     const start = normalizeTime(task.due_time);
-    const end = addMinutesToTime(start.slice(0, 5), task.duration_min ?? 30);
+    const end = addMinutesToTime(
+      start.slice(0, 5),
+      task.duration_min ?? task.estimated_minutes ?? 30,
+    );
     await updateEvent(userId, task.gcal_calendar_id, task.gcal_event_id, {
       start: { dateTime: `${task.due_date}T${start}`, timeZone },
       end: { dateTime: `${task.due_date}T${end}`, timeZone },
@@ -57,6 +61,7 @@ export async function createTask(input: {
   dueTime?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
+  estimatedMinutes?: number | null;
 }) {
   const title = input.title?.trim();
   if (!title) return { error: "title required" };
@@ -64,6 +69,13 @@ export async function createTask(input: {
   const dueTime = input.dueTime ?? null;
   if (dueTime !== null && !TIME_RE.test(dueTime)) {
     return { error: "invalid time" };
+  }
+  if (
+    input.estimatedMinutes !== undefined &&
+    input.estimatedMinutes !== null &&
+    (!Number.isInteger(input.estimatedMinutes) || input.estimatedMinutes <= 0)
+  ) {
+    return { error: "invalid estimate" };
   }
 
   const supabase = await createClient();
@@ -82,6 +94,9 @@ export async function createTask(input: {
       due_time: dueTime && input.dueDate ? normalizeTime(dueTime) : null,
       notes,
       ...(input.priority ? { priority: input.priority } : {}),
+      ...(input.estimatedMinutes !== undefined
+        ? { estimated_minutes: input.estimatedMinutes }
+        : {}),
     })
     .select(TASK_COLUMNS)
     .single();
@@ -113,12 +128,63 @@ export async function toggleTaskStatus(id: string, currentStatus: string) {
   return { error: null, nextStatus };
 }
 
+// "missed" is a manual, accountability-focused terminal state for overdue tasks
+// (like done, but negative). No-op-with-error if the task is already resolved.
+export async function markTaskMissed(id: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { data: task, error: loadError } = await supabase
+    .from("tasks")
+    .select("status")
+    .eq("id", id)
+    .maybeSingle();
+  if (loadError) return { error: loadError.message };
+  if (!task) return { error: "task not found" };
+  if (task.status === "done" || task.status === "missed") {
+    return { error: `already ${task.status}` };
+  }
+
+  const { error } = await supabase
+    .from("tasks")
+    .update({ status: "missed", missed_at: new Date().toISOString() })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+// Return a done/missed task to the open list.
+export async function reopenTask(id: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase
+    .from("tasks")
+    .update({ status: "todo", missed_at: null, completed_at: null })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
 export async function updateTask(input: {
   id: string;
   title?: string;
   dueDate?: string | null;
   dueTime?: string | null;
   durationMin?: number | null;
+  estimatedMinutes?: number | null;
   groupId?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
@@ -158,6 +224,15 @@ export async function updateTask(input: {
     }
     updates.duration_min = input.durationMin;
   }
+  if (input.estimatedMinutes !== undefined) {
+    if (
+      input.estimatedMinutes !== null &&
+      (!Number.isInteger(input.estimatedMinutes) || input.estimatedMinutes <= 0)
+    ) {
+      return { error: "invalid estimate" };
+    }
+    updates.estimated_minutes = input.estimatedMinutes;
+  }
   if (input.groupId !== undefined) updates.group_id = input.groupId;
   if (input.notes !== undefined) updates.notes = input.notes?.trim() || null;
   if (input.priority !== undefined) updates.priority = input.priority;
@@ -174,7 +249,7 @@ export async function updateTask(input: {
     .update(updates)
     .eq("id", input.id)
     .select(
-      "title, due_date, due_time, duration_min, gcal_event_id, gcal_calendar_id",
+      "title, due_date, due_time, duration_min, estimated_minutes, gcal_event_id, gcal_calendar_id",
     )
     .single();
 
@@ -200,7 +275,7 @@ export async function pushTaskToCalendar(id: string) {
   const { data: task, error: loadError } = await supabase
     .from("tasks")
     .select(
-      "id, title, due_date, due_time, duration_min, gcal_event_id, group_id, groups(google_calendar_id)",
+      "id, title, due_date, due_time, duration_min, estimated_minutes, gcal_event_id, group_id, groups(google_calendar_id)",
     )
     .eq("id", id)
     .single();
@@ -224,7 +299,9 @@ export async function pushTaskToCalendar(id: string) {
   const start = normalizeTime(task.due_time as string);
   const end = addMinutesToTime(
     start.slice(0, 5),
-    (task.duration_min as number | null) ?? 30,
+    (task.duration_min as number | null) ??
+      (task.estimated_minutes as number | null) ??
+      30,
   );
 
   let eventId: string;

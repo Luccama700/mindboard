@@ -4,7 +4,8 @@ export type Task = {
   due_date: string | null;
   due_time: string | null; // "HH:MM" | "HH:MM:SS" — a time-block on the day
   duration_min: number | null;
-  status: "todo" | "doing" | "done";
+  estimated_minutes: number | null;
+  status: "todo" | "doing" | "done" | "missed";
   priority: "low" | "med" | "high";
   // Overnight-agent lifecycle (null = not an AI task); see docs/overnight-agent-plan.md.
   ai_state: "planned" | "approved" | "building" | "built" | "failed" | null;
@@ -14,6 +15,7 @@ export type Task = {
   gcal_calendar_id: string | null;
   created_at: string;
   completed_at: string | null;
+  missed_at: string | null;
 };
 
 export type TaskWithGroup = Task & {
@@ -22,4 +24,4 @@ export type TaskWithGroup = Task & {
 };
 
 export const TASK_COLUMNS =
-  "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at";
+  "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at";

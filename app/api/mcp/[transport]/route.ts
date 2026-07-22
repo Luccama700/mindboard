@@ -50,6 +50,7 @@ import {
   proposeLogSpend,
   proposeManageFinance,
   proposeManageGroup,
+  proposeMissTask,
   proposeRescheduleEvent,
   proposeSetSpendLimit,
   proposeUpdateFinance,
@@ -162,7 +163,8 @@ const mcpHandler = createMcpHandler(
       "tasks_snapshot",
       {
         title: "Tasks snapshot",
-        description: "Counts of open tasks that are overdue, due today, or due within the next week.",
+        description:
+          "Counts of open tasks that are overdue, due today, or due within the next week, plus how many were completed (doneThisWeek) or marked missed (missedThisWeek) since the start of the current week.",
         inputSchema: {},
       },
       (_args, extra) => guard(async () => ok(await getTasksSnapshot(uid(extra)))),
@@ -186,7 +188,7 @@ const mcpHandler = createMcpHandler(
           "List tasks with their group, optionally filtered by group id and/or status. Use this to find a task's id before completing it.",
         inputSchema: {
           groupId: z.string().nullish(),
-          status: z.enum(["todo", "doing", "done"]).optional(),
+          status: z.enum(["todo", "doing", "done", "missed"]).optional(),
         },
       },
       (args, extra) => guard(async () => ok(await listTasks(uid(extra), args))),
@@ -457,6 +459,12 @@ const mcpHandler = createMcpHandler(
           dueDate: z.string().nullish(),
           notes: z.string().nullish(),
           priority: z.enum(["low", "med", "high"]).optional(),
+          estimatedMinutes: z
+            .number()
+            .int()
+            .min(1)
+            .optional()
+            .describe("expected effort in minutes"),
         },
       },
       (args, extra) =>
@@ -482,6 +490,21 @@ const mcpHandler = createMcpHandler(
     );
 
     server.registerTool(
+      "miss_task",
+      {
+        title: "Propose: mark a task missed",
+        description:
+          "Mark an overdue/open task as missed (incomplete) — an accountability record, distinct from done. Returns a preview + proposalId; call confirm_action to apply. Find the taskId via list_tasks.",
+        inputSchema: { taskId: z.string() },
+      },
+      (args, extra) =>
+        guard(async () => {
+          const r = await proposeMissTask(uid(extra), args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
       "update_task",
       {
         title: "Propose: edit a task",
@@ -493,6 +516,13 @@ const mcpHandler = createMcpHandler(
           dueDate: z.string().nullish().describe("YYYY-MM-DD, or null to clear."),
           dueTime: z.string().nullish().describe("HH:MM 24h, or null to clear the block."),
           durationMin: z.number().int().min(15).nullish(),
+          estimatedMinutes: z
+            .number()
+            .int()
+            .min(1)
+            .nullable()
+            .optional()
+            .describe("expected effort in minutes"),
           groupId: z.string().nullish().describe("Target group id, or null for inbox."),
           notes: z.string().nullish(),
           priority: z.enum(["low", "med", "high"]).optional(),
@@ -682,13 +712,20 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: update preferences",
         description:
-          "Propose changing user preferences: timezone (IANA name), the wake window (wakeStartHour 0-23, wakeEndHour 1-24 — drives free-time math), the grocery store (shoppingStore, free text like \"Save-On-Foods Wesbrook, Vancouver\" — feeds AI price lookups; null clears), and/or the weekly shopping day (shoppingDay 0=Sunday…6=Saturday — anchors projected grocery spend on the finance forecast; null clears). The daily-spend estimate lives in manage_finance instead. Returns a preview + proposalId; call confirm_action to apply.",
+          "Propose changing user preferences: timezone (IANA name), the wake window (wakeStartHour 0-23, wakeEndHour 1-24 — drives free-time math), the grocery store (shoppingStore, free text like \"Save-On-Foods Wesbrook, Vancouver\" — feeds AI price lookups; null clears), and/or the weekly shopping day (shoppingDay 0=Sunday…6=Saturday — anchors projected grocery spend on the finance forecast; null clears), and/or streamMaxTasks (3-15 — how many tasks each dashboard stream section shows). The daily-spend estimate lives in manage_finance instead. Returns a preview + proposalId; call confirm_action to apply.",
         inputSchema: {
           timezone: z.string().optional(),
           wakeStartHour: z.number().int().min(0).max(23).optional(),
           wakeEndHour: z.number().int().min(1).max(24).optional(),
           shoppingStore: z.string().nullish(),
           shoppingDay: z.number().int().min(0).max(6).nullish(),
+          streamMaxTasks: z
+            .number()
+            .int()
+            .min(3)
+            .max(15)
+            .optional()
+            .describe("max tasks shown per stream section (3-15)"),
         },
       },
       (args, extra) =>

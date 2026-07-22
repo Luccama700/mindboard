@@ -74,7 +74,7 @@ const ITEM_COLUMNS =
 const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
 const TASK_COLUMNS =
-  "id, title, due_date, status, priority, ai_state, notes, group_id, created_at, completed_at";
+  "id, title, due_date, status, priority, ai_state, notes, group_id, created_at, completed_at, estimated_minutes, missed_at";
 const SPEND_LIMIT_COLUMNS =
   "id, scope, category_id, period, amount, archived, created_at";
 
@@ -121,10 +121,35 @@ export async function getFinanceSnapshot(userId: string): Promise<FinanceVitals>
   });
 }
 
-export async function getTasksSnapshot(userId: string): Promise<TaskVitals> {
+export async function getTasksSnapshot(
+  userId: string,
+): Promise<TaskVitals & { doneThisWeek: number; missedThisWeek: number }> {
   const { supabase, ownerId } = scoped(userId);
+  const today = await todayKey(supabase, ownerId);
   const tasks = await listTasks(userId, {});
-  return tasksSnapshot(tasks, await todayKey(supabase, ownerId));
+
+  // Monday-start week in the user's zone: `today` is already local.
+  const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0=Sun
+  const weekStart = addDaysKey(today, -((dow + 6) % 7));
+
+  const [doneRes, missedRes] = await Promise.all([
+    supabase
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", ownerId)
+      .gte("completed_at", weekStart),
+    supabase
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", ownerId)
+      .gte("missed_at", weekStart),
+  ]);
+
+  return {
+    ...tasksSnapshot(tasks, today),
+    doneThisWeek: doneRes.count ?? 0,
+    missedThisWeek: missedRes.count ?? 0,
+  };
 }
 
 // ---------- spending limits ----------
@@ -241,7 +266,7 @@ export async function getInventorySnapshot(userId: string): Promise<InventoryVit
 
 export async function listTasks(userId: string, filter: {
   groupId?: string | null;
-  status?: "todo" | "doing" | "done";
+  status?: "todo" | "doing" | "done" | "missed";
 }): Promise<TaskWithGroup[]> {
   const { supabase, ownerId } = scoped(userId);
 
@@ -305,7 +330,7 @@ export async function listCodeTasks(userId: string, filter?: {
     .select(TASK_COLUMNS)
     .eq("user_id", ownerId)
     .eq("group_id", (group as { id: string }).id)
-    .neq("status", "done");
+    .in("status", ["todo", "doing"]);
   if (filter?.aiState === "none") query = query.is("ai_state", null);
   else if (filter?.aiState) query = query.eq("ai_state", filter.aiState);
 
@@ -621,7 +646,7 @@ async function readPreferencesRow(userId: string) {
   const { data } = await supabase
     .from("user_settings")
     .select(
-      "timezone, wake_start_hour, wake_end_hour, daily_spend_estimate, shopping_store, shopping_day, agent_plan_model, agent_build_model",
+      "timezone, wake_start_hour, wake_end_hour, daily_spend_estimate, shopping_store, shopping_day, stream_max_tasks, agent_plan_model, agent_build_model",
     )
     .eq("user_id", ownerId)
     .maybeSingle();
@@ -635,6 +660,7 @@ async function readPreferencesRow(userId: string) {
         : Number(data.daily_spend_estimate),
     shoppingStore: (data?.shopping_store as string | null) ?? null,
     shoppingDay: typeof data?.shopping_day === "number" ? data.shopping_day : null,
+    streamMaxTasks: typeof data?.stream_max_tasks === "number" ? data.stream_max_tasks : 5,
     // Overnight-agent model choices (null = orchestrator defaults).
     agentPlanModel: (data?.agent_plan_model as string | null) ?? null,
     agentBuildModel: (data?.agent_build_model as string | null) ?? null,

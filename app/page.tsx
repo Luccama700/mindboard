@@ -44,6 +44,7 @@ import {
   type StreamBillInput,
   type StreamSnapshot,
 } from "./lib/snapshots/stream";
+import { zonedWallTimeToUtcMs } from "./lib/snapshots/zoned-time";
 import type { UsageRule } from "./_components/inventory-projection";
 
 const getStreamData = cache(
@@ -55,12 +56,22 @@ const getStreamData = cache(
     categories: SpendCategory[];
     gaps: FreeGap[];
     groups: { id: string; name: string; color: string }[];
+    weekDone: number;
+    weekMissed: number;
   }> => {
     const prefs = await getUserPreferences(userId);
     const timeZone = safeTimeZone(prefs.timezone);
     const today = todayISO(timeZone);
     const now = new Date();
     const supabase = await createClient();
+
+    // Monday-start week in the user's zone, as a UTC instant to compare against
+    // the timestamptz completed_at/missed_at columns.
+    const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0=Sun..6=Sat
+    const weekStart = addDaysKey(today, -((dow + 6) % 7));
+    const weekStartIso = new Date(
+      zonedWallTimeToUtcMs(weekStart, 0, 0, timeZone),
+    ).toISOString();
 
     const [
       dash,
@@ -76,6 +87,8 @@ const getStreamData = cache(
       logResult,
       proposalsResult,
       categoriesResult,
+      weekDoneResult,
+      weekMissedResult,
     ] = await Promise.all([
       getDashboardData(userId, currentMonth()),
       getOpenTasks(userId),
@@ -103,6 +116,14 @@ const getStreamData = cache(
         .from("spending_categories")
         .select("id, name, color")
         .order("name", { ascending: true }),
+      supabase
+        .from("tasks")
+        .select("id", { count: "exact", head: true })
+        .gte("completed_at", weekStartIso),
+      supabase
+        .from("tasks")
+        .select("id", { count: "exact", head: true })
+        .gte("missed_at", weekStartIso),
     ]);
 
     const finance = financeSnapshot({
@@ -195,6 +216,7 @@ const getStreamData = cache(
       freeHoursToday: schedule.freeHoursToday,
       todayDelta: finance.todayDelta,
       currency: finance.currency,
+      maxTasks: prefs.stream_max_tasks,
     });
 
     return {
@@ -208,13 +230,17 @@ const getStreamData = cache(
       categories: (categoriesResult.data ?? []) as SpendCategory[],
       gaps,
       groups: dash.groups,
+      weekDone: weekDoneResult.count ?? 0,
+      weekMissed: weekMissedResult.count ?? 0,
     };
   },
 );
 
 async function StreamSection({ userId }: { userId: string }) {
-  const [{ snapshot, accounts, categories, gaps, groups }, prefs] =
-    await Promise.all([getStreamData(userId), getUserPreferences(userId)]);
+  const [
+    { snapshot, accounts, categories, gaps, groups, weekDone, weekMissed },
+    prefs,
+  ] = await Promise.all([getStreamData(userId), getUserPreferences(userId)]);
   const timeZone = safeTimeZone(prefs.timezone);
   const now = new Date();
 
@@ -225,6 +251,8 @@ async function StreamSection({ userId }: { userId: string }) {
       categories={categories}
       gaps={gaps}
       groups={groups}
+      weekDone={weekDone}
+      weekMissed={weekMissed}
       todayLabel={formatLongWeekdayMonthDay(now, timeZone).toLowerCase()}
       clockLabel={formatClock12(now, timeZone)}
     />

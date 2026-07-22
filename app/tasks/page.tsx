@@ -7,7 +7,7 @@ import {
   listCalendars,
 } from "@/utils/google/calendar";
 import { TasksClient, type TaskFilter } from "@/app/_components/tasks-client";
-import type { Task } from "@/app/_components/types";
+import { TASK_COLUMNS, type Task } from "@/app/_components/types";
 import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
 import { ownerUserId } from "@/app/lib/mcp/config";
 import type { Group } from "./groups-types";
@@ -47,9 +47,9 @@ export default async function TasksPage({
 
   let tasksQuery = supabase
     .from("tasks")
-    .select(
-      "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at",
-    )
+    .select(TASK_COLUMNS)
+    // The /tasks list is live work only; missed rows live on the history page.
+    .neq("status", "missed")
     // Soonest due date first; undated tasks sink to the bottom, newest-captured
     // first among ties/undated.
     .order("due_date", { ascending: true, nullsFirst: false })
@@ -103,7 +103,15 @@ export default async function TasksPage({
       <header className="mb-6">
         <div className="flex items-center justify-between gap-3 mb-4">
           <h1 className="text-label uppercase text-muted">tasks</h1>
-          {agentServiced && <AgentRunButton />}
+          <div className="flex items-center gap-3">
+            {agentServiced && <AgentRunButton />}
+            <Link
+              href="/tasks/history"
+              className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors whitespace-nowrap"
+            >
+              history →
+            </Link>
+          </div>
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1" data-tour="task-groups">
           <Link

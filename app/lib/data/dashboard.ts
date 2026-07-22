@@ -37,13 +37,15 @@ type RawTask = {
   duration_min: number | null;
   gcal_event_id: string | null;
   gcal_calendar_id: string | null;
-  status: "todo" | "doing" | "done";
+  estimated_minutes: number | null;
+  status: "todo" | "doing" | "done" | "missed";
   priority: "low" | "med" | "high";
   ai_state: "planned" | "approved" | "building" | "built" | "failed" | null;
   notes: string | null;
   group_id: string | null;
   created_at: string;
   completed_at: string | null;
+  missed_at: string | null;
   groups: { name: string; color: string } | { name: string; color: string }[] | null;
 };
 
@@ -162,6 +164,7 @@ function mapTasks(rawTasks: RawTask[]): TaskWithGroup[] {
       duration_min: row.duration_min,
       gcal_event_id: row.gcal_event_id,
       gcal_calendar_id: row.gcal_calendar_id,
+      estimated_minutes: row.estimated_minutes,
       status: row.status,
       priority: row.priority,
       ai_state: row.ai_state,
@@ -169,6 +172,7 @@ function mapTasks(rawTasks: RawTask[]): TaskWithGroup[] {
       group_id: row.group_id,
       created_at: row.created_at,
       completed_at: row.completed_at,
+      missed_at: row.missed_at,
       group_name: groupRecord?.name ?? null,
       group_color: groupRecord?.color ?? null,
     };
@@ -183,10 +187,10 @@ export const getOpenTasks = cache(
     const { data } = await supabase
       .from("tasks")
       .select(
-        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, groups(name, color)",
+        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at, groups(name, color)",
       )
       .eq("user_id", userId)
-      .neq("status", "done");
+      .in("status", ["todo", "doing"]);
     return mapTasks((data ?? []) as RawTask[]);
   },
 );
@@ -217,9 +221,9 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
     supabase
       .from("tasks")
       .select(
-        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, groups(name, color)",
+        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at, groups(name, color)",
       )
-      .neq("status", "done")
+      .in("status", ["todo", "doing"])
       .not("due_date", "is", null),
     supabase
       .from("groups")

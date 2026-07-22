@@ -119,6 +119,33 @@ export function extractTrailingTime(input: string): TrailingTime | null {
   };
 }
 
+export type TrailingEstimate = {
+  title: string; // input with the estimate token removed
+  minutes: number;
+  matched: string; // the raw token that was removed, e.g. "~2h"
+};
+
+// Trailing forms only, tilde sigil REQUIRED — a bare "2h" stays part of the
+// title ("sleep 8h"). "~2h" · "~90m" · "~1.5h".
+const TRAILING_ESTIMATE_RE = /(?:^|\s)(~\s*(\d+(?:\.\d+)?)\s*(m|h))\s*$/i;
+
+export function extractTrailingEstimate(input: string): TrailingEstimate | null {
+  const match = TRAILING_ESTIMATE_RE.exec(input);
+  if (!match) return null;
+
+  const value = Number(match[2]);
+  const unit = match[3].toLowerCase();
+  if (!Number.isFinite(value) || value <= 0) return null;
+
+  const minutes = Math.round(unit === "h" ? value * 60 : value);
+  if (minutes <= 0) return null;
+
+  const title = input.slice(0, match.index).trim();
+  if (!title) return null; // estimate-only input is not a task
+
+  return { title, minutes, matched: match[1].replace(/\s+/g, "") };
+}
+
 export type TrailingRecurrence = {
   title: string; // input with the recurrence phrase removed
   rule: TaskRecurrence;

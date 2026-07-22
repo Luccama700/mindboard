@@ -1,12 +1,15 @@
 // The Stream: one deterministic, ranked queue synthesized across every domain.
-// Section membership is objective time-facts only (see docs/REDESIGN.md §6 —
-// that table is this module's test spec). Priority orders within sections and
-// never promotes across them. Pure: `today`/`now` are injected.
+// NOW is an urgency board — overdue + all due-today tasks, ranked by
+// urgencyScore and capped at maxTasks (non-task NOW cards stay uncapped), each
+// task stamped with a tier the client reads for elevation. NEXT/LATER remain
+// objective time-facts (events, recurring, stock, bills). Pure: `today`/`now`
+// are injected.
 
 import {
   ruleLandsOn,
   type RecurringRule,
 } from "@/app/_components/finance-projection";
+import { urgencyScore, urgencyTier } from "./urgency";
 import {
   effectiveDailyRate,
   runOutDateKey,
@@ -94,6 +97,8 @@ export type StreamCard = {
   fact: string;
   meta: string | null;
   entity: StreamEntity;
+  // Urgency tier for NOW task cards only (0..3); absent on every other card.
+  tier?: 0 | 1 | 2 | 3;
 };
 
 export type StreamSnapshot = {
@@ -105,6 +110,7 @@ export type StreamSnapshot = {
     mood: number | null;
   };
   now: StreamCard[];
+  nowOverflow: number;
   next: StreamCard[];
   nextOverflow: number;
   later: StreamCard[];
@@ -134,6 +140,8 @@ export type StreamInput = {
   freeHoursToday: number;
   todayDelta: number;
   currency: string;
+  // Cap for the task-bearing lists (NOW tasks, NEXT, LATER). Default 5.
+  maxTasks?: number;
 };
 
 const SECTION_CAP = 5;
@@ -224,6 +232,14 @@ function shortTime(time: string): string {
   return time.slice(0, 5);
 }
 
+// "~45m" under an hour, else "~2h" / "~1.5h" (the .0 trimmed).
+export function formatEstimate(minutes: number): string {
+  if (minutes < 60) return `~${minutes}m`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  const label = Number.isInteger(hours) ? String(hours) : hours.toFixed(1);
+  return `~${label}h`;
+}
+
 function taskMeta(task: TaskWithGroup, today: string): string {
   const parts: string[] = [];
   if (task.due_date) {
@@ -240,6 +256,7 @@ function taskMeta(task: TaskWithGroup, today: string): string {
   }
   if (task.priority === "high") parts.push("!!!");
   if (task.group_name) parts.push(task.group_name);
+  if (task.estimated_minutes) parts.push(formatEstimate(task.estimated_minutes));
   return parts.join(" · ");
 }
 
@@ -378,13 +395,17 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     freeHoursToday,
     todayDelta,
     currency,
+    maxTasks = SECTION_CAP,
   } = input;
 
+  const cap = maxTasks;
   const nowMs = now.getTime();
   const tomorrow = addDaysKey(today, 1);
   const soonLimit = addDaysKey(today, SOON_WINDOW_DAYS);
 
-  const openTasks = tasks.filter((t) => t.status !== "done");
+  const openTasks = tasks.filter(
+    (t) => t.status !== "done" && t.status !== "missed",
+  );
   const timedEvents = events.filter((e) => !e.allDay && e.start && e.end);
 
   // Per-item run-out keys, computed once. Low-priority stock never enters the
@@ -436,15 +457,25 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .map((e) => eventCard(e, now, timeZone));
 
   const nowClock = wallClock(now, timeZone);
-  const timePast = (t: TaskWithGroup) =>
-    t.due_date === today &&
-    t.due_time !== null &&
-    shortTime(t.due_time) <= nowClock;
 
-  const overdueTasks = openTasks
-    .filter((t) => (t.due_date && t.due_date < today) || timePast(t))
-    .sort(byPriorityThenLateness(today))
-    .map((t) => taskCard(t, today));
+  // NOW is the urgency board: overdue + ALL due-today tasks (untimed and
+  // future-timed alike), ranked by urgencyScore (byPriorityThenLateness breaks
+  // ties), capped at maxTasks with the surplus surfaced as nowOverflow. Each
+  // card is stamped with its tier for the client's elevation treatment.
+  const nowTaskEntries = openTasks
+    .filter((t) => t.due_date !== null && t.due_date <= today)
+    .map((t) => ({ task: t, score: urgencyScore(t, today, nowClock) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return byPriorityThenLateness(today)(a.task, b.task);
+    });
+  const nowTaskCards = nowTaskEntries
+    .slice(0, cap)
+    .map(({ task, score }) => ({
+      ...taskCard(task, today),
+      tier: urgencyTier(score),
+    }));
+  const nowOverflow = Math.max(0, nowTaskEntries.length - cap);
 
   const todayDate = parseKey(today);
   const billsToday = bills
@@ -508,13 +539,13 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
   const nowCards = [
     ...nowEvents,
     ...urgentStock,
-    ...overdueTasks,
+    ...nowTaskCards,
     ...rtasksNow,
     ...billsToday,
     ...runOutNow,
   ];
 
-  // ---- NEXT: cap 5 ---------------------------------------------------------
+  // ---- NEXT: cap maxTasks --------------------------------------------------
   const laterTodayEvents = timedEvents
     .filter((e) => {
       const start = new Date(e.start).getTime();
@@ -532,8 +563,9 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .slice(0, 1)
     .map((e) => eventCard(e, now, timeZone, { tomorrow: true }));
 
-  // Due-today tasks and today's upcoming recurring occurrences interleave:
-  // time-anchored first by time, untimed after by priority.
+  // Due-today real tasks now live in NOW; only today's upcoming recurring
+  // occurrences interleave here — time-anchored first by time, untimed after
+  // by priority.
   type DueTodayEntry = {
     dueTime: string | null;
     priority: TaskWithGroup["priority"];
@@ -541,16 +573,6 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     card: StreamCard;
   };
   const dueTodayTasks = [
-    ...openTasks
-      .filter((t) => t.due_date === today && !timePast(t))
-      .map(
-        (t): DueTodayEntry => ({
-          dueTime: t.due_time,
-          priority: t.priority,
-          created: t.created_at,
-          card: taskCard(t, today),
-        }),
-      ),
     ...rtasksUpcoming.map(
       (r): DueTodayEntry => ({
         dueTime: r.due_time,
@@ -593,19 +615,17 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       );
     });
 
-  // Tasks lead: they are the actionable items, while events are ambient
-  // schedule context — a full calendar day must never push due-today tasks
-  // past the section cap into the overflow link.
+  // Recurring occurrences lead, then ambient schedule context, then low stock.
   const nextAll = [
     ...dueTodayTasks,
     ...laterTodayEvents,
     ...tomorrowFirst,
     ...lowItems,
   ];
-  const nextCards = nextAll.slice(0, SECTION_CAP);
-  const nextOverflow = Math.max(0, nextAll.length - SECTION_CAP);
+  const nextCards = nextAll.slice(0, cap);
+  const nextOverflow = Math.max(0, nextAll.length - cap);
 
-  // ---- LATER: cap 5, by date ----------------------------------------------
+  // ---- LATER: cap maxTasks, by date ---------------------------------------
   const laterTasks = openTasks
     .filter((t) => t.due_date && t.due_date > today && t.due_date <= soonLimit)
     .map((t) => ({ dateKey: t.due_date!, order: 0, card: taskCard(t, today) }));
@@ -665,8 +685,8 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     if (d !== 0) return d;
     return a.order - b.order;
   });
-  const laterCards = laterAll.map((x) => x.card).slice(0, SECTION_CAP);
-  const laterOverflow = Math.max(0, laterAll.length - SECTION_CAP);
+  const laterCards = laterAll.map((x) => x.card).slice(0, cap);
+  const laterOverflow = Math.max(0, laterAll.length - cap);
 
   // ---- LOOSE ENDS: fixed order, absent when tidy ---------------------------
   const loose: StreamCard[] = [];
@@ -753,6 +773,7 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       mood: moodToday,
     },
     now: nowCards,
+    nowOverflow,
     next: nextCards,
     nextOverflow,
     later: laterCards,

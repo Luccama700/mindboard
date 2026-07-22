@@ -29,6 +29,7 @@ export type CreateTaskInput = {
   dueDate: string | null;
   notes: string | null;
   priority: Priority;
+  estimatedMinutes?: number | null;
 };
 
 export function validateCreateTask(raw: {
@@ -37,6 +38,7 @@ export function validateCreateTask(raw: {
   dueDate?: unknown;
   notes?: unknown;
   priority?: unknown;
+  estimatedMinutes?: unknown;
 }): Result<CreateTaskInput> {
   const title = typeof raw.title === "string" ? raw.title.trim() : "";
   if (!title) return { ok: false, error: "title is required" };
@@ -51,6 +53,16 @@ export function validateCreateTask(raw: {
   if (!PRIORITIES.includes(priority)) {
     return { ok: false, error: "priority must be low, med, or high" };
   }
+  let estimatedMinutes: number | null | undefined;
+  if (raw.estimatedMinutes !== undefined) {
+    if (
+      raw.estimatedMinutes !== null &&
+      (!Number.isInteger(raw.estimatedMinutes) || (raw.estimatedMinutes as number) < 1)
+    ) {
+      return { ok: false, error: "estimatedMinutes must be a whole number of minutes (or null)" };
+    }
+    estimatedMinutes = raw.estimatedMinutes as number | null;
+  }
 
   return {
     ok: true,
@@ -60,6 +72,7 @@ export function validateCreateTask(raw: {
       dueDate: (raw.dueDate as string | null) ?? null,
       notes: typeof raw.notes === "string" ? raw.notes.trim() || null : null,
       priority,
+      ...(estimatedMinutes !== undefined ? { estimatedMinutes } : {}),
     },
   };
 }
@@ -251,6 +264,7 @@ export type UpdateTaskInput = {
   dueDate?: string | null;
   dueTime?: string | null;
   durationMin?: number | null;
+  estimatedMinutes?: number | null;
   groupId?: string | null;
   notes?: string | null;
   priority?: Priority;
@@ -294,6 +308,18 @@ export function validateUpdateTask(raw: Record<string, unknown>): Result<UpdateT
         return { ok: false, error: "durationMin must be 15 or more" };
       }
       out.durationMin = d;
+    }
+  }
+  if (raw.estimatedMinutes !== undefined) {
+    if (raw.estimatedMinutes === null) {
+      out.estimatedMinutes = null;
+    } else if (
+      !Number.isInteger(raw.estimatedMinutes) ||
+      (raw.estimatedMinutes as number) < 1
+    ) {
+      return { ok: false, error: "estimatedMinutes must be a whole number of minutes 1 or more, or null" };
+    } else {
+      out.estimatedMinutes = raw.estimatedMinutes as number;
     }
   }
   if (raw.groupId !== undefined) {
@@ -357,6 +383,13 @@ export function summarizeUpdateTask(
   }
   if (value.durationMin !== undefined && value.durationMin !== null) {
     bits.push(`${value.durationMin}min`);
+  }
+  if (value.estimatedMinutes !== undefined) {
+    bits.push(
+      value.estimatedMinutes === null
+        ? "clear estimate"
+        : `estimate ~${value.estimatedMinutes}m`,
+    );
   }
   if (value.groupId !== undefined) {
     bits.push(value.groupId === null ? "move to inbox" : `move to "${groupName ?? value.groupId}"`);
@@ -713,6 +746,7 @@ export type UpdateSettingsInput = {
   wakeEndHour?: number;
   shoppingStore?: string | null;
   shoppingDay?: number | null;
+  streamMaxTasks?: number;
 };
 
 export function validateUpdateSettings(
@@ -762,6 +796,13 @@ export function validateUpdateSettings(
       }
       out.shoppingDay = d;
     }
+  }
+  if (raw.streamMaxTasks !== undefined) {
+    const n = Math.trunc(Number(raw.streamMaxTasks));
+    if (!Number.isFinite(n) || n < 3 || n > 15) {
+      return { ok: false, error: "streamMaxTasks must be 3-15" };
+    }
+    out.streamMaxTasks = n;
   }
   if (
     out.wakeStartHour !== undefined &&

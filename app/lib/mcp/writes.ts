@@ -170,6 +170,35 @@ export async function proposeCompleteTask(userId: string, raw: unknown): Promise
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
+export async function proposeMissTask(userId: string, raw: unknown): Promise<Result<Proposal>> {
+  const taskId = (raw as { taskId?: unknown })?.taskId;
+  if (typeof taskId !== "string" || !taskId) {
+    return { ok: false, error: "taskId is required" };
+  }
+
+  const supabase = createServiceClient();
+  const ownerId = userId;
+
+  const { data } = await supabase
+    .from("tasks")
+    .select("id, title, status")
+    .eq("id", taskId)
+    .eq("user_id", ownerId)
+    .maybeSingle();
+  if (!data) return { ok: false, error: "task not found" };
+  const task = data as { id: string; title: string; status: string };
+  if (task.status === "done") {
+    return { ok: false, error: `"${task.title}" is already done` };
+  }
+  if (task.status === "missed") {
+    return { ok: false, error: `"${task.title}" is already missed` };
+  }
+
+  const summary = `Mark task "${task.title}" as missed.`;
+  const proposalId = await recordProposal(supabase, ownerId, "miss_task", { taskId }, summary);
+  return { ok: true, value: { proposalId, preview: summary } };
+}
+
 export async function proposeLogSpend(userId: string, raw: unknown): Promise<Result<Proposal>> {
   const parsed = validateLogSpend((raw ?? {}) as Record<string, unknown>);
   if (!parsed.ok) return parsed;
@@ -698,6 +727,7 @@ async function executeCreateTask(
       due_time: v.dueDate ? dueTime : null,
       notes: v.notes,
       priority: v.priority,
+      ...(v.estimatedMinutes != null ? { estimated_minutes: v.estimatedMinutes } : {}),
     })
     .select("id, title, due_date, due_time, status, priority, group_id")
     .single();
@@ -774,6 +804,26 @@ async function executeCompleteTask(
   const { data, error } = await supabase
     .from("tasks")
     .update({ status: "done", completed_at: new Date().toISOString() })
+    .eq("id", taskId)
+    .eq("user_id", ownerId)
+    .select("id, title, status")
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: "task not found" };
+  return { ok: true, value: { task: data } };
+}
+
+async function executeMissTask(
+  supabase: SupabaseClient,
+  ownerId: string,
+  input: Record<string, unknown>,
+): Promise<Result<Record<string, unknown>>> {
+  const taskId = input.taskId;
+  if (typeof taskId !== "string") return { ok: false, error: "taskId is required" };
+
+  const { data, error } = await supabase
+    .from("tasks")
+    .update({ status: "missed", missed_at: new Date().toISOString() })
     .eq("id", taskId)
     .eq("user_id", ownerId)
     .select("id, title, status")
@@ -1638,6 +1688,7 @@ async function executeUpdateTask(
     updates.due_time = v.dueTime ? `${v.dueTime}:00` : null;
   }
   if (v.durationMin !== undefined) updates.duration_min = v.durationMin;
+  if (v.estimatedMinutes !== undefined) updates.estimated_minutes = v.estimatedMinutes;
   if (v.groupId !== undefined) updates.group_id = v.groupId;
   if (v.notes !== undefined) updates.notes = v.notes;
   if (v.priority !== undefined) updates.priority = v.priority;
@@ -1653,7 +1704,7 @@ async function executeUpdateTask(
     .eq("id", v.taskId)
     .eq("user_id", ownerId)
     .select(
-      "id, title, due_date, due_time, duration_min, gcal_event_id, gcal_calendar_id, group_id, groups(google_calendar_id)",
+      "id, title, due_date, due_time, duration_min, estimated_minutes, gcal_event_id, gcal_calendar_id, group_id, groups(google_calendar_id)",
     )
     .maybeSingle();
   if (error) return { ok: false, error: error.message };
@@ -1665,6 +1716,7 @@ async function executeUpdateTask(
     due_date: string | null;
     due_time: string | null;
     duration_min: number | null;
+    estimated_minutes: number | null;
     gcal_event_id: string | null;
     gcal_calendar_id: string | null;
     groups:
@@ -1690,7 +1742,10 @@ async function executeUpdateTask(
     try {
       const timeZone = await ownerTimezone(supabase, ownerId);
       const start = task.due_time.length === 5 ? `${task.due_time}:00` : task.due_time;
-      const end = addMinutesToClock(start.slice(0, 5), task.duration_min ?? 30);
+      const end = addMinutesToClock(
+        start.slice(0, 5),
+        task.duration_min ?? task.estimated_minutes ?? 30,
+      );
       await updateEvent(ownerId, task.gcal_calendar_id, task.gcal_event_id, {
         start: { dateTime: `${task.due_date}T${start}`, timeZone },
         end: { dateTime: `${task.due_date}T${end}`, timeZone },
@@ -1713,7 +1768,10 @@ async function executeUpdateTask(
       try {
         const timeZone = await ownerTimezone(supabase, ownerId);
         const start = task.due_time.length === 5 ? `${task.due_time}:00` : task.due_time;
-        const end = addMinutesToClock(start.slice(0, 5), task.duration_min ?? 30);
+        const end = addMinutesToClock(
+          start.slice(0, 5),
+          task.duration_min ?? task.estimated_minutes ?? 30,
+        );
         const eventId = await createEvent(ownerId, calendarId, {
           summary: task.title,
           start: { dateTime: `${task.due_date}T${start}`, timeZone },
@@ -2345,6 +2403,9 @@ export async function proposeUpdateSettingsFor(
         : `shopping day → ${DAY_NAMES[v.shoppingDay]}`,
     );
   }
+  if (v.streamMaxTasks !== undefined) {
+    bits.push(`stream max tasks → ${v.streamMaxTasks}`);
+  }
   const summary = `Update preferences: ${bits.join(", ")}.`;
   const proposalId = await recordProposal(
     supabase,
@@ -2389,6 +2450,7 @@ async function executeUpdateSettings(
   if (v.wakeEndHour !== undefined) patch.wake_end_hour = v.wakeEndHour;
   if (v.shoppingStore !== undefined) patch.shopping_store = v.shoppingStore;
   if (v.shoppingDay !== undefined) patch.shopping_day = v.shoppingDay;
+  if (v.streamMaxTasks !== undefined) patch.stream_max_tasks = v.streamMaxTasks;
 
   const { error } = await supabase
     .from("user_settings")
@@ -2672,6 +2734,7 @@ export const EXECUTORS: Record<
   archive_recurring_task: executeArchiveRecurringTask,
   complete_recurring: executeCompleteRecurring,
   complete_task: executeCompleteTask,
+  miss_task: executeMissTask,
   manage_group: executeManageGroup,
   upsert_goal: executeUpsertGoal,
   reschedule_event: executeRescheduleEvent,

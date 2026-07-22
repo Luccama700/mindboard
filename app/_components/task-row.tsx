@@ -22,11 +22,23 @@ export type GroupOption = {
   color: string;
 };
 
+// Duplicated from stream.ts's formatEstimate — task-row imports no server-ish
+// snapshot code, so a local copy keeps its bundle lean.
+function formatEstimate(minutes: number): string {
+  if (minutes < 60) return `~${minutes}m`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  const label = Number.isInteger(hours) ? String(hours) : hours.toFixed(1);
+  return `~${label}h`;
+}
+
+const ESTIMATE_CHIPS = [15, 30, 60, 120, 240] as const;
+
 type UpdatePatch = {
   title?: string;
   dueDate?: string | null;
   dueTime?: string | null;
   durationMin?: number | null;
+  estimatedMinutes?: number | null;
   groupId?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
@@ -38,6 +50,7 @@ export function TaskRow({
   onToggle,
   onDelete,
   onUpdate,
+  onMiss,
   variant = "default",
   hideDate = false,
   open: openProp,
@@ -49,6 +62,7 @@ export function TaskRow({
   onToggle: (t: Task) => void;
   onDelete: (id: string) => void;
   onUpdate: (id: string, patch: UpdatePatch) => void;
+  onMiss?: (id: string) => void;
   variant?: "default" | "overdue";
   hideDate?: boolean;
   open?: boolean;
@@ -77,8 +91,10 @@ export function TaskRow({
 
   const showDate = task.due_date && !isDone && !hideDate;
   const hasNotes = Boolean(task.notes?.trim());
+  const hasEstimate = !isDone && task.estimated_minutes != null;
   const aiBadge = task.ai_state ? AI_BADGE[task.ai_state] : null;
-  const showSubtitle = hasGroupInfo || showDate || hasNotes || Boolean(aiBadge);
+  const showSubtitle =
+    hasGroupInfo || showDate || hasNotes || hasEstimate || Boolean(aiBadge);
 
   return (
     <div className="border-b border-line">
@@ -154,9 +170,16 @@ export function TaskRow({
                 <span className="text-line-subtle">·</span>
               )}
               {hasNotes && <span className="text-muted">notes</span>}
-              {(hasGroupInfo || showDate || hasNotes) && aiBadge && (
+              {(hasGroupInfo || showDate || hasNotes) && hasEstimate && (
                 <span className="text-line-subtle">·</span>
               )}
+              {hasEstimate && (
+                <span className="text-muted">
+                  {formatEstimate(task.estimated_minutes!)}
+                </span>
+              )}
+              {(hasGroupInfo || showDate || hasNotes || hasEstimate) &&
+                aiBadge && <span className="text-line-subtle">·</span>}
               {aiBadge && <span className={aiBadge.tone}>{aiBadge.label}</span>}
             </p>
           )}
@@ -169,6 +192,7 @@ export function TaskRow({
           groups={groups}
           onDelete={onDelete}
           onUpdate={onUpdate}
+          onMiss={isOverdue ? onMiss : undefined}
           hideNotes={hideNotesInPanel}
         />
       )}
@@ -181,12 +205,14 @@ function EditPanel({
   groups,
   onDelete,
   onUpdate,
+  onMiss,
   hideNotes = false,
 }: {
   task: Task | TaskWithGroup;
   groups: GroupOption[];
   onDelete: (id: string) => void;
   onUpdate: (id: string, patch: UpdatePatch) => void;
+  onMiss?: (id: string) => void;
   hideNotes?: boolean;
 }) {
   const [titleDraft, setTitleDraft] = useState(task.title);
@@ -415,6 +441,31 @@ function EditPanel({
         ))}
       </div>
 
+      <div className="flex items-center flex-wrap gap-2">
+        <label className="text-[10px] tracking-widest uppercase text-muted">
+          estimate
+        </label>
+        {ESTIMATE_CHIPS.map((m) => {
+          const active = task.estimated_minutes === m;
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() =>
+                onUpdate(task.id, { estimatedMinutes: active ? null : m })
+              }
+              className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
+                active
+                  ? "bg-accent text-accent-fg border-accent"
+                  : "border-line-strong text-muted hover:border-fg hover:text-fg"
+              }`}
+            >
+              {m < 60 ? `${m}m` : `${m / 60}h`}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="flex items-center gap-2">
         <label className="text-[10px] tracking-widest uppercase text-muted">
           group
@@ -520,7 +571,15 @@ function EditPanel({
         </div>
       )}
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-4">
+        {onMiss && (
+          <button
+            onClick={() => onMiss(task.id)}
+            className="inline-flex items-center min-h-11 text-danger opacity-70 hover:opacity-100 text-xs tracking-widest uppercase transition-opacity px-3"
+          >
+            incomplete
+          </button>
+        )}
         <button
           onClick={() => onDelete(task.id)}
           className="inline-flex items-center min-h-11 text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors px-3"

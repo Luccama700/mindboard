@@ -54,7 +54,7 @@ export async function DockMount() {
       .from("tasks")
       .select("id", { count: "exact", head: true })
       .is("group_id", null)
-      .neq("status", "done"),
+      .in("status", ["todo", "doing"]),
     brainNoteCount(supabase, user.id),
     supabase
       .from("accounts")

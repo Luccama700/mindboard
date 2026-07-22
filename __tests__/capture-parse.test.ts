@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  extractTrailingEstimate,
   extractTrailingRecurrence,
   extractTrailingTime,
   parseCapture,
@@ -178,5 +179,39 @@ describe("extractTrailingRecurrence", () => {
       title: "lunch daily",
       time: null,
     });
+  });
+});
+
+describe("extractTrailingEstimate", () => {
+  test.each<[string, string, number]>([
+    ["write report ~2h", "write report", 120],
+    ["call mom ~90m", "call mom", 90],
+    ["deep work ~1.5h", "deep work", 90],
+    ["quick fix ~15m", "quick fix", 15],
+    ["nap ~0.5h", "nap", 30],
+  ])("%s -> %s @ %d min", (input, title, minutes) => {
+    const parsed = extractTrailingEstimate(input);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.title).toBe(title);
+    expect(parsed!.minutes).toBe(minutes);
+  });
+
+  test("strips the token, leaving a clean title", () => {
+    expect(extractTrailingEstimate("write report ~2h")!.matched).toBe("~2h");
+  });
+
+  test.each([
+    "read 2h", // no tilde sigil -> stays title text
+    "sleep 8h", // bare hours are part of the title
+    "buy milk", // no estimate at all
+    "~2h", // estimate-only, no title left
+    "~", // not even a value
+    "gym ~0h", // zero minutes
+  ])("rejects %s", (input) => {
+    expect(extractTrailingEstimate(input)).toBeNull();
+  });
+
+  test("a mid-title estimate token is not extracted", () => {
+    expect(extractTrailingEstimate("~2h then lunch")).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import { GroupsClient } from "@/app/tasks/groups-client";
 import type { Group } from "@/app/tasks/groups-types";
 import type { CalendarListEntry } from "@/utils/google/calendar";
 import {
+  extractTrailingEstimate,
   extractTrailingRecurrence,
   extractTrailingTime,
   parseCapture,
@@ -129,6 +130,9 @@ export function Dock({
   const [typing, setTyping] = useState(false);
   const [keyboardUp, setKeyboardUp] = useState(false);
   const [timeDisabledFor, setTimeDisabledFor] = useState<string | null>(null);
+  const [estimateDisabledFor, setEstimateDisabledFor] = useState<string | null>(
+    null,
+  );
   const [recurrenceDisabledFor, setRecurrenceDisabledFor] = useState<
     string | null
   >(null);
@@ -185,6 +189,17 @@ export function Dock({
       }
     : null;
   const effectiveRule = parsedRecurrence?.rule ?? manualRule;
+
+  // Trailing effort estimate (`~2h`), a plain-task extractor like the time —
+  // not offered on recurring tasks (createRecurringTask has no estimate field).
+  const estExtract =
+    capture.mode === "task" ? extractTrailingEstimate(capture.title) : null;
+  const parsedEstimate =
+    estExtract !== null &&
+    estExtract.matched !== estimateDisabledFor &&
+    !effectiveRule
+      ? estExtract
+      : null;
 
   const railCollapsed = typing || keyboardUp;
 
@@ -393,8 +408,14 @@ export function Dock({
     }
 
     const parsed = parsedTime;
-    const t = (parsed ? parsed.title : title).trim();
+    let t = parsed ? parsed.title : title;
+    if (parsedEstimate) {
+      const stripped = extractTrailingEstimate(t);
+      if (stripped) t = stripped.title;
+    }
+    t = t.trim();
     const dueTime = parsed && dueDate ? parsed.time : null;
+    const estimatedMinutes = parsedEstimate ? parsedEstimate.minutes : null;
     const markdownNotes = notes.trim() || null;
     if (!t || busy) return;
 
@@ -402,6 +423,7 @@ export function Dock({
     setTitle("");
     setNotes("");
     setTimeDisabledFor(null);
+    setEstimateDisabledFor(null);
 
     const tempId = `temp-${crypto.randomUUID()}`;
     const optimisticTask: Task = {
@@ -410,6 +432,7 @@ export function Dock({
       due_date: dueDate,
       due_time: dueTime,
       duration_min: null,
+      estimated_minutes: estimatedMinutes,
       gcal_event_id: null,
       gcal_calendar_id: null,
       status: "todo",
@@ -419,6 +442,7 @@ export function Dock({
       group_id: selectedGroupId,
       created_at: new Date().toISOString(),
       completed_at: null,
+      missed_at: null,
     };
 
     emitTaskOptimistic(optimisticTask);
@@ -431,6 +455,7 @@ export function Dock({
       dueTime,
       notes: markdownNotes,
       priority,
+      estimatedMinutes,
     });
 
     if (!result.error && result.task) {
@@ -956,6 +981,18 @@ export function Dock({
               className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full bg-accent text-accent-fg border-accent transition-colors"
             >
               ⌚ {parsedTime.time} ×
+            </button>
+          )}
+
+          {parsedEstimate && (
+            <button
+              type="button"
+              onClick={() => setEstimateDisabledFor(parsedEstimate.matched)}
+              aria-label={`remove estimate ${parsedEstimate.matched}`}
+              title="tap to keep the estimate words as part of the title"
+              className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full bg-accent text-accent-fg border-accent transition-colors"
+            >
+              {parsedEstimate.matched} ×
             </button>
           )}
 

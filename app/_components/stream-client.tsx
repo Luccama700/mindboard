@@ -4,16 +4,19 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   createTask,
+  markTaskMissed,
   toggleTaskStatus,
   updateTask,
 } from "@/app/actions/tasks";
 import { updateInventoryItem } from "@/app/actions/inventory";
 import { completeRecurringOccurrence } from "@/app/actions/recurring-tasks";
 import type { FreeGap } from "@/app/lib/snapshots/schedule";
-import type {
-  StreamCard,
-  StreamSnapshot,
+import {
+  formatEstimate,
+  type StreamCard,
+  type StreamSnapshot,
 } from "@/app/lib/snapshots/stream";
+import { daysLate } from "@/app/lib/snapshots/urgency";
 import { subscribeCapture } from "./capture-bus";
 import { todayISO } from "./date-utils";
 import { formatMoney } from "./money";
@@ -57,10 +60,13 @@ export type StreamGroup = { id: string; name: string; color: string };
 function CardRow({
   card,
   section,
+  index,
+  animate,
   leaving,
   gaps,
   groups,
   onDone,
+  onMiss,
   onSnooze,
   onSchedule,
   onGroup,
@@ -72,10 +78,13 @@ function CardRow({
 }: {
   card: StreamCard;
   section: SectionKey;
-  leaving: boolean;
+  index: number;
+  animate: boolean;
+  leaving: "done" | "missed" | null;
   gaps: FreeGap[];
   groups: StreamGroup[];
   onDone: (card: StreamCard) => void;
+  onMiss: (card: StreamCard) => void;
   onSnooze: (card: StreamCard, dateKey: string) => void;
   onSchedule: (card: StreamCard, gap: FreeGap) => void;
   onGroup: (card: StreamCard, group: StreamGroup | null) => void;
@@ -93,6 +102,13 @@ function CardRow({
   const today = todayISO();
 
   const isTask = card.entity.kind === "task" || card.entity.kind === "rtask";
+  const cardTask = card.entity.kind === "task" ? card.entity.task : null;
+  const taskTier = card.entity.kind === "task" ? (card.tier ?? 0) : undefined;
+  const isFocus = taskTier === 3;
+  const isOverdueTask =
+    cardTask !== null &&
+    cardTask.due_date !== null &&
+    cardTask.due_date < today;
 
   function onTouchStart(e: React.TouchEvent) {
     if (!isTask) return;
@@ -118,8 +134,18 @@ function CardRow({
     touchStart.current = null;
   }
 
-  const tick =
-    section === "now" ? "border-l-2 border-accent" : "border-l-2 border-hairline";
+  // Tier drives a task card's left tick; other cards follow their section.
+  const tickColor =
+    leaving === "missed"
+      ? "border-danger"
+      : taskTier !== undefined
+        ? taskTier >= 2
+          ? "border-accent"
+          : "border-hairline"
+        : section === "now"
+          ? "border-accent"
+          : "border-hairline";
+  const tick = `border-l-2 ${tickColor}`;
 
   const actions: React.ReactNode[] = [];
   if (card.entity.kind === "task") {
@@ -134,6 +160,20 @@ function CardRow({
       >
         done
       </button>,
+    );
+    if (isOverdueTask) {
+      actions.push(
+        <button
+          key="incomplete"
+          type="button"
+          onClick={() => onMiss(card)}
+          className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-danger opacity-70 hover:opacity-100 hover:border-danger transition-[color,opacity,border-color]"
+        >
+          incomplete
+        </button>,
+      );
+    }
+    actions.push(
       <div key="later" className="relative">
         <button
           type="button"
@@ -343,38 +383,105 @@ function CardRow({
     );
   }
 
+  // Focus cards carry their own meta line: effort + lateness, lateness in danger.
+  const focusEstimate =
+    cardTask?.estimated_minutes != null
+      ? formatEstimate(cardTask.estimated_minutes)
+      : null;
+  let focusLate: React.ReactNode = null;
+  if (cardTask?.due_date) {
+    if (cardTask.due_date < today) {
+      const n = daysLate(cardTask.due_date, today);
+      focusLate = (
+        <span className="text-danger">{n === 1 ? "1d late" : `${n}d late`}</span>
+      );
+    } else if (cardTask.due_date === today) {
+      focusLate = <span className="text-muted">today</span>;
+    }
+  }
+  const factStruck = leaving === "done";
+
+  const restMax = isFocus ? "max-h-[40rem]" : "max-h-40";
+  const leaveClass =
+    leaving === "missed"
+      ? "overflow-hidden max-h-0 opacity-0 translate-y-1 scale-[.98] duration-[400ms]"
+      : leaving === "done"
+        ? "overflow-hidden max-h-0 opacity-0 -translate-x-1 duration-[280ms]"
+        : `${restMax} opacity-100 duration-[120ms]`;
+
+  const innerStyle: React.CSSProperties = {};
+  if (dx !== 0) innerStyle.transform = `translateX(${dx}px)`;
+  if (animate) innerStyle.animationDelay = `${Math.min(index, 10) * 35}ms`;
+  const swipeBg = dx > 40 ? "bg-accent-wash" : dx < -40 ? "bg-card-hover" : "";
+  const innerClass = isFocus
+    ? `glass-panel rounded-panel ${tick} p-4 ${swipeBg}`
+    : `${tick} pl-3 pr-1 py-2 ${swipeBg}`;
+
   return (
     <div
       // overflow-hidden only while collapsing: at rest it would clip the
       // later/schedule dropdowns, which open past the card's bottom edge.
-      className={`transition-all ease-signal ${
-        leaving
-          ? "overflow-hidden max-h-0 opacity-0 -translate-x-1 duration-[280ms]"
-          : "max-h-40 opacity-100 duration-[120ms]"
-      }`}
+      className={`transition-all ease-signal ${isFocus ? "my-2" : ""} ${
+        animate && isFocus ? "focus-pop" : ""
+      } ${leaveClass}`}
     >
       <div
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
-        style={dx !== 0 ? { transform: `translateX(${dx}px)` } : undefined}
-        className={`${tick} pl-3 pr-1 py-2 ${
-          dx > 40 ? "bg-accent-wash" : dx < -40 ? "bg-card-hover" : ""
-        }`}
+        style={innerStyle}
+        className={`${innerClass} ${animate ? "stream-rise" : ""}`}
       >
-        <p className="text-body text-fg flex items-baseline gap-2 min-w-0">
-          <span className="text-muted shrink-0" aria-hidden>
-            {card.glyph}
-          </span>
-          <span className={leaving ? "line-through text-muted truncate" : "truncate"}>
-            {card.fact}
-          </span>
-          {card.meta && (
-            <span className="text-meta text-muted shrink-0">{card.meta}</span>
-          )}
-        </p>
-        {actions.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 mt-1.5">{actions}</div>
+        {isFocus ? (
+          <>
+            <p className="text-base font-medium text-fg flex items-baseline gap-2 min-w-0">
+              <span className="text-muted shrink-0" aria-hidden>
+                {card.glyph}
+              </span>
+              <span
+                className={
+                  factStruck ? "line-through text-muted truncate" : "truncate"
+                }
+              >
+                {card.fact}
+              </span>
+            </p>
+            {(focusEstimate || focusLate) && (
+              <p className="text-meta text-muted mt-1 flex items-center gap-1.5">
+                {focusEstimate && <span>{focusEstimate}</span>}
+                {focusEstimate && focusLate && <span aria-hidden>·</span>}
+                {focusLate}
+              </p>
+            )}
+            {actions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2.5 mt-3">
+                {actions}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-body text-fg flex items-baseline gap-2 min-w-0">
+              <span className="text-muted shrink-0" aria-hidden>
+                {card.glyph}
+              </span>
+              <span
+                className={`${factStruck ? "line-through text-muted" : ""} ${
+                  taskTier === 2 ? "font-medium" : ""
+                } truncate`}
+              >
+                {card.fact}
+              </span>
+              {card.meta && (
+                <span className="text-meta text-muted shrink-0">{card.meta}</span>
+              )}
+            </p>
+            {actions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                {actions}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -387,6 +494,8 @@ export function StreamClient({
   categories,
   gaps,
   groups,
+  weekDone,
+  weekMissed,
   todayLabel,
   clockLabel,
 }: {
@@ -395,11 +504,15 @@ export function StreamClient({
   categories: SpendCategory[];
   gaps: FreeGap[];
   groups: StreamGroup[];
+  weekDone: number;
+  weekMissed: number;
   todayLabel: string;
   clockLabel: string;
 }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
-  const [leaving, setLeaving] = useState<Set<string>>(new Set());
+  const [leaving, setLeaving] = useState<Map<string, "done" | "missed">>(
+    new Map(),
+  );
   const [bought, setBought] = useState<Set<string>>(new Set());
   const [qtys, setQtys] = useState<Record<string, number>>({});
   const [stepError, setStepError] = useState<string | null>(null);
@@ -418,6 +531,16 @@ export function StreamClient({
     Record<string, { name: string; color: string } | null>
   >({});
   const [, startTransition] = useTransition();
+
+  // Entrance stagger runs on the first client mount only — later snapshot
+  // refreshes (post-action revalidation) must not re-stagger the whole list.
+  // The flag drops once every card's rise/glow has finished, so removing the
+  // class is a no-op rather than a killed animation.
+  const [animateEntrance, setAnimateEntrance] = useState(true);
+  useEffect(() => {
+    const id = setTimeout(() => setAnimateEntrance(false), 900);
+    return () => clearTimeout(id);
+  }, []);
 
   // Latest groups for the capture subscription, which stays mounted with []
   // deps — read through the ref so an optimistic card shows its real group.
@@ -501,12 +624,20 @@ export function StreamClient({
 
   // Resolution is scoped to the section a card left from, so the same entity
   // legitimately reappearing in another section (snooze -> LATER) still shows.
-  function resolve(section: SectionKey, cardId: string) {
+  // The "missed" variant sinks slower (400ms exit, 450ms hide) than "done".
+  function resolve(
+    section: SectionKey,
+    cardId: string,
+    variant: "done" | "missed" = "done",
+  ) {
     const key = `${section}:${cardId}`;
-    setLeaving((prev) => new Set(prev).add(key));
-    setTimeout(() => {
-      setHidden((prev) => new Set(prev).add(key));
-    }, 300);
+    setLeaving((prev) => new Map(prev).set(key, variant));
+    setTimeout(
+      () => {
+        setHidden((prev) => new Set(prev).add(key));
+      },
+      variant === "missed" ? 450 : 300,
+    );
   }
 
   function onDone(section: SectionKey) {
@@ -524,6 +655,17 @@ export function StreamClient({
       resolve(section, card.id);
       startTransition(async () => {
         await toggleTaskStatus(task.id, task.status);
+      });
+    };
+  }
+
+  function onMiss(section: SectionKey) {
+    return (card: StreamCard) => {
+      if (card.entity.kind !== "task") return;
+      const task = card.entity.task;
+      resolve(section, card.id, "missed");
+      startTransition(async () => {
+        await markTaskMissed(task.id);
       });
     };
   }
@@ -671,15 +813,18 @@ export function StreamClient({
       <section className="mb-8">
         <SectionRuler label={label} count={cards.length} />
         <div className="mt-2 divide-y divide-hairline">
-          {cards.map((card) => (
+          {cards.map((card, index) => (
             <CardRow
               key={card.id}
               card={card}
               section={key}
-              leaving={leaving.has(`${key}:${card.id}`)}
+              index={index}
+              animate={animateEntrance}
+              leaving={leaving.get(`${key}:${card.id}`) ?? null}
               gaps={gaps}
               groups={groups}
               onDone={onDone(key)}
+              onMiss={onMiss(key)}
               onSnooze={onSnooze(key)}
               onSchedule={onSchedule()}
               onGroup={onGroup}
@@ -705,7 +850,8 @@ export function StreamClient({
 
   return (
     <div>
-      <div className="flex items-baseline justify-between flex-wrap gap-x-4 gap-y-1 mb-8 pr-10 lg:pr-0">
+      <div className="mb-8">
+      <div className="flex items-baseline justify-between flex-wrap gap-x-4 gap-y-1 pr-10 lg:pr-0">
         <p className="text-body text-fg">
           {todayLabel} <span className="text-muted">· {clockLabel}</span>
         </p>
@@ -735,6 +881,15 @@ export function StreamClient({
             {moodDots}
           </button>
         </p>
+      </div>
+      {weekDone + weekMissed > 0 && (
+        <Link
+          href="/tasks/history"
+          className="mt-1 inline-block text-meta text-muted hover:text-fg transition-colors"
+        >
+          this week · {weekDone} done · {weekMissed} missed
+        </Link>
+      )}
       </div>
 
       {stepError && (
@@ -778,7 +933,7 @@ export function StreamClient({
         </div>
       ) : (
         <div data-tour="stream">
-          {renderSection("now", "now", nowCards, 0, "/tasks")}
+          {renderSection("now", "now", nowCards, snapshot.nowOverflow, "/tasks")}
           {renderSection("next", "next", nextCards, snapshot.nextOverflow, "/tasks")}
           {renderSection("later", "later", laterCards, snapshot.laterOverflow, "/week")}
         </div>

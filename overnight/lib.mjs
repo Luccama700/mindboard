@@ -160,6 +160,7 @@ export function pickLifeTasks(tasks, codeGroupId, infeasibleCache = {}) {
   return (tasks ?? []).filter(
     (t) =>
       t.status !== "done" &&
+      t.status !== "missed" &&
       !t.ai_state &&
       (codeGroupId == null || t.group_id !== codeGroupId) &&
       infeasibleCache[t.id]?.title !== t.title,

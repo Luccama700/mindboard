@@ -7,12 +7,14 @@ export type UserPreferences = {
   timezone: string | null;
   wake_start_hour: number;
   wake_end_hour: number;
+  stream_max_tasks: number;
 };
 
 const DEFAULTS: UserPreferences = {
   timezone: null,
   wake_start_hour: 8,
   wake_end_hour: 22,
+  stream_max_tasks: 5,
 };
 
 // Manual everyday-spend fallback for the cashflow forecast (null = unset).
@@ -56,7 +58,7 @@ export const getUserPreferences = cache(
     const supabase = await createClient();
     const { data } = await supabase
       .from("user_settings")
-      .select("timezone, wake_start_hour, wake_end_hour")
+      .select("timezone, wake_start_hour, wake_end_hour, stream_max_tasks")
       .eq("user_id", userId)
       .maybeSingle();
     if (!data) return DEFAULTS;
@@ -70,6 +72,10 @@ export const getUserPreferences = cache(
         typeof data.wake_end_hour === "number"
           ? data.wake_end_hour
           : DEFAULTS.wake_end_hour,
+      stream_max_tasks:
+        typeof data.stream_max_tasks === "number"
+          ? data.stream_max_tasks
+          : DEFAULTS.stream_max_tasks,
     };
   },
 );

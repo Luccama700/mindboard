@@ -24,9 +24,15 @@ vi.mock("@/utils/google/calendar", () => ({
   updateEvent: vi.fn(),
 }));
 
+vi.mock("@/app/lib/data/settings", () => ({
+  getUserPreferences: vi.fn(async () => ({ timezone: "UTC" })),
+}));
+
 import {
   createTask,
   deleteTask,
+  markTaskMissed,
+  reopenTask,
   toggleTaskStatus,
   updateTask,
 } from "@/app/actions/tasks";
@@ -63,6 +69,8 @@ describe("task actions", () => {
       group_id: "group-1",
       created_at: "2026-05-23T10:00:00.000Z",
       completed_at: null,
+      estimated_minutes: null,
+      missed_at: null,
     };
     const single = vi.fn(async () => ({ data: task, error: null }));
     const select = vi.fn(() => ({ single }));
@@ -180,6 +188,121 @@ describe("task actions", () => {
       status: "done",
       completed_at: "2026-05-23T10:15:00.000Z",
     });
+  });
+
+  test("updateTask maps estimatedMinutes without touching schedule sync", async () => {
+    const single = vi.fn(async () => ({
+      data: {
+        title: "t",
+        due_date: null,
+        due_time: null,
+        duration_min: null,
+        estimated_minutes: 45,
+        gcal_event_id: null,
+        gcal_calendar_id: null,
+      },
+      error: null,
+    }));
+    const select = vi.fn(() => ({ single }));
+    const eq = vi.fn(() => ({ select }));
+    const update = vi.fn(() => ({ eq }));
+    mocks.from.mockReturnValue({ update });
+
+    await expect(
+      updateTask({ id: "task-1", estimatedMinutes: 45 }),
+    ).resolves.toEqual({ error: null });
+
+    expect(update).toHaveBeenCalledWith({ estimated_minutes: 45 });
+  });
+
+  test("updateTask rejects an invalid estimatedMinutes before writing", async () => {
+    await expect(
+      updateTask({ id: "task-1", estimatedMinutes: 2.5 }),
+    ).resolves.toEqual({ error: "invalid estimate" });
+    expect(mocks.from).not.toHaveBeenCalled();
+  });
+
+  test("updateTask calendar sync falls back to the estimate when duration_min is null", async () => {
+    const { updateEvent } = await import("@/utils/google/calendar");
+    const single = vi.fn(async () => ({
+      data: {
+        title: "t",
+        due_date: "2026-07-22",
+        due_time: "09:00:00",
+        duration_min: null,
+        estimated_minutes: 45,
+        gcal_event_id: "evt-1",
+        gcal_calendar_id: "cal-1",
+      },
+      error: null,
+    }));
+    const select = vi.fn(() => ({ single }));
+    const eq = vi.fn(() => ({ select }));
+    const update = vi.fn(() => ({ eq }));
+    mocks.from.mockReturnValue({ update });
+
+    await expect(
+      updateTask({ id: "task-1", dueTime: "09:00" }),
+    ).resolves.toEqual({ error: null });
+
+    expect(updateEvent).toHaveBeenCalledWith(
+      "user-1",
+      "cal-1",
+      "evt-1",
+      expect.objectContaining({
+        end: { dateTime: "2026-07-22T09:45:00", timeZone: "UTC" },
+      }),
+    );
+  });
+
+  test("markTaskMissed sets status and timestamp when the task is open", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-22T10:00:00.000Z"));
+    const maybeSingle = vi.fn(async () => ({ data: { status: "todo" }, error: null }));
+    const loadEq = vi.fn(() => ({ maybeSingle }));
+    const loadSelect = vi.fn(() => ({ eq: loadEq }));
+    const updateEq = vi.fn(async () => ({ error: null }));
+    const update = vi.fn(() => ({ eq: updateEq }));
+    mocks.from
+      .mockReturnValueOnce({ select: loadSelect })
+      .mockReturnValueOnce({ update });
+
+    await expect(markTaskMissed("task-1")).resolves.toEqual({ error: null });
+
+    expect(update).toHaveBeenCalledWith({
+      status: "missed",
+      missed_at: "2026-07-22T10:00:00.000Z",
+    });
+    expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  test("markTaskMissed refuses a task that is already done", async () => {
+    const maybeSingle = vi.fn(async () => ({ data: { status: "done" }, error: null }));
+    const loadEq = vi.fn(() => ({ maybeSingle }));
+    const loadSelect = vi.fn(() => ({ eq: loadEq }));
+    const update = vi.fn();
+    mocks.from.mockReturnValue({ select: loadSelect, update });
+
+    await expect(markTaskMissed("task-1")).resolves.toEqual({ error: "already done" });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("reopenTask returns a task to todo and clears both timestamps", async () => {
+    const eq = vi.fn(async () => ({ error: null }));
+    const update = vi.fn(() => ({ eq }));
+    mocks.from.mockReturnValue({ update });
+
+    await expect(reopenTask("task-1")).resolves.toEqual({ error: null });
+
+    expect(update).toHaveBeenCalledWith({
+      status: "todo",
+      missed_at: null,
+      completed_at: null,
+    });
+    expect(eq).toHaveBeenCalledWith("id", "task-1");
+    expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
   test("deleteTask deletes by id and revalidates dashboard data", async () => {

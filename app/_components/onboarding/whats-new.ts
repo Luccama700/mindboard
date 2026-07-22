@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-22-missed-and-history",
+    date: "2026-07-22",
+    title: "nothing due-today slips past you",
+    items: [
+      "give a task an estimate — 2h, 20m — and the daily board sizes itself by how urgent things really are, not just a flat list.",
+      "anything due today lives in now; miss it and mark it missed — an honest terminal state, done's negative twin.",
+      "the new tasks → history page rolls up your last weeks: done in green, missed in red, a day-by-day timeline underneath. reopen anything you want back.",
+      "set how many tasks the board shows before \"more\" in settings → preferences.",
+    ],
+  },
+  {
     id: "2026-07-18-reel-capture",
     date: "2026-07-18",
     title: "reels become notes",

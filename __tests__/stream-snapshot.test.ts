@@ -15,6 +15,7 @@ function task(over: Partial<TaskWithGroup> & { id: string }): TaskWithGroup {
     due_date: null,
     due_time: null,
     duration_min: null,
+    estimated_minutes: null,
     gcal_event_id: null,
     gcal_calendar_id: null,
     status: "todo",
@@ -24,6 +25,7 @@ function task(over: Partial<TaskWithGroup> & { id: string }): TaskWithGroup {
     group_id: "g1",
     created_at: "2026-07-01T10:00:00.000Z",
     completed_at: null,
+    missed_at: null,
     group_name: "life",
     group_color: "#fff",
     ...over,
@@ -57,8 +59,8 @@ function ids(cards: { id: string }[]): string[] {
   return cards.map((c) => c.id);
 }
 
-describe("NOW membership (objective facts only)", () => {
-  test("a due-today task with a past due_time is NOW; a future due_time stays NEXT", () => {
+describe("NOW is the urgency board", () => {
+  test("all due-today tasks (timed or not) are NOW, ranked by urgency; NEXT holds no plain tasks", () => {
     const snap = streamSnapshot(
       base({
         tasks: [
@@ -68,12 +70,20 @@ describe("NOW membership (objective facts only)", () => {
         ],
       }),
     );
-    expect(ids(snap.now)).toEqual(["task:past"]);
-    expect(ids(snap.next)).toEqual(["task:future", "task:untimed"]);
+    // past (time passed, 14) > future (6) = untimed (6, stable order).
+    expect(ids(snap.now)).toEqual([
+      "task:past",
+      "task:future",
+      "task:untimed",
+    ]);
+    expect(ids(snap.next)).toEqual([]);
     expect(snap.now[0].meta).toContain("⌚ 11:00");
+    expect(snap.now[0].tier).toBe(3);
+    expect(snap.now[1].tier).toBe(1);
+    expect(snap.now[2].tier).toBe(1);
   });
 
-  test("overdue task is NOW; due-today task is NEXT; priority never promotes", () => {
+  test("overdue outranks due-today; both are NOW; urgency orders them", () => {
     const snap = streamSnapshot(
       base({
         tasks: [
@@ -82,8 +92,65 @@ describe("NOW membership (objective facts only)", () => {
         ],
       }),
     );
-    expect(ids(snap.now)).toEqual(["task:over"]);
-    expect(ids(snap.next)).toEqual(["task:today-high"]);
+    // over: 2d late (23) -> focus; today-high: due today + high (9) -> elevated.
+    expect(ids(snap.now)).toEqual(["task:over", "task:today-high"]);
+    expect(ids(snap.next)).toEqual([]);
+    expect(snap.now[0].tier).toBe(3);
+    expect(snap.now[1].tier).toBe(2);
+  });
+
+  test("NOW tasks cap at maxTasks; the surplus is nowOverflow; non-tasks stay uncapped", () => {
+    const tasks = Array.from({ length: 8 }, (_, i) =>
+      task({ id: `t${i}`, due_date: "2026-07-01" }),
+    );
+    const snap = streamSnapshot(
+      base({
+        tasks,
+        bills: [
+          {
+            id: "rent",
+            name: "rent",
+            frequency: "monthly",
+            day_of_month: 6,
+            weekday: null,
+            interval_days: null,
+            start_date: null,
+            amount: 1400,
+          },
+        ],
+      }),
+    );
+    expect(snap.now.filter((c) => c.id.startsWith("task:"))).toHaveLength(5);
+    expect(snap.nowOverflow).toBe(3);
+    // the bill (a non-task NOW card) is never capped away.
+    expect(ids(snap.now)).toContain(`bill:rent:${TODAY}`);
+  });
+
+  test("maxTasks overrides the cap for NOW, NEXT, and LATER", () => {
+    const snap = streamSnapshot(
+      base({
+        maxTasks: 2,
+        tasks: [
+          task({ id: "n1", due_date: "2026-07-01" }),
+          task({ id: "n2", due_date: "2026-07-01" }),
+          task({ id: "n3", due_date: "2026-07-01" }),
+          task({ id: "l1", due_date: "2026-07-07" }),
+          task({ id: "l2", due_date: "2026-07-08" }),
+          task({ id: "l3", due_date: "2026-07-09" }),
+        ],
+      }),
+    );
+    expect(snap.now).toHaveLength(2);
+    expect(snap.nowOverflow).toBe(1);
+    expect(snap.later).toHaveLength(2);
+    expect(snap.laterOverflow).toBe(1);
+  });
+
+  test("nowOverflow is 0 when nothing spills", () => {
+    const snap = streamSnapshot(
+      base({ tasks: [task({ id: "over", due_date: "2026-07-05" })] }),
+    );
+    expect(snap.nowOverflow).toBe(0);
   });
 
   test("event in progress or starting within 60min is NOW; later today is NEXT", () => {
@@ -245,7 +312,7 @@ describe("recurring tasks", () => {
     ...over,
   });
 
-  test("today's occurrences interleave into NEXT by time; non-landing rules are absent", () => {
+  test("today's occurrences interleave into NEXT by time; the due-today task sits in NOW", () => {
     const snap = streamSnapshot(
       base({
         tasks: [task({ id: "t1", due_date: TODAY, due_time: "14:00:00" })],
@@ -256,9 +323,10 @@ describe("recurring tasks", () => {
         ],
       }),
     );
+    expect(ids(snap.now)).toEqual(["task:t1"]);
+    expect(snap.now[0].tier).toBe(2); // due today, within 2h -> elevated
     expect(ids(snap.next)).toEqual([
       `rtask:lunch:${TODAY}`,
-      "task:t1",
       `rtask:teeth:${TODAY}`,
     ]);
     expect(snap.next[0].meta).toContain("⌚ 12:30");
@@ -390,7 +458,7 @@ describe("stock priority", () => {
 });
 
 describe("ordering within sections", () => {
-  test("NOW: events by start, then tasks by priority desc then days-late desc, then bills, then run-outs", () => {
+  test("NOW: events by start, then tasks by urgency desc, then bills, then run-outs", () => {
     const snap = streamSnapshot(
       base({
         tasks: [
@@ -438,70 +506,32 @@ describe("ordering within sections", () => {
         ],
       }),
     );
+    // urgency: later-med (16d late, 163) > late-med (5d late, 53) > late-high
+    // (1d late + high, 16).
     expect(ids(snap.now)).toEqual([
       "event:a",
       "event:b",
-      "task:late-high",
       "task:later-med",
       "task:late-med",
+      "task:late-high",
       `bill:rent:${TODAY}`,
       "item:tp",
     ]);
   });
 
-  test("NOW is never capped", () => {
-    const tasks = Array.from({ length: 9 }, (_, i) =>
-      task({ id: `t${i}`, due_date: "2026-07-01" }),
-    );
-    const snap = streamSnapshot(base({ tasks }));
-    expect(snap.now).toHaveLength(9);
-  });
-
-  test("NEXT caps at 5 with overflow count; due-today tasks lead events", () => {
-    const tasks = Array.from({ length: 6 }, (_, i) =>
-      task({ id: `t${i}`, due_date: TODAY }),
-    );
-    const snap = streamSnapshot(
-      base({
-        tasks,
-        events: [
-          {
-            id: "tonight",
-            summary: "gym",
-            start: "2026-07-06T17:00:00",
-            end: "2026-07-06T18:00:00",
-            allDay: false,
-          },
-        ],
-      }),
-    );
-    expect(snap.next).toHaveLength(5);
-    // Tasks are the actionable items — a full calendar day must never push
-    // them past the cap into the overflow link.
-    expect(snap.next[0].id).toBe("task:t0");
-    expect(snap.next.every((c) => c.id.startsWith("task:"))).toBe(true);
-    expect(snap.nextOverflow).toBe(2);
-  });
-
-  test("a busy event day never crowds due-today tasks out of NEXT", () => {
+  test("NEXT caps at maxTasks with overflow count (later-today events)", () => {
     const events = Array.from({ length: 6 }, (_, i) => ({
       id: `e${i}`,
       summary: `event ${i}`,
-      start: `2026-07-06T1${i + 2}:00:00`,
-      end: `2026-07-06T1${i + 3}:00:00`,
+      // well past now (12:00) + the 60min NOW lead window, so all land in NEXT.
+      start: `2026-07-06T${14 + i}:00:00`,
+      end: `2026-07-06T${14 + i}:30:00`,
       allDay: false,
     }));
-    const snap = streamSnapshot(
-      base({
-        tasks: [
-          task({ id: "t1", due_date: TODAY }),
-          task({ id: "t2", due_date: TODAY }),
-        ],
-        events,
-      }),
-    );
-    expect(snap.next[0].id).toBe("task:t1");
-    expect(snap.next[1].id).toBe("task:t2");
+    const snap = streamSnapshot(base({ events }));
+    expect(snap.next).toHaveLength(5);
+    expect(snap.next[0].id).toBe("event:e0");
+    expect(snap.nextOverflow).toBe(1);
   });
 
   test("tomorrow's first event (only) appears in NEXT", () => {

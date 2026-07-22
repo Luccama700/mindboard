@@ -9,10 +9,12 @@ export function PreferencesForm({
   initialTimezone,
   initialWakeStart,
   initialWakeEnd,
+  initialStreamMaxTasks,
 }: {
   initialTimezone: string | null;
   initialWakeStart: number;
   initialWakeEnd: number;
+  initialStreamMaxTasks: number;
 }) {
   const guessed =
     typeof Intl !== "undefined"
@@ -21,6 +23,7 @@ export function PreferencesForm({
   const [timezone, setTimezone] = useState(initialTimezone ?? guessed);
   const [wakeStart, setWakeStart] = useState(String(initialWakeStart));
   const [wakeEnd, setWakeEnd] = useState(String(initialWakeEnd));
+  const [streamMax, setStreamMax] = useState(String(initialStreamMaxTasks));
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -33,6 +36,7 @@ export function PreferencesForm({
         timezone,
         wakeStartHour: Number(wakeStart),
         wakeEndHour: Number(wakeEnd),
+        streamMaxTasks: Number(streamMax),
       });
       if (result.error) setError(result.error);
       else setSaved(true);
@@ -88,6 +92,21 @@ export function PreferencesForm({
       <p className="text-meta text-muted leading-relaxed">
         the wake window bounds the free-hours math on the home screen.
       </p>
+
+      <div>
+        <p className="text-label uppercase text-muted mb-1.5">board tasks shown</p>
+        <input
+          type="number"
+          min={3}
+          max={15}
+          value={streamMax}
+          onChange={(e) => setStreamMax(e.target.value)}
+          className={INPUT_CLASS}
+        />
+        <p className="text-meta text-muted leading-relaxed mt-1.5">
+          max tasks on the daily board before &ldquo;more&rdquo;.
+        </p>
+      </div>
 
       {error && <p className="text-action text-danger">{error}</p>}
       {saved && !error && <p className="text-action text-accent">saved ✓</p>}

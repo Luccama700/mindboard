@@ -20,7 +20,8 @@ export function tasksSnapshot(
   let dueSoon = 0;
 
   for (const task of tasks) {
-    if (task.status === "done" || !task.due_date) continue;
+    if (task.status === "done" || task.status === "missed" || !task.due_date)
+      continue;
     const days = daysBetween(today, task.due_date);
     if (days < 0) overdue++;
     else if (days === 0) dueToday++;

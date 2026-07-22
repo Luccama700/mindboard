@@ -113,6 +113,7 @@ function task(partial: Partial<TaskWithGroup>): TaskWithGroup {
     due_date: null,
     due_time: null,
     duration_min: null,
+    estimated_minutes: null,
     gcal_event_id: null,
     gcal_calendar_id: null,
     status: "todo",
@@ -122,6 +123,7 @@ function task(partial: Partial<TaskWithGroup>): TaskWithGroup {
     group_id: null,
     created_at: "2026-01-01T00:00:00Z",
     completed_at: null,
+    missed_at: null,
     group_name: null,
     group_color: null,
     ...partial,
@@ -391,6 +393,18 @@ describe("tasksSnapshot", () => {
       TODAY,
     );
     expect(snap.dueToday).toBe(1);
+  });
+
+  test("missed tasks are skipped like done ones — never overdue, due today, or soon", () => {
+    const snap = tasksSnapshot(
+      [
+        task({ id: "1", due_date: "2026-05-30", status: "missed" }), // would be overdue
+        task({ id: "2", due_date: "2026-06-01", status: "missed" }), // would be today
+        task({ id: "3", due_date: "2026-06-05", status: "missed" }), // would be soon
+      ],
+      TODAY,
+    );
+    expect(snap).toEqual({ overdue: 0, dueToday: 0, dueSoon: 0 });
   });
 });
 
