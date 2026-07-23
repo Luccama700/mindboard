@@ -86,8 +86,9 @@ audio output, so no VibeVoice.)
    fall back to image mode (added 2026-07-23): yt-dlp's info-json extraction
    (`YTDLP_INFO_CMD`) still yields each item's full-size CDN image URL, so the
    worker downloads the images and records them as frames — caption + vision
-   description/OCR, no transcript. A mixed carousel's video items contribute
-   their cover image only.
+   description/OCR, no transcript. A mixed carousel (video + images) gets
+   both: the video's keyframes and transcript (empty when the video ships no
+   audio stream — that degrades gracefully) plus each image item.
 
 4. **The worker itself** (pure stdlib, Python ≥ 3.10):
 

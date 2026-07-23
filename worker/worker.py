@@ -234,17 +234,16 @@ def describe_frames(frame_files: list[Path], label: str = "frame") -> list[dict]
     return frames
 
 
-def handle_post_images(url: str, workdir: Path) -> dict:
-    """Fallback for photo posts and carousels: no video, so no transcript.
-    Pull each item's best CDN image via yt-dlp's info json, then treat the
-    images as the record's frames. The caption is the core deliverable here
-    (the app rejects a record with neither transcript nor caption)."""
-    log("  no video — treating as a photo post…")
+def fetch_post_images(url: str, workdir: Path) -> tuple[dict, list[Path]]:
+    """yt-dlp info-json extraction for a post (no video download): returns the
+    post's metadata and its items' full-size CDN images, downloaded to
+    workdir/images. A carousel yields one image per item (a video item
+    contributes its cover); a single photo yields one."""
     info_dir = workdir / "info"
-    info_dir.mkdir()
+    info_dir.mkdir(exist_ok=True)
     run_command(YTDLP_INFO_CMD, timeout=300, out=str(info_dir), url=url)
 
-    title = author = caption = ""
+    meta = {"title": "", "author": "", "caption": ""}
     entries: list[dict] = []
     for path in sorted(info_dir.glob("*.info.json")):
         try:
@@ -253,43 +252,56 @@ def handle_post_images(url: str, workdir: Path) -> dict:
             continue
         # The playlist json (carousels) carries the post's caption/author; a
         # single-image post has one entry json carrying both. First one wins.
-        caption = caption or str(info.get("description") or "").strip()
-        author = author or str(info.get("uploader") or info.get("channel") or "").strip()
-        title = title or str(info.get("title") or "").strip()
+        meta["caption"] = meta["caption"] or str(info.get("description") or "").strip()
+        meta["author"] = (
+            meta["author"] or str(info.get("uploader") or info.get("channel") or "").strip()
+        )
+        meta["title"] = meta["title"] or str(info.get("title") or "").strip()
         if info.get("thumbnails"):
             entries.append(info)
 
-    frames_dir = workdir / "frames"
-    frames_dir.mkdir()
-    frame_files: list[Path] = []
+    images_dir = workdir / "images"
+    images_dir.mkdir(exist_ok=True)
+    image_files: list[Path] = []
     for index, info in enumerate(entries[:REEL_MAX_FRAMES], start=1):
         # yt-dlp lists thumbnails worst-to-best; the last is the full image.
         best = (info.get("thumbnails") or [])[-1]
         if not best.get("url"):
             continue
-        dest = frames_dir / f"img{index:03d}.jpg"
+        dest = images_dir / f"img{index:03d}.jpg"
         try:
             download(best["url"], dest, headers={"User-Agent": "Mozilla/5.0"})
-            frame_files.append(dest)
+            image_files.append(dest)
         except Exception as error:  # noqa: BLE001 — images are per-item best-effort
             log(f"    image {index} failed: {str(error)[:100]}")
-    if not frame_files and not caption:
+    if len(entries) > REEL_MAX_FRAMES:
+        log(f"  carousel has {len(entries)} items; capped at {REEL_MAX_FRAMES}")
+    return meta, image_files
+
+
+def handle_post_images(url: str, workdir: Path) -> dict:
+    """Fallback for photo posts with no downloadable video: no transcript.
+    The images become the record's frames; the caption is the core
+    deliverable (the app rejects a record with neither transcript nor
+    caption)."""
+    log("  no video — treating as a photo post…")
+    meta, image_files = fetch_post_images(url, workdir)
+    caption = meta["caption"]
+    if not image_files and not caption:
         raise RuntimeError(
             "no video, no images, and no caption (private or removed post?)"
         )
-    if len(entries) > REEL_MAX_FRAMES:
-        log(f"  carousel has {len(entries)} items; capped at {REEL_MAX_FRAMES}")
 
     result: dict = {
-        "title": (title or (caption.split("\n")[0][:80] if caption else ""))[:120],
+        "title": (meta["title"] or (caption.split("\n")[0][:80] if caption else ""))[:120],
         "caption": caption,
-        "author": author,
+        "author": meta["author"],
         "duration_sec": 0,
         "transcript": "",
-        "frames": describe_frames(frame_files, label="image"),
+        "frames": describe_frames(image_files, label="image"),
     }
-    if frame_files:
-        result["thumbnail_base64"] = base64.b64encode(frame_files[0].read_bytes()).decode()
+    if image_files:
+        result["thumbnail_base64"] = base64.b64encode(image_files[0].read_bytes()).decode()
         result["thumbnail_ext"] = "jpg"
     return result
 
@@ -319,8 +331,10 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     video = videos[0]
 
     # Metadata from yt-dlp's info json (caption = the post's description).
+    # For a carousel the json in outdir is the playlist metadata; its
+    # playlist_count reveals there are sibling items beyond this video.
     title = author = caption = ""
-    duration_sec = 0
+    duration_sec = playlist_count = 0
     info_files = list(outdir.glob("*.info.json"))
     if info_files:
         try:
@@ -328,22 +342,32 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
             caption = str(info.get("description") or "").strip()
             author = str(info.get("uploader") or info.get("channel") or "").strip()
             duration_sec = int(info.get("duration") or 0)
+            playlist_count = int(info.get("playlist_count") or 0)
             title = str(info.get("title") or "").strip()
         except Exception:  # noqa: BLE001
             pass
 
-    # Audio -> transcript (the core deliverable).
+    # Audio -> transcript (the core deliverable). But a carousel's video item
+    # or a music-less clip can ship no audio stream at all — extraction
+    # failing degrades to an empty transcript (caption + visuals still make a
+    # record), while a whisper failure on real audio stays loud: that's a
+    # config problem, not a property of the post.
+    transcript = ""
     audio = workdir / "audio.wav"
-    run_command(
-        FFMPEG + " -y -i {video} -vn -ac 1 -ar 16000 {audio}",
-        timeout=300,
-        video=str(video),
-        audio=str(audio),
-    )
-    log("  transcribing…")
-    run_command(WHISPER_CMD, timeout=1800, audio=str(audio), out=str(outdir))
-    txts = sorted(outdir.glob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
-    transcript = txts[0].read_text(encoding="utf-8").strip() if txts else ""
+    try:
+        run_command(
+            FFMPEG + " -y -i {video} -vn -ac 1 -ar 16000 {audio}",
+            timeout=300,
+            video=str(video),
+            audio=str(audio),
+        )
+    except Exception as error:  # noqa: BLE001
+        log(f"  no audio track — skipping transcript ({str(error)[:80]})")
+    if audio.exists():
+        log("  transcribing…")
+        run_command(WHISPER_CMD, timeout=1800, audio=str(audio), out=str(outdir))
+        txts = sorted(outdir.glob("*.txt"), key=lambda p: p.stat().st_size, reverse=True)
+        transcript = txts[0].read_text(encoding="utf-8").strip() if txts else ""
 
     # Keyframes are ADDITIVE: a valid transcript already exists, so frame
     # extraction must never sink the job. Try scene-change first (best frames),
@@ -376,13 +400,24 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     if not frame_files:
         log("  no keyframes extracted — continuing transcript-only")
 
+    frames = describe_frames(frame_files)
+    # A mixed carousel: the downloaded video is only one item, and the image
+    # items never hit the download pass. Pull them too so the record covers
+    # the whole post (additive — a failure here never sinks the job).
+    if playlist_count > 1:
+        try:
+            _, image_files = fetch_post_images(url, workdir)
+            frames += describe_frames(image_files, label="image")
+        except Exception as error:  # noqa: BLE001
+            log(f"  carousel images failed: {str(error)[:100]}")
+
     result: dict = {
         "title": (title or (caption.split("\n")[0][:80] if caption else ""))[:120],
         "caption": caption,
         "author": author,
         "duration_sec": duration_sec,
         "transcript": transcript,
-        "frames": describe_frames(frame_files),
+        "frames": frames,
     }
     if frame_files:
         result["thumbnail_base64"] = base64.b64encode(frame_files[0].read_bytes()).decode()
