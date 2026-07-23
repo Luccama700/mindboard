@@ -9,6 +9,7 @@ import {
   updateMindspaceTopic,
 } from "@/app/actions/mindspace";
 import type {
+  MindspaceObservation,
   MindspaceSource,
   MindspaceTopic,
   MindspaceView,
@@ -25,6 +26,7 @@ const SOURCE_LABELS: Record<MindspaceSource, string> = {
   ai_chat: "chat",
   daily_log: "check-in",
   spend: "spend",
+  event: "event",
 };
 
 function pct(share: number): string {
@@ -41,6 +43,14 @@ function agoLabel(occurredAt: number, nowMs: number): string {
   if (days <= 0) return "today";
   if (days === 1) return "1d ago";
   return `${days}d ago`;
+}
+
+// Mass-weighted mean salience (0..3) → a word, never a decimal.
+function chargeLabel(meanSalience: number): string {
+  if (meanSalience < 0.75) return "quiet";
+  if (meanSalience < 1.4) return "engaged";
+  if (meanSalience < 2.2) return "charged";
+  return "intense";
 }
 
 function TrendArrow({ trend }: { trend: "up" | "down" | "flat" }) {
@@ -192,11 +202,15 @@ export function MindspaceClient({
   topics,
   nowMs,
   vaultConnected,
+  observations,
+  pendingCount,
 }: {
   view: MindspaceView;
   topics: MindspaceTopic[];
   nowMs: number;
   vaultConnected: boolean;
+  observations: MindspaceObservation[];
+  pendingCount: number;
 }) {
   const [windowIndex, setWindowIndex] = useState(1);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -204,6 +218,9 @@ export function MindspaceClient({
   const current = view.windows[windowIndex];
   const topicById = new Map(topics.map((topic) => [topic.id, topic]));
   const mutedTopics = topics.filter((topic) => topic.status === "muted");
+  const generalObservations = observations.filter(
+    (observation) => observation.topicId === null,
+  );
 
   return (
     <div>
@@ -233,8 +250,28 @@ export function MindspaceClient({
         ))}
         <span className="ml-auto text-[10px] text-muted">
           {current.totalItems} traces · {massLabel(current.totalMassMinutes)}
+          {pendingCount > 0 && <> · reading {pendingCount} new…</>}
         </span>
       </div>
+
+      {observations.length > 0 && (
+        <div className="mb-8">
+          <p className="text-[10px] tracking-widest uppercase text-muted mb-1">
+            noticing
+          </p>
+          {(generalObservations.length > 0
+            ? generalObservations
+            : observations
+          ).map((observation) => (
+            <p
+              key={observation.id}
+              className="text-sm text-muted leading-relaxed"
+            >
+              {observation.text}
+            </p>
+          ))}
+        </div>
+      )}
 
       {current.totalItems === 0 ? (
         <p className="text-sm text-muted leading-relaxed">
@@ -325,6 +362,22 @@ export function MindspaceClient({
 
                   {isOpen && (
                     <div>
+                      <p className="text-[10px] text-muted mt-2">
+                        volume {massLabel(share.rawMassMinutes)} · charge{" "}
+                        {chargeLabel(share.meanSalience)}
+                      </p>
+                      {observations
+                        .filter(
+                          (observation) => observation.topicId === topic.id,
+                        )
+                        .map((observation) => (
+                          <p
+                            key={observation.id}
+                            className="text-xs text-muted mt-1 leading-relaxed"
+                          >
+                            {observation.text}
+                          </p>
+                        ))}
                       <ul className="mt-2 space-y-1">
                         {share.topItems.map((item) => (
                           <li key={`${item.title}-${item.occurredAt}`}>

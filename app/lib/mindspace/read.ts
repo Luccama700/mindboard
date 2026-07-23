@@ -3,6 +3,11 @@ import { cache } from "react";
 
 import { createClient } from "@/utils/supabase/server";
 import {
+  GoogleCalendarConnectionError,
+  listEvents,
+  type CalendarEvent,
+} from "@/utils/google/calendar";
+import {
   getVaultCorpus,
   VaultConnectionError,
   type VaultNote,
@@ -30,6 +35,7 @@ const SESSION_MIN_MINUTES = 2;
 const SESSION_MAX_MINUTES = 120;
 const TASK_MASS = 3;
 const SPEND_MASS = 1;
+const EVENT_MAX_MINUTES = 240;
 const MATCH_TEXT_CAP = 20_000;
 const ROW_LIMIT = 2000;
 
@@ -128,7 +134,6 @@ export function chatSessions(
         new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
     );
     let sessionStart = 0;
-    let index = 0;
     while (sessionStart < bucket.length) {
       let end = sessionStart;
       while (
@@ -150,7 +155,10 @@ export function chatSessions(
       const title = titles.get(conversationId) ?? null;
       items.push({
         source: "ai_chat",
-        ref: `${conversationId}:${index}`,
+        // Keyed by session start so the ref stays stable as older messages
+        // age out of the fetch window (an ordinal would shift and orphan the
+        // cached classification).
+        ref: `${conversationId}:${startMs}`,
         title: title?.trim() ? title : "copilot chat",
         href: "/plan",
         occurredAt: endMs,
@@ -165,7 +173,6 @@ export function chatSessions(
         groupId: null,
       });
       sessionStart = end + 1;
-      index++;
     }
   }
   return items;
@@ -200,9 +207,32 @@ export const gatherMindspaceItems = cache(
         throw error;
       });
 
-    const [vault, tasksRes, messagesRes, conversationsRes, logsRes, spendRes] =
-      await Promise.all([
+    const eventsPromise: Promise<CalendarEvent[]> = listEvents(userId, {
+      timeMin: cutoffIso,
+      timeMax: new Date(nowMs).toISOString(),
+    }).catch((error) => {
+      if (error instanceof GoogleCalendarConnectionError) return [];
+      console.error("mindspace listEvents failed", error);
+      return [];
+    });
+
+    const [
+      vault,
+      events,
+      groupsRes,
+      tasksRes,
+      messagesRes,
+      conversationsRes,
+      logsRes,
+      spendRes,
+    ] = await Promise.all([
         vaultPromise,
+        eventsPromise,
+        supabase
+          .from("groups")
+          .select("id, google_calendar_id")
+          .eq("user_id", userId)
+          .not("google_calendar_id", "is", null),
         supabase
           .from("tasks")
           .select(
@@ -351,6 +381,39 @@ export const gatherMindspaceItems = cache(
         frontmatterTopics: [],
         wikilinkPaths: [],
         groupId: null,
+      });
+    }
+
+    // Attended calendar time: timed events that already ended, weighted by
+    // duration. An event on a group-linked calendar inherits that group for
+    // the fast-path topic match.
+    const calendarGroups = new Map(
+      ((groupsRes.data ?? []) as {
+        id: string;
+        google_calendar_id: string | null;
+      }[]).map((row) => [row.google_calendar_id as string, row.id]),
+    );
+    for (const event of events) {
+      if (event.allDay) continue;
+      const startMs = Date.parse(event.start);
+      const endMs = Date.parse(event.end);
+      if (Number.isNaN(startMs) || Number.isNaN(endMs)) continue;
+      if (endMs > nowMs || endMs < cutoffMs) continue;
+      const durationMinutes = Math.round((endMs - startMs) / 60_000);
+      if (durationMinutes <= 0) continue;
+      const title = event.summary || "untitled event";
+      items.push({
+        source: "event",
+        ref: `event:${event.calendarId}:${event.eventId}`,
+        title,
+        href: "/week",
+        occurredAt: startMs,
+        mass: Math.min(EVENT_MAX_MINUTES, durationMinutes),
+        wordCount: countWords(title),
+        text: `${title}\n${event.calendarSummary}`,
+        frontmatterTopics: [],
+        wikilinkPaths: [],
+        groupId: calendarGroups.get(event.calendarId) ?? null,
       });
     }
 

@@ -23,8 +23,19 @@ const SPARSE_ITEM_COUNT = 10;
 const TREND_DELTA = 0.05;
 const TOP_ITEMS = 4;
 
+// Salience multiplier on attention mass: a raw 2am entry (3) outweighs a
+// routine changelog (0) of equal length. Index = salience 0..3.
+export const SALIENCE_MULT = [0.5, 1, 1.6, 2.2] as const;
+
+export function salienceMult(salience: number): number {
+  const index = Math.min(3, Math.max(0, Math.round(salience)));
+  return SALIENCE_MULT[index];
+}
+
 type TopicAccumulator = {
   mass: number;
+  rawMass: number;
+  salienceMass: number; // Σ salience × rawMass, for the mass-weighted mean
   itemCount: number;
   items: TopicEvidence[];
 };
@@ -45,19 +56,25 @@ function buildWindow(
   let unclassifiedMass = 0;
 
   for (const item of inWindow) {
-    totalMass += item.mass;
+    const effectiveMass = item.mass * salienceMult(item.salience);
+    totalMass += effectiveMass;
     if (item.labels.length === 0) {
-      unclassifiedMass += item.mass;
+      unclassifiedMass += effectiveMass;
       continue;
     }
     for (const label of item.labels) {
-      const slice = item.mass * label.weight;
+      const slice = effectiveMass * label.weight;
+      const rawSlice = item.mass * label.weight;
       const acc = byTopic.get(label.topicId) ?? {
         mass: 0,
+        rawMass: 0,
+        salienceMass: 0,
         itemCount: 0,
         items: [],
       };
       acc.mass += slice;
+      acc.rawMass += rawSlice;
+      acc.salienceMass += item.salience * rawSlice;
       acc.itemCount += 1;
       acc.items.push({
         title: item.title,
@@ -91,6 +108,8 @@ function buildWindow(
         topicId: topic.id,
         share,
         massMinutes: acc.mass,
+        rawMassMinutes: acc.rawMass,
+        meanSalience: acc.rawMass > 0 ? acc.salienceMass / acc.rawMass : 1,
         itemCount: acc.itemCount,
         topItems: [...acc.items]
           .sort((a, b) => b.massMinutes - a.massMinutes)

@@ -14,6 +14,18 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-22-mindspace-m2",
+    date: "2026-07-22",
+    title: "mindspace learns to feel the difference",
+    items: [
+      "traces now get read properly — a small model (on your own api key) classifies each note, chat, task, and calendar event against your topics and scores how charged it was. a raw 2am entry now outweighs a routine changelog of the same length.",
+      "each topic's expanded view shows the two halves separately: volume (how much you produced) and charge (how heavy it read) — high-volume-low-charge and low-volume-high-charge are different facts about your week.",
+      "your calendar joined the sources: attended events count by duration, and events on a group-linked calendar know their topic automatically.",
+      "a quiet \"noticing\" line at the top: at most three one-sentence observations about what shifted, written from the numbers alone — never from your words. noticing, not judging.",
+      "classification happens in the background after the page loads and remembers its verdicts, so the board sharpens visit over visit.",
+    ],
+  },
+  {
     id: "2026-07-22-mindspace",
     date: "2026-07-22",
     title: "mindspace — what's been on your mind",

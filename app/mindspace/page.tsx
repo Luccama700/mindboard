@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 
 import { createClient } from "@/utils/supabase/server";
 import { getUserPreferences } from "@/app/lib/data/settings";
@@ -7,7 +8,12 @@ import {
   gatherMindspaceItems,
   getMindspaceTopics,
 } from "@/app/lib/mindspace/read";
-import { classifyItems } from "@/app/lib/mindspace/classify";
+import {
+  computeClassifications,
+  getObservations,
+  loadPersistedVerdicts,
+  runMindspacePass,
+} from "@/app/lib/mindspace/pipeline";
 import { buildMindspaceView } from "@/app/lib/mindspace/aggregate";
 import {
   buildSeedCandidates,
@@ -92,12 +98,34 @@ export default async function MindspacePage() {
     );
   }
 
-  const { items, vaultConnected, nowMs } = await gatherMindspaceItems(
-    user.id,
-    prefs.timezone,
+  const [{ items, vaultConnected, nowMs }, persisted, observations] =
+    await Promise.all([
+      gatherMindspaceItems(user.id, prefs.timezone),
+      loadPersistedVerdicts(supabase, user.id),
+      getObservations(user.id),
+    ]);
+  const { classified, pending, currentHash } = computeClassifications(
+    items,
+    topics,
+    persisted,
   );
-  const classified = classifyItems(items, topics);
   const view = buildMindspaceView(classified, topics, nowMs);
+
+  const observationsStale =
+    observations.length === 0 ||
+    nowMs - Date.parse(observations[0].createdAt) > 20 * 60 * 60 * 1000;
+  if (pending.length > 0 || observationsStale) {
+    after(() =>
+      runMindspacePass({
+        userId: user.id,
+        topics,
+        items,
+        pending,
+        currentHash,
+        nowMs,
+      }),
+    );
+  }
 
   const coloredTopics = topics.map((topic, index) => ({
     ...topic,
@@ -112,6 +140,8 @@ export default async function MindspacePage() {
         topics={coloredTopics}
         nowMs={nowMs}
         vaultConnected={vaultConnected}
+        observations={observations}
+        pendingCount={pending.length}
       />
     </main>
   );

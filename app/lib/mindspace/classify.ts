@@ -123,5 +123,72 @@ export function classifyItems(
   return items.map((item) => ({
     ...item,
     labels: classifyItem(item, matchers),
+    salience: 1,
   }));
+}
+
+// Fingerprint of everything the LLM classifier's verdict depends on. A stored
+// verdict whose hash no longer matches was made against a different taxonomy
+// and re-classifies on the next pass. FNV-1a, hex.
+export function taxonomyHash(topics: MindspaceTopic[]): string {
+  const canonical = topics
+    .filter((topic) => topic.status !== "archived")
+    .map(
+      (topic) =>
+        `${topic.id}|${topic.name.toLowerCase()}|${[...topic.aliases]
+          .map((alias) => alias.toLowerCase())
+          .sort()
+          .join(",")}`,
+    )
+    .sort()
+    .join(";");
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < canonical.length; i++) {
+    hash ^= canonical.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+export type PersistedVerdict = {
+  salience: number;
+  labels: ItemLabel[];
+  taxonomyHash: string | null;
+  classified: boolean;
+};
+
+// Merge freshly gathered items with cached LLM verdicts: a classified item
+// whose verdict matches the current taxonomy keeps its LLM labels + salience;
+// everything else falls back to the fast path and joins the pending queue.
+// Labels pointing at deleted topics are dropped; if that empties an LLM
+// verdict, the fast path fills in so the item isn't silently unclassified.
+export function mergeClassifications(
+  items: MindspaceItem[],
+  topics: MindspaceTopic[],
+  persisted: Map<string, PersistedVerdict>,
+  currentHash: string,
+): { classified: ClassifiedItem[]; pending: MindspaceItem[] } {
+  const matchers = buildMatchers(topics);
+  const topicIds = new Set(topics.map((topic) => topic.id));
+  const classified: ClassifiedItem[] = [];
+  const pending: MindspaceItem[] = [];
+
+  for (const item of items) {
+    const verdict = persisted.get(`${item.source}:${item.ref}`);
+    const fresh =
+      verdict?.classified === true && verdict.taxonomyHash === currentHash;
+    if (!fresh) pending.push(item);
+
+    const cachedLabels = fresh
+      ? verdict!.labels.filter((label) => topicIds.has(label.topicId))
+      : [];
+    classified.push({
+      ...item,
+      labels:
+        cachedLabels.length > 0 ? cachedLabels : classifyItem(item, matchers),
+      salience: fresh ? verdict!.salience : 1,
+    });
+  }
+
+  return { classified, pending };
 }

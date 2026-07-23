@@ -30,7 +30,8 @@ export type MindspaceSource =
   | "task"
   | "ai_chat"
   | "daily_log"
-  | "spend";
+  | "spend"
+  | "event";
 
 // One countable trace, before classification. `mass` is the common currency:
 // estimated minutes of engagement (reading time for notes, session span for
@@ -51,7 +52,12 @@ export type MindspaceItem = {
 
 export type ItemLabel = { topicId: string; weight: number };
 
-export type ClassifiedItem = MindspaceItem & { labels: ItemLabel[] };
+// Emotional salience, the "weight on mind" half of the score (LLM-assigned in
+// M2): 0 routine · 1 engaged · 2 charged · 3 intense. Fast-path items default 1.
+export type ClassifiedItem = MindspaceItem & {
+  labels: ItemLabel[];
+  salience: number;
+};
 
 export type WindowDays = 3 | 7 | 30;
 
@@ -65,8 +71,10 @@ export type TopicEvidence = {
 
 export type TopicShare = {
   topicId: string;
-  share: number; // 0..1 of the window's total mass
-  massMinutes: number;
+  share: number; // 0..1 of the window's total effective (salience-weighted) mass
+  massMinutes: number; // effective minutes
+  rawMassMinutes: number; // unweighted minutes — the "volume" half
+  meanSalience: number; // mass-weighted mean salience — the "charge" half
   itemCount: number;
   topItems: TopicEvidence[];
 };
@@ -88,4 +96,11 @@ export type TopicTrend = "up" | "down" | "flat";
 export type MindspaceView = {
   windows: MindspaceWindowView[];
   trends: Record<string, TopicTrend>;
+};
+
+export type MindspaceObservation = {
+  id: string;
+  topicId: string | null;
+  text: string;
+  createdAt: string;
 };

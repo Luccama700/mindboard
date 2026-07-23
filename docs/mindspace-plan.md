@@ -257,8 +257,17 @@ with the design system tokens (`--color-accent`, text scales).
   (frontmatter/wikilinks/groups/name matches — zero LLM), read-time aggregation,
   `/mindspace` page with bars over vault + tasks + ai_messages + daily logs +
   spend notes. *Already useful.*
-- **M2 — LLM classification:** Haiku batch classifier + salience, jobs-queue
-  classify-on-write, calendar ingestion, trends, observations.
+- **M2 — LLM classification** *(shipped 2026-07-22)*: migration 0044
+  (`mindspace_items`/`mindspace_labels`/`mindspace_observations` — verdict cache
+  only, no trace text persisted), Haiku forced-tool batch classifier with
+  salience 0–3 + valence on the user's stored key, salience-multiplied shares
+  (×0.5/1/1.6/2.2), volume-vs-charge display, calendar-event ingestion
+  (duration mass, group-linked calendars fast-path), and the "noticing"
+  observations layer (numbers-only prompt, ≤3 lines, 20h cadence). Runs via
+  `after()` on page visit (no cron on this deployment — deliberate deviation
+  from the planned jobs-queue classify-on-write; the queue can still arrive
+  with M3's external streams). Taxonomy edits invalidate verdicts via
+  `taxonomy_hash`; stale items re-classify next pass, capped 60/visit.
 - **M3 — external streams:** overnight-agent Claude Code session sync
   (`mindspace_ingest_sessions` MCP tool), claude.ai export import page.
 - **M4 — discovery & polish:** weekly emergent-topic suggestions, add/split scoped

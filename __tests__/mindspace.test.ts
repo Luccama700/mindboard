@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyItem, buildMatchers, classifyItems } from "@/app/lib/mindspace/classify";
+import {
+  classifyItem,
+  buildMatchers,
+  classifyItems,
+  mergeClassifications,
+  taxonomyHash,
+  type PersistedVerdict,
+} from "@/app/lib/mindspace/classify";
 import {
   buildMindspaceView,
   countWords,
   readingMinutes,
+  salienceMult,
 } from "@/app/lib/mindspace/aggregate";
 import { buildSeedCandidates } from "@/app/lib/mindspace/seed";
 import type {
@@ -148,10 +156,12 @@ describe("buildMindspaceView", () => {
     topicId: string | null,
     mass: number,
     ageDays: number,
+    salience = 1,
   ): ClassifiedItem {
     return {
-      ...item({ mass, occurredAt: NOW - ageDays * DAY, ref: `${topicId}-${ageDays}-${mass}` }),
+      ...item({ mass, occurredAt: NOW - ageDays * DAY, ref: `${topicId}-${ageDays}-${mass}-${salience}` }),
       labels: topicId ? [{ topicId, weight: 1 }] : [],
+      salience,
     };
   }
 
@@ -236,6 +246,7 @@ describe("buildMindspaceView", () => {
         { topicId: "emma", weight: 2 / 3 },
         { topicId: "mb", weight: 1 / 3 },
       ],
+      salience: 1,
     };
     const filler = Array.from({ length: 10 }, (_, i) =>
       classified("emma", 3, 1 + (i % 3)),
@@ -300,6 +311,152 @@ describe("buildSeedCandidates", () => {
 
     // people sort before projects
     expect(candidates[0].kind).toBe("person");
+  });
+});
+
+describe("salience weighting", () => {
+  const topics = [topic({ id: "emma" }), topic({ id: "mb", name: "Mindboard" })];
+
+  function charged(
+    topicId: string,
+    mass: number,
+    salience: number,
+    ageDays: number,
+  ): ClassifiedItem {
+    return {
+      ...item({
+        mass,
+        occurredAt: NOW - ageDays * DAY,
+        ref: `${topicId}-${salience}-${ageDays}-${mass}`,
+      }),
+      labels: [{ topicId, weight: 1 }],
+      salience,
+    };
+  }
+
+  it("multiplies mass by the salience tier", () => {
+    expect(salienceMult(0)).toBe(0.5);
+    expect(salienceMult(1)).toBe(1);
+    expect(salienceMult(3)).toBe(2.2);
+    expect(salienceMult(-5)).toBe(0.5);
+    expect(salienceMult(99)).toBe(2.2);
+  });
+
+  it("lets a charged entry outweigh a longer routine one", () => {
+    const items = [
+      // Emma: 30 raw minutes at salience 3 → 66 effective.
+      ...Array.from({ length: 5 }, (_, i) => charged("emma", 6, 3, 1 + (i % 3))),
+      // Mindboard: 60 raw minutes at salience 0 → 30 effective.
+      ...Array.from({ length: 5 }, (_, i) => charged("mb", 12, 0, 1 + (i % 3))),
+    ];
+    const week = buildMindspaceView(items, topics, NOW).windows[1];
+    const emma = week.shares.find((s) => s.topicId === "emma")!;
+    const mb = week.shares.find((s) => s.topicId === "mb")!;
+    expect(emma.share).toBeGreaterThan(mb.share);
+    expect(emma.share).toBeCloseTo(66 / 96);
+    expect(emma.rawMassMinutes).toBeCloseTo(30);
+    expect(emma.meanSalience).toBeCloseTo(3);
+    expect(mb.meanSalience).toBeCloseTo(0);
+  });
+});
+
+describe("taxonomyHash", () => {
+  it("is order-independent and sensitive to aliases", () => {
+    const a = topic({ id: "a", name: "Emma" });
+    const b = topic({ id: "b", name: "Mindboard" });
+    expect(taxonomyHash([a, b])).toBe(taxonomyHash([b, a]));
+    expect(taxonomyHash([a, b])).not.toBe(
+      taxonomyHash([{ ...a, aliases: ["em"] }, b]),
+    );
+    // archived topics don't affect the hash
+    expect(
+      taxonomyHash([a, b, topic({ id: "c", name: "Old", status: "archived" })]),
+    ).toBe(taxonomyHash([a, b]));
+  });
+});
+
+describe("mergeClassifications", () => {
+  const topics = [topic({ id: "emma" }), topic({ id: "mb", name: "Mindboard" })];
+  const hash = taxonomyHash(topics);
+
+  it("uses a fresh cached verdict and skips the pending queue", () => {
+    const cached = new Map<string, PersistedVerdict>([
+      [
+        "capture:x",
+        {
+          salience: 3,
+          labels: [{ topicId: "emma", weight: 1 }],
+          taxonomyHash: hash,
+          classified: true,
+        },
+      ],
+    ]);
+    const { classified, pending } = mergeClassifications(
+      [item({ ref: "x", text: "nothing matchable" })],
+      topics,
+      cached,
+      hash,
+    );
+    expect(pending).toHaveLength(0);
+    expect(classified[0].salience).toBe(3);
+    expect(classified[0].labels).toEqual([{ topicId: "emma", weight: 1 }]);
+  });
+
+  it("re-queues stale-taxonomy verdicts but keeps fast-path labels meanwhile", () => {
+    const cached = new Map<string, PersistedVerdict>([
+      [
+        "capture:x",
+        {
+          salience: 2,
+          labels: [{ topicId: "emma", weight: 1 }],
+          taxonomyHash: "old-hash",
+          classified: true,
+        },
+      ],
+    ]);
+    const { classified, pending } = mergeClassifications(
+      [item({ ref: "x", frontmatterTopics: ["Mindboard"] })],
+      topics,
+      cached,
+      hash,
+    );
+    expect(pending).toHaveLength(1);
+    expect(classified[0].salience).toBe(1);
+    expect(classified[0].labels).toEqual([{ topicId: "mb", weight: 1 }]);
+  });
+
+  it("drops labels for deleted topics and falls back to the fast path", () => {
+    const cached = new Map<string, PersistedVerdict>([
+      [
+        "capture:x",
+        {
+          salience: 2,
+          labels: [{ topicId: "deleted-topic", weight: 1 }],
+          taxonomyHash: hash,
+          classified: true,
+        },
+      ],
+    ]);
+    const { classified, pending } = mergeClassifications(
+      [item({ ref: "x", frontmatterTopics: ["Emma"] })],
+      topics,
+      cached,
+      hash,
+    );
+    expect(pending).toHaveLength(0);
+    expect(classified[0].labels).toEqual([{ topicId: "emma", weight: 1 }]);
+  });
+
+  it("queues unseen items with fast-path labels", () => {
+    const { classified, pending } = mergeClassifications(
+      [item({ ref: "new", frontmatterTopics: ["Emma"] })],
+      topics,
+      new Map(),
+      hash,
+    );
+    expect(pending).toHaveLength(1);
+    expect(classified[0].labels).toEqual([{ topicId: "emma", weight: 1 }]);
+    expect(classified[0].salience).toBe(1);
   });
 });
 
