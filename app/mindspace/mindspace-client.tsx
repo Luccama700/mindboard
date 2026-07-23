@@ -27,6 +27,8 @@ const SOURCE_LABELS: Record<MindspaceSource, string> = {
   daily_log: "check-in",
   spend: "spend",
   event: "event",
+  claude_ai: "claude.ai",
+  claude_code: "code session",
 };
 
 function pct(share: number): string {

@@ -791,6 +791,19 @@ async function main() {
   }
 
   await nightReport(planned, built, lifeProposed, lifeDone);
+
+  // Mindspace: send local Claude Code session summaries to the app (M3,
+  // docs/mindspace-plan.md). Non-fatal — a failed sync just retries with the
+  // next run's rescan slack.
+  if (!DRY) {
+    try {
+      const { syncMindspaceSessions } = await import("./mindspace-sync.mjs");
+      await syncMindspaceSessions({ url: CONFIG.url, pat: CONFIG.pat, log });
+    } catch (error) {
+      log(`mindspace sync failed (non-fatal): ${error?.message ?? error}`);
+    }
+  }
+
   log("overnight run complete");
 }
 

@@ -268,8 +268,16 @@ with the design system tokens (`--color-accent`, text scales).
   from the planned jobs-queue classify-on-write; the queue can still arrive
   with M3's external streams). Taxonomy edits invalidate verdicts via
   `taxonomy_hash`; stale items re-classify next pass, capped 60/visit.
-- **M3 — external streams:** overnight-agent Claude Code session sync
-  (`mindspace_ingest_sessions` MCP tool), claude.ai export import page.
+- **M3 — external streams** *(shipped 2026-07-22)*: migration 0045
+  (`mindspace_sessions` — user's own words only, capped, upsert-idempotent on
+  (user, provider, session_ref)). claude.ai: `/mindspace/import` parses the
+  export's conversations.json **in the browser** (files run tens of MB past
+  server-action limits) and posts compact session records in batches. Claude
+  Code: `overnight/mindspace-sync.mjs` scans `~/.claude/projects/*.jsonl`
+  locally (skips sidechains/tool dumps/system noise), sends ≤400
+  sessions/night through the new fenced `mindspace_ingest_sessions` MCP tool;
+  wired into run.mjs non-fatally. Item refs carry the word count so a
+  re-synced session that grew re-classifies automatically.
 - **M4 — discovery & polish:** weekly emergent-topic suggestions, add/split scoped
   re-classification, MCP read tool `mindspace_snapshot` (so the assistant and agents
   can see it), sparse-state tuning.

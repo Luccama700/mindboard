@@ -1,5 +1,10 @@
 import { timingSafeEqual } from "node:crypto";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
+import { createServiceClient } from "@/utils/supabase/service";
+import {
+  ingestExternalSessions,
+  SESSION_BATCH_MAX,
+} from "@/app/lib/mindspace/sessions";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
 import { verifyAccessToken } from "@/app/lib/mcp/oauth";
@@ -1136,6 +1141,50 @@ const mcpHandler = createMcpHandler(
         guard(async () => {
           const r = await captureToBrain(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    // Fenced direct write, same reasoning as capture_to_brain: append-only
+    // ingestion of the user's own activity metadata into mindspace_sessions
+    // (docs/mindspace-plan.md M3), idempotent on session ref — a nightly
+    // automation rail where propose → confirm would be noise, and nothing
+    // else in Mindboard is touchable through it.
+    server.registerTool(
+      "mindspace_ingest_sessions",
+      {
+        title: "Ingest external AI sessions into mindspace",
+        description:
+          "Sync external AI-session summaries (Claude Code transcripts scanned locally) into the user's mindspace attention data. Send per-session records with the user's OWN prompts only (summarized/truncated), never assistant output. Re-sending a session ref updates it in place.",
+        inputSchema: {
+          provider: z.enum(["claude_code", "claude_ai"]).default("claude_code"),
+          sessions: z
+            .array(
+              z.object({
+                ref: z.string().max(200),
+                title: z.string().max(200).optional(),
+                project: z.string().max(200).optional(),
+                startedAt: z.string().describe("ISO timestamp"),
+                endedAt: z.string().describe("ISO timestamp"),
+                durationMin: z.number().min(0),
+                userText: z.string().max(8000),
+                wordCount: z.number().min(0).optional(),
+              }),
+            )
+            .min(1)
+            .max(SESSION_BATCH_MAX),
+        },
+      },
+      (args, extra) =>
+        guard(async () => {
+          const result = await ingestExternalSessions(
+            createServiceClient(),
+            uid(extra),
+            args.provider,
+            args.sessions,
+          );
+          return result.ok
+            ? ok({ imported: result.imported, skipped: result.skipped })
+            : fail(result.error ?? "ingest failed");
         }),
     );
 

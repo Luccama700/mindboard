@@ -31,7 +31,9 @@ export type MindspaceSource =
   | "ai_chat"
   | "daily_log"
   | "spend"
-  | "event";
+  | "event"
+  | "claude_ai"
+  | "claude_code";
 
 // One countable trace, before classification. `mass` is the common currency:
 // estimated minutes of engagement (reading time for notes, session span for

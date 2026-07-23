@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-22-mindspace-m3",
+    date: "2026-07-22",
+    title: "mindspace hears the rest of the conversation",
+    items: [
+      "your claude.ai conversations can now count: mindspace → import walks you through the data export. the file parses in your browser — only compact records of your own words are stored, and re-imports dedupe.",
+      "claude code sessions sync themselves — the overnight agent scans your local transcripts each night and sends per-session summaries of your prompts only. assistant output and tool dumps never leave the pc.",
+      "both show up as their own trace types (claude.ai, code session) in each topic's evidence list, weighted by how long the session actually ran.",
+    ],
+  },
+  {
     id: "2026-07-22-mindspace-m2",
     date: "2026-07-22",
     title: "mindspace learns to feel the difference",

@@ -225,6 +225,7 @@ export const gatherMindspaceItems = cache(
       conversationsRes,
       logsRes,
       spendRes,
+      sessionsRes,
     ] = await Promise.all([
         vaultPromise,
         eventsPromise,
@@ -265,6 +266,14 @@ export const gatherMindspaceItems = cache(
           .eq("user_id", userId)
           .gte("occurred_at", cutoffDate)
           .not("note", "is", null)
+          .limit(ROW_LIMIT),
+        supabase
+          .from("mindspace_sessions")
+          .select(
+            "provider, session_ref, title, project, started_at, ended_at, duration_min, word_count, user_text",
+          )
+          .eq("user_id", userId)
+          .gte("ended_at", cutoffIso)
           .limit(ROW_LIMIT),
       ]);
 
@@ -378,6 +387,51 @@ export const gatherMindspaceItems = cache(
         mass: SPEND_MASS,
         wordCount: countWords(note),
         text: `${note}\n${category?.name ?? ""}`,
+        frontmatterTopics: [],
+        wikilinkPaths: [],
+        groupId: null,
+      });
+    }
+
+    // Imported external AI sessions (claude.ai export, Claude Code sync).
+    // The item ref carries the word count so a session that grew on re-sync
+    // gets a fresh ref and re-classifies; the old verdict ages out via cleanup.
+    type SessionRow = {
+      provider: "claude_ai" | "claude_code";
+      session_ref: string;
+      title: string | null;
+      project: string | null;
+      started_at: string;
+      ended_at: string;
+      duration_min: number;
+      word_count: number;
+      user_text: string;
+    };
+    for (const session of (sessionsRes.data ?? []) as SessionRow[]) {
+      const endedMs = Date.parse(session.ended_at);
+      if (Number.isNaN(endedMs) || endedMs < cutoffMs || endedMs > nowMs) {
+        continue;
+      }
+      const title =
+        session.title?.trim() ||
+        (session.provider === "claude_code"
+          ? `code session${session.project ? ` — ${session.project}` : ""}`
+          : "claude.ai chat");
+      items.push({
+        source: session.provider,
+        ref: `${session.session_ref}#${session.word_count}`,
+        title,
+        href: null,
+        occurredAt: endedMs,
+        mass: Math.min(
+          SESSION_MAX_MINUTES,
+          Math.max(SESSION_MIN_MINUTES, session.duration_min),
+        ),
+        wordCount: session.word_count,
+        text: `${title}\n${session.project ?? ""}\n${session.user_text}`.slice(
+          0,
+          MATCH_TEXT_CAP,
+        ),
         frontmatterTopics: [],
         wikilinkPaths: [],
         groupId: null,

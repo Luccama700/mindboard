@@ -61,9 +61,17 @@ export default async function MindspacePage() {
       >
         ← mindboard
       </Link>
-      <h1 className="text-xs tracking-widest uppercase text-muted">
-        mindspace
-      </h1>
+      <div className="flex items-center gap-4">
+        <h1 className="text-xs tracking-widest uppercase text-muted">
+          mindspace
+        </h1>
+        <Link
+          href="/mindspace/import"
+          className="text-xs tracking-widest uppercase text-muted hover:text-fg transition-colors min-h-11 flex items-center"
+        >
+          import →
+        </Link>
+      </div>
     </header>
   );
 

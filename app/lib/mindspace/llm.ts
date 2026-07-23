@@ -28,6 +28,8 @@ const SOURCE_HINTS: Record<MindspaceItem["source"], string> = {
   daily_log: "daily check-in note",
   spend: "spending note",
   event: "calendar event",
+  claude_ai: "the user's messages in a claude.ai conversation",
+  claude_code: "the user's prompts in a Claude Code session",
 };
 
 const CLASSIFY_TOOL: Anthropic.Tool = {
