@@ -55,6 +55,16 @@ WHISPER_CMD = os.environ.get(
     "WHISPER_CMD",
     "whisper-ctranslate2 {audio} --model large-v3 --output_format txt --output_dir {out}",
 )
+# Photo posts/carousels (instagram.com/p/...) have no video for yt-dlp to
+# download, but its metadata extraction still works: with
+# --ignore-no-formats-error each carousel item's info json carries full-size
+# CDN image URLs in `thumbnails`. The image fallback runs this, downloads the
+# images, and records them as frames — caption + vision, no transcript.
+YTDLP_INFO_CMD = os.environ.get(
+    "YTDLP_INFO_CMD",
+    "yt-dlp --no-warnings --ignore-no-formats-error --skip-download "
+    "--write-info-json -o {out}/item%(playlist_index)s.%(ext)s {url}",
+)
 VISION_MODEL = os.environ.get("VISION_MODEL", "qwen3-vl:8b")  # "" disables visuals
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 REEL_MAX_FRAMES = int(os.environ.get("REEL_MAX_FRAMES", "10"))
@@ -78,8 +88,9 @@ def api(body: dict) -> dict:
         return json.loads(response.read().decode())
 
 
-def download(url: str, dest: Path) -> None:
-    with urllib.request.urlopen(url, timeout=600) as response:
+def download(url: str, dest: Path, headers: dict | None = None) -> None:
+    request = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=600) as response:
         dest.write_bytes(response.read())
 
 
@@ -210,6 +221,79 @@ def ollama_describe(image_path: Path) -> dict:
         return {}
 
 
+def describe_frames(frame_files: list[Path], label: str = "frame") -> list[dict]:
+    """Run the local VLM over keyframes/images. Best-effort — returns only
+    frames that yielded a description or on-screen text."""
+    frames: list[dict] = []
+    if VISION_MODEL and frame_files:
+        log(f"  reading {len(frame_files)} {label}(s) with {VISION_MODEL}…")
+        for index, frame in enumerate(frame_files, start=1):
+            described = ollama_describe(frame)
+            if described.get("describe") or described.get("text"):
+                frames.append({"at": f"{label} {index}", **described})
+    return frames
+
+
+def handle_post_images(url: str, workdir: Path) -> dict:
+    """Fallback for photo posts and carousels: no video, so no transcript.
+    Pull each item's best CDN image via yt-dlp's info json, then treat the
+    images as the record's frames. The caption is the core deliverable here
+    (the app rejects a record with neither transcript nor caption)."""
+    log("  no video — treating as a photo post…")
+    info_dir = workdir / "info"
+    info_dir.mkdir()
+    run_command(YTDLP_INFO_CMD, timeout=300, out=str(info_dir), url=url)
+
+    title = author = caption = ""
+    entries: list[dict] = []
+    for path in sorted(info_dir.glob("*.info.json")):
+        try:
+            info = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 — one bad json must not sink the job
+            continue
+        # The playlist json (carousels) carries the post's caption/author; a
+        # single-image post has one entry json carrying both. First one wins.
+        caption = caption or str(info.get("description") or "").strip()
+        author = author or str(info.get("uploader") or info.get("channel") or "").strip()
+        title = title or str(info.get("title") or "").strip()
+        if info.get("thumbnails"):
+            entries.append(info)
+
+    frames_dir = workdir / "frames"
+    frames_dir.mkdir()
+    frame_files: list[Path] = []
+    for index, info in enumerate(entries[:REEL_MAX_FRAMES], start=1):
+        # yt-dlp lists thumbnails worst-to-best; the last is the full image.
+        best = (info.get("thumbnails") or [])[-1]
+        if not best.get("url"):
+            continue
+        dest = frames_dir / f"img{index:03d}.jpg"
+        try:
+            download(best["url"], dest, headers={"User-Agent": "Mozilla/5.0"})
+            frame_files.append(dest)
+        except Exception as error:  # noqa: BLE001 — images are per-item best-effort
+            log(f"    image {index} failed: {str(error)[:100]}")
+    if not frame_files and not caption:
+        raise RuntimeError(
+            "no video, no images, and no caption (private or removed post?)"
+        )
+    if len(entries) > REEL_MAX_FRAMES:
+        log(f"  carousel has {len(entries)} items; capped at {REEL_MAX_FRAMES}")
+
+    result: dict = {
+        "title": (title or (caption.split("\n")[0][:80] if caption else ""))[:120],
+        "caption": caption,
+        "author": author,
+        "duration_sec": 0,
+        "transcript": "",
+        "frames": describe_frames(frame_files, label="image"),
+    }
+    if frame_files:
+        result["thumbnail_base64"] = base64.b64encode(frame_files[0].read_bytes()).decode()
+        result["thumbnail_ext"] = "jpg"
+    return result
+
+
 def handle_reel(claim: dict, workdir: Path) -> dict:
     if not WHISPER_CMD:
         raise RuntimeError("WHISPER_CMD is not configured on this worker")
@@ -218,14 +302,20 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     outdir = workdir / "out"
     outdir.mkdir()
     log(f"  downloading reel {reel.get('shortcode', '')}…")
-    run_command(YTDLP_CMD, timeout=300, out=str(outdir), url=url)
+    # Photo posts make yt-dlp exit non-zero ("No video formats found"), so a
+    # download failure falls through to the image fallback rather than failing
+    # the job outright; genuinely broken links fail there with a clear error.
+    try:
+        run_command(YTDLP_CMD, timeout=300, out=str(outdir), url=url)
+    except Exception as error:  # noqa: BLE001
+        log(f"  yt-dlp download failed: {str(error)[:100]}")
 
     videos = [
         p for p in outdir.iterdir()
         if p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov")
     ]
     if not videos:
-        raise RuntimeError("yt-dlp downloaded no video (private or unavailable reel?)")
+        return handle_post_images(url, workdir)
     video = videos[0]
 
     # Metadata from yt-dlp's info json (caption = the post's description).
@@ -286,21 +376,13 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     if not frame_files:
         log("  no keyframes extracted — continuing transcript-only")
 
-    frames: list[dict] = []
-    if VISION_MODEL and frame_files:
-        log(f"  reading {len(frame_files)} frame(s) with {VISION_MODEL}…")
-        for index, frame in enumerate(frame_files, start=1):
-            described = ollama_describe(frame)
-            if described.get("describe") or described.get("text"):
-                frames.append({"at": f"frame {index}", **described})
-
     result: dict = {
         "title": (title or (caption.split("\n")[0][:80] if caption else ""))[:120],
         "caption": caption,
         "author": author,
         "duration_sec": duration_sec,
         "transcript": transcript,
-        "frames": frames,
+        "frames": describe_frames(frame_files),
     }
     if frame_files:
         result["thumbnail_base64"] = base64.b64encode(frame_files[0].read_bytes()).decode()

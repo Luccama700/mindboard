@@ -82,6 +82,13 @@ audio output, so no VibeVoice.)
    isn't reachable. Private-account reels that yt-dlp can't fetch fail the job
    with a clear message — no Instagram login is ever used.
 
+   Photo posts and carousels (`instagram.com/p/...` shares with no video)
+   fall back to image mode (added 2026-07-23): yt-dlp's info-json extraction
+   (`YTDLP_INFO_CMD`) still yields each item's full-size CDN image URL, so the
+   worker downloads the images and records them as frames — caption + vision
+   description/OCR, no transcript. A mixed carousel's video items contribute
+   their cover image only.
+
 4. **The worker itself** (pure stdlib, Python ≥ 3.10):
 
    ```bash
