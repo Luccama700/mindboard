@@ -265,3 +265,79 @@ export async function uncompleteRecurringOccurrence(
   revalidatePath("/", "layout");
   return { error: null };
 }
+
+// Approve a gap proposal into a persisted per-occurrence commitment. Unlike a
+// completion this carries no today-guard: a slot can be placed on any future
+// day. The upsert overwrites (no ignoreDuplicates) so re-approving/moving a slot
+// on the same day replaces it. A cross-day move (fromDateKey !== dateKey) deletes
+// the origin row after writing the new one.
+export async function approveRecurringSlot(input: {
+  ruleId: string;
+  dateKey: string;
+  start: string;
+  durationMin?: number | null;
+  fromDateKey?: string;
+}) {
+  if (!DATE_RE.test(input.dateKey)) return { error: "invalid date" };
+  if (!TIME_RE.test(input.start)) return { error: "invalid time" };
+  const startTime = input.start.length === 5 ? `${input.start}:00` : input.start;
+
+  let durationMin: number | null = null;
+  if (input.durationMin !== undefined && input.durationMin !== null) {
+    const d = Math.trunc(Number(input.durationMin));
+    if (!Number.isFinite(d) || d < 15) return { error: "duration must be 15+ minutes" };
+    durationMin = d;
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase.from("recurring_task_slots").upsert(
+    {
+      user_id: user.id,
+      rule_id: input.ruleId,
+      occurred_on: input.dateKey,
+      start_time: startTime,
+      duration_min: durationMin,
+    },
+    { onConflict: "rule_id,occurred_on" },
+  );
+
+  if (error) return { error: error.message };
+
+  if (input.fromDateKey !== undefined && input.fromDateKey !== input.dateKey) {
+    const { error: moveError } = await supabase
+      .from("recurring_task_slots")
+      .delete()
+      .eq("rule_id", input.ruleId)
+      .eq("occurred_on", input.fromDateKey)
+      .eq("user_id", user.id);
+    if (moveError) return { error: moveError.message };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+export async function clearRecurringSlot(ruleId: string, dateKey: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase
+    .from("recurring_task_slots")
+    .delete()
+    .eq("rule_id", ruleId)
+    .eq("occurred_on", dateKey)
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}

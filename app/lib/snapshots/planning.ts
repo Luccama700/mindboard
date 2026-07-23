@@ -89,6 +89,14 @@ export type PlanningInput = {
   events: ScheduleEvent[]; // Google Calendar events across the horizon
   recurringTasks: PlanningRecurringRule[];
   completedRecurring: Set<string>; // "ruleId|dateKey" for known (past/today) completions
+  // Approved per-occurrence slots (migration 0042): each overrides its rule's
+  // due_time for that day (never double-counted). Default [].
+  recurringSlots?: {
+    rule_id: string;
+    occurred_on: string;
+    start_time: string; // "HH:MM" or "HH:MM:SS"
+    duration_min: number | null;
+  }[];
   tasks: TaskWithGroup[]; // every open task
 
   accounts: PlanningAccount[];
@@ -146,6 +154,7 @@ export type PlanningOccurrence = {
   priority: "low" | "med" | "high";
   group: string | null;
   done: boolean;
+  slotted: boolean; // an approved slot pins this occurrence's time for its day
 };
 
 export type PlanningInventoryItem = {
@@ -233,6 +242,7 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
     events,
     recurringTasks,
     completedRecurring,
+    recurringSlots = [],
     tasks,
     accounts,
     recurringExpenses,
@@ -246,6 +256,12 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
   } = input;
 
   const nowMs = now.getTime();
+
+  // Approved slots keyed "ruleId|dateKey" — each overrides its rule's due_time
+  // (and duration) for that day, in both the timed schedule and the occurrence list.
+  const slotByKey = new Map(
+    recurringSlots.map((s) => [`${s.rule_id}|${s.occurred_on}`, s]),
+  );
   const horizonEnd = addDaysKey(today, horizonDays);
   const dayKeys: string[] = [];
   for (let d = today; d <= horizonEnd; d = addDaysKey(d, 1)) dayKeys.push(d);
@@ -259,6 +275,7 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
   const allDayEvents = events.filter((e) => e.allDay);
   const timedRecurring = recurringTasks.filter((r) => r.due_time);
   const timedTasks = openTasks.filter((t) => t.due_date && t.due_time);
+  const ruleById = new Map(recurringTasks.map((r) => [r.id, r]));
 
   // Today's free hours count every source that blocks time (events, time-blocked
   // tasks, timed habits) — captured from the day loop below.
@@ -274,10 +291,30 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
     }
     for (const rule of timedRecurring) {
       if (!taskRuleLandsOn(rule, date)) continue;
+      // A slot overrides the rule's due_time for this day — the slot block below
+      // supplies it instead, so skip the rule-timed block (never double-counted).
+      if (slotByKey.has(`${rule.id}|${dateKey}`)) continue;
       const hm = parseHms(rule.due_time as string);
       if (!hm) continue;
       const startMs = zonedWallTimeToUtcMs(dateKey, hm.h, hm.m, timeZone);
       const endMs = startMs + (rule.duration_min ?? DEFAULT_BLOCK_MINUTES) * 60_000;
+      blocks.push({
+        title: rule.title,
+        start: zonedIso(startMs, timeZone),
+        end: zonedIso(endMs, timeZone),
+        source: "recurring",
+      });
+    }
+    for (const slot of recurringSlots) {
+      if (slot.occurred_on !== dateKey) continue;
+      const rule = ruleById.get(slot.rule_id);
+      if (!rule) continue;
+      const hm = parseHms(slot.start_time);
+      if (!hm) continue;
+      const startMs = zonedWallTimeToUtcMs(dateKey, hm.h, hm.m, timeZone);
+      const endMs =
+        startMs +
+        (slot.duration_min ?? rule.duration_min ?? DEFAULT_BLOCK_MINUTES) * 60_000;
       blocks.push({
         title: rule.title,
         start: zonedIso(startMs, timeZone),
@@ -405,15 +442,21 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
     const date = parseKey(dateKey);
     for (const rule of recurringTasks) {
       if (!taskRuleLandsOn(rule, date)) continue;
+      const slot = slotByKey.get(`${rule.id}|${dateKey}`);
       recurringOccurrences.push({
         ruleId: rule.id,
         title: rule.title,
         date: dateKey,
-        dueTime: rule.due_time ? rule.due_time.slice(0, 5) : null,
-        durationMin: rule.duration_min,
+        dueTime: slot
+          ? slot.start_time.slice(0, 5)
+          : rule.due_time
+            ? rule.due_time.slice(0, 5)
+            : null,
+        durationMin: slot ? (slot.duration_min ?? rule.duration_min) : rule.duration_min,
         priority: rule.priority,
         group: rule.group_name,
         done: completedRecurring.has(`${rule.id}|${dateKey}`),
+        slotted: slot !== undefined,
       });
     }
   }

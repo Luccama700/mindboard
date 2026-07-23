@@ -13,7 +13,7 @@ import {
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
-import { busyFromDayItems } from "@/app/lib/snapshots/gap-plan";
+import { busyFromDayItems, rtaskEffectiveTiming } from "@/app/lib/snapshots/gap-plan";
 import type { CalendarItem } from "./calendar-types";
 import { formatClockTime, formatHourLabel } from "./date-utils";
 import { formatSignedChange } from "./money";
@@ -99,14 +99,9 @@ function taskMinutes(item: TaskItem): { start: number; end: number } | null {
   return { start, end: start + (item.durationMin ?? DEFAULT_TASK_MINUTES) };
 }
 
-// Timed occurrences. Soft-placed (plannedStart) rules render as advisory ghosts
-// via plannedRtaskMinutes; an untimed rule with no placement yields no block.
-function rtaskMinutes(item: RtaskItem): { start: number; end: number } | null {
-  if (!item.dueTime) return null;
-  const start = timeToMinutes(item.dueTime.slice(0, 5));
-  return { start, end: start + (item.durationMin ?? DEFAULT_TASK_MINUTES) };
-}
-
+// Soft-placed (plannedStart) rules render as advisory ghosts via
+// plannedRtaskMinutes; committed timing (slot ?? due_time) comes from
+// rtaskEffectiveTiming instead.
 function plannedRtaskMinutes(
   item: RtaskItem,
 ): { start: number; end: number } | null {
@@ -134,7 +129,22 @@ type DragData =
       startMinutes: number;
       endMinutes: number;
     }
-  | { kind: "event-allday"; id: string; dateKey: string };
+  | { kind: "event-allday"; id: string; dateKey: string }
+  | {
+      kind: "rtask-planned";
+      id: string;
+      ruleId: string;
+      dateKey: string;
+      minutes: number;
+    }
+  | {
+      kind: "rtask-slot";
+      id: string;
+      ruleId: string;
+      dateKey: string;
+      startMinutes: number;
+      minutes: number;
+    };
 
 export type RescheduleEvent = {
   itemId: string;
@@ -240,24 +250,86 @@ function TimedTaskBlock({
   );
 }
 
-// A recurring occurrence, never draggable — the rule owns its schedule. Timed
-// rules render as a bold, border-2 dashed hollow block. A soft-placed untimed
-// rule (plannedStart) renders as a lighter advisory ghost — 1px dashed border,
-// dimmed, muted title, an "auto" time line — so it reads as a suggestion, not a
-// commitment. Both strike + dim once completed today.
-function RecurringTaskBlock({ item }: { item: RtaskItem }) {
-  const timed = item.dueTime !== null;
-  const minutes = timed ? rtaskMinutes(item) : plannedRtaskMinutes(item);
-  if (!minutes) return null;
+// A recurring occurrence with THREE states, one unconditional useDraggable so
+// hook order never shifts. A committed slot (slotStart) or a timed rule both
+// render as a bold, border-2 dashed hollow block — the slot draggable, the plain
+// timed rule inert (the rule owns its schedule). A soft-placed untimed rule
+// (plannedStart, no slot) renders as a lighter advisory ghost — 1px dashed
+// border, dimmed, muted title, an "auto" time line, an inline ✓ to approve it —
+// and is itself draggable into a committed slot. Position precedence: slot >
+// dueTime > planned. All strike + dim once completed today.
+function RecurringTaskBlock({
+  item,
+  dateKey,
+  onScheduleRtask,
+}: {
+  item: RtaskItem;
+  dateKey: string;
+  onScheduleRtask: WeekViewProps["onScheduleRtask"];
+}) {
+  const hasSlot = item.slotStart !== null;
+  const isPlanned =
+    item.dueTime === null &&
+    item.plannedStart !== null &&
+    item.slotStart === null;
+  const ruleTimedNoSlot = item.dueTime !== null && item.slotStart === null;
 
-  if (timed) {
+  // slot ?? dueTime wins; a bare planned ghost falls back to its advisory span.
+  const effective = rtaskEffectiveTiming(item);
+  const planned = plannedRtaskMinutes(item);
+  const block =
+    effective !== null
+      ? {
+          start: timeToMinutes(effective.time.slice(0, 5)),
+          minutes: effective.minutes,
+        }
+      : planned !== null
+        ? { start: planned.start, minutes: planned.end - planned.start }
+        : null;
+
+  const dragData: DragData | null =
+    hasSlot && block
+      ? {
+          kind: "rtask-slot",
+          id: item.id,
+          ruleId: item.ruleId,
+          dateKey,
+          startMinutes: block.start,
+          minutes: block.minutes,
+        }
+      : isPlanned && block
+        ? {
+            kind: "rtask-planned",
+            id: item.id,
+            ruleId: item.ruleId,
+            dateKey,
+            minutes: block.minutes,
+          }
+        : null;
+
+  const enabled = !ruleTimedNoSlot && !item.done && dragData !== null;
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `rtask-drag-${item.id}`,
+    disabled: !enabled,
+    data: dragData ?? undefined,
+  });
+
+  if (!block) return null;
+  const start = block.start;
+  const end = block.start + block.minutes;
+  const dragBind = enabled
+    ? { ref: setNodeRef, ...attributes, ...listeners }
+    : {};
+
+  if (hasSlot || item.dueTime !== null) {
     return (
       <div
+        {...dragBind}
         className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
-          item.done ? "opacity-50" : ""
-        }`}
+          enabled ? "cursor-grab" : ""
+        } ${isDragging ? "opacity-30" : ""} ${item.done ? "opacity-50" : ""}`}
         style={{
-          ...blockStyle(minutes.start, minutes.end),
+          ...blockStyle(start, end),
           borderColor: item.color,
         }}
       >
@@ -270,7 +342,7 @@ function RecurringTaskBlock({ item }: { item: RtaskItem }) {
           {item.title}
         </p>
         <p className="truncate text-[10px] text-muted">
-          {minutesToTime(minutes.start)} – {minutesToTime(minutes.end)}
+          {minutesToTime(start)} – {minutesToTime(end)}
         </p>
       </div>
     );
@@ -278,14 +350,36 @@ function RecurringTaskBlock({ item }: { item: RtaskItem }) {
 
   return (
     <div
+      {...dragBind}
       className={`absolute left-1 right-1 overflow-hidden rounded-lg border border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
+        enabled ? "cursor-grab" : ""
+      } ${isDragging ? "opacity-30" : ""} ${
         item.done ? "opacity-50" : "opacity-70"
       }`}
       style={{
-        ...blockStyle(minutes.start, minutes.end),
+        ...blockStyle(start, end),
         borderColor: item.color,
       }}
     >
+      {!item.done && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onScheduleRtask({
+              ruleId: item.ruleId,
+              occurredOn: dateKey,
+              start: item.plannedStart!.slice(0, 5),
+              durationMin: block.minutes,
+            });
+          }}
+          aria-label={`approve ${item.title}`}
+          className="absolute right-0.5 top-0.5 z-20 flex h-6 w-6 items-center justify-center rounded text-[11px] text-positive hover:bg-card"
+        >
+          ✓
+        </button>
+      )}
       <p
         className={`truncate text-[11px] text-muted ${
           item.done ? "line-through" : ""
@@ -295,7 +389,7 @@ function RecurringTaskBlock({ item }: { item: RtaskItem }) {
         {item.title}
       </p>
       <p className="truncate text-[10px] text-muted">
-        ~{minutesToTime(minutes.start)} – {minutesToTime(minutes.end)} · auto
+        ~{minutesToTime(start)} – {minutesToTime(end)} · auto
       </p>
     </div>
   );
@@ -403,7 +497,25 @@ function FinanceChip({
 }
 
 function DragPreview({ item }: { item: CalendarItem }) {
-  if (item.kind === "finance" || item.kind === "rtask") return null;
+  if (item.kind === "finance") return null;
+  if (item.kind === "rtask") {
+    const timing = rtaskEffectiveTiming(item);
+    const minutes = timing
+      ? timing.minutes
+      : (item.plannedMinutes ?? item.durationMin ?? DEFAULT_TASK_MINUTES);
+    const height = Math.max((minutes / 60) * HOUR_HEIGHT, 32);
+    return (
+      <div
+        className="overflow-hidden rounded-lg border border-dashed bg-page/85 px-1.5 py-0.5 shadow-lg"
+        style={{ width: "9rem", height: `${height}px`, borderColor: item.color }}
+      >
+        <p className="truncate text-[11px] font-bold text-fg">
+          <span aria-hidden>↻ </span>
+          {item.title}
+        </p>
+      </div>
+    );
+  }
   const color = item.color;
   if (item.kind === "task" || item.allDay) {
     return (
@@ -511,6 +623,26 @@ function FreeGapUnderlay({
   );
 }
 
+type WeekViewProps = {
+  selected: string;
+  today: string;
+  itemsByDate: Map<string, CalendarItem[]>;
+  onSelect: (key: string) => void;
+  onRescheduleEvent: (e: RescheduleEvent) => void;
+  onRescheduleTask: (t: RescheduleTask) => void;
+  onResizeTask?: (taskId: string, durationMin: number) => void;
+  onScheduleRtask: (p: {
+    ruleId: string;
+    occurredOn: string;
+    start: string;
+    durationMin: number;
+    fromDateKey?: string;
+  }) => void;
+  onClearRtaskSlot: (ruleId: string, occurredOn: string) => void;
+  wakeStartHour?: number;
+  wakeEndHour?: number;
+};
+
 export function WeekView({
   selected,
   today,
@@ -519,19 +651,11 @@ export function WeekView({
   onRescheduleEvent,
   onRescheduleTask,
   onResizeTask,
+  onScheduleRtask,
+  onClearRtaskSlot,
   wakeStartHour = 8,
   wakeEndHour = 22,
-}: {
-  selected: string;
-  today: string;
-  itemsByDate: Map<string, CalendarItem[]>;
-  onSelect: (key: string) => void;
-  onRescheduleEvent: (e: RescheduleEvent) => void;
-  onRescheduleTask: (t: RescheduleTask) => void;
-  onResizeTask?: (taskId: string, durationMin: number) => void;
-  wakeStartHour?: number;
-  wakeEndHour?: number;
-}) {
+}: WeekViewProps) {
   const week = buildWeek(selected);
   const timedRef = useRef<HTMLDivElement>(null);
   const [activeItem, setActiveItem] = useState<CalendarItem | null>(null);
@@ -673,6 +797,47 @@ export function WeekView({
       return;
     }
 
+    if (data.kind === "rtask-planned") {
+      const minutes = droppedMinutes(event);
+      if (minutes === null) return;
+      const occurredOn =
+        dayShift === 0 ? data.dateKey : shiftDateKey(data.dateKey, dayShift);
+      onScheduleRtask({
+        ruleId: data.ruleId,
+        occurredOn,
+        start: minutesToTime(minutes),
+        durationMin: data.minutes,
+        fromDateKey: occurredOn !== data.dateKey ? data.dateKey : undefined,
+      });
+      return;
+    }
+
+    if (data.kind === "rtask-slot") {
+      const grid = timedRef.current;
+      const translated = event.active.rect.current.translated;
+      if (grid && translated) {
+        const gridRect = grid.getBoundingClientRect();
+        if (translated.top < gridRect.top - 12) {
+          // Dragged back up above the grid: the commitment dissolves. Clear the
+          // ORIGINAL day's slot.
+          onClearRtaskSlot(data.ruleId, data.dateKey);
+          return;
+        }
+      }
+      const minutes = droppedMinutes(event);
+      if (minutes === null) return;
+      const occurredOn =
+        dayShift === 0 ? data.dateKey : shiftDateKey(data.dateKey, dayShift);
+      onScheduleRtask({
+        ruleId: data.ruleId,
+        occurredOn,
+        start: minutesToTime(minutes),
+        durationMin: data.minutes,
+        fromDateKey: occurredOn !== data.dateKey ? data.dateKey : undefined,
+      });
+      return;
+    }
+
     if (data.kind === "event-allday") {
       if (dayShift === 0) return;
       const newDateKey = shiftDateKey(data.dateKey, dayShift);
@@ -767,7 +932,8 @@ export function WeekView({
                 (item): item is RtaskItem =>
                   item.kind === "rtask" &&
                   item.dueTime === null &&
-                  item.plannedStart === null,
+                  item.plannedStart === null &&
+                  item.slotStart === null,
               );
 
               return (
@@ -844,7 +1010,9 @@ export function WeekView({
               const recurringItems = dayItems.filter(
                 (item): item is RtaskItem =>
                   item.kind === "rtask" &&
-                  (item.dueTime !== null || item.plannedStart !== null),
+                  (item.dueTime !== null ||
+                    item.plannedStart !== null ||
+                    item.slotStart !== null),
               );
               const isToday = key === today;
               const nowTop =
@@ -881,7 +1049,12 @@ export function WeekView({
                   ))}
 
                   {recurringItems.map((item) => (
-                    <RecurringTaskBlock key={item.id} item={item} />
+                    <RecurringTaskBlock
+                      key={item.id}
+                      item={item}
+                      dateKey={key}
+                      onScheduleRtask={onScheduleRtask}
+                    />
                   ))}
 
                   {timedTasks.map((item) => (

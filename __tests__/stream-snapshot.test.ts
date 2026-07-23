@@ -315,7 +315,7 @@ describe("recurring tasks", () => {
     ...over,
   });
 
-  test("today's occurrences interleave into NEXT by time; the due-today task sits in NOW", () => {
+  test("recurring occurrences leave NOW/NEXT for the routines section; the due-today task sits in NOW", () => {
     const snap = streamSnapshot(
       base({
         tasks: [task({ id: "t1", due_date: TODAY, due_time: "14:00:00" })],
@@ -328,23 +328,54 @@ describe("recurring tasks", () => {
     );
     expect(ids(snap.now)).toEqual(["task:t1"]);
     expect(snap.now[0].tier).toBe(2); // due today, within 2h -> elevated
-    expect(ids(snap.next)).toEqual([
+    expect(ids(snap.next)).toEqual([]);
+    expect(ids(snap.routines)).toEqual([
       `rtask:lunch:${TODAY}`,
       `rtask:teeth:${TODAY}`,
     ]);
-    expect(snap.next[0].meta).toContain("⌚ 12:30");
-    expect(snap.next[0].meta).toContain("every day");
-    expect(snap.next[0].glyph).toBe("↻");
+    expect(snap.routines[0].meta).toContain("⌚ 12:30");
+    expect(snap.routines[0].meta).toContain("every day");
+    expect(snap.routines[0].glyph).toBe("↻");
   });
 
-  test("a timed occurrence whose time has passed moves to NOW after overdue tasks", () => {
+  test("a timed occurrence whose time has passed stays in routines, not NOW", () => {
     const snap = streamSnapshot(
       base({
         tasks: [task({ id: "over", due_date: "2026-07-04" })],
         recurringTasks: [rule({ id: "breakfast", due_time: "08:00:00" })],
       }),
     );
-    expect(ids(snap.now)).toEqual(["task:over", `rtask:breakfast:${TODAY}`]);
+    expect(ids(snap.now)).toEqual(["task:over"]);
+    expect(ids(snap.routines)).toEqual([`rtask:breakfast:${TODAY}`]);
+  });
+
+  test("a due recurring occurrence never bumps pulse.toClear", () => {
+    const snap = streamSnapshot(
+      base({
+        recurringTasks: [
+          rule({ id: "breakfast", due_time: "08:00:00" }), // time passed
+          rule({ id: "teeth" }), // untimed
+        ],
+      }),
+    );
+    expect(ids(snap.now)).toEqual([]);
+    expect(snap.pulse.toClear).toBe(0);
+    expect(ids(snap.routines)).toEqual([
+      `rtask:breakfast:${TODAY}`,
+      `rtask:teeth:${TODAY}`,
+    ]);
+  });
+
+  test("NEXT holds no recurring cards", () => {
+    const snap = streamSnapshot(
+      base({
+        recurringTasks: [
+          rule({ id: "lunch", due_time: "13:00:00" }), // upcoming
+          rule({ id: "teeth" }), // untimed
+        ],
+      }),
+    );
+    expect(snap.next.filter((c) => c.id.startsWith("rtask:"))).toEqual([]);
   });
 
   test("completed occurrences disappear for the rest of today", () => {
@@ -358,7 +389,7 @@ describe("recurring tasks", () => {
       }),
     );
     expect(ids(snap.now)).toEqual([]);
-    expect(ids(snap.next)).toEqual([`rtask:lunch:${TODAY}`]);
+    expect(ids(snap.routines)).toEqual([`rtask:lunch:${TODAY}`]);
   });
 
   test("no recurring cards in LATER — the week view carries the forward picture", () => {
@@ -370,38 +401,91 @@ describe("recurring tasks", () => {
     expect(ids(snap.later)).toEqual([]);
   });
 
-  test("an untimed rule with a planned slot shows an advisory ~⌚ meta + entity.plannedStart", () => {
+  test("routines order by effective time: slot < rule-time < planned < untimed, priority tiebreak", () => {
+    const snap = streamSnapshot(
+      base({
+        recurringTasks: [
+          rule({ id: "untimed-low", priority: "low" }),
+          rule({ id: "untimed-high", priority: "high" }),
+          rule({ id: "planned" }),
+          rule({ id: "timed", due_time: "09:00:00" }),
+          rule({ id: "slotted" }),
+        ],
+        slotStartByRule: new Map([["slotted", "07:00"]]),
+        plannedStartByRule: new Map([["planned", "11:00"]]),
+      }),
+    );
+    expect(ids(snap.routines)).toEqual([
+      `rtask:slotted:${TODAY}`,
+      `rtask:timed:${TODAY}`,
+      `rtask:planned:${TODAY}`,
+      `rtask:untimed-high:${TODAY}`,
+      `rtask:untimed-low:${TODAY}`,
+    ]);
+  });
+
+  test("routines cap at maxTasks with routinesOverflow", () => {
+    const snap = streamSnapshot(
+      base({
+        maxTasks: 2,
+        recurringTasks: [
+          rule({ id: "a", due_time: "08:00:00" }),
+          rule({ id: "b", due_time: "09:00:00" }),
+          rule({ id: "c", due_time: "10:00:00" }),
+        ],
+      }),
+    );
+    expect(snap.routines).toHaveLength(2);
+    expect(ids(snap.routines)).toEqual([
+      `rtask:a:${TODAY}`,
+      `rtask:b:${TODAY}`,
+    ]);
+    expect(snap.routinesOverflow).toBe(1);
+  });
+
+  test("meta: a slot shows a firm ⌚ and wins over the rule's due_time", () => {
+    const snap = streamSnapshot(
+      base({
+        recurringTasks: [rule({ id: "gym", due_time: "09:00:00" })],
+        slotStartByRule: new Map([["gym", "07:00"]]),
+      }),
+    );
+    const card = snap.routines.find((c) => c.id === `rtask:gym:${TODAY}`)!;
+    expect(card.meta).toContain("today ⌚ 07:00");
+    expect(card.meta).not.toContain("09:00");
+    expect(card.meta).not.toContain("~⌚");
+    expect(card.entity).toMatchObject({ kind: "rtask", slotStart: "07:00" });
+  });
+
+  test("meta: an untimed rule with a planned slot shows an advisory ~⌚ + entity.plannedStart", () => {
     const snap = streamSnapshot(
       base({
         recurringTasks: [rule({ id: "teeth" })],
         plannedStartByRule: new Map([["teeth", "16:30"]]),
       }),
     );
-    const card = snap.next.find((c) => c.id === `rtask:teeth:${TODAY}`)!;
+    const card = snap.routines.find((c) => c.id === `rtask:teeth:${TODAY}`)!;
     expect(card.meta).toContain("today ~⌚ 16:30");
-    expect(card.entity).toMatchObject({ kind: "rtask", plannedStart: "16:30" });
+    expect(card.entity).toMatchObject({
+      kind: "rtask",
+      plannedStart: "16:30",
+      slotStart: null,
+    });
   });
 
-  test("an untimed rule with no planned slot stays a plain 'today'", () => {
+  test("meta: an untimed rule with no slot or plan stays a plain 'today'", () => {
     const snap = streamSnapshot(
       base({ recurringTasks: [rule({ id: "teeth" })] }),
     );
-    const card = snap.next.find((c) => c.id === `rtask:teeth:${TODAY}`)!;
+    const card = snap.routines.find((c) => c.id === `rtask:teeth:${TODAY}`)!;
     expect(card.meta).toContain("today");
     expect(card.meta).not.toContain("~⌚");
-    expect(card.entity).toMatchObject({ kind: "rtask", plannedStart: null });
-  });
-
-  test("a planned time in the past does NOT escalate an untimed rule to NOW", () => {
-    const snap = streamSnapshot(
-      base({
-        recurringTasks: [rule({ id: "teeth" })],
-        // 08:00 is well before noon, but a planned slot is advisory only.
-        plannedStartByRule: new Map([["teeth", "08:00"]]),
-      }),
-    );
-    expect(ids(snap.now)).toEqual([]);
-    expect(ids(snap.next)).toEqual([`rtask:teeth:${TODAY}`]);
+    expect(card.meta).not.toContain("⌚");
+    expect(card.entity).toMatchObject({
+      kind: "rtask",
+      plannedStart: null,
+      slotStart: null,
+    });
   });
 });
 

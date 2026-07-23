@@ -6,6 +6,10 @@ import { useMemo, useState } from "react";
 import type { CalendarEvent } from "@/utils/google/calendar";
 import { rescheduleEvent } from "@/app/actions/calendar";
 import { updateTask } from "@/app/actions/tasks";
+import {
+  approveRecurringSlot,
+  clearRecurringSlot,
+} from "@/app/actions/recurring-tasks";
 import { freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
 import type { ScheduleVitals } from "@/app/lib/snapshots/schedule";
 import {
@@ -13,6 +17,7 @@ import {
   planUntimedOccurrences,
 } from "@/app/lib/snapshots/gap-plan";
 import type { CalendarRecurringTask } from "@/app/lib/data/dashboard";
+import type { RecurringSlotRow } from "@/app/lib/data/recurring-tasks";
 import { formatRecurrence, taskRuleLandsOn } from "@/app/lib/recurrence";
 import type { CalendarItem } from "./calendar-types";
 import {
@@ -151,6 +156,7 @@ export function DashboardCalendar({
   basePath = "/",
   recurringTasks = [],
   recurringCompletions = [],
+  recurringSlots = [],
 }: {
   month: string;
   tasks: TaskWithGroup[];
@@ -166,6 +172,7 @@ export function DashboardCalendar({
   basePath?: string;
   recurringTasks?: CalendarRecurringTask[];
   recurringCompletions?: { rule_id: string; occurred_on: string }[];
+  recurringSlots?: RecurringSlotRow[];
 }) {
   const router = useRouter();
   const today = toDateKey(new Date());
@@ -187,6 +194,13 @@ export function DashboardCalendar({
   >({});
   const [taskOverrides, setTaskOverrides] = useState<
     Record<string, TaskOverride>
+  >({});
+  // Optimistic per-occurrence slot state, keyed `${ruleId}:${dateKey}`. Tri-state:
+  // a value is an optimistic commitment, null is an optimistic clear, absent
+  // defers to the DB slot. Applied during materialization before the planning
+  // pass so an approved slot wins over any DB row and suppresses its ghost.
+  const [slotOverrides, setSlotOverrides] = useState<
+    Record<string, { start: string; minutes: number } | null>
   >({});
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -264,10 +278,33 @@ export function DashboardCalendar({
       const completed = new Set(
         recurringCompletions.map((c) => `${c.rule_id}:${c.occurred_on}`),
       );
+      const slotByKey = new Map(
+        recurringSlots.map((s) => [`${s.rule_id}:${s.occurred_on}`, s]),
+      );
       for (const date of grid) {
         const key = toDateKey(date);
         for (const rule of recurringTasks) {
           if (!taskRuleLandsOn(rule, date)) continue;
+          const overrideKey = `${rule.id}:${key}`;
+          const override = slotOverrides[overrideKey];
+          const slot = slotByKey.get(overrideKey);
+          let slotStart: string | null = null;
+          let slotMinutes: number | null = null;
+          if (override === null) {
+            // optimistically cleared: no slot
+          } else if (override !== undefined) {
+            slotStart =
+              override.start.length === 5
+                ? `${override.start}:00`
+                : override.start;
+            slotMinutes = override.minutes;
+          } else if (slot) {
+            slotStart =
+              slot.start_time.length === 5
+                ? `${slot.start_time}:00`
+                : slot.start_time;
+            slotMinutes = slot.duration_min;
+          }
           const items = map.get(key) ?? [];
           items.push({
             kind: "rtask",
@@ -279,6 +316,8 @@ export function DashboardCalendar({
             durationMin: rule.duration_min,
             plannedStart: null,
             plannedMinutes: null,
+            slotStart,
+            slotMinutes,
             scheduleLabel: formatRecurrence(rule),
             done: completed.has(`${rule.id}:${key}`),
           });
@@ -297,10 +336,14 @@ export function DashboardCalendar({
         if (key < today) continue;
         const dayItems = map.get(key);
         if (!dayItems) continue;
+        // Committed slots (slotStart set) are excluded from the proposal planner
+        // — they are real placements, and busyFromDayItems already counts them,
+        // so remaining ghosts pack around them.
         const untimed = dayItems.filter(
           (item): item is Extract<CalendarItem, { kind: "rtask" }> =>
             item.kind === "rtask" &&
             item.dueTime === null &&
+            item.slotStart === null &&
             !item.done,
         );
         if (untimed.length === 0) continue;
@@ -344,6 +387,8 @@ export function DashboardCalendar({
     taskOverrides,
     recurringTasks,
     recurringCompletions,
+    recurringSlots,
+    slotOverrides,
     grid,
     today,
     wakeStartHour,
@@ -471,6 +516,79 @@ export function DashboardCalendar({
     next: EventOverride,
   ) {
     void commitEventReschedule(eventItem, next);
+  }
+
+  async function handleScheduleRtask(p: {
+    ruleId: string;
+    occurredOn: string;
+    start: string;
+    durationMin: number;
+    fromDateKey?: string;
+  }) {
+    setErrorMessage(null);
+    const crossDay =
+      p.fromDateKey !== undefined && p.fromDateKey !== p.occurredOn;
+    if (crossDay) {
+      const rule = recurringTasks.find((r) => r.id === p.ruleId);
+      if (
+        rule &&
+        !taskRuleLandsOn(rule, new Date(`${p.occurredOn}T00:00:00`))
+      ) {
+        setErrorMessage("that routine doesn't occur on that day");
+        return;
+      }
+    }
+
+    const targetKey = `${p.ruleId}:${p.occurredOn}`;
+    const sourceKey = crossDay ? `${p.ruleId}:${p.fromDateKey}` : null;
+    const priors: Record<
+      string,
+      { start: string; minutes: number } | null | undefined
+    > = { [targetKey]: slotOverrides[targetKey] };
+    if (sourceKey) priors[sourceKey] = slotOverrides[sourceKey];
+
+    const startSec = p.start.length === 5 ? `${p.start}:00` : p.start;
+    setSlotOverrides((o) => {
+      const next = { ...o, [targetKey]: { start: startSec, minutes: p.durationMin } };
+      if (sourceKey) next[sourceKey] = null;
+      return next;
+    });
+
+    const result = await approveRecurringSlot({
+      ruleId: p.ruleId,
+      dateKey: p.occurredOn,
+      start: p.start,
+      durationMin: p.durationMin,
+      fromDateKey: p.fromDateKey,
+    });
+    if (result?.error) {
+      setSlotOverrides((o) => {
+        const next = { ...o };
+        for (const [k, v] of Object.entries(priors)) {
+          if (v === undefined) delete next[k];
+          else next[k] = v;
+        }
+        return next;
+      });
+      setErrorMessage(result.error || "couldn't schedule that routine");
+    }
+  }
+
+  async function handleClearRtaskSlot(ruleId: string, dateKey: string) {
+    setErrorMessage(null);
+    const key = `${ruleId}:${dateKey}`;
+    const prior = slotOverrides[key];
+    setSlotOverrides((o) => ({ ...o, [key]: null }));
+    const result = await clearRecurringSlot(ruleId, dateKey);
+    if (result?.error) {
+      setSlotOverrides((o) => {
+        const next = { ...o };
+        if (prior === undefined) delete next[key];
+        else next[key] = prior;
+        return next;
+      });
+      setErrorMessage(result.error || "couldn't clear that slot");
+    }
   }
 
   const selectedItems = itemsByDate.get(selected) ?? [];
@@ -702,6 +820,8 @@ export function DashboardCalendar({
           onSelect={setSelected}
           onRescheduleEvent={onRescheduleEvent}
           onRescheduleTask={onRescheduleTask}
+          onScheduleRtask={handleScheduleRtask}
+          onClearRtaskSlot={handleClearRtaskSlot}
         />
       )}
 
@@ -760,11 +880,13 @@ export function DashboardCalendar({
                           ? `${item.category} · ${formatSignedChange(item.amount, item.direction, item.currency)}`
                           : item.kind === "rtask"
                             ? `↻ ${item.scheduleLabel} · ${
-                                item.dueTime
-                                  ? `⌚ ${item.dueTime.slice(0, 5)}`
-                                  : item.plannedStart
-                                    ? `~${item.plannedStart.slice(0, 5)}`
-                                    : "anytime"
+                                item.slotStart
+                                  ? `⌚ ${item.slotStart.slice(0, 5)}`
+                                  : item.dueTime
+                                    ? `⌚ ${item.dueTime.slice(0, 5)}`
+                                    : item.plannedStart
+                                      ? `~${item.plannedStart.slice(0, 5)}`
+                                      : "anytime"
                               }${item.done ? " · done" : ""}`
                             : `${item.calendar} · ${formatEventRange(item)}`}
                     </p>
@@ -780,6 +902,44 @@ export function DashboardCalendar({
                       onCancel={() => setExpandedItem(null)}
                     />
                   )}
+
+                  {item.kind === "rtask" && item.slotStart !== null && (
+                    <div className="flex justify-end border-t border-line px-3 py-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleClearRtaskSlot(item.ruleId, selected)
+                        }
+                        className="min-h-11 px-3 text-xs text-muted hover:text-danger transition-colors"
+                      >
+                        unpin ×
+                      </button>
+                    </div>
+                  )}
+
+                  {item.kind === "rtask" &&
+                    item.dueTime === null &&
+                    item.plannedStart !== null &&
+                    item.slotStart === null &&
+                    !item.done && (
+                      <div className="flex justify-end border-t border-line px-3 py-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleScheduleRtask({
+                              ruleId: item.ruleId,
+                              occurredOn: selected,
+                              start: item.plannedStart!.slice(0, 5),
+                              durationMin:
+                                item.plannedMinutes ?? item.durationMin ?? 30,
+                            })
+                          }
+                          className="min-h-11 px-3 text-xs text-accent-ink hover:text-fg transition-colors"
+                        >
+                          add ⌚{item.plannedStart!.slice(0, 5)}
+                        </button>
+                      </div>
+                    )}
                 </div>
               );
             })}

@@ -4,7 +4,9 @@ import {
   formatRecurrence,
   nextOccurrenceKey,
   occurrenceBusyEvents,
+  slotBusyEvents,
   taskRuleLandsOn,
+  type RecurringSlot,
   type RecurringTaskRule,
   type TaskRecurrence,
 } from "@/app/lib/recurrence";
@@ -132,5 +134,73 @@ describe("occurrenceBusyEvents", () => {
     const start = new Date(events[0].start);
     const end = new Date(events[0].end);
     expect((end.getTime() - start.getTime()) / 60_000).toBe(60);
+  });
+
+  test("a rule+day in the skip set emits nothing (slot precedence)", () => {
+    const events = occurrenceBusyEvents(
+      [timed],
+      ["2026-07-06"],
+      new Set(["r1:2026-07-06"]),
+    );
+    expect(events).toEqual([]);
+  });
+});
+
+describe("slotBusyEvents", () => {
+  const rules: Pick<RecurringTaskRule, "id" | "title" | "duration_min">[] = [
+    { id: "r1", title: "gym", duration_min: 60 },
+    { id: "r2", title: "read", duration_min: null },
+  ];
+
+  test("duration precedence slot > rule > default; title comes from the rule", () => {
+    const slots: RecurringSlot[] = [
+      { rule_id: "r1", occurred_on: "2026-07-06", start_time: "07:00:00", duration_min: 90 },
+      { rule_id: "r2", occurred_on: "2026-07-06", start_time: "20:00:00", duration_min: null },
+    ];
+    const events = slotBusyEvents(slots, rules);
+    expect(events).toHaveLength(2);
+    // slot duration wins over the rule's 60
+    const gym = events[0];
+    expect(gym.summary).toBe("gym");
+    expect(
+      (new Date(gym.end).getTime() - new Date(gym.start).getTime()) / 60_000,
+    ).toBe(90);
+    // rule has no duration and slot has none → 30 default
+    const read = events[1];
+    expect(read.summary).toBe("read");
+    expect(
+      (new Date(read.end).getTime() - new Date(read.start).getTime()) / 60_000,
+    ).toBe(30);
+    expect(new Date(gym.start).getHours()).toBe(7);
+    expect(gym.allDay).toBe(false);
+  });
+
+  test("a slot whose rule id is unknown is skipped", () => {
+    const slots: RecurringSlot[] = [
+      { rule_id: "ghost", occurred_on: "2026-07-06", start_time: "07:00:00", duration_min: 30 },
+    ];
+    expect(slotBusyEvents(slots, rules)).toEqual([]);
+  });
+
+  test("skipped occurrence + its slot together yield exactly one event", () => {
+    const timedGym: RecurringTaskRule = {
+      id: "r1",
+      title: "gym",
+      due_time: "17:00",
+      duration_min: 60,
+      ...rule({}),
+    };
+    const slots: RecurringSlot[] = [
+      { rule_id: "r1", occurred_on: "2026-07-06", start_time: "07:00:00", duration_min: 90 },
+    ];
+    const occ = occurrenceBusyEvents(
+      [timedGym],
+      ["2026-07-06"],
+      new Set(["r1:2026-07-06"]),
+    );
+    const slot = slotBusyEvents(slots, [timedGym]);
+    expect(occ).toEqual([]);
+    expect(slot).toHaveLength(1);
+    expect(new Date(slot[0].start).getHours()).toBe(7);
   });
 });

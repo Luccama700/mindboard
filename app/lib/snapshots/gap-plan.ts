@@ -5,8 +5,9 @@
 // planningSnapshot. Placement READS free intervals but never writes back into
 // them, so a suggestion can never make a day read as busier than it truly is.
 // busyFromDayItems below is the shared busy-builder: it counts only real timed
-// commitments (google events, time-blocked tasks, TIMED recurring), never the
-// planned ghosts.
+// commitments (google events, time-blocked tasks, TIMED recurring, and APPROVED
+// slots — a slot overrides its rule's due_time for that day), never the planned
+// ghosts. Only plannedStart placements stay advisory.
 
 import type { CalendarItem } from "@/app/_components/calendar-types";
 import type { FreeInterval, ScheduleEvent } from "@/app/lib/snapshots/schedule";
@@ -111,10 +112,26 @@ export function planUntimedOccurrences(input: {
   return slots;
 }
 
+// The effective committed timing of an rtask item: an approved slot overrides
+// the rule's due_time (and its duration) for that day. Returns null when the
+// occurrence carries neither a slot nor a due_time (a bare untimed habit —
+// still advisory even when soft-placed).
+export function rtaskEffectiveTiming(
+  item: Extract<CalendarItem, { kind: "rtask" }>,
+): { time: string; minutes: number } | null {
+  const time = item.slotStart ?? item.dueTime;
+  if (time === null) return null;
+  return {
+    time,
+    minutes: item.slotMinutes ?? item.durationMin ?? DEFAULT_MINUTES,
+  };
+}
+
 // The busy blocks of one calendar day, shared by the gap planner and the week
 // view's free-gap underlay so they cannot drift: timed google events, timed
-// tasks (due_time), and TIMED recurring occurrences (dueTime !== null). Untimed
-// rules — including soft-placed ghosts — contribute nothing.
+// tasks (due_time), and committed recurring occurrences (TIMED, or with an
+// approved slot). Untimed rules — including soft-placed ghosts — contribute
+// nothing.
 export function busyFromDayItems(
   dateKey: string,
   items: CalendarItem[],
@@ -129,10 +146,21 @@ export function busyFromDayItems(
         end: item.end,
         allDay: false,
       });
-    } else if (item.kind === "task" || item.kind === "rtask") {
+    } else if (item.kind === "task") {
       if (item.dueTime === null) continue;
       const start = timeToMinutes(item.dueTime.slice(0, 5));
       const end = start + (item.durationMin ?? DEFAULT_MINUTES);
+      busy.push({
+        summary: item.title,
+        start: `${dateKey}T${minutesToTime(start)}:00`,
+        end: `${dateKey}T${minutesToTime(end)}:00`,
+        allDay: false,
+      });
+    } else if (item.kind === "rtask") {
+      const timing = rtaskEffectiveTiming(item);
+      if (timing === null) continue;
+      const start = timeToMinutes(timing.time.slice(0, 5));
+      const end = start + timing.minutes;
       busy.push({
         summary: item.title,
         start: `${dateKey}T${minutesToTime(start)}:00`,

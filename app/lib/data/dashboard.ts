@@ -10,6 +10,7 @@ import {
 import type { FinanceChange } from "@/app/_components/dashboard-calendar";
 import type { TaskWithGroup } from "@/app/_components/types";
 import type { TaskRecurrence } from "@/app/lib/recurrence";
+import type { RecurringSlotRow } from "@/app/lib/data/recurring-tasks";
 
 // Recurring-task rules for the calendar: occurrences are computed client-side
 // per grid day; completions mark them done/struck. Untimed rules also reach the
@@ -220,6 +221,7 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
     changesResponse,
     recurringResponse,
     completionsResponse,
+    slotsResponse,
     eventsResult,
   ] = await Promise.all([
     supabase
@@ -250,6 +252,11 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
     supabase
       .from("recurring_task_completions")
       .select("rule_id, occurred_on")
+      .gte("occurred_on", startDate)
+      .lt("occurred_on", endDate),
+    supabase
+      .from("recurring_task_slots")
+      .select("rule_id, occurred_on, start_time, duration_min")
       .gte("occurred_on", startDate)
       .lt("occurred_on", endDate),
     eventsPromise,
@@ -307,6 +314,7 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
       rule_id: string;
       occurred_on: string;
     }[],
+    recurringSlots: (slotsResponse.data ?? []) as RecurringSlotRow[],
     events: eventsResult.events,
     calendarStatus: eventsResult.status,
   };

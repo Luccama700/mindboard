@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-22-routines-quiet-corner",
+    date: "2026-07-22",
+    title: "routines settle into their own quiet corner",
+    items: [
+      "recurring cards no longer crowd now or next — they all sink to a new routines section at the very bottom of the stream, out of the way but still one tap from done.",
+      "and they stop padding your \"to clear\" count — recurring stuff isn't a fire, so it doesn't get counted like one.",
+      "a routine i've proposed a time for shows up on the week grid — tap ✓ to approve it where it sits, or drag it into a better slot. drag again to move it, or drag it off the top to unpin.",
+    ],
+  },
+  {
     id: "2026-07-22-routines-in-place",
     date: "2026-07-22",
     title: "your routines find their own slot",

@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   busyFromDayItems,
   planUntimedOccurrences,
+  rtaskEffectiveTiming,
   type PlannedSlot,
 } from "@/app/lib/snapshots/gap-plan";
 import type { CalendarItem } from "@/app/_components/calendar-types";
@@ -192,6 +193,8 @@ describe("busyFromDayItems", () => {
       durationMin: null,
       plannedStart: null,
       plannedMinutes: null,
+      slotStart: null,
+      slotMinutes: null,
       scheduleLabel: "every day",
       done: false,
       ...over,
@@ -212,5 +215,71 @@ describe("busyFromDayItems", () => {
       { summary: "tt", start: "2026-07-08T14:00:00", end: "2026-07-08T15:00:00", allDay: false },
       { summary: "rt", start: "2026-07-08T16:00:00", end: "2026-07-08T16:30:00", allDay: false },
     ]);
+  });
+
+  test("an approved slot on an untimed rtask counts as busy (slotMinutes precedence)", () => {
+    const busy = busyFromDayItems(DATE, [
+      rtask({
+        id: "committed",
+        title: "gym",
+        dueTime: null,
+        durationMin: 30,
+        slotStart: "07:00:00",
+        slotMinutes: 90,
+      }),
+      rtask({ id: "untimed-no-slot", dueTime: null }),
+    ]);
+    expect(busy).toEqual([
+      { summary: "gym", start: "2026-07-08T07:00:00", end: "2026-07-08T08:30:00", allDay: false },
+    ]);
+  });
+});
+
+describe("rtaskEffectiveTiming", () => {
+  const rtask = (over: Partial<Extract<CalendarItem, { kind: "rtask" }>>) =>
+    ({
+      kind: "rtask",
+      id: "r",
+      ruleId: "rule",
+      title: "rtask",
+      color: "#fff",
+      dueTime: null,
+      durationMin: null,
+      plannedStart: null,
+      plannedMinutes: null,
+      slotStart: null,
+      slotMinutes: null,
+      scheduleLabel: "every day",
+      done: false,
+      ...over,
+    }) as Extract<CalendarItem, { kind: "rtask" }>;
+
+  test("a slot overrides due_time and its duration", () => {
+    expect(
+      rtaskEffectiveTiming(
+        rtask({ dueTime: "17:00:00", durationMin: 60, slotStart: "07:00:00", slotMinutes: 90 }),
+      ),
+    ).toEqual({ time: "07:00:00", minutes: 90 });
+  });
+
+  test("falls back to due_time, then rule duration, then the 30-min default", () => {
+    expect(rtaskEffectiveTiming(rtask({ dueTime: "12:00:00", durationMin: 45 }))).toEqual({
+      time: "12:00:00",
+      minutes: 45,
+    });
+    expect(rtaskEffectiveTiming(rtask({ dueTime: "12:00:00" }))).toEqual({
+      time: "12:00:00",
+      minutes: 30,
+    });
+  });
+
+  test("a bare untimed occurrence (no slot, no due_time) has no effective timing", () => {
+    expect(rtaskEffectiveTiming(rtask({}))).toBeNull();
+  });
+
+  test("a slot's duration falls back to the rule duration when the slot omits it", () => {
+    expect(
+      rtaskEffectiveTiming(rtask({ durationMin: 45, slotStart: "07:00:00", slotMinutes: null })),
+    ).toEqual({ time: "07:00:00", minutes: 45 });
   });
 });

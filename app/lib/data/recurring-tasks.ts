@@ -70,3 +70,27 @@ export const getRecurringCompletions = cache(
     return (data ?? []) as { rule_id: string; occurred_on: string }[];
   },
 );
+
+export type RecurringSlotRow = {
+  rule_id: string;
+  occurred_on: string;
+  start_time: string;
+  duration_min: number | null;
+};
+
+export const getRecurringSlots = cache(
+  async (
+    userId: string,
+    startKey: string,
+    endKey: string,
+  ): Promise<RecurringSlotRow[]> => {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("recurring_task_slots")
+      .select("rule_id, occurred_on, start_time, duration_min")
+      .eq("user_id", userId)
+      .gte("occurred_on", startKey)
+      .lte("occurred_on", endKey);
+    return (data ?? []) as RecurringSlotRow[];
+  },
+);

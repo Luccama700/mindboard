@@ -61,7 +61,7 @@ export type StreamRecurringTaskInput = TaskRecurrence & {
   notes: string | null;
 };
 
-export type StreamSection = "now" | "next" | "later" | "loose";
+export type StreamSection = "now" | "next" | "later" | "loose" | "routines";
 export type StreamDomain =
   | "task"
   | "event"
@@ -90,6 +90,7 @@ export type StreamEntity =
       group_name: string | null;
       hasNotes: boolean;
       plannedStart: string | null;
+      slotStart: string | null;
     }
   | { kind: "event"; id: string; summary: string; start: string; end: string }
   | { kind: "bill"; id: string; name: string; amount: number; dateKey: string }
@@ -129,6 +130,8 @@ export type StreamSnapshot = {
   later: StreamCard[];
   laterOverflow: number;
   loose: StreamCard[];
+  routines: StreamCard[];
+  routinesOverflow: number;
   nextUp: string | null;
 };
 
@@ -144,6 +147,10 @@ export type StreamInput = {
   // computed by the gap planner. Display only: a planned time never escalates a
   // card to NOW (that stays keyed on real due_time).
   plannedStartByRule?: Map<string, string>;
+  // Approved per-occurrence slots for today (rule id -> "HH:MM"): a committed
+  // time that overrides the rule's placement. Accepted here for a parallel
+  // workstream to consume; not yet read by this snapshot.
+  slotStartByRule?: Map<string, string>;
   items: StreamItemInput[];
   usagesByItem: Record<string, UsageRule[]>;
   goals: StreamGoalInput[];
@@ -292,11 +299,14 @@ function rtaskCard(
   rule: StreamRecurringTaskInput,
   today: string,
   plannedStart: string | null = null,
+  slotStart: string | null = null,
 ): StreamCard {
-  // Timed rules show their fixed time; an untimed rule that the gap planner
-  // soft-placed shows an advisory "~⌚"; a bare untimed rule just reads "today".
-  const timeLabel = rule.due_time
-    ? `today ⌚ ${shortTime(rule.due_time)}`
+  // A committed slot or the rule's fixed due_time shows a firm "⌚" (slot wins);
+  // an untimed rule the gap planner soft-placed shows an advisory "~⌚"; a bare
+  // untimed rule just reads "today".
+  const firmTime = slotStart ?? (rule.due_time ? shortTime(rule.due_time) : null);
+  const timeLabel = firmTime
+    ? `today ⌚ ${firmTime}`
     : plannedStart
       ? `today ~⌚ ${shortTime(plannedStart)}`
       : "today";
@@ -325,7 +335,8 @@ function rtaskCard(
       group_id: rule.group_id,
       group_name: rule.group_name,
       hasNotes: (rule.notes ?? "").trim().length > 0,
-      plannedStart: rule.due_time ? null : plannedStart,
+      plannedStart: rule.due_time || slotStart ? null : plannedStart,
+      slotStart,
     },
   };
 }
@@ -417,6 +428,7 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     recurringTasks,
     completedRecurringToday,
     plannedStartByRule,
+    slotStartByRule,
     items,
     usagesByItem,
     goals,
@@ -515,19 +527,48 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .filter((b) => ruleLandsOn(b, todayDate))
     .map((b) => billCard(b, today, today, currency));
 
-  // Today's uncompleted recurring occurrences. Timed + time-passed escalate to
-  // NOW like a due-today task; the rest interleave into NEXT. Yesterday's
-  // misses never appear — each day is fresh (completions are the history).
-  const rtaskTimePast = (r: StreamRecurringTaskInput) =>
-    r.due_time !== null && shortTime(r.due_time) <= nowClock;
+  // Today's uncompleted recurring occurrences. They no longer mix into NOW/NEXT
+  // or the to-clear count — recurring is a quiet backdrop, so every occurrence
+  // sinks to its own `routines` section at the very bottom of the stream.
+  // Yesterday's misses never appear — each day is fresh (completions are the
+  // history). Ordered by effective time: a committed slot, then the rule's
+  // fixed due_time, then a soft-placed plan; untimed-unplaced last, ties by
+  // priority then title then rule id.
   const todaysRules = recurringTasks.filter(
     (r) => taskRuleLandsOn(r, todayDate) && !completedRecurringToday.has(r.id),
   );
-  const rtasksNow = todaysRules
-    .filter(rtaskTimePast)
-    .sort((a, b) => shortTime(a.due_time!).localeCompare(shortTime(b.due_time!)))
-    .map((r) => rtaskCard(r, today));
-  const rtasksUpcoming = todaysRules.filter((r) => !rtaskTimePast(r));
+  const effectiveRtaskTime = (r: StreamRecurringTaskInput): string | null => {
+    const slot = slotStartByRule?.get(r.id);
+    if (slot) return slot;
+    if (r.due_time) return shortTime(r.due_time);
+    return plannedStartByRule?.get(r.id) ?? null;
+  };
+  const routineCards = todaysRules
+    .slice()
+    .sort((a, b) => {
+      const ta = effectiveRtaskTime(a);
+      const tb = effectiveRtaskTime(b);
+      if (ta && tb) {
+        const c = ta.localeCompare(tb);
+        if (c !== 0) return c;
+      } else if (ta) return -1;
+      else if (tb) return 1;
+      const p = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+      if (p !== 0) return p;
+      const t = a.title.localeCompare(b.title);
+      if (t !== 0) return t;
+      return a.id.localeCompare(b.id);
+    })
+    .map((r) =>
+      rtaskCard(
+        r,
+        today,
+        plannedStartByRule?.get(r.id) ?? null,
+        slotStartByRule?.get(r.id) ?? null,
+      ),
+    );
+  const routines = routineCards.slice(0, cap);
+  const routinesOverflow = Math.max(0, routineCards.length - cap);
 
   const urgentStock = streamItems
     .filter(itemUrgent)
@@ -573,7 +614,6 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     ...nowEvents,
     ...urgentStock,
     ...nowTaskCards,
-    ...rtasksNow,
     ...billsToday,
     ...runOutNow,
   ];
@@ -596,36 +636,8 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     .slice(0, 1)
     .map((e) => eventCard(e, now, timeZone, { tomorrow: true }));
 
-  // Due-today real tasks now live in NOW; only today's upcoming recurring
-  // occurrences interleave here — time-anchored first by time, untimed after
-  // by priority.
-  type DueTodayEntry = {
-    dueTime: string | null;
-    priority: TaskWithGroup["priority"];
-    created: string;
-    card: StreamCard;
-  };
-  const dueTodayTasks = [
-    ...rtasksUpcoming.map(
-      (r): DueTodayEntry => ({
-        dueTime: r.due_time,
-        priority: r.priority,
-        created: "",
-        card: rtaskCard(r, today, plannedStartByRule?.get(r.id) ?? null),
-      }),
-    ),
-  ]
-    .sort((a, b) => {
-      if (a.dueTime && b.dueTime)
-        return shortTime(a.dueTime).localeCompare(shortTime(b.dueTime));
-      if (a.dueTime) return -1;
-      if (b.dueTime) return 1;
-      const p = PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
-      if (p !== 0) return p;
-      return a.created.localeCompare(b.created);
-    })
-    .map((entry) => entry.card);
-
+  // Due-today real tasks live in NOW; recurring occurrences live in `routines`.
+  // NEXT now carries only ambient schedule context and low stock.
   const lowItems = streamItems
     .filter((item) => {
       if (itemUrgent(item) || itemOut(item)) return false;
@@ -648,9 +660,8 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       );
     });
 
-  // Recurring occurrences lead, then ambient schedule context, then low stock.
+  // Ambient schedule context, then low stock.
   const nextAll = [
-    ...dueTodayTasks,
     ...laterTodayEvents,
     ...tomorrowFirst,
     ...lowItems,
@@ -812,6 +823,8 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     later: laterCards,
     laterOverflow,
     loose,
+    routines,
+    routinesOverflow,
     nextUp,
   };
 }

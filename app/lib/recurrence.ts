@@ -91,18 +91,34 @@ export function nextOccurrenceKey(
   return null;
 }
 
+// An approved per-occurrence slot (migration 0042): a committed time that
+// overrides the rule's due_time for that day.
+export type RecurringSlot = {
+  rule_id: string;
+  occurred_on: string;
+  start_time: string; // "HH:MM:SS" or "HH:MM"
+  duration_min: number | null;
+};
+
 // Timed occurrences as synthetic busy events, for the free-time math
 // (scheduleSnapshot / freeGaps / the week underlay). Untimed rules are
 // list-only and contribute nothing.
+//
+// Slot precedence invariant: an approved slot is a commitment that OVERRIDES the
+// rule's due_time for its day, so it must never be double-counted. Callers pass
+// a `skip` set of "${ruleId}:${dateKey}" keys that have a slot; those occurrences
+// emit nothing here and are supplied instead by slotBusyEvents.
 export function occurrenceBusyEvents(
   rules: RecurringTaskRule[],
   dateKeys: string[],
+  skip?: Set<string>,
 ): ScheduleEvent[] {
   const events: ScheduleEvent[] = [];
   for (const key of dateKeys) {
     const date = parseKey(key);
     for (const rule of rules) {
       if (!rule.due_time || !taskRuleLandsOn(rule, date)) continue;
+      if (skip?.has(`${rule.id}:${key}`)) continue;
       const [h, m] = rule.due_time.split(":").map(Number);
       if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
       const start = new Date(date);
@@ -118,6 +134,35 @@ export function occurrenceBusyEvents(
         allDay: false,
       });
     }
+  }
+  return events;
+}
+
+// Approved slots as synthetic busy events, the commitment counterpart to
+// occurrenceBusyEvents. Duration precedence: slot > rule > default. A slot whose
+// rule id is unknown (archived/deleted) is skipped.
+export function slotBusyEvents(
+  slots: RecurringSlot[],
+  rules: Pick<RecurringTaskRule, "id" | "title" | "duration_min">[],
+): ScheduleEvent[] {
+  const ruleById = new Map(rules.map((r) => [r.id, r]));
+  const events: ScheduleEvent[] = [];
+  for (const slot of slots) {
+    const rule = ruleById.get(slot.rule_id);
+    if (!rule) continue;
+    const [h, m] = slot.start_time.split(":").map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
+    const minutes =
+      slot.duration_min ?? rule.duration_min ?? DEFAULT_OCCURRENCE_MINUTES;
+    const start = parseKey(slot.occurred_on);
+    start.setHours(h, m, 0, 0);
+    const end = new Date(start.getTime() + minutes * 60_000);
+    events.push({
+      summary: rule.title,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      allDay: false,
+    });
   }
   return events;
 }

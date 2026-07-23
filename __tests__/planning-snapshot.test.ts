@@ -232,3 +232,77 @@ describe("planningSnapshot", () => {
     });
   });
 });
+
+describe("planningSnapshot with approved slots", () => {
+  test("a slot on a timed rule yields ONE block at the slot time (source recurring)", () => {
+    const input = baseInput();
+    input.recurringSlots = [
+      { rule_id: "r1", occurred_on: "2026-07-08", start_time: "16:00:00", duration_min: 90 },
+    ];
+    const day0 = planningSnapshot(input).schedule.days[0];
+    const meds = day0.timed.filter((b) => b.title === "meds");
+    expect(meds).toEqual([
+      {
+        title: "meds",
+        start: "2026-07-08T16:00:00-04:00",
+        end: "2026-07-08T17:30:00-04:00",
+        source: "recurring",
+      },
+    ]);
+    // The original 20:00 rule block is gone (overridden, not double-counted).
+    expect(day0.timed.some((b) => b.start === "2026-07-08T20:00:00-04:00")).toBe(false);
+  });
+
+  test("free hours shrink as the slot's minutes become committed", () => {
+    const input = baseInput();
+    input.recurringSlots = [
+      { rule_id: "r1", occurred_on: "2026-07-08", start_time: "16:00:00", duration_min: 90 },
+    ];
+    const s = planningSnapshot(input);
+    // lunch 60 + block 60 + meds-slot 90 = 210 committed inside noon–22:00.
+    expect(s.schedule.days[0].committedMinutes).toBe(210);
+    // 600 − 210 = 390 = 6.5h (was 7.8 with the 15-min rule block).
+    expect(s.schedule.freeHoursToday).toBe(6.5);
+  });
+
+  test("a slot on an untimed rule makes that occurrence block (was advisory)", () => {
+    const input = baseInput();
+    input.recurringSlots = [
+      { rule_id: "r2", occurred_on: "2026-07-08", start_time: "18:00:00", duration_min: 45 },
+    ];
+    const day0 = planningSnapshot(input).schedule.days[0];
+    expect(day0.timed).toContainEqual({
+      title: "stretch",
+      start: "2026-07-08T18:00:00-04:00",
+      end: "2026-07-08T18:45:00-04:00",
+      source: "recurring",
+    });
+    // 135 (lunch + block + meds) + 45 = 180.
+    expect(day0.committedMinutes).toBe(180);
+  });
+
+  test("untimed rules WITHOUT a slot still never block", () => {
+    const input = baseInput();
+    input.recurringSlots = [
+      { rule_id: "r1", occurred_on: "2026-07-08", start_time: "16:00:00", duration_min: 90 },
+    ];
+    const day0 = planningSnapshot(input).schedule.days[0];
+    // r2 (stretch) has no slot on any day → contributes no block.
+    expect(day0.timed.some((b) => b.title === "stretch")).toBe(false);
+  });
+
+  test("recurringOccurrences report the slot time and a slotted flag", () => {
+    const input = baseInput();
+    input.recurringSlots = [
+      { rule_id: "r1", occurred_on: "2026-07-08", start_time: "16:00:00", duration_min: 90 },
+    ];
+    const occ = planningSnapshot(input).tasks.recurringOccurrences;
+    const slotted = occ.find((o) => o.ruleId === "r1" && o.date === "2026-07-08");
+    expect(slotted).toMatchObject({ dueTime: "16:00", durationMin: 90, slotted: true });
+    // Another day of the same rule (no slot) keeps the rule time and flags false.
+    const plain = occ.find((o) => o.ruleId === "r1" && o.date === "2026-07-09");
+    expect(plain).toMatchObject({ dueTime: "20:00", slotted: false });
+    const untimed = occ.find((o) => o.ruleId === "r2" && o.date === "2026-07-08");
+    expect(untimed).toMatchObject({ dueTime: null, slotted: false });
+  });
+});

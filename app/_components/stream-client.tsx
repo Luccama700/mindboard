@@ -35,7 +35,7 @@ import {
 import { RecurringEditPanel } from "./recurring-edit-panel";
 import type { Task } from "./types";
 
-type SectionKey = "now" | "next" | "later" | "loose";
+type SectionKey = "now" | "next" | "later" | "loose" | "routines";
 
 function snoozeOptions(today: string): { label: string; dateKey: string }[] {
   const parse = (key: string) => {
@@ -1019,6 +1019,14 @@ export function StreamClient({
       )}
 
       {renderSection("loose", "loose ends", looseCards, 0, "/tasks")}
+
+      {renderSection(
+        "routines",
+        "routines",
+        visible("routines", snapshot.routines),
+        snapshot.routinesOverflow,
+        "/week",
+      )}
 
       {logOpen && (
         <DailyLogSheet

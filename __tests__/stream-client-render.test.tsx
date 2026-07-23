@@ -92,6 +92,7 @@ function rtaskCard(id: string, title: string): StreamCard {
       group_name: null,
       hasNotes: false,
       plannedStart: null,
+      slotStart: null,
     },
   } as StreamCard;
 }
@@ -111,6 +112,8 @@ const snapshot: StreamSnapshot = {
   later: [],
   laterOverflow: 0,
   loose: [],
+  routines: [],
+  routinesOverflow: 0,
   nextUp: null,
 };
 
@@ -189,12 +192,33 @@ describe("StreamClient rendering", () => {
     renderStream({
       ...snapshot,
       now: [],
-      next: [rtaskCard("r1", "morning stretch")],
+      next: [],
+      routines: [rtaskCard("r1", "morning stretch")],
     });
     // Collapsed: no panel yet.
     expect(screen.queryByText("stop repeating")).toBeNull();
     fireEvent.click(screen.getByText("morning stretch"));
     expect(screen.getByText("stop repeating")).toBeTruthy();
+  });
+
+  test("the routines section renders last and holds recurring cards", () => {
+    const { container } = renderStream({
+      ...snapshot,
+      now: [taskCard("t0", "overdue thing")],
+      next: [taskCard("t1", "log the class")],
+      later: [],
+      routines: [rtaskCard("r1", "morning stretch")],
+    });
+    // The recurring card lives under a "routines" section label.
+    expect(screen.getByText("routines")).toBeTruthy();
+    expect(screen.getByText("morning stretch")).toBeTruthy();
+    // routines is the last section in the DOM, after now/next.
+    const labels = Array.from(
+      container.querySelectorAll("section"),
+    ).map((s) => s.textContent ?? "");
+    const routinesSection = labels.findIndex((t) => t.includes("routines"));
+    const nextSection = labels.findIndex((t) => t.includes("log the class"));
+    expect(routinesSection).toBeGreaterThan(nextSection);
   });
 
   test("a tier-3 task renders the focus treatment (glass panel + effort/lateness meta)", () => {

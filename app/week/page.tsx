@@ -8,7 +8,7 @@ import {
   normalizeMonth,
 } from "@/app/lib/data/dashboard";
 import { getUserPreferences } from "@/app/lib/data/settings";
-import { occurrenceBusyEvents } from "@/app/lib/recurrence";
+import { occurrenceBusyEvents, slotBusyEvents } from "@/app/lib/recurrence";
 import { scheduleSnapshot } from "@/app/lib/snapshots/schedule";
 import { todayISO } from "@/app/_components/date-utils";
 import { addDaysKey } from "@/app/lib/snapshots/stream";
@@ -40,6 +40,7 @@ export default async function WeekPage({
       calendarLinks,
       recurringTasks,
       recurringCompletions,
+      recurringSlots,
     },
     prefs,
   ] = await Promise.all([
@@ -48,10 +49,18 @@ export default async function WeekPage({
   ]);
 
   const today = todayISO();
+  const slotKeys = new Set(
+    recurringSlots.map((s) => `${s.rule_id}:${s.occurred_on}`),
+  );
   const schedule = scheduleSnapshot({
     events: [
       ...events,
-      ...occurrenceBusyEvents(recurringTasks, [today, addDaysKey(today, 1)]),
+      ...occurrenceBusyEvents(
+        recurringTasks,
+        [today, addDaysKey(today, 1)],
+        slotKeys,
+      ),
+      ...slotBusyEvents(recurringSlots, recurringTasks),
     ],
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,
@@ -80,6 +89,7 @@ export default async function WeekPage({
           basePath="/week"
           recurringTasks={recurringTasks}
           recurringCompletions={recurringCompletions}
+          recurringSlots={recurringSlots}
         />
       </div>
     </main>

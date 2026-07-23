@@ -100,6 +100,7 @@ export async function buildPlanningSnapshot(params: {
     usagesRes,
     recurringRes,
     completionsRes,
+    slotsRes,
     tasksRes,
     goalsRes,
     logsRes,
@@ -144,6 +145,11 @@ export async function buildPlanningSnapshot(params: {
     supabase
       .from("recurring_task_completions")
       .select("rule_id, occurred_on")
+      .eq("user_id", userId)
+      .gte("occurred_on", today),
+    supabase
+      .from("recurring_task_slots")
+      .select("rule_id, occurred_on, start_time, duration_min")
       .eq("user_id", userId)
       .gte("occurred_on", today),
     supabase
@@ -241,6 +247,13 @@ export async function buildPlanningSnapshot(params: {
     ),
   );
 
+  const recurringSlots = (slotsRes.data ?? []) as {
+    rule_id: string;
+    occurred_on: string;
+    start_time: string;
+    duration_min: number | null;
+  }[];
+
   type TaskRow = Omit<TaskWithGroup, "group_name" | "group_color"> & {
     groups: Rel<{ name: string; color: string }>;
   };
@@ -288,6 +301,7 @@ export async function buildPlanningSnapshot(params: {
     events,
     recurringTasks,
     completedRecurring,
+    recurringSlots,
     tasks,
     accounts,
     recurringExpenses,

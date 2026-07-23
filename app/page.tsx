@@ -29,9 +29,14 @@ import { getInventoryItems, getInventoryUsages } from "./lib/data/inventory";
 import {
   getActiveRecurringTasks,
   getRecurringCompletions,
+  getRecurringSlots,
 } from "./lib/data/recurring-tasks";
 import { getUserPreferences } from "./lib/data/settings";
-import { occurrenceBusyEvents, taskRuleLandsOn } from "./lib/recurrence";
+import {
+  occurrenceBusyEvents,
+  slotBusyEvents,
+  taskRuleLandsOn,
+} from "./lib/recurrence";
 import { financeSnapshot } from "./lib/snapshots/finance";
 import { planUntimedOccurrences } from "./lib/snapshots/gap-plan";
 import {
@@ -82,6 +87,7 @@ const getStreamData = cache(
       recurringExpenses,
       recurringTasks,
       recurringCompletions,
+      recurringSlots,
       items,
       usages,
       todayChanges,
@@ -98,6 +104,7 @@ const getStreamData = cache(
       getActiveRecurringExpenses(userId),
       getActiveRecurringTasks(userId),
       getRecurringCompletions(userId, today, today),
+      getRecurringSlots(userId, today, addDaysKey(today, 1)),
       getInventoryItems(userId),
       getInventoryUsages(userId),
       getBalanceChangesOn(userId, today),
@@ -135,10 +142,20 @@ const getStreamData = cache(
       today,
     });
     // Timed recurring occurrences count as busy time in the free-hours math
-    // and the schedule chips, alongside real Google events.
+    // and the schedule chips, alongside real Google events. An approved slot
+    // overrides its rule's due_time for that day: the occurrence is skipped and
+    // the slot supplies the commitment instead (never double-counted).
+    const slotKeys = new Set(
+      recurringSlots.map((s) => `${s.rule_id}:${s.occurred_on}`),
+    );
     const busyEvents = [
       ...dash.events,
-      ...occurrenceBusyEvents(recurringTasks, [today, addDaysKey(today, 1)]),
+      ...occurrenceBusyEvents(
+        recurringTasks,
+        [today, addDaysKey(today, 1)],
+        slotKeys,
+      ),
+      ...slotBusyEvents(recurringSlots, recurringTasks),
     ];
     const schedule = scheduleSnapshot({
       events: busyEvents,
@@ -161,12 +178,23 @@ const getStreamData = cache(
     const completedRecurringToday = new Set(
       recurringCompletions.map((c) => c.rule_id),
     );
+    // Rules with an approved slot for today are committed, not soft-placed: keep
+    // them out of the untimed planner (busyEvents already counts their slot).
+    const slotRuleIdsToday = new Set(
+      recurringSlots.filter((s) => s.occurred_on === today).map((s) => s.rule_id),
+    );
+    const slotStartByRule = new Map(
+      recurringSlots
+        .filter((s) => s.occurred_on === today)
+        .map((s) => [s.rule_id, s.start_time.slice(0, 5)]),
+    );
     const todayDate = new Date(`${today}T00:00:00`);
     const untimedTodayRules = recurringTasks.filter(
       (r) =>
         r.due_time === null &&
         taskRuleLandsOn(r, todayDate) &&
-        !completedRecurringToday.has(r.id),
+        !completedRecurringToday.has(r.id) &&
+        !slotRuleIdsToday.has(r.id),
     );
     const plannedStartByRule = new Map(
       planUntimedOccurrences({
@@ -227,6 +255,7 @@ const getStreamData = cache(
       recurringTasks,
       completedRecurringToday,
       plannedStartByRule,
+      slotStartByRule,
       items: items.map((item) => ({
         id: item.id,
         name: item.name,
@@ -314,6 +343,7 @@ async function WeekPaneSection({
       calendarLinks,
       recurringTasks,
       recurringCompletions,
+      recurringSlots,
     },
     prefs,
   ] = await Promise.all([
@@ -323,10 +353,18 @@ async function WeekPaneSection({
 
   const timeZone = safeTimeZone(prefs.timezone);
   const today = todayISO(timeZone);
+  const slotKeys = new Set(
+    recurringSlots.map((s) => `${s.rule_id}:${s.occurred_on}`),
+  );
   const schedule = scheduleSnapshot({
     events: [
       ...events,
-      ...occurrenceBusyEvents(recurringTasks, [today, addDaysKey(today, 1)]),
+      ...occurrenceBusyEvents(
+        recurringTasks,
+        [today, addDaysKey(today, 1)],
+        slotKeys,
+      ),
+      ...slotBusyEvents(recurringSlots, recurringTasks),
     ],
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,
@@ -351,6 +389,7 @@ async function WeekPaneSection({
       basePath="/"
       recurringTasks={recurringTasks}
       recurringCompletions={recurringCompletions}
+      recurringSlots={recurringSlots}
     />
   );
 }
