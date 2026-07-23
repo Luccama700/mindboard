@@ -77,7 +77,7 @@ describe("NOW is the urgency board", () => {
       "task:untimed",
     ]);
     expect(ids(snap.next)).toEqual([]);
-    expect(snap.now[0].meta).toContain("⌚ 11:00");
+    expect(snap.now[0].meta).toContain("today 11:00");
     expect(snap.now[0].tier).toBe(3);
     expect(snap.now[1].tier).toBe(1);
     expect(snap.now[2].tier).toBe(1);
@@ -333,7 +333,7 @@ describe("recurring tasks", () => {
       `rtask:lunch:${TODAY}`,
       `rtask:teeth:${TODAY}`,
     ]);
-    expect(snap.routines[0].meta).toContain("⌚ 12:30");
+    expect(snap.routines[0].meta).toContain("today 12:30");
     expect(snap.routines[0].meta).toContain("every day");
     expect(snap.routines[0].glyph).toBe("↻");
   });
@@ -443,7 +443,7 @@ describe("recurring tasks", () => {
     expect(snap.routinesOverflow).toBe(1);
   });
 
-  test("meta: a slot shows a firm ⌚ and wins over the rule's due_time", () => {
+  test("meta: a slot shows a firm time and wins over the rule's due_time", () => {
     const snap = streamSnapshot(
       base({
         recurringTasks: [rule({ id: "gym", due_time: "09:00:00" })],
@@ -451,13 +451,13 @@ describe("recurring tasks", () => {
       }),
     );
     const card = snap.routines.find((c) => c.id === `rtask:gym:${TODAY}`)!;
-    expect(card.meta).toContain("today ⌚ 07:00");
+    expect(card.meta).toContain("today 07:00");
     expect(card.meta).not.toContain("09:00");
-    expect(card.meta).not.toContain("~⌚");
+    expect(card.meta).not.toContain("~");
     expect(card.entity).toMatchObject({ kind: "rtask", slotStart: "07:00" });
   });
 
-  test("meta: an untimed rule with a planned slot shows an advisory ~⌚ + entity.plannedStart", () => {
+  test("meta: an untimed rule with a planned slot shows an advisory ~ time + entity.plannedStart", () => {
     const snap = streamSnapshot(
       base({
         recurringTasks: [rule({ id: "teeth" })],
@@ -465,7 +465,7 @@ describe("recurring tasks", () => {
       }),
     );
     const card = snap.routines.find((c) => c.id === `rtask:teeth:${TODAY}`)!;
-    expect(card.meta).toContain("today ~⌚ 16:30");
+    expect(card.meta).toContain("today ~16:30");
     expect(card.entity).toMatchObject({
       kind: "rtask",
       plannedStart: "16:30",
@@ -479,8 +479,7 @@ describe("recurring tasks", () => {
     );
     const card = snap.routines.find((c) => c.id === `rtask:teeth:${TODAY}`)!;
     expect(card.meta).toContain("today");
-    expect(card.meta).not.toContain("~⌚");
-    expect(card.meta).not.toContain("⌚");
+    expect(card.meta).not.toMatch(/~?\d{2}:\d{2}/);
     expect(card.entity).toMatchObject({
       kind: "rtask",
       plannedStart: null,

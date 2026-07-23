@@ -741,7 +741,7 @@ export function StreamClient({
       const day = gap.dateKey === todayISO() ? "today" : "tomorrow";
       setRetimed((prev) => ({
         ...prev,
-        [card.id]: `${day} ⌚ ${gap.start}`,
+        [card.id]: `${day} ${gap.start}`,
       }));
       startTransition(async () => {
         await updateTask({

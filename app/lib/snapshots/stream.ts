@@ -270,11 +270,11 @@ function taskMeta(task: TaskWithGroup, today: string): string {
     const late = daysLate(task.due_date, today);
     if (late > 0) parts.push(late === 1 ? "1d late" : `${late}d late`);
     else if (late === 0)
-      parts.push(task.due_time ? `today ⌚ ${shortTime(task.due_time)}` : "today");
+      parts.push(task.due_time ? `today ${shortTime(task.due_time)}` : "today");
     else
       parts.push(
         task.due_time
-          ? `${shortDate(task.due_date)} ⌚ ${shortTime(task.due_time)}`
+          ? `${shortDate(task.due_date)} ${shortTime(task.due_time)}`
           : shortDate(task.due_date),
       );
   }
@@ -301,14 +301,14 @@ function rtaskCard(
   plannedStart: string | null = null,
   slotStart: string | null = null,
 ): StreamCard {
-  // A committed slot or the rule's fixed due_time shows a firm "⌚" (slot wins);
-  // an untimed rule the gap planner soft-placed shows an advisory "~⌚"; a bare
-  // untimed rule just reads "today".
+  // A committed slot or the rule's fixed due_time shows a firm time (slot wins);
+  // an untimed rule the gap planner soft-placed shows an advisory "~" time; a
+  // bare untimed rule just reads "today".
   const firmTime = slotStart ?? (rule.due_time ? shortTime(rule.due_time) : null);
   const timeLabel = firmTime
-    ? `today ⌚ ${firmTime}`
+    ? `today ${firmTime}`
     : plannedStart
-      ? `today ~⌚ ${shortTime(plannedStart)}`
+      ? `today ~${shortTime(plannedStart)}`
       : "today";
   const parts: string[] = [timeLabel, formatRecurrence(rule)];
   if (rule.priority === "high") parts.push("!!!");

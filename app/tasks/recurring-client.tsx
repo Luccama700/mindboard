@@ -19,8 +19,8 @@ function scheduleLabel(rule: RecurringTaskRow): string {
   if (rule.due_time) {
     parts.push(
       rule.duration_min
-        ? `⌚ ${rule.due_time.slice(0, 5)} · ${durationLabel(rule.duration_min)}`
-        : `⌚ ${rule.due_time.slice(0, 5)}`,
+        ? `${rule.due_time.slice(0, 5)} · ${durationLabel(rule.duration_min)}`
+        : rule.due_time.slice(0, 5),
     );
   } else if (rule.duration_min) {
     parts.push(durationLabel(rule.duration_min));

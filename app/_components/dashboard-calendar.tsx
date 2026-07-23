@@ -881,9 +881,9 @@ export function DashboardCalendar({
                           : item.kind === "rtask"
                             ? `↻ ${item.scheduleLabel} · ${
                                 item.slotStart
-                                  ? `⌚ ${item.slotStart.slice(0, 5)}`
+                                  ? item.slotStart.slice(0, 5)
                                   : item.dueTime
-                                    ? `⌚ ${item.dueTime.slice(0, 5)}`
+                                    ? item.dueTime.slice(0, 5)
                                     : item.plannedStart
                                       ? `~${item.plannedStart.slice(0, 5)}`
                                       : "anytime"
@@ -936,7 +936,7 @@ export function DashboardCalendar({
                           }
                           className="min-h-11 px-3 text-xs text-accent-ink hover:text-fg transition-colors"
                         >
-                          add ⌚{item.plannedStart!.slice(0, 5)}
+                          add {item.plannedStart!.slice(0, 5)}
                         </button>
                       </div>
                     )}

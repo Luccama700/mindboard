@@ -980,7 +980,7 @@ export function Dock({
               title="tap to keep the time words as part of the title"
               className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full bg-accent text-accent-fg border-accent transition-colors"
             >
-              ⌚ {parsedTime.time} ×
+              {parsedTime.time} ×
             </button>
           )}
 
