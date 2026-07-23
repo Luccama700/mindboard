@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/utils/supabase/server";
+import { createServiceClient } from "@/utils/supabase/service";
 import { readProviderKey } from "@/app/lib/connections/keys";
 import {
   mergeClassifications,
@@ -228,7 +229,10 @@ export async function runMindspacePass(input: {
 }): Promise<void> {
   const { userId, topics, items, pending, currentHash, nowMs } = input;
   try {
-    const supabase = await createClient();
+    // Service client, not the cookie client: `after()` runs outside the
+    // request context, where `cookies()` throws. Every query below is
+    // explicitly userId-scoped, per the multi-tenant invariant.
+    const supabase = createServiceClient();
     const apiKey = await readProviderKey(supabase, userId, "anthropic");
     if (!apiKey) return;
     const anthropic = new Anthropic({ apiKey });
