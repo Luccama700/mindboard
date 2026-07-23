@@ -63,3 +63,6 @@ worker/worker.env
 
 # home worker runtime logs
 worker/logs/
+
+# mindspace sync local cursor
+overnight/.mindspace-sync.json
