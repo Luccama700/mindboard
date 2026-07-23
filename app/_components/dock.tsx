@@ -499,6 +499,7 @@ export function Dock({
             <span className="text-meta text-muted">{groups.length}</span>
           </button>
           {[
+            { href: "/mindspace", label: "mindspace" },
             { href: "/week", label: "week" },
             { href: "/settings", label: "settings" },
           ].map((item) => (

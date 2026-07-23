@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-22-mindspace",
+    date: "2026-07-22",
+    title: "mindspace — what's been on your mind",
+    items: [
+      "a new page (more → mindspace) showing what share of your recorded attention each of your concerns has been getting — over the last 3 days, week, or month.",
+      "topics seed themselves from your vault's people, projects, and areas plus your task groups; rename, merge, pin, or mute them anytime. mute hides a topic without losing anything — an off-switch for loops you don't want fed.",
+      "the percentages are honest about what they are: shares of what you captured — notes, chats, tasks, check-ins — not of your mind itself. quiet things are under-counted.",
+    ],
+  },
+  {
     id: "2026-07-22-routines-quiet-corner",
     date: "2026-07-22",
     title: "routines settle into their own quiet corner",
