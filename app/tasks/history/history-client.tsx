@@ -48,6 +48,14 @@ export function HistoryClient({
     );
   }
 
+  // Running index across day groups so rows cascade in, capped so a long
+  // history doesn't stagger forever. Stable keys keep a reopen removal from
+  // replaying its siblings' entrance.
+  const orderIndex = new Map<string, number>();
+  for (const day of visibleDays) {
+    for (const e of day.events) orderIndex.set(e.id, orderIndex.size);
+  }
+
   return (
     <div className="space-y-6">
       {visibleDays.map((day) => (
@@ -57,10 +65,12 @@ export function HistoryClient({
           </p>
           {day.events.map((e) => {
             const done = e.kind === "done";
+            const delay = Math.min(orderIndex.get(e.id) ?? 0, 12) * 35;
             return (
               <div
                 key={e.id}
-                className="flex items-center gap-2.5 py-2 border-b border-line"
+                className="flex items-center gap-2.5 py-2 border-b border-line stream-rise"
+                style={{ animationDelay: `${delay}ms` }}
               >
                 <span
                   className={`flex-shrink-0 text-sm ${done ? "text-accent" : "text-danger"}`}
@@ -92,7 +102,7 @@ export function HistoryClient({
                   <button
                     type="button"
                     onClick={() => onReopen(e.id)}
-                    className="flex-shrink-0 inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+                    className="press flex-shrink-0 inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
                   >
                     reopen
                   </button>

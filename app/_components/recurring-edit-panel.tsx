@@ -152,7 +152,7 @@ export function RecurringEditPanel({
   const chipOff = "border-line-strong text-muted hover:border-fg hover:text-fg";
 
   return (
-    <div className="pt-3 pb-1 space-y-3">
+    <div className="glass-rise pt-3 pb-1 space-y-3">
       <input
         type="text"
         value={titleDraft}

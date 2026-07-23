@@ -33,6 +33,8 @@ import {
   type SpendCategory,
 } from "./stream-sheets";
 import { RecurringEditPanel } from "./recurring-edit-panel";
+import { MindspaceBar } from "./mindspace-bar";
+import type { MindshareBar } from "@/app/lib/mindspace/share-bar";
 import type { Task } from "./types";
 
 type SectionKey = "now" | "next" | "later" | "loose" | "routines";
@@ -145,13 +147,20 @@ function CardRow({
     touchStart.current = null;
   }
 
-  // Tier drives a task card's left tick; other cards follow their section.
+  // Task/rtask cards carry their GROUP color on the left tick (set inline
+  // below); missed cards flash danger; other cards follow their section.
+  const cardGroupColor =
+    card.entity.kind === "task"
+      ? card.entity.task.group_color
+      : card.entity.kind === "rtask"
+        ? card.entity.group_color
+        : null;
   const tickColor =
     leaving === "missed"
       ? "border-danger"
-      : taskTier !== undefined
-        ? taskTier >= 2
-          ? "border-accent"
+      : isTask
+        ? cardGroupColor
+          ? ""
           : "border-hairline"
         : section === "now"
           ? "border-accent"
@@ -167,7 +176,7 @@ function CardRow({
         key="done"
         type="button"
         onClick={() => onDone(card)}
-        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
+        className="press min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         done
       </button>,
@@ -178,7 +187,7 @@ function CardRow({
           key="incomplete"
           type="button"
           onClick={() => onMiss(card)}
-          className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-danger opacity-70 hover:opacity-100 hover:border-danger transition-[color,opacity,border-color]"
+          className="press min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-danger opacity-70 hover:opacity-100 hover:border-danger transition-[color,opacity,border-color]"
         >
           incomplete
         </button>,
@@ -190,7 +199,7 @@ function CardRow({
           type="button"
           onClick={() => setSnoozeOpen((v) => !v)}
           aria-expanded={snoozeOpen}
-          className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
+          className="press min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
         >
           later ▾
         </button>
@@ -219,7 +228,7 @@ function CardRow({
           type="button"
           onClick={() => setScheduleOpen((v) => !v)}
           aria-expanded={scheduleOpen}
-          className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
+          className="press min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
         >
           schedule ▾
         </button>
@@ -257,7 +266,7 @@ function CardRow({
           type="button"
           onClick={() => setGroupOpen((v) => !v)}
           aria-expanded={groupOpen}
-          className="flex min-h-11 min-w-0 max-w-40 items-center gap-2 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
+          className="press flex min-h-11 min-w-0 max-w-40 items-center gap-2 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-fg transition-colors"
         >
           <span
             className={`h-2.5 w-2.5 flex-shrink-0 ${
@@ -314,7 +323,7 @@ function CardRow({
         key="done"
         type="button"
         onClick={() => onDone(card)}
-        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
+        className="press min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         done
       </button>,
@@ -325,7 +334,7 @@ function CardRow({
         key="log"
         type="button"
         onClick={() => onLogBill(card)}
-        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
+        className="press min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         log it
       </button>,
@@ -367,7 +376,7 @@ function CardRow({
         key="log-day"
         type="button"
         onClick={onOpenLog}
-        className="min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
+        className="press min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
       >
         log day
       </button>,
@@ -423,6 +432,9 @@ function CardRow({
   const innerStyle: React.CSSProperties = {};
   if (dx !== 0) innerStyle.transform = `translateX(${dx}px)`;
   if (animate) innerStyle.animationDelay = `${Math.min(index, 10) * 35}ms`;
+  if (leaving !== "missed" && isTask && cardGroupColor) {
+    innerStyle.borderLeftColor = cardGroupColor;
+  }
   const swipeBg = dx > 40 ? "bg-accent-wash" : dx < -40 ? "bg-card-hover" : "";
   const innerClass = isFocus
     ? `glass-panel rounded-panel ${tick} p-4 ${swipeBg}`
@@ -544,6 +556,7 @@ export function StreamClient({
   groups,
   weekDone,
   weekMissed,
+  mindshare,
   todayLabel,
   clockLabel,
 }: {
@@ -554,6 +567,7 @@ export function StreamClient({
   groups: StreamGroup[];
   weekDone: number;
   weekMissed: number;
+  mindshare: MindshareBar | null;
   todayLabel: string;
   clockLabel: string;
 }) {
@@ -968,6 +982,11 @@ export function StreamClient({
         >
           this week · {weekDone} done · {weekMissed} missed
         </Link>
+      )}
+      {mindshare && (
+        <div className="mt-2">
+          <MindspaceBar bar={mindshare} animate={animateEntrance} />
+        </div>
       )}
       </div>
 

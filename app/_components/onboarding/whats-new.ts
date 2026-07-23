@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-22-mindshare-and-motion",
+    date: "2026-07-22",
+    title: "your attention, right in the stream",
+    items: [
+      "the day's header carries a slim mindshare bar now — a 3-day slice of what's had your attention, colored per topic. tap it to open the full mindspace board.",
+      "cards wear their group's color along the edge again, so a glance tells you what's whose without reading a word.",
+      "motion got quieter and smoother across the board — the bar grows in on load, and panels, sheets, and the tasks history view settle instead of snapping.",
+    ],
+  },
+  {
     id: "2026-07-22-mindspace-m3",
     date: "2026-07-22",
     title: "mindspace hears the rest of the conversation",

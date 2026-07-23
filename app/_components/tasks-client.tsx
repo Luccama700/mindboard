@@ -112,6 +112,15 @@ export function TasksClient({
     [filter],
   );
 
+  // Stream-style leave: collapse the row (max-h/opacity transition) BEFORE the
+  // optimistic removal dispatches, so it eases out instead of popping. Stale ids
+  // that outlive their row are harmless — the row is already unmounted.
+  const [leaving, setLeaving] = useState<Set<string>>(new Set());
+  function leaveThenRun(id: string, run: () => void) {
+    setLeaving((prev) => new Set(prev).add(id));
+    setTimeout(run, 280);
+  }
+
   function onToggle(task: Task) {
     const nextStatus = task.status === "done" ? "todo" : "done";
     startTransition(async () => {
@@ -121,24 +130,36 @@ export function TasksClient({
   }
 
   function onDelete(id: string) {
-    startTransition(async () => {
-      dispatch({ kind: "delete", id });
-      await deleteTask(id);
-    });
+    leaveThenRun(id, () =>
+      startTransition(async () => {
+        dispatch({ kind: "delete", id });
+        await deleteTask(id);
+      }),
+    );
   }
 
   function onMiss(id: string) {
-    startTransition(async () => {
-      dispatch({ kind: "delete", id });
-      await markTaskMissed(id);
-    });
+    leaveThenRun(id, () =>
+      startTransition(async () => {
+        dispatch({ kind: "delete", id });
+        await markTaskMissed(id);
+      }),
+    );
   }
 
   function onUpdate(id: string, patch: UpdatePatch) {
-    startTransition(async () => {
-      dispatch({ kind: "update", id, patch });
-      await updateTask({ id, ...patch });
-    });
+    const apply = () =>
+      startTransition(async () => {
+        dispatch({ kind: "update", id, patch });
+        await updateTask({ id, ...patch });
+      });
+    // A group change that moves the task off the current page removes the row —
+    // collapse it first; every other edit applies in place immediately.
+    if (patch.groupId !== undefined && !matchesFilter(patch.groupId, filter)) {
+      leaveThenRun(id, apply);
+    } else {
+      apply();
+    }
   }
 
   const [sorting, setSorting] = useState(false);
@@ -204,20 +225,28 @@ export function TasksClient({
       )}
 
       {active.map((t) => (
-        <TaskRow
+        <div
           key={t.id}
-          task={t}
-          groups={groups}
-          onToggle={onToggle}
-          onDelete={onDelete}
-          onUpdate={onUpdate}
-          onMiss={onMiss}
-          variant={
-            t.due_date && t.due_date < today && t.status === "todo"
-              ? "overdue"
-              : "default"
-          }
-        />
+          className={`ease-signal transition-all ${
+            leaving.has(t.id)
+              ? "overflow-hidden max-h-0 opacity-0 duration-[280ms]"
+              : "max-h-[40rem] opacity-100 duration-[120ms]"
+          }`}
+        >
+          <TaskRow
+            task={t}
+            groups={groups}
+            onToggle={onToggle}
+            onDelete={onDelete}
+            onUpdate={onUpdate}
+            onMiss={onMiss}
+            variant={
+              t.due_date && t.due_date < today && t.status === "todo"
+                ? "overdue"
+                : "default"
+            }
+          />
+        </div>
       ))}
 
       {done.length > 0 && (
@@ -226,14 +255,22 @@ export function TasksClient({
             done · {done.length}
           </p>
           {done.map((t) => (
-            <TaskRow
+            <div
               key={t.id}
-              task={t}
-              groups={groups}
-              onToggle={onToggle}
-              onDelete={onDelete}
-              onUpdate={onUpdate}
-            />
+              className={`ease-signal transition-all ${
+                leaving.has(t.id)
+                  ? "overflow-hidden max-h-0 opacity-0 duration-[280ms]"
+                  : "max-h-[40rem] opacity-100 duration-[120ms]"
+              }`}
+            >
+              <TaskRow
+                task={t}
+                groups={groups}
+                onToggle={onToggle}
+                onDelete={onDelete}
+                onUpdate={onUpdate}
+              />
+            </div>
           ))}
         </div>
       )}

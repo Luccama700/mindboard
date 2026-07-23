@@ -88,6 +88,7 @@ export type StreamEntity =
       priority: "low" | "med" | "high";
       group_id: string | null;
       group_name: string | null;
+      group_color: string | null;
       hasNotes: boolean;
       plannedStart: string | null;
       slotStart: string | null;
@@ -334,6 +335,7 @@ function rtaskCard(
       priority: rule.priority,
       group_id: rule.group_id,
       group_name: rule.group_name,
+      group_color: rule.group_color,
       hasNotes: (rule.notes ?? "").trim().length > 0,
       plannedStart: rule.due_time || slotStart ? null : plannedStart,
       slotStart,

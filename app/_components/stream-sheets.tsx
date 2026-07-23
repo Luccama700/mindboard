@@ -21,21 +21,23 @@ export function Sheet({
         type="button"
         aria-label="close"
         onClick={onClose}
-        className="absolute inset-0 glass-scrim"
+        className="absolute inset-0 glass-scrim scrim-fade"
       />
       <div className="absolute left-0 right-0 bottom-0 glass rounded-t-sheet rounded-b-none border-b-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] max-h-[80vh] overflow-y-auto lg:left-1/2 lg:right-auto lg:w-[28rem] lg:-translate-x-1/2">
-        <div className="flex items-center justify-between mb-4">
-          <p className="text-label uppercase text-muted">{title}</p>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="close sheet"
-            className="min-h-11 px-3 text-muted hover:text-fg transition-colors text-lg leading-none"
-          >
-            ×
-          </button>
+        <div className="sheet-rise">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-label uppercase text-muted">{title}</p>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="close sheet"
+              className="min-h-11 px-3 text-muted hover:text-fg transition-colors text-lg leading-none"
+            >
+              ×
+            </button>
+          </div>
+          {children}
         </div>
-        {children}
       </div>
     </div>
   );

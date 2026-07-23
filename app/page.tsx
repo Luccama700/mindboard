@@ -27,6 +27,10 @@ import {
 } from "./lib/data/finance";
 import { getInventoryItems, getInventoryUsages } from "./lib/data/inventory";
 import {
+  getMindspaceShareBar,
+  type MindshareBar,
+} from "./lib/mindspace/share-bar";
+import {
   getActiveRecurringTasks,
   getRecurringCompletions,
   getRecurringSlots,
@@ -65,6 +69,7 @@ const getStreamData = cache(
     groups: { id: string; name: string; color: string }[];
     weekDone: number;
     weekMissed: number;
+    mindshare: MindshareBar | null;
   }> => {
     const prefs = await getUserPreferences(userId);
     const timeZone = safeTimeZone(prefs.timezone);
@@ -97,6 +102,7 @@ const getStreamData = cache(
       categoriesResult,
       weekDoneResult,
       weekMissedResult,
+      mindshare,
     ] = await Promise.all([
       getDashboardData(userId, currentMonth()),
       getOpenTasks(userId),
@@ -133,6 +139,7 @@ const getStreamData = cache(
         .from("tasks")
         .select("id", { count: "exact", head: true })
         .gte("missed_at", weekStartIso),
+      getMindspaceShareBar(userId),
     ]);
 
     const finance = financeSnapshot({
@@ -295,13 +302,23 @@ const getStreamData = cache(
       groups: dash.groups,
       weekDone: weekDoneResult.count ?? 0,
       weekMissed: weekMissedResult.count ?? 0,
+      mindshare,
     };
   },
 );
 
 async function StreamSection({ userId }: { userId: string }) {
   const [
-    { snapshot, accounts, categories, gaps, groups, weekDone, weekMissed },
+    {
+      snapshot,
+      accounts,
+      categories,
+      gaps,
+      groups,
+      weekDone,
+      weekMissed,
+      mindshare,
+    },
     prefs,
   ] = await Promise.all([getStreamData(userId), getUserPreferences(userId)]);
   const timeZone = safeTimeZone(prefs.timezone);
@@ -316,6 +333,7 @@ async function StreamSection({ userId }: { userId: string }) {
       groups={groups}
       weekDone={weekDone}
       weekMissed={weekMissed}
+      mindshare={mindshare}
       todayLabel={formatLongWeekdayMonthDay(now, timeZone).toLowerCase()}
       clockLabel={formatClock12(now, timeZone)}
     />

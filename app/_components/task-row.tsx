@@ -97,12 +97,19 @@ export function TaskRow({
     hasGroupInfo || showDate || hasNotes || hasEstimate || Boolean(aiBadge);
 
   return (
-    <div className="border-b border-line">
+    <div
+      className="border-b border-l-2 border-line pl-3"
+      style={{
+        borderLeftColor: isOverdue
+          ? "var(--danger)"
+          : (groupColor ?? "transparent"),
+      }}
+    >
       <div className="flex items-center gap-3 py-3">
         <button
           onClick={() => onToggle(task)}
           aria-label={isDone ? "mark as todo" : "mark as done"}
-          className={`flex-shrink-0 w-7 h-7 border-2 rounded-full transition-all flex items-center justify-center ${
+          className={`press flex-shrink-0 w-7 h-7 border-2 rounded-full transition-all flex items-center justify-center ${
             isDone
               ? "bg-accent border-accent"
               : isOverdue
@@ -286,7 +293,7 @@ function EditPanel({
   }
 
   return (
-    <div ref={panelRef} className="pb-3 space-y-3">
+    <div ref={panelRef} className="glass-rise pb-3 space-y-3">
       <input
         type="text"
         value={titleDraft}

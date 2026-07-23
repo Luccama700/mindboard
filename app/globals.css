@@ -294,6 +294,14 @@ body::before {
     border: 1px solid var(--glass-border);
     background: color-mix(in srgb, var(--bg-card) 55%, transparent);
   }
+
+  /* Tactile press: a quiet scale-in on tap (mirrors the dock submit button). */
+  .press {
+    transition: transform var(--dur-micro) var(--ease-signal);
+  }
+  .press:active {
+    transform: scale(0.98);
+  }
 }
 
 @keyframes glass-rise {
@@ -523,6 +531,42 @@ body::before {
 
 .stream-rise {
   animation: stream-rise var(--dur-resolve) var(--ease-glass) backwards;
+}
+
+/* Bottom-sheet entrance: the scrim fades while the sheet body lifts. Kept on an
+   inner wrapper so the sheet's lg centering transform (translate-x) is untouched. */
+@keyframes sheet-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+.sheet-rise {
+  animation: sheet-rise var(--dur-panel) var(--ease-glass) both;
+}
+
+@keyframes scrim-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.scrim-fade {
+  animation: scrim-fade var(--dur-panel) linear both;
+}
+
+/* Mindshare bar segments grow from the left on first mount, staggered by an
+   inline animationDelay. backwards holds scaleX(0) through the delay. */
+@keyframes bar-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+.bar-grow {
+  transform-origin: left;
+  animation: bar-grow 400ms var(--ease-glass) backwards;
 }
 
 /* One-time accent glow on a focus (tier-3) card, delayed so it lands just after

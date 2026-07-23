@@ -90,6 +90,7 @@ function rtaskCard(id: string, title: string): StreamCard {
       priority: "med",
       group_id: null,
       group_name: null,
+      group_color: null,
       hasNotes: false,
       plannedStart: null,
       slotStart: null,
@@ -132,6 +133,7 @@ function renderStream(snap: StreamSnapshot) {
       groups={GROUPS}
       weekDone={0}
       weekMissed={0}
+      mindshare={null}
       todayLabel="tuesday, jul 8"
       clockLabel="9:41 am"
     />,
@@ -168,6 +170,18 @@ describe("StreamClient rendering", () => {
     // The group button wears the task's own group; inbox for the ungrouped.
     expect(screen.getByText("English Classes ▾")).toBeTruthy();
     expect(screen.getAllByText("inbox ▾").length).toBe(2);
+  });
+
+  test("a grouped task card's inner div carries border-l-2 and the group's inline left color, no border-accent", () => {
+    renderStream(snapshot);
+    const inner = screen
+      .getByText("Log Flavio Class")
+      .closest("div[style]") as HTMLElement;
+    expect(inner).toBeTruthy();
+    expect(inner.className).toContain("border-l-2");
+    expect(inner.className).not.toContain("border-accent");
+    // #9E44F8 → rgb(158, 68, 248)
+    expect(inner.style.borderLeftColor).toBe("rgb(158, 68, 248)");
   });
 
   test("an overdue task card shows the incomplete button", () => {
@@ -236,5 +250,38 @@ describe("StreamClient rendering", () => {
     // focus meta: effort + lateness (danger tint on the lateness)
     expect(screen.getByText("~2h")).toBeTruthy();
     expect(screen.getByText(/d late/)).toBeTruthy();
+  });
+
+  test("renders the mindshare bar linking to /mindspace with one div per segment", () => {
+    const { container } = render(
+      <StreamClient
+        snapshot={snapshot}
+        accounts={[]}
+        categories={[]}
+        gaps={[]}
+        groups={GROUPS}
+        weekDone={0}
+        weekMissed={0}
+        mindshare={{
+          segments: [
+            { topicId: "t1", name: "t1", color: "#3cd9ff", share: 0.6 },
+            { topicId: "t2", name: "t2", color: "#ffb73c", share: 0.4 },
+          ],
+          otherShare: 0,
+          unclassifiedShare: 0,
+        }}
+        todayLabel="tuesday, jul 8"
+        clockLabel="9:41 am"
+      />,
+    );
+    const link = container.querySelector('a[href="/mindspace"]');
+    expect(link).toBeTruthy();
+    expect(link?.getAttribute("aria-label")).toBe("mindspace attention");
+    // One inline-colored div per segment (filler carries no inline color).
+    const strip = link!.querySelector("div")!;
+    const colored = Array.from(strip.querySelectorAll("div")).filter(
+      (d) => (d as HTMLElement).style.backgroundColor !== "",
+    );
+    expect(colored.length).toBe(2);
   });
 });

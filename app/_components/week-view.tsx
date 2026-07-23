@@ -222,7 +222,7 @@ function TimedTaskBlock({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 bg-page/85 px-1.5 py-0.5 cursor-grab z-10 ${
+      className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 bg-page/85 px-1.5 py-0.5 cursor-grab z-10 transition-[opacity,box-shadow,border-color] duration-[120ms] ease-signal hover:bg-card-hover ${
         isDragging ? "opacity-30" : ""
       }`}
       style={{
@@ -325,7 +325,7 @@ function RecurringTaskBlock({
     return (
       <div
         {...dragBind}
-        className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
+        className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 transition-[opacity,box-shadow,border-color] duration-[120ms] ease-signal hover:bg-card-hover ${
           enabled ? "cursor-grab" : ""
         } ${isDragging ? "opacity-30" : ""} ${item.done ? "opacity-50" : ""}`}
         style={{
@@ -351,7 +351,7 @@ function RecurringTaskBlock({
   return (
     <div
       {...dragBind}
-      className={`absolute left-1 right-1 overflow-hidden rounded-lg border border-dashed bg-page/85 px-1.5 py-0.5 z-10 ${
+      className={`absolute left-1 right-1 overflow-hidden rounded-lg border border-dashed bg-page/85 px-1.5 py-0.5 z-10 transition-[opacity,box-shadow,border-color] duration-[120ms] ease-signal hover:bg-card-hover ${
         enabled ? "cursor-grab" : ""
       } ${isDragging ? "opacity-30" : ""} ${
         item.done ? "opacity-50" : "opacity-70"
@@ -375,7 +375,7 @@ function RecurringTaskBlock({
             });
           }}
           aria-label={`approve ${item.title}`}
-          className="absolute right-0.5 top-0.5 z-20 flex h-6 w-6 items-center justify-center rounded text-[11px] text-positive hover:bg-card"
+          className="absolute right-0.5 top-0.5 z-20 flex h-6 w-6 items-center justify-center rounded text-[11px] text-positive transition-colors hover:bg-positive-wash"
         >
           ✓
         </button>
@@ -467,7 +467,7 @@ function TimedEventBlock({
       ref={setNodeRef}
       {...attributes}
       {...listeners}
-      className={`absolute left-1 right-1 overflow-hidden rounded-lg px-1.5 py-1 text-accent-fg shadow-[inset_2px_0_0_rgba(0,0,0,0.35)] ${
+      className={`absolute left-1 right-1 overflow-hidden rounded-lg px-1.5 py-1 text-accent-fg shadow-[inset_2px_0_0_rgba(0,0,0,0.35)] transition-[opacity,box-shadow,border-color] duration-[120ms] ease-signal hover:brightness-110 ${
         isWritable ? "cursor-grab" : "cursor-default opacity-60"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{

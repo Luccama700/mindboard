@@ -40,7 +40,7 @@ type TopicAccumulator = {
   items: TopicEvidence[];
 };
 
-function buildWindow(
+export function buildWindow(
   items: ClassifiedItem[],
   topics: MindspaceTopic[],
   days: WindowDays,

@@ -15,6 +15,7 @@ import {
   runMindspacePass,
 } from "@/app/lib/mindspace/pipeline";
 import { buildMindspaceView } from "@/app/lib/mindspace/aggregate";
+import { assignTopicColors } from "@/app/lib/mindspace/colors";
 import {
   buildSeedCandidates,
   type SeedGroup,
@@ -26,20 +27,6 @@ import {
 } from "@/app/lib/brain/vault";
 import { MindspaceClient } from "./mindspace-client";
 import { SeedClient } from "./seed-client";
-
-// Deterministic fallback palette for topics seeded without a group color.
-const FALLBACK_COLORS = [
-  "#b5ff3c",
-  "#3cd9ff",
-  "#ffb73c",
-  "#c892ff",
-  "#3c8fff",
-  "#ff6b9d",
-  "#7cff6b",
-  "#fb623c",
-  "#9e44f8",
-  "#3cffc9",
-];
 
 export default async function MindspacePage() {
   const supabase = await createClient();
@@ -135,10 +122,7 @@ export default async function MindspacePage() {
     );
   }
 
-  const coloredTopics = topics.map((topic, index) => ({
-    ...topic,
-    color: topic.color ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length],
-  }));
+  const coloredTopics = assignTopicColors(topics);
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto">
