@@ -90,6 +90,9 @@ const CONFIG = {
   // Post-push review of every build branch (OVERNIGHT_REVIEW=0 disables).
   reviewEnabled: process.env.OVERNIGHT_REVIEW !== "0",
   reviewModel: process.env.OVERNIGHT_REVIEW_MODEL ?? "opus-5",
+  // Opus 5 house rule: xhigh, never max (Topics/Prompting Claude Opus 5 in
+  // the vault). The other phases stay on OVERNIGHT_EFFORT (high).
+  reviewEffort: process.env.OVERNIGHT_REVIEW_EFFORT ?? "xhigh",
   reviewBudgetUsd: process.env.OVERNIGHT_REVIEW_BUDGET_USD ?? "4",
   reviewTimeoutMs: Number(process.env.OVERNIGHT_REVIEW_TIMEOUT_MIN ?? 15) * 60_000,
   planTimeoutMs: Number(process.env.OVERNIGHT_PLAN_TIMEOUT_MIN ?? 20) * 60_000,
@@ -535,6 +538,7 @@ async function buildPhase(tasks) {
           budgetUsd: CONFIG.reviewBudgetUsd,
           maxTurns: 50,
           timeoutMs: CONFIG.reviewTimeoutMs,
+          effort: CONFIG.reviewEffort,
         });
         const verdict = review.ok
           ? review.text
@@ -804,7 +808,7 @@ async function main() {
   log(
     `engines: plan=${ENGINES.plan.id}${ENGINES.plan.fellBack ? " (proxy down → fallback)" : ""}, ` +
       `build=${ENGINES.build.id}${ENGINES.build.fellBack ? " (proxy down → fallback)" : ""}, ` +
-      `review=${CONFIG.reviewEnabled ? ENGINES.review.id : "off"}, ` +
+      `review=${CONFIG.reviewEnabled ? `${ENGINES.review.id}@${CONFIG.reviewEffort}` : "off"}, ` +
       `effort=${CONFIG.effort}`,
   );
 

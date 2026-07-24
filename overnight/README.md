@@ -58,6 +58,7 @@ in the edit panel) — same button for both tracks. The agent never touches
    # OVERNIGHT_CLAUDE_BIN=claude    # or a proxy shim, e.g. claudex for gpt-5.6-sol
    # OVERNIGHT_REVIEW=1             # 0 disables the post-push build review
    # OVERNIGHT_REVIEW_MODEL=opus-5
+   # OVERNIGHT_REVIEW_EFFORT=xhigh  # opus-5 house rule: xhigh, never max
    # OVERNIGHT_REVIEW_BUDGET_USD=4  # per review run
    # OVERNIGHT_REVIEW_TIMEOUT_MIN=15
    # DIGEST_MODEL=haiku             # digest.ps1 (morning report / finance digest)
