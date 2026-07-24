@@ -44,6 +44,7 @@ import {
   extractSection,
   parseToolResult,
   parseTriage,
+  reviewPrompt,
   MODEL_CHOICES,
   pickBuildTasks,
   resolveModel,
@@ -86,6 +87,11 @@ const CONFIG = {
   maxBuilds: Number(process.env.OVERNIGHT_MAX_BUILDS ?? 2),
   planBudgetUsd: process.env.OVERNIGHT_PLAN_BUDGET_USD ?? "3",
   buildBudgetUsd: process.env.OVERNIGHT_BUILD_BUDGET_USD ?? "15",
+  // Post-push review of every build branch (OVERNIGHT_REVIEW=0 disables).
+  reviewEnabled: process.env.OVERNIGHT_REVIEW !== "0",
+  reviewModel: process.env.OVERNIGHT_REVIEW_MODEL ?? "opus-5",
+  reviewBudgetUsd: process.env.OVERNIGHT_REVIEW_BUDGET_USD ?? "4",
+  reviewTimeoutMs: Number(process.env.OVERNIGHT_REVIEW_TIMEOUT_MIN ?? 15) * 60_000,
   planTimeoutMs: Number(process.env.OVERNIGHT_PLAN_TIMEOUT_MIN ?? 20) * 60_000,
   buildTimeoutMs: Number(process.env.OVERNIGHT_BUILD_TIMEOUT_MIN ?? 90) * 60_000,
   previewTemplate: process.env.OVERNIGHT_PREVIEW_TEMPLATE ?? "",
@@ -264,7 +270,7 @@ async function freshNotes(taskId, fallback) {
 
 // Resolved once per run in main(): the app's per-user choice, else env
 // defaults. Proxy models degrade to opus if claudex is unreachable.
-const ENGINES = { plan: null, build: null };
+const ENGINES = { plan: null, build: null, review: null };
 
 async function proxyReachable() {
   try {
@@ -510,6 +516,47 @@ async function buildPhase(tasks) {
         notes: appendSection(await freshNotes(task.id, task.notes), `AI build — ${today}`, report),
         aiState: "built",
       });
+
+      // Post-push review: an adversarial read-only pass over the diff, its
+      // verdict appended to the notes beside the preview URL. Non-fatal — a
+      // failed review must never undo a healthy build — but the failure is
+      // recorded so an unreviewed branch is visible from the phone.
+      if (CONFIG.reviewEnabled) {
+        log(`  reviewing ${branch} (${ENGINES.review.id})`);
+        const review = runClaude({
+          prompt: reviewPrompt(task, branch),
+          cwd: worktree,
+          permissionMode: "dontAsk",
+          engine: ENGINES.review,
+          tools: "Read,Grep,Glob,Bash",
+          strictMcp: true,
+          allowedTools: "Bash(git diff *),Bash(git log *),Bash(git status),Bash(git show *),Bash(ls *)",
+          disallowedTools: "Edit,Write,NotebookEdit,WebSearch,WebFetch",
+          budgetUsd: CONFIG.reviewBudgetUsd,
+          maxTurns: 50,
+          timeoutMs: CONFIG.reviewTimeoutMs,
+        });
+        const verdict = review.ok
+          ? review.text
+          : `review did not complete (non-fatal): ${clip(review.text, 400)}\nThe branch is UNREVIEWED — read the diff before merging.`;
+        try {
+          await updateTask(task.id, {
+            notes: appendSection(
+              await freshNotes(task.id, task.notes),
+              `AI review — ${today}`,
+              clip(verdict, 4000),
+            ),
+          });
+        } catch (writeError) {
+          log(`  could not record review: ${clip(String(writeError), 200)}`);
+        }
+        log(
+          review.ok
+            ? `  review done (cost $${review.costUsd?.toFixed?.(2) ?? "?"})`
+            : `  review FAILED (non-fatal): ${clip(review.text, 200)}`,
+        );
+      }
+
       run("git", ["worktree", "remove", "--force", worktree], { cwd: REPO });
       log(`  built and pushed ${branch} (cost $${result.costUsd?.toFixed?.(2) ?? "?"})`);
       outcomes.push({ task, ok: true, branch });
@@ -753,9 +800,11 @@ async function main() {
   const proxyOk = needsProxy ? await ensureProxy() : false;
   ENGINES.plan = resolveModel(planChoice, proxyOk, "fable-5");
   ENGINES.build = resolveModel(buildChoice, proxyOk, "gpt-5.6-sol");
+  ENGINES.review = resolveModel(CONFIG.reviewModel, proxyOk, "opus-5");
   log(
     `engines: plan=${ENGINES.plan.id}${ENGINES.plan.fellBack ? " (proxy down → fallback)" : ""}, ` +
       `build=${ENGINES.build.id}${ENGINES.build.fellBack ? " (proxy down → fallback)" : ""}, ` +
+      `review=${CONFIG.reviewEnabled ? ENGINES.review.id : "off"}, ` +
       `effort=${CONFIG.effort}`,
   );
 

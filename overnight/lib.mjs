@@ -110,6 +110,33 @@ export function buildPrompt(task, plan) {
   ].join("\n");
 }
 
+// Post-push adversarial review of a build branch. Read-only by design: the
+// reviewer sees the worktree after the orchestrator's gate has passed, so its
+// job is judgment (real defects, invariant violations), not fixing.
+export function reviewPrompt(task, branch) {
+  return [
+    `You are an adversarial code reviewer. This worktree holds branch ${branch},`,
+    `an overnight AI build of the task below, already pushed for the user's`,
+    `morning review. Diff it against origin/main (git diff origin/main...HEAD),`,
+    `and READ the surrounding code before judging — every finding must name a`,
+    `concrete failure scenario, not a suspicion. AGENTS.md is the convention`,
+    `reference.`,
+    ``,
+    `TASK: ${task.title}`,
+    ``,
+    `Hunt real defects only: broken behavior, RLS/multi-tenant leaks (queries`,
+    `not threaded through the caller's userId), writes that bypass the`,
+    `propose→confirm rail, secrets reaching code/logs/child env, Windows path`,
+    `or filename breakage, races against existing locks/mutexes, and untested`,
+    `pure logic. Style nits do not count.`,
+    ``,
+    `Reply with EXACTLY one of:`,
+    `VERDICT: ship — plus one line on why it is safe to merge.`,
+    `VERDICT: caution — plus a ranked list of findings, each with file:line,`,
+    `the failure scenario, and the minimal fix.`,
+  ].join("\n");
+}
+
 // The last section a nightly run wrote under the given heading prefix.
 // A section ends only at an appendSection divider (--- followed by another
 // ## heading) — a bare markdown horizontal rule inside the body is content.
@@ -136,6 +163,7 @@ export function extractPlan(notes) {
 // CLIProxyAPI (claudex) for non-Anthropic models.
 export const MODEL_CHOICES = {
   "fable-5": { model: "fable" },
+  "opus-5": { model: "claude-opus-5" },
   "opus-4.8": { model: "opus" },
   "gpt-5.6-sol": { model: "gpt-5.6-sol", proxy: true },
 };

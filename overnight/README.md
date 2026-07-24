@@ -1,4 +1,4 @@
-# Overnight agent
+﻿# Overnight agent
 
 The nightly orchestrator (design: `docs/overnight-agent-plan.md`). At 4am —
 or on demand — it works the user's board over MCP, two tracks:
@@ -43,7 +43,7 @@ in the edit panel) — same button for both tracks. The agent never touches
    MINDBOARD_PAT=mbp_...            # settings → MCP connection → personal token
    # optional:
    # OVERNIGHT_PREVIEW_TEMPLATE=https://mindboard-git-{branch}-<team>.vercel.app
-   # OVERNIGHT_PLAN_MODEL=fable-5   # fable-5 | opus-4.8 | gpt-5.6-sol (app setting wins)
+   # OVERNIGHT_PLAN_MODEL=fable-5   # fable-5 | opus-5 | opus-4.8 | gpt-5.6-sol (app setting wins)
    # OVERNIGHT_BUILD_MODEL=gpt-5.6-sol
    # OVERNIGHT_EFFORT=high
    # OVERNIGHT_PROXY_URL=http://127.0.0.1:8317   # claudex / CLIProxyAPI
@@ -56,6 +56,12 @@ in the edit panel) — same button for both tracks. The agent never touches
    # OVERNIGHT_LIFE_BUDGET_USD=5    # per life-task run
    # OVERNIGHT_TRIAGE_MODEL=haiku   # cheap triage model
    # OVERNIGHT_CLAUDE_BIN=claude    # or a proxy shim, e.g. claudex for gpt-5.6-sol
+   # OVERNIGHT_REVIEW=1             # 0 disables the post-push build review
+   # OVERNIGHT_REVIEW_MODEL=opus-5
+   # OVERNIGHT_REVIEW_BUDGET_USD=4  # per review run
+   # OVERNIGHT_REVIEW_TIMEOUT_MIN=15
+   # DIGEST_MODEL=haiku             # digest.ps1 (morning report / finance digest)
+   # DIGEST_BUDGET_USD=1
    ```
 
 2. Dry run (no Claude spawned, no writes):
@@ -76,8 +82,11 @@ in the edit panel) — same button for both tracks. The agent never touches
 - Next morning: tasks show `✦ plan ready`; read the plan in the notes, tap
   **approve build** (or **dismiss**).
 - The following night the build runs; `✦ built` + preview URL land in the
-  notes. Merge the `ai/<slug>` branch when happy; **retry tonight** re-queues
-  a failed one.
+  notes, followed by an **AI review** section: an adversarial read-only pass
+  over the diff (default opus-5) ending in `VERDICT: ship` or
+  `VERDICT: caution` with file:line findings. A branch whose review failed
+  says so — read the diff yourself before merging that one. Merge the
+  `ai/<slug>` branch when happy; **retry tonight** re-queues a failed one.
 - `--plan-only` / `--build-only` narrow a manual run:
   `node overnight\run.mjs --build-only`.
 
@@ -92,3 +101,23 @@ in the edit panel) — same button for both tracks. The agent never touches
   or revoke the PAT in settings (every MCP call dies instantly).
 - Logs: `overnight/logs/<date>.log`. Failed builds keep their worktree under
   `../mindboard-ai/` for inspection.
+
+## Scheduled digests
+
+`digest.ps1` runs a cheap headless Claude (haiku by default) against the
+Mindboard MCP and captures the result to the brain vault + a local mirror in
+`overnight/logs/digest-*.md`:
+
+- **Morning report** (daily 08:03): last night's orchestrator outcomes —
+  including silent FATALs the logs would otherwise swallow — plus today's
+  plan from `get_snapshot`/`tasks_snapshot`. Captured as
+  "Morning report — date".
+- **Finance digest** (Mondays 08:33): `finance_snapshot` + `finance_forecast`
+  + last week's ledger — net-worth trend, anomalies, upcoming bills, and the
+  projected low point. Captured as "Finance digest — week of date".
+
+Register both with `.\overnight\install-digests.ps1`; test one with
+`powershell -File overnight\digest.ps1 -Kind morning`. Remove with
+`Unregister-ScheduledTask -TaskName "Mindboard Morning Report" -Confirm:$false`
+(same for `"Mindboard Finance Digest"`).
+

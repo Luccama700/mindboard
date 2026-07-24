@@ -3,6 +3,7 @@
 // (overnight/lib.mjs MODEL_CHOICES) — keep the three lists in sync.
 export const AGENT_MODEL_CHOICES = [
   { id: "fable-5", label: "fable 5 — deepest reasoning" },
+  { id: "opus-5", label: "opus 5 — near-fable at half price" },
   { id: "opus-4.8", label: "opus 4.8 — strong all-rounder" },
   { id: "gpt-5.6-sol", label: "gpt-5.6-sol — via the pc's claudex proxy" },
 ] as const;

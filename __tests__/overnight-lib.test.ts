@@ -17,6 +17,7 @@ import {
   previewUrl,
   quoteArg,
   resolveModel,
+  reviewPrompt,
   slugify,
   triagePrompt,
 } from "../overnight/lib.mjs";
@@ -268,6 +269,17 @@ describe("Track B prompts", () => {
   });
 });
 
+describe("reviewPrompt", () => {
+  test("names the branch, the task, and demands a verdict", () => {
+    const prompt = reviewPrompt({ title: "Add urgency board" }, "ai/add-urgency-board-0f2a7c31");
+    expect(prompt).toContain("ai/add-urgency-board-0f2a7c31");
+    expect(prompt).toContain("Add urgency board");
+    expect(prompt).toContain("git diff origin/main...HEAD");
+    expect(prompt).toContain("VERDICT: ship");
+    expect(prompt).toContain("VERDICT: caution");
+  });
+});
+
 describe("resolveModel", () => {
   test("maps choices to CLI models", () => {
     expect(resolveModel("fable-5", false)).toMatchObject({ id: "fable-5", model: "fable" });
@@ -294,7 +306,7 @@ describe("resolveModel", () => {
 
   test("choice ids stay in sync with the app's whitelist", () => {
     expect(Object.keys(MODEL_CHOICES).sort()).toEqual(
-      ["fable-5", "gpt-5.6-sol", "opus-4.8"].sort(),
+      ["fable-5", "gpt-5.6-sol", "opus-4.8", "opus-5"].sort(),
     );
   });
 });
