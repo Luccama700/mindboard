@@ -2,7 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { readVaultCredentials } from "@/app/lib/brain/vault";
+import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
 import {
   createVaultFileWithRetry,
   VAULT_NOT_CONFIGURED_MESSAGE,
@@ -343,6 +343,8 @@ export async function finalizeSourceFor(
       .eq("user_id", userId);
     return written;
   }
+
+  revalidateVaultTree(userId);
 
   const { error: updateError } = await supabase
     .from("course_sources")

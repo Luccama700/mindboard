@@ -10,10 +10,12 @@ import {
 import type { Group } from "@/app/tasks/groups-types";
 import { Dock } from "./dock";
 
-// Rail badge: how many notes the vault holds. The tree fetch is cached for
-// 180s (see vault.ts) and DockMount renders inside its own Suspense boundary,
-// so a cold or failing GitHub call never blocks page content — it only
-// delays the dock, and any failure degrades to no badge.
+// Rail badge: how many notes the vault holds. Explicitly opts out of the
+// fresh-by-default tree read (vault.ts): this renders on every page, a count
+// that lags by up to the 180s TTL is harmless, and an uncached GitHub call per
+// render is not. DockMount renders inside its own Suspense boundary, so a cold
+// or failing GitHub call never blocks page content — it only delays the dock,
+// and any failure degrades to no badge.
 async function brainNoteCount(
   supabase: SupabaseClient,
   userId: string,
@@ -21,7 +23,9 @@ async function brainNoteCount(
   try {
     const credentials = await readVaultCredentials(supabase, userId);
     if (!credentials) return 0;
-    const notes = await listVaultNotePaths(credentials, vaultTag(userId));
+    const notes = await listVaultNotePaths(credentials, vaultTag(userId), {
+      fresh: false,
+    });
     return notes.length;
   } catch {
     return 0;

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
 import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
-import { readVaultCredentials } from "@/app/lib/brain/vault";
+import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
 import {
   createVaultBase64FileWithRetry,
   createVaultFileWithRetry,
@@ -113,7 +113,7 @@ async function failJob(job: JobRow, message: string) {
       const credentials = await readVaultCredentials(supabase, job.user_id);
       if (credentials) {
         const shortcode = String(job.payload.shortcode ?? "");
-        await createVaultFileWithRetry(
+        const failureNote = await createVaultFileWithRetry(
           credentials,
           (attempt) => reelFailureNotePath(shortcode, attempt),
           buildReelFailureDocument({
@@ -123,6 +123,7 @@ async function failJob(job: JobRow, message: string) {
           }),
           `Reel failed: ${shortcode}`,
         );
+        if (failureNote.ok) revalidateVaultTree(job.user_id);
       }
     } catch {
       // best-effort — the job row still carries the error
@@ -267,6 +268,7 @@ async function completeOcr(
     `Course source: ${courseName} — ${source.title} (via home worker)`,
   );
   if (!written.ok) throw new Error(written.error);
+  revalidateVaultTree(job.user_id);
 
   await supabase
     .from("course_sources")
@@ -398,6 +400,8 @@ async function completeReel(
     `Reel record: ${title} (via home worker)`,
   );
   if (!written.ok) throw new Error(written.error);
+  // Covers the thumbnail commit above too — same tree, one invalidation.
+  revalidateVaultTree(job.user_id);
 
   return { vault_path: written.value?.path ?? firstPath };
 }

@@ -4,7 +4,7 @@ import { PDFDocument } from "pdf-lib";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { readProviderKey } from "@/app/lib/connections/keys";
-import { readVaultCredentials } from "@/app/lib/brain/vault";
+import { expireVaultTree, readVaultCredentials } from "@/app/lib/brain/vault";
 import {
   createVaultFileWithRetry,
   VAULT_NOT_CONFIGURED_MESSAGE,
@@ -247,6 +247,8 @@ export async function runPdfConversion(input: {
     `Course source: ${courseName} — ${source.title} (via claude api)`,
   );
   if (!written.ok) return fail(written.error);
+  // Server Action path: expire immediately so /brain shows the source now.
+  expireVaultTree(userId);
 
   const { error: updateError } = await supabase
     .from("course_sources")

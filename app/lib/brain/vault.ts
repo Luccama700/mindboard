@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import { revalidateTag, updateTag } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/utils/supabase/server";
@@ -56,6 +57,31 @@ const BLOB_BATCH_SIZE = 25;
 
 export function vaultTag(userId: string): string {
   return `vault:${userId}`;
+}
+
+// Invalidate a user's cached vault tree after a commit. Route Handlers (the
+// MCP server, /api/capture, /api/worker) can only use revalidateTag, which is
+// stale-while-revalidate — the very next read may still be served the old
+// tree. That is precisely why the MCP read path fetches fresh instead of
+// trusting this: invalidation here keeps the /brain pages honest, it does NOT
+// make a read authoritative. Never throws: a failed invalidation must not undo
+// a successful write, but it is logged rather than swallowed.
+export function revalidateVaultTree(userId: string): void {
+  try {
+    revalidateTag(vaultTag(userId), "max");
+  } catch (error) {
+    console.warn("vault tree revalidation failed", error);
+  }
+}
+
+// Server Actions only (Next 16 restricts updateTag to them): expires the entry
+// immediately so the acting user reads their own write on the next render.
+export function expireVaultTree(userId: string): void {
+  try {
+    updateTag(vaultTag(userId));
+  } catch (error) {
+    console.warn("vault tree expiry failed", error);
+  }
 }
 
 // Public read for pages: connection state without the token column.
@@ -115,14 +141,24 @@ function includedMarkdownPath(path: string): boolean {
 
 type TreeEntry = { path: string; sha: string; type: string };
 
+// `fresh` bypasses the data cache entirely. Needed because the cached path is
+// stale-while-revalidate: past the TTL a read can still be served the old tree
+// while the refresh happens behind it, and on serverless the refreshed entry
+// may not be visible to the next invocation either. Callers that must observe
+// a just-committed write (the MCP tools) cannot tolerate that.
+export type TreeFetchOptions = { fresh?: boolean };
+
 async function fetchTree(
   credentials: VaultCredentials,
   tag: string,
+  { fresh = false }: TreeFetchOptions = {},
 ): Promise<TreeEntry[]> {
   const url = `https://api.github.com/repos/${credentials.repo}/git/trees/${encodeURIComponent(credentials.branch)}?recursive=1`;
   const response = await fetch(url, {
     headers: githubHeaders(credentials.token),
-    next: { revalidate: TREE_REVALIDATE_SECONDS, tags: [tag] },
+    ...(fresh
+      ? { cache: "no-store" as const }
+      : { next: { revalidate: TREE_REVALIDATE_SECONDS, tags: [tag] } }),
   });
   if (response.status === 401 || response.status === 403) {
     throw new VaultConnectionError(
@@ -229,13 +265,19 @@ export const getVaultCorpus = cache(
 );
 
 // Session-less vault reads for the MCP server: list note paths, or fetch one
-// note's raw markdown by path (case-insensitive). Both go through the same
-// tree fetch as getVaultCorpus but skip the full-corpus blob download.
+// note's raw markdown by path (case-insensitive). Both use the same tree fetch
+// as getVaultCorpus but skip the full-corpus blob download.
+//
+// These DEFAULT TO FRESH. They are how an agent checks whether its own write
+// landed, so answering from a cached tree is a correctness bug, not a
+// performance win — staleness is opt-in (see DockMount's badge), never the
+// default. getVaultCorpus keeps the cache: it downloads every blob.
 export async function listVaultNotePaths(
   credentials: VaultCredentials,
   tag: string,
+  { fresh = true }: TreeFetchOptions = {},
 ): Promise<{ path: string; folder: string; title: string }[]> {
-  const entries = await fetchTree(credentials, tag);
+  const entries = await fetchTree(credentials, tag, { fresh });
   return entries.map((entry) => ({
     path: entry.path,
     folder: noteFolder(entry.path),
@@ -247,8 +289,9 @@ export async function readVaultNoteRaw(
   credentials: VaultCredentials,
   tag: string,
   path: string,
+  { fresh = true }: TreeFetchOptions = {},
 ): Promise<{ path: string; markdown: string } | null> {
-  const entries = await fetchTree(credentials, tag);
+  const entries = await fetchTree(credentials, tag, { fresh });
   const lowered = path.toLowerCase();
   const entry =
     entries.find((e) => e.path === path) ??

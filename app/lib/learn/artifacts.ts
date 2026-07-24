@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { readProviderKey } from "@/app/lib/connections/keys";
-import { readVaultCredentials } from "@/app/lib/brain/vault";
+import { expireVaultTree, readVaultCredentials } from "@/app/lib/brain/vault";
 import {
   createVaultFileWithRetry,
   sanitizeCaptureTitle,
@@ -189,6 +189,8 @@ export async function generateArtifactFor(
     `Course artifact: ${course.name} — ${spec.label}`,
   );
   if (!written.ok) return written;
+  // Server Action path: expire immediately so /brain shows the artifact now.
+  expireVaultTree(userId);
   return { ok: true, value: { vault_path: written.value.path } };
 }
 
