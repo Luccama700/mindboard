@@ -26,6 +26,22 @@ export function workerAllowedUserIds(): string[] {
   return [...new Set([ownerUserId(), ...extra])];
 }
 
+// Hosts that Dynamic Client Registration may register a redirect_uri on.
+// Registration is unauthenticated by design (RFC 7591, and claude.ai needs it),
+// so this is the gate that stops an attacker from registering their own host
+// and phishing an authorization code out of a signed-in user. Override with
+// MCP_OAUTH_ALLOWED_REDIRECT_HOSTS (comma-separated); a bare host also matches
+// its subdomains.
+const DEFAULT_OAUTH_REDIRECT_HOSTS = ["claude.ai", "chatgpt.com", "localhost", "127.0.0.1"];
+
+export function oauthAllowedRedirectHosts(): string[] {
+  const configured = (process.env.MCP_OAUTH_ALLOWED_REDIRECT_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter(Boolean);
+  return configured.length > 0 ? configured : DEFAULT_OAUTH_REDIRECT_HOSTS;
+}
+
 // User-local date key (YYYY-MM-DD). The process clock is UTC on Vercel, so the
 // user's stored timezone (user_settings.timezone) is resolved and the date is
 // computed in that zone — matching the app's todayISO(timeZone) convention (so

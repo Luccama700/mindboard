@@ -1785,8 +1785,12 @@ function QuantityField({
     setDraft(String(value));
   }
 
+  // An emptied field means "I'm retyping", never "set this to zero" — Number("")
+  // is 0, so without the blank guard clearing the box and tapping away silently
+  // zeroes the item's real stock.
   function commit(raw: string) {
-    const n = Number(raw);
+    const trimmed = raw.trim();
+    const n = trimmed === "" ? NaN : Number(trimmed);
     if (!Number.isFinite(n) || n < 0) {
       setDraft(String(value));
       return;
@@ -1797,7 +1801,9 @@ function QuantityField({
   }
 
   function step(delta: number) {
-    const base = Number.isFinite(Number(draft)) ? Number(draft) : value;
+    const trimmed = draft.trim();
+    const parsed = trimmed === "" ? NaN : Number(trimmed);
+    const base = Number.isFinite(parsed) ? parsed : value;
     const next = Math.max(0, Math.round((base + delta) * 1000) / 1000);
     onCommit(next);
   }
@@ -1808,7 +1814,7 @@ function QuantityField({
         type="button"
         onClick={() => step(-1)}
         aria-label="decrease quantity"
-        className="min-h-11 w-11 rounded-l-full border border-line-strong text-fg text-lg leading-none hover:border-fg hover:bg-card-hover transition-colors"
+        className="min-h-11 w-11 rounded-l-full border border-line-strong text-fg text-lg leading-none hover:border-fg hover:bg-card-hover transition-colors press"
       >
         −
       </button>
@@ -1833,7 +1839,7 @@ function QuantityField({
         type="button"
         onClick={() => step(1)}
         aria-label="increase quantity"
-        className="min-h-11 w-11 rounded-r-full border border-line-strong text-fg text-lg leading-none hover:border-fg hover:bg-card-hover transition-colors"
+        className="min-h-11 w-11 rounded-r-full border border-line-strong text-fg text-lg leading-none hover:border-fg hover:bg-card-hover transition-colors press"
       >
         +
       </button>

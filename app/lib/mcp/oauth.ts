@@ -10,6 +10,7 @@ const RESOURCE_PATH = "/api/mcp/mcp";
 const SCOPE = "mcp";
 
 const CODE_TTL = 60; // seconds — auth code is short-lived
+const CONSENT_TTL = 300; // 5 minutes — how long a rendered consent form stays valid
 const ACCESS_TTL = 60 * 60; // 1 hour
 const REFRESH_TTL = 60 * 60 * 24 * 30; // 30 days
 const CLIENT_TTL = 60 * 60 * 24 * 365; // 1 year
@@ -77,17 +78,94 @@ export function verifyPkceS256(verifier: string, challenge: string): boolean {
 
 // ---------- client_id (dynamic client registration) ----------
 
-export function issueClientId(redirectUris: string[]): string {
-  return signToken({ typ: "client", redirect_uris: redirectUris, exp: nowSec() + CLIENT_TTL });
+export function issueClientId(redirectUris: string[], clientName?: string): string {
+  return signToken({
+    typ: "client",
+    redirect_uris: redirectUris,
+    ...(clientName ? { name: clientName } : {}),
+    exp: nowSec() + CLIENT_TTL,
+  });
 }
 
-export function parseClientId(clientId: string): { redirectUris: string[] } | null {
-  const p = verifyToken<{ redirect_uris?: string[] }>(clientId, "client");
-  return p ? { redirectUris: p.redirect_uris ?? [] } : null;
+export function parseClientId(
+  clientId: string,
+): { redirectUris: string[]; clientName?: string } | null {
+  const p = verifyToken<{ redirect_uris?: string[]; name?: string }>(clientId, "client");
+  if (!p) return null;
+  return {
+    redirectUris: p.redirect_uris ?? [],
+    ...(typeof p.name === "string" ? { clientName: p.name } : {}),
+  };
 }
 
 export function isAllowedRedirect(redirectUri: string, registered: string[]): boolean {
   return typeof redirectUri === "string" && registered.includes(redirectUri);
+}
+
+// Registration-time host gate. Dynamic Client Registration is unauthenticated,
+// so without this ANY attacker-controlled https host could be registered as a
+// redirect target and then used to phish an authorization code out of a
+// signed-in user. Match is exact host or a dot-suffixed parent domain — never a
+// substring, which "evil-claude.ai.attacker.com" would satisfy.
+export function isAllowedRedirectHost(redirectUri: string, allowedHosts: string[]): boolean {
+  let host: string;
+  try {
+    host = new URL(redirectUri).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return allowedHosts.some((raw) => {
+    const allowed = raw.trim().toLowerCase().replace(/^\./, "");
+    if (!allowed) return false;
+    return host === allowed || host.endsWith(`.${allowed}`);
+  });
+}
+
+// ---------- consent ticket ----------
+
+// Proves that the consent form the user is submitting is the one WE rendered
+// for THIS session and THIS client. Without it, /authorize issuing a code on a
+// bare GET is a CSRF: an <img> or iframe pointing at the endpoint would hand an
+// attacker-registered client a full-scope code for whoever is signed in.
+
+export function issueConsentTicket(input: {
+  ownerId: string;
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+}): string {
+  return signToken({
+    typ: "consent",
+    sub: input.ownerId,
+    client_id: input.clientId,
+    redirect_uri: input.redirectUri,
+    cc: input.codeChallenge,
+    exp: nowSec() + CONSENT_TTL,
+  });
+}
+
+export function verifyConsentTicket(
+  ticket: string,
+  expected: {
+    ownerId: string;
+    clientId: string;
+    redirectUri: string;
+    codeChallenge: string;
+  },
+): boolean {
+  const p = verifyToken<{
+    sub: string;
+    client_id: string;
+    redirect_uri: string;
+    cc: string;
+  }>(ticket, "consent");
+  if (!p) return false;
+  return (
+    p.sub === expected.ownerId &&
+    p.client_id === expected.clientId &&
+    p.redirect_uri === expected.redirectUri &&
+    p.cc === expected.codeChallenge
+  );
 }
 
 // ---------- authorization code ----------

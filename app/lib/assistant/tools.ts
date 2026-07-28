@@ -2,7 +2,8 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type Anthropic from "@anthropic-ai/sdk";
 
-import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
+import { safeTimeZone } from "@/app/_components/date-utils";
+import { todayKey } from "@/app/lib/mcp/config";
 import {
   getAccounts,
   getActiveRecurringExpenses,
@@ -708,7 +709,11 @@ export async function runAssistantTool(
   name: string,
   input: Record<string, unknown>,
 ): Promise<ToolOutcome> {
-  const today = todayISO();
+  // Must be the user's local date, not the process clock (UTC on Vercel) —
+  // otherwise every evening west of UTC the assistant reports tomorrow: today's
+  // tasks read as overdue, today's spend reads as $0, and spend limits check an
+  // empty window. Same resolution the MCP twin uses, so both agree with /.
+  const today = await todayKey(supabase, userId);
   const now = new Date();
 
   try {
@@ -1043,12 +1048,12 @@ export async function runAssistantTool(
         const entries = buildShoppingList({
           items: (itemsRes.data ?? []) as ShoppingListItem[],
           rulesByItem,
-          today: todayISO(),
+          today,
         });
         return {
           type: "result",
           content: {
-            today: todayISO(),
+            today,
             store: (settingsRes.data?.shopping_store as string | null) ?? null,
             shoppingDay:
               typeof settingsRes.data?.shopping_day === "number"

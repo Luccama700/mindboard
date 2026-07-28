@@ -3,11 +3,14 @@ import { beforeAll, describe, expect, test } from "vitest";
 import {
   authorizationServerMetadata,
   isAllowedRedirect,
+  isAllowedRedirectHost,
   issueAccessToken,
   issueClientId,
   issueCode,
+  issueConsentTicket,
   issueRefreshToken,
   parseClientId,
+  verifyConsentTicket,
   protectedResourceMetadata,
   signToken,
   verifyAccessToken,
@@ -116,6 +119,66 @@ describe("client_id + redirect allow-list", () => {
     expect(isAllowedRedirect("https://claude.ai/cb", uris)).toBe(true);
     expect(isAllowedRedirect("https://claude.ai/evil", uris)).toBe(false);
     expect(isAllowedRedirect("https://evil.com/cb", uris)).toBe(false);
+  });
+
+  test("carries an optional client_name for the consent screen", () => {
+    expect(parseClientId(issueClientId(["https://claude.ai/cb"], "Claude"))?.clientName).toBe(
+      "Claude",
+    );
+    expect(parseClientId(issueClientId(["https://claude.ai/cb"]))?.clientName).toBeUndefined();
+  });
+});
+
+// Registration is unauthenticated, so this host gate is what stops an attacker
+// registering their own redirect target and phishing a code out of a signed-in
+// user.
+describe("registration host allow-list", () => {
+  const hosts = ["claude.ai", "chatgpt.com", "localhost"];
+
+  test("accepts allowed hosts and their subdomains", () => {
+    expect(isAllowedRedirectHost("https://claude.ai/cb", hosts)).toBe(true);
+    expect(isAllowedRedirectHost("https://api.claude.ai/cb", hosts)).toBe(true);
+    expect(isAllowedRedirectHost("http://localhost:3000/cb", hosts)).toBe(true);
+  });
+
+  test("rejects look-alike and unrelated hosts", () => {
+    expect(isAllowedRedirectHost("https://evil.example/cb", hosts)).toBe(false);
+    // substring matching would wrongly accept these
+    expect(isAllowedRedirectHost("https://claude.ai.evil.com/cb", hosts)).toBe(false);
+    expect(isAllowedRedirectHost("https://evilclaude.ai/cb", hosts)).toBe(false);
+    expect(isAllowedRedirectHost("https://notclaude.ai/cb", hosts)).toBe(false);
+    expect(isAllowedRedirectHost("not-a-url", hosts)).toBe(false);
+    expect(isAllowedRedirectHost("https://claude.ai/cb", [])).toBe(false);
+  });
+});
+
+describe("consent ticket", () => {
+  const grant = {
+    ownerId: "user-1",
+    clientId: "client-1",
+    redirectUri: "https://claude.ai/cb",
+    codeChallenge: "chal",
+  };
+
+  test("round-trips for the exact grant it was issued for", () => {
+    expect(verifyConsentTicket(issueConsentTicket(grant), grant)).toBe(true);
+  });
+
+  test("rejects a ticket bound to a different user (the CSRF case)", () => {
+    const ticket = issueConsentTicket(grant);
+    expect(verifyConsentTicket(ticket, { ...grant, ownerId: "victim" })).toBe(false);
+  });
+
+  test("rejects tampered client, redirect, or PKCE challenge", () => {
+    const ticket = issueConsentTicket(grant);
+    expect(verifyConsentTicket(ticket, { ...grant, clientId: "other" })).toBe(false);
+    expect(verifyConsentTicket(ticket, { ...grant, redirectUri: "https://evil/cb" })).toBe(false);
+    expect(verifyConsentTicket(ticket, { ...grant, codeChallenge: "other" })).toBe(false);
+  });
+
+  test("rejects garbage and cross-type tokens", () => {
+    expect(verifyConsentTicket("garbage", grant)).toBe(false);
+    expect(verifyConsentTicket(issueCode(grant), grant)).toBe(false);
   });
 });
 

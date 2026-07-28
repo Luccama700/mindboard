@@ -7,7 +7,7 @@ import {
   ASSISTANT_TOOLS,
   runAssistantTool,
 } from "@/app/lib/assistant/tools";
-import { todayISO } from "@/app/_components/date-utils";
+import { todayKey } from "@/app/lib/mcp/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -116,8 +116,11 @@ export async function POST(request: Request) {
     content: message,
   });
 
-  // Live planning fuel: goals + the last week of daily logs.
-  const [goalsResult, logsResult] = await Promise.all([
+  // Live planning fuel: goals + the last week of daily logs. `today` resolves
+  // in the user's zone — the process clock is UTC on Vercel, so a bare
+  // todayISO() would tell the model tomorrow's date all evening.
+  const [todayLocal, goalsResult, logsResult] = await Promise.all([
+    todayKey(supabase, user.id),
     supabase
       .from("goals")
       .select("title, why, horizon, status, target_date")
@@ -128,7 +131,7 @@ export async function POST(request: Request) {
       .order("log_date", { ascending: false })
       .limit(7),
   ]);
-  const context = `today: ${todayISO()}
+  const context = `today: ${todayLocal}
 active goals: ${JSON.stringify(goalsResult.data ?? [])}
 last check-ins (mood/energy 1-5): ${JSON.stringify(logsResult.data ?? [])}`;
 

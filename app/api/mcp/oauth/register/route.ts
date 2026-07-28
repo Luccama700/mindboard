@@ -1,4 +1,5 @@
-import { issueClientId } from "@/app/lib/mcp/oauth";
+import { isAllowedRedirectHost, issueClientId } from "@/app/lib/mcp/oauth";
+import { oauthAllowedRedirectHosts } from "@/app/lib/mcp/config";
 
 // Dynamic Client Registration (RFC 7591). MCP clients (claude.ai) self-register
 // here. We issue a stateless client_id (a signed token embedding the client's
@@ -30,6 +31,7 @@ export async function POST(request: Request): Promise<Response> {
   if (redirectUris.length === 0) {
     return json({ error: "invalid_redirect_uri", error_description: "redirect_uris is required" }, 400);
   }
+  const allowedHosts = oauthAllowedRedirectHosts();
   for (const uri of redirectUris) {
     let u: URL;
     try {
@@ -41,12 +43,21 @@ export async function POST(request: Request): Promise<Response> {
     if (u.protocol !== "https:" && !local) {
       return json({ error: "invalid_redirect_uri", error_description: `must be https: ${uri}` }, 400);
     }
+    // This endpoint is unauthenticated, so an unrestricted redirect_uri would
+    // let anyone register their own host and then phish a full-scope code out
+    // of a signed-in user via /authorize.
+    if (!isAllowedRedirectHost(uri, allowedHosts)) {
+      return json(
+        { error: "invalid_redirect_uri", error_description: `host not allowed: ${u.hostname}` },
+        400,
+      );
+    }
   }
 
   const clientName = typeof body.client_name === "string" ? body.client_name : undefined;
   return json(
     {
-      client_id: issueClientId(redirectUris),
+      client_id: issueClientId(redirectUris, clientName),
       redirect_uris: redirectUris,
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],

@@ -295,6 +295,22 @@ body::before {
     background: color-mix(in srgb, var(--bg-card) 55%, transparent);
   }
 
+  /* Expands a control's TOUCH target to the 44px floor without changing its
+     drawn size — for small round affordances (colour swatches) where growing
+     the visual would wreck the palette's density. */
+  .tap-44 {
+    position: relative;
+  }
+  .tap-44::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+
   /* Tactile press: a quiet scale-in on tap (mirrors the dock submit button). */
   .press {
     transition: transform var(--dur-micro) var(--ease-signal);
@@ -585,12 +601,19 @@ body::before {
   animation: focus-pop 600ms var(--ease-glass) 200ms backwards;
 }
 
+/* Delays must be zeroed too, not just durations. The staggered entrances
+   (.stream-rise, .bar-grow, .focus-pop) carry an inline animationDelay and use
+   fill-mode backwards, which holds the from-state — opacity 0 / scaleX(0) —
+   for the whole delay. Zeroing only the duration would leave that content
+   invisible for up to 350ms for exactly the users who asked for less motion. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
   }
 }

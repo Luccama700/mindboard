@@ -93,10 +93,15 @@ function daysInMonthOf(date: Date): number {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
 }
 
+// Clamps to the last day of the destination month rather than overflowing into
+// the next one. Bare setMonth() rolls Jan 31 + 1 month over to Mar 3, which
+// walks a month-end payday forward a few days every cycle.
 function addMonthsKey(key: string, count: number): string {
   const date = parseKey(key);
-  date.setMonth(date.getMonth() + count);
-  return keyOf(date);
+  const day = date.getDate();
+  const target = new Date(date.getFullYear(), date.getMonth() + count, 1);
+  target.setDate(Math.min(day, daysInMonthOf(target)));
+  return keyOf(target);
 }
 
 function daysBetween(aKey: string, bKey: string): number {

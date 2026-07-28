@@ -62,7 +62,7 @@ export function ColorPicker({
               type="button"
               onClick={() => onChange(c)}
               aria-label={`pick color ${c}`}
-              className={`w-9 h-9 rounded-full transition-transform ${
+              className={`w-9 h-9 rounded-full transition-transform tap-44 press ${
                 selected
                   ? "ring-2 ring-fg ring-offset-2 ring-offset-card scale-110"
                   : ""
@@ -76,7 +76,7 @@ export function ColorPicker({
           type="button"
           onClick={openCustom}
           aria-label="pick custom color"
-          className={`relative w-9 h-9 rounded-full transition-transform overflow-hidden ${
+          className={`relative w-9 h-9 rounded-full transition-transform tap-44 press overflow-hidden ${
             customActive
               ? "ring-2 ring-fg ring-offset-2 ring-offset-card scale-110"
               : ""
