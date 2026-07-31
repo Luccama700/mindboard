@@ -33,13 +33,13 @@ type Recorded = {
   order: string[];
   insert: Record<string, unknown> | null;
   taskUpdate: Record<string, unknown> | null;
-  deleted: string[];
 };
 
-// One router for the two tables the action touches, recording the call order so
-// the guards run before the insert and any rollback after the failure that
-// caused it. user_settings is here only to prove the action never writes it:
-// stamping agent_run_requested_at would drag a full nightly sweep along.
+// One router for the two tables the action touches, recording the call order:
+// the guards run before either write, and the note lands before the queue row
+// so a half-done dispatch never needs undoing. user_settings has no branch on
+// purpose — writing it would throw, proving the action never stamps it (that
+// would drag a full nightly sweep along behind every dispatch).
 function mockTables(
   over: {
     task?: { data: unknown; error: unknown };
@@ -52,7 +52,6 @@ function mockTables(
     order: [],
     insert: null,
     taskUpdate: null,
-    deleted: [],
   };
 
   mocks.from.mockImplementation((table: string) => {
@@ -101,13 +100,6 @@ function mockTables(
               );
             }),
           })),
-        })),
-        delete: vi.fn(() => ({
-          eq: vi.fn(async (_col: string, id: string) => {
-            rec.order.push("dispatch:delete");
-            rec.deleted.push(id);
-            return { error: null };
-          }),
         })),
       };
     }
@@ -180,11 +172,13 @@ describe("requestTaskDispatch", () => {
     // user_settings is never touched: the poll drains this queue on its own,
     // and agent_run_requested_at would also kick off a full nightly sweep.
     expect(mocks.from).not.toHaveBeenCalledWith("user_settings");
+    // The note is committed BEFORE the queue row exists, so nothing ever
+    // needs rolling back.
     expect(rec.order).toEqual([
       "task:load",
       "dispatch:open-check",
-      "dispatch:insert",
       "task:update",
+      "dispatch:insert",
     ]);
     expect(rec.insert).toEqual({
       user_id: "user-1",
@@ -192,32 +186,44 @@ describe("requestTaskDispatch", () => {
       note: "book the room",
       status: "requested",
     });
-    // No ai_state: 'approved' is the nightly sweep's queue, not this one.
+    // ai_state null, never 'approved': that is the nightly sweep's queue, and
+    // clearing it drops a stale ✦ done/✦ failed badge from the card.
     expect(rec.taskUpdate).toEqual({
       notes:
         "old notes\n\n---\n\n## Operator note (2026-07-31)\n\nbook the room",
+      ai_state: null,
     });
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
-  test("stops when the dispatch row cannot be created", async () => {
+  // A failed insert leaves only the note section behind — no queue row, no
+  // ai_state, and nothing that makes the button refuse the next attempt.
+  test("a failed insert errors without locking the task out", async () => {
     const rec = mockTables({
       dispatch: { data: null, error: { message: "relation missing" } },
     });
     await expect(
       requestTaskDispatch({ taskId: "task-1", note: "do it" }),
     ).resolves.toEqual({ error: "could not create dispatch" });
-    expect(rec.taskUpdate).toBeNull();
+    expect(rec.taskUpdate).not.toBeNull();
+    expect(rec.taskUpdate?.ai_state).toBeNull();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
+
+    // Same task, second try: the open-check sees no row, so it goes through.
+    const retry = mockTables();
+    await expect(
+      requestTaskDispatch({ taskId: "task-1", note: "do it" }),
+    ).resolves.toEqual({ error: null, dispatchId: "dispatch-1" });
+    expect(retry.insert).not.toBeNull();
   });
 
-  test("a failed task update takes the orphaned dispatch back out", async () => {
+  test("a failed task update never reaches the queue", async () => {
     const rec = mockTables({ taskUpdateError: { message: "nope" } });
     await expect(
       requestTaskDispatch({ taskId: "task-1", note: "do it" }),
     ).resolves.toEqual({ error: "could not update task" });
-    expect(rec.deleted).toEqual(["dispatch-1"]);
-    expect(rec.order[rec.order.length - 1]).toBe("dispatch:delete");
+    expect(rec.insert).toBeNull();
+    expect(rec.order).toEqual(["task:load", "dispatch:open-check", "task:update"]);
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
@@ -240,6 +246,8 @@ describe("requestTaskDispatch", () => {
     expect(rec.taskUpdate).toBeNull();
   });
 
+  // Losing the double-tap race leaves the note behind (the in-flight dispatch
+  // will answer it) but never a second queue row.
   test("a unique-violation on insert reads as already dispatched", async () => {
     const rec = mockTables({
       dispatch: { data: null, error: { code: "23505", message: "duplicate" } },
@@ -247,7 +255,7 @@ describe("requestTaskDispatch", () => {
     await expect(
       requestTaskDispatch({ taskId: "task-1", note: "do it" }),
     ).resolves.toEqual({ error: "already dispatched" });
-    expect(rec.taskUpdate).toBeNull();
-    expect(rec.deleted).toEqual([]);
+    expect(rec.insert).not.toBeNull();
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 });

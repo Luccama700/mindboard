@@ -26,6 +26,10 @@ create policy "task_dispatches_insert_own" on public.task_dispatches
 create policy "task_dispatches_update_own" on public.task_dispatches
   for update using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+-- Nothing deletes dispatches today; the policy exists so a future "cancel"
+-- can, and so a session client can never reach past its own rows if it does.
+create policy "task_dispatches_delete_own" on public.task_dispatches
+  for delete using (auth.uid() = user_id);
 
 create index task_dispatches_pending_idx
   on public.task_dispatches (user_id, status, created_at);
