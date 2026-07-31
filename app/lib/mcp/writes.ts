@@ -35,6 +35,11 @@ import {
 } from "./finance-admin-ops";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { executeGenerateAudioOverview } from "@/app/lib/learn/episodes";
+import {
+  DISPATCH_COLUMNS,
+  type DispatchStatus,
+  type TaskDispatch,
+} from "@/app/lib/dispatch/types";
 import { changeFingerprint } from "@/app/lib/finance/derive";
 import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 import { formatRecurrence } from "@/app/lib/recurrence";
@@ -2835,6 +2840,158 @@ export async function claimAgentRun(
     .select("user_id");
   if (error) return { ok: false, error: error.message };
   return { ok: true, value: { requested: (data ?? []).length > 0 } };
+}
+
+// ---------- task dispatches ("do this now") ----------
+
+// A claim goes stale after an hour: the PC may have slept or crashed mid-run,
+// and the row must become claimable again rather than wedging the queue
+// (spec: docs/superpowers/specs/2026-07-31-task-dispatch-design.md).
+const DISPATCH_STALE_MS = 60 * 60 * 1000;
+
+type DispatchCandidate = {
+  id: string;
+  status: DispatchStatus;
+  claimed_at: string | null;
+  created_at: string;
+};
+
+// Oldest claimable row for this user: a fresh 'requested' one, or a
+// 'claimed'/'running' one whose claim has gone stale. Two narrow queries
+// instead of one OR-filter so both ride task_dispatches_pending_idx and the
+// eligibility rule stays readable; the older of the two wins.
+async function pickDispatchCandidate(
+  supabase: SupabaseClient,
+  userId: string,
+  taskId: string | null,
+): Promise<Result<DispatchCandidate | null>> {
+  const staleBefore = new Date(Date.now() - DISPATCH_STALE_MS).toISOString();
+  const base = () => {
+    const q = supabase
+      .from("task_dispatches")
+      .select("id, status, claimed_at, created_at")
+      .eq("user_id", userId);
+    return taskId ? q.eq("task_id", taskId) : q;
+  };
+
+  const [requested, stale] = await Promise.all([
+    base()
+      .eq("status", "requested")
+      .order("created_at", { ascending: true })
+      .limit(1),
+    base()
+      .in("status", ["claimed", "running"])
+      .lt("claimed_at", staleBefore)
+      .order("created_at", { ascending: true })
+      .limit(1),
+  ]);
+  if (requested.error) return { ok: false, error: requested.error.message };
+  if (stale.error) return { ok: false, error: stale.error.message };
+
+  const rows = [
+    ...((requested.data ?? []) as DispatchCandidate[]),
+    ...((stale.data ?? []) as DispatchCandidate[]),
+  ].sort((a, b) => a.created_at.localeCompare(b.created_at));
+  return { ok: true, value: rows[0] ?? null };
+}
+
+// Fenced direct write (same class as claim_agent_run): the overnight worker
+// claims one dispatch to execute. No propose→confirm, no audit row — this is
+// operational queue state, and the human-readable trail is the task notes.
+// The UPDATE is guarded on the status + claimed_at we selected, so a
+// concurrent claimer takes the row and we simply look again (once).
+export async function claimTaskDispatch(
+  userId: string,
+  taskId?: unknown,
+): Promise<Result<{ dispatch: (TaskDispatch & { task_title: string }) | null }>> {
+  if (taskId !== undefined && taskId !== null && typeof taskId !== "string") {
+    return { ok: false, error: "taskId must be a string" };
+  }
+  const filterTask = typeof taskId === "string" && taskId.trim() ? taskId.trim() : null;
+  const supabase = createServiceClient();
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const candidate = await pickDispatchCandidate(supabase, userId, filterTask);
+    if (!candidate.ok) return candidate;
+    if (!candidate.value) return { ok: true, value: { dispatch: null } };
+
+    const row = candidate.value;
+    const guarded = supabase
+      .from("task_dispatches")
+      .update({ status: "claimed", claimed_at: new Date().toISOString() })
+      .eq("id", row.id)
+      .eq("user_id", userId)
+      .eq("status", row.status);
+    const { data, error } =
+      row.claimed_at === null
+        ? await guarded.is("claimed_at", null).select(DISPATCH_COLUMNS)
+        : await guarded.eq("claimed_at", row.claimed_at).select(DISPATCH_COLUMNS);
+    if (error) return { ok: false, error: error.message };
+
+    const claimed = ((data ?? []) as TaskDispatch[])[0];
+    if (!claimed) continue; // lost the race — re-pick
+
+    // The worker's prompt needs the title, and the dispatch row has none.
+    const { data: task } = await supabase
+      .from("tasks")
+      .select("title")
+      .eq("id", claimed.task_id)
+      .eq("user_id", userId)
+      .maybeSingle();
+    return {
+      ok: true,
+      value: {
+        dispatch: {
+          ...claimed,
+          task_title: ((task?.title as string | undefined) ?? "").trim(),
+        },
+      },
+    };
+  }
+  return { ok: true, value: { dispatch: null } };
+}
+
+// Fenced direct write: the worker's progress report on a dispatch it holds.
+// done/failed are terminal and stamp finished_at.
+export async function updateTaskDispatch(
+  userId: string,
+  input: {
+    dispatchId?: unknown;
+    status?: unknown;
+    resultSummary?: unknown;
+  },
+): Promise<Result<{ ok: true }>> {
+  const dispatchId =
+    typeof input?.dispatchId === "string" ? input.dispatchId.trim() : "";
+  if (!dispatchId) return { ok: false, error: "dispatchId is required" };
+
+  const status = input?.status;
+  if (status !== "running" && status !== "done" && status !== "failed") {
+    return { ok: false, error: "status must be running, done, or failed" };
+  }
+  const summary = input?.resultSummary;
+  if (summary !== undefined && summary !== null && typeof summary !== "string") {
+    return { ok: false, error: "resultSummary must be a string" };
+  }
+
+  const patch: Record<string, unknown> = { status };
+  if (typeof summary === "string") patch.result_summary = summary;
+  if (status === "done" || status === "failed") {
+    patch.finished_at = new Date().toISOString();
+  }
+
+  const supabase = createServiceClient();
+  const { data, error } = await supabase
+    .from("task_dispatches")
+    .update(patch)
+    .eq("id", dispatchId)
+    .eq("user_id", userId)
+    .select("id");
+  if (error) return { ok: false, error: error.message };
+  if (((data ?? []) as unknown[]).length === 0) {
+    return { ok: false, error: "dispatch not found" };
+  }
+  return { ok: true, value: { ok: true } };
 }
 
 // Best-effort refresh of the web UI's cached pages after an MCP write. Guarded
