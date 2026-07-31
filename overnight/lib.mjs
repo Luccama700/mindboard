@@ -71,6 +71,26 @@ export function pickBuildTasks(tasks, max) {
     .slice(0, max);
 }
 
+// Value of a `--flag value` (or `--flag=value`) argument. Returns null when the
+// flag is absent, trailing, or followed by another flag — callers then treat it
+// as "not given" rather than swallowing the next flag as a value.
+export function argValue(argv, flag) {
+  const args = argv ?? [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = String(args[i]);
+    if (arg.startsWith(`${flag}=`)) {
+      const value = arg.slice(flag.length + 1);
+      return value === "" ? null : value;
+    }
+    if (arg === flag) {
+      const next = args[i + 1];
+      if (next === undefined || String(next).startsWith("--")) return null;
+      return String(next);
+    }
+  }
+  return null;
+}
+
 // Quote a single argument for a Windows cmd.exe command line (spawn shell:true).
 export function quoteArg(arg) {
   const value = String(arg);
@@ -283,6 +303,41 @@ export function parseTriage(text, validIds) {
       typeof v.feasible === "boolean" &&
       (!v.feasible || typeof v.approach === "string"),
   );
+}
+
+// ---------- Track C: dispatched tasks ("do this now") ----------
+
+// The operator picked THIS task and asked for it now, so the executor gets the
+// full Track A profile (shell, files, browser) instead of Track B's web-only
+// one — the guardrails below are what keep that safe, and they are carried
+// verbatim in the prompt (spec:
+// docs/superpowers/specs/2026-07-31-task-dispatch-design.md).
+export function dispatchPrompt(task, note, manifest) {
+  return [
+    `You are the user's home agent, dispatched by them just now to work ONE`,
+    `task at full power: shell, files, and the browser are yours inside your`,
+    `workspace.`,
+    ``,
+    `HARD RULES: never submit, send, sign, purchase, publish, or post anything`,
+    `in the user's name — you prepare, research, build, and draft, and they`,
+    `act on it. No credential handling. Graded coursework submission stays a`,
+    `human action. Code work happens on ai/* branches only, never main.`,
+    ``,
+    `YOUR CAPABILITIES MANIFEST:`,
+    ``,
+    manifest,
+    ``,
+    `TASK: ${task.title}`,
+    task.notes?.trim() ? `THE TASK'S NOTES:\n${clip(task.notes.trim(), 4000)}` : ``,
+    ``,
+    `WHAT THE USER JUST ASKED FOR (this is the brief — it wins over the notes`,
+    `where they disagree):`,
+    clip(String(note ?? "").trim(), 4000),
+    ``,
+    `Do the work now. Your final message is the deliverable itself: plain`,
+    `markdown, concrete results with paths/links/branches where relevant, and`,
+    `a short "suggested next steps for you" list at the end. No preamble.`,
+  ].join("\n");
 }
 
 export function execPrompt(task, approach) {

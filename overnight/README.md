@@ -21,6 +21,13 @@ or on demand — it works the user's board over MCP, two tracks:
   file edits, and a hard draft-never-submit rule. Summary lands in the task
   notes, the full result in the brain vault.
 
+**Track C — dispatched ("do this now"):**
+
+- one task the user picked in the app, with a one-shot note, run **now** at
+  full power (shell + files + browser, the Track A profile) instead of the
+  nightly sweep. The result is written back into the task notes as
+  `## Agent result` and the badge flips to `✦ done` / `✦ failed`.
+
 Approve/dismiss happens on the task row in the app (the `ai build` controls
 in the edit panel) — same button for both tracks. The agent never touches
 `main`, and never submits anything anywhere.
@@ -31,8 +38,37 @@ in the edit panel) — same button for both tracks. The agent never touches
   the `Mindboard Agent Poll` scheduled task (every 5 min,
   `run.mjs --if-requested`) claims it via the `claim_agent_run` MCP tool and
   fires a full run.
+- **`✦ do it` on a task** (the day stream): writes a `task_dispatches` row +
+  an `## Operator note` into the task and stamps the same run request. The
+  next poll claims the dispatch (`claim_task_dispatch`) and runs **that task
+  only**, then exits — no sweep.
 - **From Claude Code**: the `/overnight` skill, or directly, e.g.
   `node overnight\run.mjs --life-only --plan-only` (triage + propose only).
+
+## Targeted runs (`--task`)
+
+```powershell
+node overnight\run.mjs --task <task-uuid>          # claim + run that task's dispatch
+node overnight\run.mjs --dry --task <task-uuid>    # print the prompt + profile, claim nothing
+```
+
+`--task` claims the pending dispatch for that one task
+(`claim_task_dispatch { taskId }`); with none pending it logs and exits 0. The
+id must be a task uuid — anything else exits before touching the network. A
+claim that dies (machine asleep, crash) goes stale after 60 minutes and the
+next poll re-claims it.
+
+### First-run checklist (do this once, before pointing it at anything real)
+
+1. Apply `supabase/migrations/0047_task_dispatches.sql` (agents never apply
+   migrations — this one is yours to run).
+2. Make a sandbox task, e.g. "agent smoke test".
+3. On the day stream, tap `✦ do it` and send the note
+   `write hello.md in the agent workspace`.
+4. Run it in the foreground: `node overnight\run.mjs --task <task-uuid>`.
+5. Check all three: `../mindboard-agent-workspace/hello.md` exists, the task
+   notes carry `## Operator note` + `## Agent result`, and the
+   `task_dispatches` row reads `done` with a `finished_at`.
 
 ## Setup (once)
 
@@ -55,6 +91,8 @@ in the edit panel) — same button for both tracks. The agent never touches
    # OVERNIGHT_MAX_LIFE=3           # life-task executions per run
    # OVERNIGHT_LIFE_BUDGET_USD=5    # per life-task run
    # OVERNIGHT_TRIAGE_MODEL=haiku   # cheap triage model
+   # OVERNIGHT_DISPATCH_BUDGET_USD=10   # per dispatched (✦ do it) run
+   # OVERNIGHT_DISPATCH_TIMEOUT_MIN=45  # hard timeout for one dispatch
    # OVERNIGHT_CLAUDE_BIN=claude    # or a proxy shim, e.g. claudex for gpt-5.6-sol
    # OVERNIGHT_REVIEW=1             # 0 disables the post-push build review
    # OVERNIGHT_REVIEW_MODEL=opus-5
@@ -97,6 +135,12 @@ in the edit panel) — same button for both tracks. The agent never touches
   the `ai_audit_log` (`list_proposals`).
 - Plan runs are read-only (plan mode). Build runs are confined to their
   worktree with a whitelisted tool set; the orchestrator does all git.
+- Dispatched (`✦ do it`) runs get the widest profile — shell, files, browser,
+  inside `../mindboard-agent-workspace` — so their guardrails ride in the
+  prompt verbatim: prepare/research/build/draft only, never send, sign,
+  purchase, publish, or submit in the user's name; no credential handling;
+  graded coursework submission stays a human action; code work on `ai/*`
+  branches, never `main`.
 - Per-run `--max-budget-usd` and `--max-turns`, plus nightly plan/build caps.
 - Kill switch: `Disable-ScheduledTask -TaskName "Mindboard Overnight Agent"`,
   or revoke the PAT in settings (every MCP call dies instantly).

@@ -36,9 +36,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   appendSection,
+  argValue,
   branchNameFor,
   buildPrompt,
   clip,
+  dispatchPrompt,
   execPrompt,
   extractPlan,
   extractSection,
@@ -104,6 +106,9 @@ const CONFIG = {
   lifeBudgetUsd: process.env.OVERNIGHT_LIFE_BUDGET_USD ?? "5",
   lifeTimeoutMs: Number(process.env.OVERNIGHT_LIFE_TIMEOUT_MIN ?? 30) * 60_000,
   triageModel: process.env.OVERNIGHT_TRIAGE_MODEL ?? "haiku",
+  // Track C (dispatched tasks): one task, asked for by hand, full powers.
+  dispatchBudgetUsd: process.env.OVERNIGHT_DISPATCH_BUDGET_USD ?? "10",
+  dispatchTimeoutMs: Number(process.env.OVERNIGHT_DISPATCH_TIMEOUT_MIN ?? 45) * 60_000,
   // Life runs execute OUTSIDE the repo so claude doesn't load Mindboard's
   // project context for an apartment search.
   workspace: process.env.OVERNIGHT_WORKSPACE ?? resolve(REPO, "..", "mindboard-agent-workspace"),
@@ -111,6 +116,7 @@ const CONFIG = {
 
 const FLAGS = new Set(process.argv.slice(2));
 const DRY = FLAGS.has("--dry");
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ---------- logging ----------
 
@@ -257,16 +263,20 @@ async function openTasksFeed() {
 // Always re-fetch right before composing a notes write so we append to the
 // current text, not the copy from run start. Track A tasks live in the code
 // feed; Track B tasks only exist in the full list.
-async function freshNotes(taskId, fallback) {
+async function findTask(taskId) {
   try {
     const feed = await tool("list_code_tasks");
     const found = feed.tasks?.find((t) => t.id === taskId);
-    if (found) return found.notes;
-    const life = (await openTasksFeed()).find((t) => t.id === taskId);
-    return life ? life.notes : fallback;
+    if (found) return found;
+    return (await openTasksFeed()).find((t) => t.id === taskId) ?? null;
   } catch {
-    return fallback;
+    return null;
   }
+}
+
+async function freshNotes(taskId, fallback) {
+  const task = await findTask(taskId);
+  return task ? task.notes : fallback;
 }
 
 // ---------- engines (per-phase models) ----------
@@ -331,7 +341,13 @@ const LOCK_FILE = join(HERE, ".lock");
 // margin: a genuinely crashed holder delays the next takeover by ~the same
 // window — the polls pick it up afterward.
 const LOCK_STALE_MS =
-  Math.max(CONFIG.buildTimeoutMs, CONFIG.planTimeoutMs, CONFIG.lifeTimeoutMs, 20 * 60_000) +
+  Math.max(
+    CONFIG.buildTimeoutMs,
+    CONFIG.planTimeoutMs,
+    CONFIG.lifeTimeoutMs,
+    CONFIG.dispatchTimeoutMs,
+    20 * 60_000,
+  ) +
   15 * 60_000;
 const LOCK_OPTS = {
   lockfilePath: LOCK_FILE,
@@ -729,6 +745,105 @@ async function execPhase(allTasks, codeGroupId) {
   return outcomes;
 }
 
+// ---------- Track C: dispatched tasks ("do this now") ----------
+
+// The operator picked one task in the app and asked for it now, so this runs
+// the Track A profile (shell, files, browser) against a single task instead of
+// sweeping the board — the guardrails ride in the prompt. Deliberately not
+// wrapped in a try/catch: an unexpected throw leaves the row 'running', and
+// claim_task_dispatch reclaims it after 60 minutes.
+async function dispatchPhase(dispatch) {
+  log(`dispatch ${dispatch.id} → task ${dispatch.task_id}`);
+  await tool("update_task_dispatch", { dispatchId: dispatch.id, status: "running" });
+
+  const notes = await freshNotes(dispatch.task_id, "");
+  const task = {
+    id: dispatch.task_id,
+    title: dispatch.task_title || dispatch.task_id,
+    notes,
+  };
+  const manifest = readFileSync(join(HERE, "capabilities.md"), "utf8");
+  mkdirSync(CONFIG.workspace, { recursive: true });
+
+  const result = runClaude({
+    prompt: dispatchPrompt(task, dispatch.note, manifest),
+    cwd: CONFIG.workspace,
+    permissionMode: "acceptEdits",
+    engine: ENGINES.build,
+    budgetUsd: CONFIG.dispatchBudgetUsd,
+    maxTurns: 120,
+    timeoutMs: CONFIG.dispatchTimeoutMs,
+  });
+
+  // The deliverable is never lost: a local copy lands next to the logs before
+  // any network write is attempted (same rule as the life-task executor).
+  if (!DRY && result.ok) {
+    writeFileSync(join(logDir, `dispatch-${dispatch.id}-${today}.md`), result.text);
+  }
+
+  if (result.ok) {
+    await updateTask(dispatch.task_id, {
+      notes: appendSection(
+        await freshNotes(dispatch.task_id, notes),
+        `Agent result — ${today}`,
+        clip(result.text, 6000),
+      ),
+      aiState: "built",
+    });
+    await tool("update_task_dispatch", {
+      dispatchId: dispatch.id,
+      status: "done",
+      resultSummary: clip(result.text, 1000),
+    });
+    log(`  dispatch done (cost $${result.costUsd?.toFixed?.(2) ?? "?"})`);
+  } else {
+    log(`  dispatch FAILED: ${clip(result.text, 400)}`);
+    await updateTask(dispatch.task_id, {
+      notes: appendSection(
+        await freshNotes(dispatch.task_id, notes),
+        `Agent result — failed — ${today}`,
+        clip(result.text || "run failed; see overnight/logs", 2000),
+      ),
+      aiState: "failed",
+    });
+    await tool("update_task_dispatch", {
+      dispatchId: dispatch.id,
+      status: "failed",
+      resultSummary: clip(result.text || "failed", 1000),
+    });
+  }
+}
+
+// `--task <uuid>`: watch-it-work runs from the shell. `--dry` composes and
+// prints the prompt + permission profile without claiming anything (the
+// spec's dry-run integration check).
+async function dispatchDirect(taskId) {
+  if (DRY) {
+    const task = await findTask(taskId);
+    const manifest = readFileSync(join(HERE, "capabilities.md"), "utf8");
+    log(
+      `dry --task: profile permissionMode=acceptEdits engine=${ENGINES.build.id} ` +
+        `budget=$${CONFIG.dispatchBudgetUsd} timeout=${Math.round(CONFIG.dispatchTimeoutMs / 60_000)}min ` +
+        `cwd=${CONFIG.workspace} (nothing claimed)`,
+    );
+    console.log(
+      dispatchPrompt(
+        { id: taskId, title: task?.title ?? taskId, notes: task?.notes ?? null },
+        "(dry run — the real operator note comes from the claimed dispatch)",
+        manifest,
+      ),
+    );
+    return;
+  }
+
+  const claim = await tool("claim_task_dispatch", { taskId });
+  if (!claim.dispatch) {
+    log("no pending dispatch for that task — nothing to do");
+    return;
+  }
+  await dispatchPhase(claim.dispatch);
+}
+
 async function nightReport(planned, built, lifeProposed = [], lifeDone = []) {
   if (
     planned.length === 0 &&
@@ -764,6 +879,14 @@ async function nightReport(planned, built, lifeProposed = [], lifeDone = []) {
 async function main() {
   if (!CONFIG.url || !CONFIG.pat) {
     throw new Error("MINDBOARD_URL and MINDBOARD_PAT are required (overnight/.env)");
+  }
+
+  // Targeted dispatch (Track C). The id is a uuid from the app, never free
+  // text — validated here because it is the one argv value a human types.
+  const directTaskId = argValue(process.argv.slice(2), "--task");
+  if (directTaskId !== null && !UUID_RE.test(directTaskId)) {
+    log("--task expects a task uuid — exiting");
+    return;
   }
   // Lock BEFORE claiming: if another run is live, a pending "run now"
   // request must survive untouched for the next poll to pick up. Polls give
@@ -811,6 +934,20 @@ async function main() {
       `review=${CONFIG.reviewEnabled ? `${ENGINES.review.id}@${CONFIG.reviewEffort}` : "off"}, ` +
       `effort=${CONFIG.effort}`,
   );
+
+  // Track C runs instead of the sweep, and only after the engines resolve —
+  // the dispatched executor rides the build engine.
+  if (directTaskId) {
+    await dispatchDirect(directTaskId);
+    return;
+  }
+  if (isPoll) {
+    const claim = await tool("claim_task_dispatch", {});
+    if (claim.dispatch) {
+      await dispatchPhase(claim.dispatch);
+      return;
+    }
+  }
 
   const doCode = !FLAGS.has("--life-only");
   const doLife = !FLAGS.has("--code-only");

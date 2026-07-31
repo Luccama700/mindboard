@@ -3,8 +3,10 @@ import { describe, expect, test } from "vitest";
 import {
   MODEL_CHOICES,
   appendSection,
+  argValue,
   branchNameFor,
   clip,
+  dispatchPrompt,
   execPrompt,
   extractPlan,
   extractSection,
@@ -308,6 +310,63 @@ describe("resolveModel", () => {
     expect(Object.keys(MODEL_CHOICES).sort()).toEqual(
       ["fable-5", "gpt-5.6-sol", "opus-4.8", "opus-5"].sort(),
     );
+  });
+});
+
+describe("argValue", () => {
+  test("reads the value that follows a flag", () => {
+    expect(argValue(["--task", "3f1c"], "--task")).toBe("3f1c");
+    expect(argValue(["--dry", "--task", "3f1c"], "--task")).toBe("3f1c");
+  });
+
+  test("reads the --flag=value form", () => {
+    expect(argValue(["--task=3f1c"], "--task")).toBe("3f1c");
+  });
+
+  test("null when absent, trailing, or followed by another flag", () => {
+    expect(argValue(["--dry"], "--task")).toBeNull();
+    expect(argValue(["--task"], "--task")).toBeNull();
+    expect(argValue(["--task", "--dry"], "--task")).toBeNull();
+    expect(argValue([], "--task")).toBeNull();
+  });
+});
+
+describe("dispatchPrompt (Track C)", () => {
+  const TASK = {
+    id: "t1",
+    title: "book the practice room",
+    notes: "prefer mornings",
+  };
+
+  test("carries the task, the operator note, the manifest, and the guardrails", () => {
+    const prompt = dispatchPrompt(
+      TASK,
+      "check the booking site and hold 9am",
+      "MANIFEST BODY",
+    );
+    expect(prompt).toContain("book the practice room");
+    expect(prompt).toContain("prefer mornings");
+    expect(prompt).toContain("check the booking site and hold 9am");
+    expect(prompt).toContain("MANIFEST BODY");
+    // the verbatim guardrail block
+    expect(prompt).toContain("never submit");
+    expect(prompt).toContain("No credential handling");
+    expect(prompt).toContain("Graded coursework");
+    expect(prompt).toContain("ai/*");
+    expect(prompt).toContain("never main");
+  });
+
+  test("survives a task with no notes and clips a huge one", () => {
+    const bare = dispatchPrompt({ id: "t1", title: "x", notes: null }, "go", "M");
+    expect(bare).toContain("TASK: x");
+    expect(bare).not.toContain("THE TASK'S NOTES");
+
+    const big = dispatchPrompt(
+      { ...TASK, notes: "n".repeat(20000) },
+      "go",
+      "M",
+    );
+    expect(big).toContain("[truncated]");
   });
 });
 
