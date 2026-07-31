@@ -109,6 +109,7 @@ function dispatch(over: Partial<Row> = {}): Row {
     task_id: "task-1",
     note: "do the thing",
     status: "requested",
+    attempts: 0,
     result_summary: null,
     created_at: "2026-07-31T09:00:00.000Z",
     claimed_at: null,
@@ -117,7 +118,17 @@ function dispatch(over: Partial<Row> = {}): Row {
   };
 }
 
-function install(dispatches: Row[], tasks: Row[] = [{ id: "task-1", user_id: "user-1", title: "Book the room" }]): Db {
+function install(
+  dispatches: Row[],
+  tasks: Row[] = [
+    {
+      id: "task-1",
+      user_id: "user-1",
+      title: "Book the room",
+      notes: "prefer mornings",
+    },
+  ],
+): Db {
   const db = makeDb({ task_dispatches: dispatches, tasks });
   mocks.createServiceClient.mockReturnValue(db);
   return db;
@@ -151,9 +162,76 @@ describe("claimTaskDispatch", () => {
     expect(result.value.dispatch?.status).toBe("claimed");
     expect(result.value.dispatch?.claimed_at).toBe(NOW.toISOString());
     expect(result.value.dispatch?.task_title).toBe("Book the room");
+    // the write-back fallback travels with the claim
+    expect(result.value.dispatch?.task_notes).toBe("prefer mornings");
+    expect(result.value.dispatch?.attempts).toBe(1);
     expect(db.tables.task_dispatches.find((r) => r.id === "new")?.status).toBe(
       "requested",
     );
+  });
+
+  test("a fresh request wins over an older stale reclaim", async () => {
+    install([
+      dispatch({
+        id: "sick",
+        status: "running",
+        claimed_at: STALE,
+        attempts: 1,
+        created_at: "2026-07-31T06:00:00.000Z",
+      }),
+      dispatch({ id: "fresh", created_at: "2026-07-31T11:00:00.000Z" }),
+    ]);
+
+    const result = await claimTaskDispatch("user-1");
+    expect(result.ok && result.value.dispatch?.id).toBe("fresh");
+  });
+
+  test("a row past the attempts cap is retired, not claimed", async () => {
+    const db = install([
+      dispatch({ id: "poison", status: "running", claimed_at: STALE, attempts: 3 }),
+    ]);
+
+    await expect(claimTaskDispatch("user-1")).resolves.toEqual({
+      ok: true,
+      value: { dispatch: null },
+    });
+    const row = db.tables.task_dispatches[0];
+    expect(row.status).toBe("failed");
+    expect(row.result_summary).toBe("gave up after 3 attempts");
+    expect(row.finished_at).toBe(NOW.toISOString());
+  });
+
+  test("retiring an exhausted row does not block the next healthy one", async () => {
+    const db = install([
+      dispatch({
+        id: "poison",
+        status: "running",
+        claimed_at: STALE,
+        attempts: 3,
+        created_at: "2026-07-31T06:00:00.000Z",
+      }),
+      dispatch({ id: "healthy", created_at: "2026-07-31T10:00:00.000Z" }),
+    ]);
+
+    const result = await claimTaskDispatch("user-1");
+    expect(result.ok && result.value.dispatch?.id).toBe("healthy");
+    expect(db.tables.task_dispatches.find((r) => r.id === "poison")?.status).toBe(
+      "failed",
+    );
+  });
+
+  test("a claimed row with no claimed_at is still reachable", async () => {
+    install([dispatch({ id: "orphan", status: "claimed", claimed_at: null })]);
+    const result = await claimTaskDispatch("user-1");
+    expect(result.ok && result.value.dispatch?.id).toBe("orphan");
+  });
+
+  test("a task with no notes claims with a null fallback", async () => {
+    install([dispatch()], [
+      { id: "task-1", user_id: "user-1", title: "Book the room", notes: null },
+    ]);
+    const result = await claimTaskDispatch("user-1");
+    expect(result.ok && result.value.dispatch?.task_notes).toBeNull();
   });
 
   test("a taskId filters the claim to that task", async () => {
@@ -291,6 +369,49 @@ describe("updateTaskDispatch", () => {
       updateTaskDispatch("user-1", { dispatchId: "d1", status: "done" }),
     ).resolves.toEqual({ ok: false, error: "dispatch not found" });
     expect(db.tables.task_dispatches[0].status).toBe("claimed");
+  });
+
+  test("running is only reachable from claimed", async () => {
+    const db = install([dispatch({ status: "requested" })]);
+    await expect(
+      updateTaskDispatch("user-1", { dispatchId: "d1", status: "running" }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "dispatch is requested — cannot move it to running",
+    });
+    expect(db.tables.task_dispatches[0].status).toBe("requested");
+  });
+
+  test("a terminal dispatch is immutable", async () => {
+    const db = install([
+      dispatch({
+        status: "failed",
+        claimed_at: FRESH,
+        result_summary: "gave up after 3 attempts",
+        finished_at: FRESH,
+      }),
+    ]);
+    await expect(
+      updateTaskDispatch("user-1", {
+        dispatchId: "d1",
+        status: "done",
+        resultSummary: "actually it worked",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "dispatch is failed — cannot move it to done",
+    });
+    const row = db.tables.task_dispatches[0];
+    expect(row.status).toBe("failed");
+    expect(row.result_summary).toBe("gave up after 3 attempts");
+  });
+
+  test("failed is reachable from claimed without passing through running", async () => {
+    const db = install([dispatch({ status: "claimed", claimed_at: FRESH })]);
+    await expect(
+      updateTaskDispatch("user-1", { dispatchId: "d1", status: "failed" }),
+    ).resolves.toEqual({ ok: true, value: { ok: true } });
+    expect(db.tables.task_dispatches[0].status).toBe("failed");
   });
 
   test("rejects a bad status and a missing id", async () => {

@@ -2849,51 +2849,132 @@ export async function claimAgentRun(
 // (spec: docs/superpowers/specs/2026-07-31-task-dispatch-design.md).
 const DISPATCH_STALE_MS = 60 * 60 * 1000;
 
+// A dispatch that kills the worker gets reclaimed — but only this many times.
+// Past it the row is retired as failed, so one poisonous task cannot eat every
+// poll forever.
+export const DISPATCH_MAX_ATTEMPTS = 3;
+
+// Enough rows to look past a few exhausted ones without paging.
+const DISPATCH_CANDIDATE_SCAN = 10;
+
 type DispatchCandidate = {
   id: string;
   status: DispatchStatus;
   claimed_at: string | null;
   created_at: string;
+  attempts: number;
 };
 
-// Oldest claimable row for this user: a fresh 'requested' one, or a
-// 'claimed'/'running' one whose claim has gone stale. Two narrow queries
-// instead of one OR-filter so both ride task_dispatches_pending_idx and the
-// eligibility rule stays readable; the older of the two wins.
+// Claimable rows for this user, freshest intent first: a 'requested' one, else
+// a 'claimed'/'running' one whose claim died. Three narrow queries instead of
+// one OR-filter so each rides task_dispatches_pending_idx and the eligibility
+// rule stays readable. The third covers a claimed/running row with a NULL
+// claimed_at — the transition guards make that unreachable, but if one ever
+// appeared a time-based query would never see it again.
+async function scanDispatchCandidates(
+  supabase: SupabaseClient,
+  userId: string,
+  taskId: string | null,
+): Promise<Result<{ requested: DispatchCandidate[]; reclaimable: DispatchCandidate[] }>> {
+  const staleBefore = new Date(Date.now() - DISPATCH_STALE_MS).toISOString();
+  const base = () => {
+    const q = supabase
+      .from("task_dispatches")
+      .select("id, status, claimed_at, created_at, attempts")
+      .eq("user_id", userId);
+    return taskId ? q.eq("task_id", taskId) : q;
+  };
+  const oldestFirst = { ascending: true };
+
+  const [requested, stale, orphaned] = await Promise.all([
+    base()
+      .eq("status", "requested")
+      .order("created_at", oldestFirst)
+      .limit(DISPATCH_CANDIDATE_SCAN),
+    base()
+      .in("status", ["claimed", "running"])
+      .lt("claimed_at", staleBefore)
+      .order("created_at", oldestFirst)
+      .limit(DISPATCH_CANDIDATE_SCAN),
+    base()
+      .in("status", ["claimed", "running"])
+      .is("claimed_at", null)
+      .order("created_at", oldestFirst)
+      .limit(DISPATCH_CANDIDATE_SCAN),
+  ]);
+  if (requested.error) return { ok: false, error: requested.error.message };
+  if (stale.error) return { ok: false, error: stale.error.message };
+  if (orphaned.error) return { ok: false, error: orphaned.error.message };
+
+  const byAge = (a: DispatchCandidate, b: DispatchCandidate) =>
+    a.created_at.localeCompare(b.created_at);
+  return {
+    ok: true,
+    value: {
+      requested: ((requested.data ?? []) as DispatchCandidate[]).sort(byAge),
+      reclaimable: [
+        ...((stale.data ?? []) as DispatchCandidate[]),
+        ...((orphaned.data ?? []) as DispatchCandidate[]),
+      ].sort(byAge),
+    },
+  };
+}
+
+// Retire rows that have burned their attempts. Guarded on a non-terminal
+// status so a row someone else just finished is left alone.
+async function retireExhaustedDispatches(
+  supabase: SupabaseClient,
+  userId: string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  await supabase
+    .from("task_dispatches")
+    .update({
+      status: "failed",
+      result_summary: `gave up after ${DISPATCH_MAX_ATTEMPTS} attempts`,
+      finished_at: new Date().toISOString(),
+    })
+    .in("id", ids)
+    .eq("user_id", userId)
+    .in("status", ["requested", "claimed", "running"]);
+}
+
+// Next row worth claiming: a fresh request beats a stale reclaim, so a sick
+// old dispatch can never block work the user just asked for. Rows past the
+// attempts cap are retired here rather than returned.
 async function pickDispatchCandidate(
   supabase: SupabaseClient,
   userId: string,
   taskId: string | null,
 ): Promise<Result<DispatchCandidate | null>> {
-  const staleBefore = new Date(Date.now() - DISPATCH_STALE_MS).toISOString();
-  const base = () => {
-    const q = supabase
-      .from("task_dispatches")
-      .select("id, status, claimed_at, created_at")
-      .eq("user_id", userId);
-    return taskId ? q.eq("task_id", taskId) : q;
+  const scan = await scanDispatchCandidates(supabase, userId, taskId);
+  if (!scan.ok) return scan;
+
+  const exhausted = [...scan.value.requested, ...scan.value.reclaimable].filter(
+    (row) => row.attempts >= DISPATCH_MAX_ATTEMPTS,
+  );
+  await retireExhaustedDispatches(
+    supabase,
+    userId,
+    exhausted.map((row) => row.id),
+  );
+
+  const live = (rows: DispatchCandidate[]) =>
+    rows.find((row) => row.attempts < DISPATCH_MAX_ATTEMPTS) ?? null;
+  return {
+    ok: true,
+    value: live(scan.value.requested) ?? live(scan.value.reclaimable),
   };
-
-  const [requested, stale] = await Promise.all([
-    base()
-      .eq("status", "requested")
-      .order("created_at", { ascending: true })
-      .limit(1),
-    base()
-      .in("status", ["claimed", "running"])
-      .lt("claimed_at", staleBefore)
-      .order("created_at", { ascending: true })
-      .limit(1),
-  ]);
-  if (requested.error) return { ok: false, error: requested.error.message };
-  if (stale.error) return { ok: false, error: stale.error.message };
-
-  const rows = [
-    ...((requested.data ?? []) as DispatchCandidate[]),
-    ...((stale.data ?? []) as DispatchCandidate[]),
-  ].sort((a, b) => a.created_at.localeCompare(b.created_at));
-  return { ok: true, value: rows[0] ?? null };
 }
+
+export type ClaimedDispatch = TaskDispatch & {
+  task_title: string;
+  // The task's notes AS OF the claim. The worker re-reads them before writing
+  // back, but if that read fails this is the fallback — appending to "" would
+  // erase whatever the user had written.
+  task_notes: string | null;
+};
 
 // Fenced direct write (same class as claim_agent_run): the overnight worker
 // claims one dispatch to execute. No propose→confirm, no audit row — this is
@@ -2903,7 +2984,7 @@ async function pickDispatchCandidate(
 export async function claimTaskDispatch(
   userId: string,
   taskId?: unknown,
-): Promise<Result<{ dispatch: (TaskDispatch & { task_title: string }) | null }>> {
+): Promise<Result<{ dispatch: ClaimedDispatch | null }>> {
   if (taskId !== undefined && taskId !== null && typeof taskId !== "string") {
     return { ok: false, error: "taskId must be a string" };
   }
@@ -2918,7 +2999,13 @@ export async function claimTaskDispatch(
     const row = candidate.value;
     const guarded = supabase
       .from("task_dispatches")
-      .update({ status: "claimed", claimed_at: new Date().toISOString() })
+      .update({
+        status: "claimed",
+        claimed_at: new Date().toISOString(),
+        // Not atomic on its own, but the status/claimed_at guard means exactly
+        // one claimer's write lands, so the count cannot double-step.
+        attempts: row.attempts + 1,
+      })
       .eq("id", row.id)
       .eq("user_id", userId)
       .eq("status", row.status);
@@ -2931,10 +3018,11 @@ export async function claimTaskDispatch(
     const claimed = ((data ?? []) as TaskDispatch[])[0];
     if (!claimed) continue; // lost the race — re-pick
 
-    // The worker's prompt needs the title, and the dispatch row has none.
+    // The worker's prompt needs the title, and its write-back needs the notes
+    // to append to; the dispatch row carries neither.
     const { data: task } = await supabase
       .from("tasks")
-      .select("title")
+      .select("title, notes")
       .eq("id", claimed.task_id)
       .eq("user_id", userId)
       .maybeSingle();
@@ -2944,12 +3032,22 @@ export async function claimTaskDispatch(
         dispatch: {
           ...claimed,
           task_title: ((task?.title as string | undefined) ?? "").trim(),
+          task_notes: (task?.notes as string | null | undefined) ?? null,
         },
       },
     };
   }
   return { ok: true, value: { dispatch: null } };
 }
+
+// Legal moves. Enforced in the UPDATE's WHERE, so a stale worker reporting on
+// a dispatch that was retired (or already finished) changes nothing rather
+// than resurrecting it.
+const DISPATCH_TRANSITIONS: Record<"running" | "done" | "failed", DispatchStatus[]> = {
+  running: ["claimed"],
+  done: ["claimed", "running"],
+  failed: ["claimed", "running"],
+};
 
 // Fenced direct write: the worker's progress report on a dispatch it holds.
 // done/failed are terminal and stamp finished_at.
@@ -2986,10 +3084,24 @@ export async function updateTaskDispatch(
     .update(patch)
     .eq("id", dispatchId)
     .eq("user_id", userId)
+    .in("status", DISPATCH_TRANSITIONS[status])
     .select("id");
   if (error) return { ok: false, error: error.message };
+
   if (((data ?? []) as unknown[]).length === 0) {
-    return { ok: false, error: "dispatch not found" };
+    // Nothing moved: either the row isn't ours, or it is in a status this
+    // transition may not leave. Say which.
+    const { data: existing } = await supabase
+      .from("task_dispatches")
+      .select("status")
+      .eq("id", dispatchId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!existing) return { ok: false, error: "dispatch not found" };
+    return {
+      ok: false,
+      error: `dispatch is ${existing.status} — cannot move it to ${status}`,
+    };
   }
   return { ok: true, value: { ok: true } };
 }
