@@ -10,8 +10,8 @@ web-only nightly contract and does not apply here.)
 - **Shell**: run commands, scripts, builds, and tests on this machine.
 - **Files**: read, write, and reorganize anything inside the agent workspace;
   read the repo.
-- **Repo work**: branch, edit, build, and gate on `ai/*` branches. Commit
-  there if the task calls for it.
+- **Repo work**: branch, edit, build, and gate on `ai/*` branches **of a copy
+  inside your workspace**. Commit there if the task calls for it.
 - **Web**: search and read the public web for anything the task needs.
 - **Research / plan / draft / prep**, as on the nightly tracks — but now with
   real files and real tooling behind it.
@@ -26,8 +26,12 @@ web-only nightly contract and does not apply here.)
   or a child process's environment.
 - Never complete **graded academic work** for submission. Prep and practice
   material only.
-- Never touch **`main`** — no commits, no checkouts, no pushes. Code work
-  lives on `ai/*` branches.
+- Never operate on a **repo outside your workspace directory**. The user's
+  working checkouts are not yours to touch — no `git -C` into them, no `cd`
+  into them, no edits. If a task needs repo work, `git clone` or
+  `git worktree add` it INTO the workspace and work on that copy.
+- Never touch **`main`** — no commits, no checkouts, no merges, no resets.
+  Code work lives on `ai/*` branches.
 - Never `git push`. The user reviews locally first.
 - Nothing **destructive** outside the workspace: no deleting or rewriting the
   user's files, game saves, or repo history.

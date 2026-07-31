@@ -366,6 +366,10 @@ describe("dispatchPrompt (Track C)", () => {
     expect(prompt).toContain("Graded coursework");
     expect(prompt).toContain("ai/*");
     expect(prompt).toContain("never main");
+    // The cwd is the real fence; the prompt has to say so, because the
+    // disallow list is only pattern matching.
+    expect(prompt).toContain("NEVER on a repo outside your workspace");
+    expect(prompt).toContain("worktree");
   });
 
   // run.mjs feeds this file to dispatchPrompt; capabilities.md (Track B) is
@@ -381,6 +385,8 @@ describe("dispatchPrompt (Track C)", () => {
     expect(manifest).toContain("Never");
     expect(manifest).toContain("credentials");
     expect(manifest).toContain("main");
+    expect(manifest).toContain("repo outside your workspace");
+    expect(manifest).toContain("git worktree add");
   });
 
   test("survives a task with no notes and clips a huge one", () => {

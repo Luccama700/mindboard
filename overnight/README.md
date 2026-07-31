@@ -143,15 +143,21 @@ that keeps killing its run is retired as failed after **3** claims
   the `ai_audit_log` (`list_proposals`).
 - Plan runs are read-only (plan mode). Build runs are confined to their
   worktree with a whitelisted tool set; the orchestrator does all git.
-- Dispatched (`✦ do it`) runs get the widest profile — shell and files inside
-  `../mindboard-agent-workspace` — so they are fenced twice. Mechanically:
-  `--allowedTools Bash(*)` with `--strict-mcp-config` (no MCP servers reach
-  the child; the orchestrator owns every Mindboard write) and a disallow list
-  covering `git push`, `git checkout main`, and `git switch main`. In the
-  prompt, verbatim, beside `dispatch-capabilities.md`: prepare/research/
-  build/draft only, never send, sign, purchase, publish, or submit in the
-  user's name; no credential handling; graded coursework submission stays a
-  human action; code work on `ai/*` branches, never `main`.
+- Dispatched (`✦ do it`) runs get the widest profile: shell and files, with
+  `--allowedTools Bash(*)` and `--strict-mcp-config` (no MCP server reaches
+  the child — the orchestrator owns every Mindboard write). **The real
+  isolation is the working directory**: the run happens in
+  `../mindboard-agent-workspace`, not in a repo you care about.
+- On top of that sit two *best-effort* layers, not a sandbox. A disallowed
+  pattern list (`git push*`, `git -C*`, `git merge*`, `git rebase*`,
+  `git reset --hard*`, and the `main` checkout/switch/branch spellings)
+  catches the obvious ways to wreck a checkout — a determined or creative
+  command line can still get around pattern matching. And the prompt carries
+  `dispatch-capabilities.md` verbatim: prepare/research/build/draft only,
+  never send, sign, purchase, publish, or submit in the user's name; no
+  credential handling; graded coursework submission stays a human action;
+  never operate on a repo outside the workspace (clone or worktree it in
+  instead); `ai/*` branches only, never `main`.
 - Per-run `--max-budget-usd` and `--max-turns`, plus nightly plan/build caps.
 - Kill switch: `Disable-ScheduledTask -TaskName "Mindboard Overnight Agent"`,
   or revoke the PAT in settings (every MCP call dies instantly).

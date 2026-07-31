@@ -787,16 +787,33 @@ const MAX_DISPATCH_DRAIN = 3;
 // manifest and would contradict the powers this phase actually grants.
 const DISPATCH_MANIFEST = join(HERE, "dispatch-capabilities.md");
 
-// Full local powers, mechanically fenced: --allowedTools Bash(*) is how this
-// codebase grants shell, --strict-mcp-config drops every MCP server (the
-// orchestrator owns the Mindboard writes, not the child), and the disallow
-// list is the mechanical half of "never main, never push" — the prompt's
-// guardrails are the other half.
+// Full local powers: --allowedTools Bash(*) is how this codebase grants shell,
+// and --strict-mcp-config drops every MCP server (the orchestrator owns the
+// Mindboard writes, not the child).
+//
+// The disallow list is PATTERN blocking, not a sandbox — it catches the
+// obvious spellings of "wreck a repo", nothing more. `git -C` is banned
+// wholesale because it is how you reach a repo you are not standing in, and
+// it has no legitimate use here. The real isolation is the cwd: the run lives
+// in the agent workspace, and the prompt + manifest forbid touching any repo
+// outside it.
+const DISPATCH_DISALLOWED_TOOLS = [
+  "Bash(git push*)",
+  "Bash(git -C*)",
+  "Bash(git checkout main*)",
+  "Bash(git switch main*)",
+  "Bash(git checkout -B main*)",
+  "Bash(git branch -f main*)",
+  "Bash(git merge*)",
+  "Bash(git rebase*)",
+  "Bash(git reset --hard*)",
+].join(",");
+
 const DISPATCH_TOOL_PROFILE = {
   permissionMode: "acceptEdits",
   allowedTools: "Bash(*)",
   strictMcp: true,
-  disallowedTools: "Bash(git push*),Bash(git checkout main*),Bash(git switch main*)",
+  disallowedTools: DISPATCH_DISALLOWED_TOOLS,
 };
 
 // Append the run's outcome to the task's notes. The base is the task's CURRENT
