@@ -23,6 +23,7 @@ import {
   quoteArg,
   resolveModel,
   reviewPrompt,
+  shouldDrainDispatches,
   slugify,
   triagePrompt,
 } from "../overnight/lib.mjs";
@@ -338,6 +339,21 @@ describe("argValue", () => {
     expect(argValue(["--task", "--dry"], "--task")).toBe(FLAG_WITHOUT_VALUE);
     expect(argValue(["--dry", "--task"], "--task")).toBe(FLAG_WITHOUT_VALUE);
     expect(argValue(["--task="], "--task")).toBe(FLAG_WITHOUT_VALUE);
+  });
+});
+
+describe("shouldDrainDispatches", () => {
+  test("drains on the poll and on a full run", () => {
+    expect(shouldDrainDispatches(["--if-requested"])).toBe(true);
+    expect(shouldDrainDispatches([])).toBe(true);
+    expect(shouldDrainDispatches(["--dry"])).toBe(true);
+  });
+
+  test("a narrowed run does not get dragged into someone's dispatch", () => {
+    for (const flag of ["--plan-only", "--build-only", "--code-only", "--life-only"]) {
+      expect(shouldDrainDispatches([flag])).toBe(false);
+      expect(shouldDrainDispatches(["--if-requested", flag])).toBe(false);
+    }
   });
 });
 

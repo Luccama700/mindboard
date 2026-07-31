@@ -98,6 +98,22 @@ export function argValue(argv, flag) {
   return null;
 }
 
+// Narrowing flags: each one says "run this slice of the sweep, nothing else".
+// A dispatch is not part of any slice, so these opt out of the drain — a
+// `--plan-only` run must not spend 45 minutes executing someone's task.
+const DRAIN_BLOCKING_FLAGS = [
+  "--plan-only",
+  "--build-only",
+  "--code-only",
+  "--life-only",
+];
+
+// The queue drains on the 5-minute poll and on full (flagless) runs only.
+export function shouldDrainDispatches(argv) {
+  const args = (argv ?? []).map(String);
+  return !DRAIN_BLOCKING_FLAGS.some((flag) => args.includes(flag));
+}
+
 // Quote a single argument for a Windows cmd.exe command line (spawn shell:true).
 export function quoteArg(arg) {
   const value = String(arg);

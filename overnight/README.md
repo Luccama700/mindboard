@@ -45,7 +45,8 @@ in the edit panel) — same button for both tracks. The agent never touches
   run, poll or nightly, drains the dispatch queue first (up to 3 per run,
   oldest fresh request first), so the row alone is enough and a dispatch never
   drags a full sweep along behind it. One task may have one live dispatch at a
-  time.
+  time. A narrowed run (`--plan-only`, `--build-only`, `--code-only`,
+  `--life-only`) skips the drain.
 - **From Claude Code**: the `/overnight` skill, or directly, e.g.
   `node overnight\run.mjs --life-only --plan-only` (triage + propose only).
 
@@ -100,7 +101,8 @@ that keeps killing its run is retired as failed after **3** claims
    # OVERNIGHT_LIFE_BUDGET_USD=5    # per life-task run
    # OVERNIGHT_TRIAGE_MODEL=haiku   # cheap triage model
    # OVERNIGHT_DISPATCH_BUDGET_USD=10   # per dispatched (✦ do it) run
-   # OVERNIGHT_DISPATCH_TIMEOUT_MIN=45  # hard timeout for one dispatch
+   # OVERNIGHT_DISPATCH_TIMEOUT_MIN=45  # hard timeout for one dispatch; clamped
+   #                                    # to 50 — a claim goes stale at 60 min
    # OVERNIGHT_CLAUDE_BIN=claude    # or a proxy shim, e.g. claudex for gpt-5.6-sol
    # OVERNIGHT_REVIEW=1             # 0 disables the post-push build review
    # OVERNIGHT_REVIEW_MODEL=opus-5

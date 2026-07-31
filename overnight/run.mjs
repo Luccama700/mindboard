@@ -51,6 +51,7 @@ import {
   MODEL_CHOICES,
   pickBuildTasks,
   resolveModel,
+  shouldDrainDispatches,
   pickExecTasks,
   pickLifeTasks,
   pickPlanTasks,
@@ -74,6 +75,19 @@ function loadDotEnv() {
   }
 }
 loadDotEnv();
+
+// A dispatch claim goes stale after a hardcoded 60 minutes server-side, and
+// the next poll reclaims it. A local timeout at or past that would let a
+// second run adopt a dispatch the first is still working — so the ceiling
+// stays under it, whatever the env says. (Warned about once `log` exists.)
+const DISPATCH_TIMEOUT_MAX_MIN = 50;
+const DISPATCH_TIMEOUT_REQUESTED_MIN = Number(
+  process.env.OVERNIGHT_DISPATCH_TIMEOUT_MIN ?? 45,
+);
+const DISPATCH_TIMEOUT_MIN =
+  Number.isFinite(DISPATCH_TIMEOUT_REQUESTED_MIN) && DISPATCH_TIMEOUT_REQUESTED_MIN > 0
+    ? Math.min(DISPATCH_TIMEOUT_REQUESTED_MIN, DISPATCH_TIMEOUT_MAX_MIN)
+    : 45;
 
 const CONFIG = {
   url: (process.env.MINDBOARD_URL ?? "").replace(/\/$/, ""),
@@ -109,7 +123,7 @@ const CONFIG = {
   triageModel: process.env.OVERNIGHT_TRIAGE_MODEL ?? "haiku",
   // Track C (dispatched tasks): one task, asked for by hand, full powers.
   dispatchBudgetUsd: process.env.OVERNIGHT_DISPATCH_BUDGET_USD ?? "10",
-  dispatchTimeoutMs: Number(process.env.OVERNIGHT_DISPATCH_TIMEOUT_MIN ?? 45) * 60_000,
+  dispatchTimeoutMs: DISPATCH_TIMEOUT_MIN * 60_000,
   // Life runs execute OUTSIDE the repo so claude doesn't load Mindboard's
   // project context for an apartment search.
   workspace: process.env.OVERNIGHT_WORKSPACE ?? resolve(REPO, "..", "mindboard-agent-workspace"),
@@ -130,6 +144,13 @@ function log(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
   console.log(line);
   appendFileSync(logFile, `${line}\n`);
+}
+
+if (DISPATCH_TIMEOUT_REQUESTED_MIN > DISPATCH_TIMEOUT_MAX_MIN) {
+  log(
+    `warning: OVERNIGHT_DISPATCH_TIMEOUT_MIN=${DISPATCH_TIMEOUT_REQUESTED_MIN} clamped to ` +
+      `${DISPATCH_TIMEOUT_MAX_MIN} — a dispatch claim goes stale at 60 min and would be reclaimed mid-run`,
+  );
 }
 
 // ---------- subprocesses ----------
@@ -1048,9 +1069,12 @@ async function main() {
     await dispatchDirect(directTaskId);
     return;
   }
-  // The queue drains on EVERY run (a dry run claims nothing) — the "run agent
-  // now" stamp below gates the nightly sweep, not this.
-  if (!DRY) await drainDispatches();
+  // The queue drains on every poll and every full run (a dry run claims
+  // nothing, a narrowed one opts out) — the "run agent now" stamp below gates
+  // the nightly sweep, not this.
+  if (!DRY && shouldDrainDispatches(process.argv.slice(2))) {
+    await drainDispatches();
+  }
 
   // Poll mode (the 5-minute scheduled task): exit silently unless the user
   // tapped "run agent now" in the app since the last poll. A dry poll never
