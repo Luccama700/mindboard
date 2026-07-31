@@ -33,27 +33,25 @@ type Recorded = {
   order: string[];
   insert: Record<string, unknown> | null;
   taskUpdate: Record<string, unknown> | null;
-  upsert: { payload: Record<string, unknown>; opts: unknown } | null;
   deleted: string[];
 };
 
-// One router for the three tables the action touches, recording the call order
-// so the guards run before the insert, the note before the wake-up stamp, and
-// any rollback after the failure that caused it.
+// One router for the two tables the action touches, recording the call order so
+// the guards run before the insert and any rollback after the failure that
+// caused it. user_settings is here only to prove the action never writes it:
+// stamping agent_run_requested_at would drag a full nightly sweep along.
 function mockTables(
   over: {
     task?: { data: unknown; error: unknown };
     openDispatches?: unknown[];
     dispatch?: { data: unknown; error: unknown };
     taskUpdateError?: unknown;
-    stampError?: unknown;
   } = {},
 ): Recorded {
   const rec: Recorded = {
     order: [],
     insert: null,
     taskUpdate: null,
-    upsert: null,
     deleted: [],
   };
 
@@ -113,15 +111,6 @@ function mockTables(
         })),
       };
     }
-    if (table === "user_settings") {
-      return {
-        upsert: vi.fn(async (payload: Record<string, unknown>, opts: unknown) => {
-          rec.order.push("settings:upsert");
-          rec.upsert = { payload, opts };
-          return { error: over.stampError ?? null };
-        }),
-      };
-    }
     throw new Error(`unexpected table ${table}`);
   });
 
@@ -179,7 +168,7 @@ describe("requestTaskDispatch", () => {
     ).resolves.toEqual({ error: "task not found" });
   });
 
-  test("inserts the dispatch, appends the note, approves, and stamps the run request", async () => {
+  test("inserts the dispatch and appends the note, without waking the sweep", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-31T10:00:00.000Z"));
     const rec = mockTables();
@@ -188,12 +177,14 @@ describe("requestTaskDispatch", () => {
       requestTaskDispatch({ taskId: "task-1", note: "  book the room  " }),
     ).resolves.toEqual({ error: null, dispatchId: "dispatch-1" });
 
+    // user_settings is never touched: the poll drains this queue on its own,
+    // and agent_run_requested_at would also kick off a full nightly sweep.
+    expect(mocks.from).not.toHaveBeenCalledWith("user_settings");
     expect(rec.order).toEqual([
       "task:load",
       "dispatch:open-check",
       "dispatch:insert",
       "task:update",
-      "settings:upsert",
     ]);
     expect(rec.insert).toEqual({
       user_id: "user-1",
@@ -206,13 +197,6 @@ describe("requestTaskDispatch", () => {
       notes:
         "old notes\n\n---\n\n## Operator note (2026-07-31)\n\nbook the room",
     });
-    expect(rec.upsert).toEqual({
-      payload: {
-        user_id: "user-1",
-        agent_run_requested_at: "2026-07-31T10:00:00.000Z",
-      },
-      opts: { onConflict: "user_id" },
-    });
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
@@ -224,25 +208,14 @@ describe("requestTaskDispatch", () => {
       requestTaskDispatch({ taskId: "task-1", note: "do it" }),
     ).resolves.toEqual({ error: "could not create dispatch" });
     expect(rec.taskUpdate).toBeNull();
-    expect(rec.upsert).toBeNull();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
-  test("reports a failed task update, rolls the dispatch back, and never stamps", async () => {
+  test("a failed task update takes the orphaned dispatch back out", async () => {
     const rec = mockTables({ taskUpdateError: { message: "nope" } });
     await expect(
       requestTaskDispatch({ taskId: "task-1", note: "do it" }),
     ).resolves.toEqual({ error: "could not update task" });
-    expect(rec.upsert).toBeNull();
-    expect(rec.deleted).toEqual(["dispatch-1"]);
-    expect(mocks.revalidatePath).not.toHaveBeenCalled();
-  });
-
-  test("a failed wake-up stamp propagates and rolls the dispatch back", async () => {
-    const rec = mockTables({ stampError: { message: "settings offline" } });
-    await expect(
-      requestTaskDispatch({ taskId: "task-1", note: "do it" }),
-    ).resolves.toEqual({ error: "could not wake the agent" });
     expect(rec.deleted).toEqual(["dispatch-1"]);
     expect(rec.order[rec.order.length - 1]).toBe("dispatch:delete");
     expect(mocks.revalidatePath).not.toHaveBeenCalled();

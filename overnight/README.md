@@ -41,10 +41,10 @@ in the edit panel) — same button for both tracks. The agent never touches
   `run.mjs --if-requested`) claims it via the `claim_agent_run` MCP tool and
   fires a full run.
 - **`✦ do it` on a task** (the day stream): writes a `task_dispatches` row +
-  an `## Operator note` into the task and stamps the same run request. **Every**
-  run — poll or nightly — drains the dispatch queue first (up to 3 per run,
-  oldest fresh request first), whether or not a run was requested; the stamp
-  gates only the sweep that follows. One task may have one live dispatch at a
+  an `## Operator note` into the task. It stamps **no** run request — **every**
+  run, poll or nightly, drains the dispatch queue first (up to 3 per run,
+  oldest fresh request first), so the row alone is enough and a dispatch never
+  drags a full sweep along behind it. One task may have one live dispatch at a
   time.
 - **From Claude Code**: the `/overnight` skill, or directly, e.g.
   `node overnight\run.mjs --life-only --plan-only` (triage + propose only).

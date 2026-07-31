@@ -391,9 +391,14 @@ export async function requestAgentRun() {
 // operator note (spec:
 // docs/superpowers/specs/2026-07-31-task-dispatch-design.md). The dispatch row
 // is the queue entry the worker claims; the note is ALSO appended to the task
-// notes, which stay the human-readable source of truth. Approving the task and
-// stamping the agent-run request is what makes the PC pick it up on its next
-// 5-minute poll. Owner-gated like requestAgentRun — only the owner's PAT polls.
+// notes, which stay the human-readable source of truth.
+//
+// Deliberately does NOT stamp agent_run_requested_at: the PC's 5-minute poll
+// drains this queue unconditionally, so the row alone is enough to be picked
+// up. That stamp stays what it has always been — the "run the full sweep now"
+// signal owned by ✦ run agent now — and a dispatch must not trigger a nightly
+// sweep as a side effect. Owner-gated like requestAgentRun: only the owner's
+// PAT polls, so for anyone else the row would never be claimed.
 export async function requestTaskDispatch(input: {
   taskId: string;
   note: string;
@@ -448,12 +453,6 @@ export async function requestTaskDispatch(input: {
     return { error: raced ? "already dispatched" : "could not create dispatch" };
   }
 
-  // Anything that fails from here leaves a queue row nothing will ever run,
-  // so the row goes back out before the error does.
-  const rollback = async () => {
-    await supabase.from("task_dispatches").delete().eq("id", dispatch.id);
-  };
-
   // No ai_state here: 'approved' is the nightly sweep's queue, and a dispatch
   // is not that. The worker stamps 'building' when it actually starts.
   const today = new Date().toISOString().slice(0, 10);
@@ -464,17 +463,9 @@ export async function requestTaskDispatch(input: {
     })
     .eq("id", task.id);
   if (updErr) {
-    await rollback();
+    // The queue row would outlive the note it belongs to — take it back out.
+    await supabase.from("task_dispatches").delete().eq("id", dispatch.id);
     return { error: "could not update task" };
-  }
-
-  const { error: stampErr } = await supabase.from("user_settings").upsert(
-    { user_id: user.id, agent_run_requested_at: new Date().toISOString() },
-    { onConflict: "user_id" },
-  );
-  if (stampErr) {
-    await rollback();
-    return { error: "could not wake the agent" };
   }
 
   revalidatePath("/", "layout");
