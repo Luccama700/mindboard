@@ -281,6 +281,29 @@ describe("planningSnapshot with approved slots", () => {
     expect(day0.committedMinutes).toBe(180);
   });
 
+  test("a promoted slot suppresses the rule block, the slot block, and the occurrence", () => {
+    const input = baseInput();
+    input.recurringSlots = [
+      {
+        rule_id: "r1",
+        occurred_on: "2026-07-08",
+        start_time: "16:00:00",
+        duration_min: 90,
+        gcal_event_id: "evt-1",
+      },
+    ];
+    const s = planningSnapshot(input);
+    const day0 = s.schedule.days[0];
+    // No recurring block at all: the real Google event (arriving via the
+    // events feed) is the only representation of the promoted occurrence.
+    expect(day0.timed.some((b) => b.title === "meds")).toBe(false);
+    expect(
+      s.tasks.recurringOccurrences.some(
+        (o) => o.ruleId === "r1" && o.date === "2026-07-08",
+      ),
+    ).toBe(false);
+  });
+
   test("untimed rules WITHOUT a slot still never block", () => {
     const input = baseInput();
     input.recurringSlots = [

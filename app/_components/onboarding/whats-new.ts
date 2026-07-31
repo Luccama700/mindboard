@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-07-31-routines-drag-promote",
+    date: "2026-07-31",
+    title: "routines you can actually move",
+    items: [
+      "every timed routine on the week grid drags now — not just pinned ones. dropping it pins that day's time; the rule's usual time comes back tomorrow, and unpin undoes it.",
+      "short routine blocks stopped clipping their text — under ~45 minutes they collapse to one clean line with the time inline.",
+      "a routine can become a real calendar event: pick it in the day list, tap make event →, name it (\"lunch\" → \"lunch w/ ana\"), and it lands on your google calendar — the routine steps aside for that day and the event edits and drags like any other.",
+    ],
+  },
+  {
     id: "2026-07-22-mindshare-and-motion",
     date: "2026-07-22",
     title: "your attention, right in the stream",

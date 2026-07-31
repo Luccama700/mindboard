@@ -256,7 +256,7 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
       .lt("occurred_on", endDate),
     supabase
       .from("recurring_task_slots")
-      .select("rule_id, occurred_on, start_time, duration_min")
+      .select("rule_id, occurred_on, start_time, duration_min, gcal_event_id")
       .gte("occurred_on", startDate)
       .lt("occurred_on", endDate),
     eventsPromise,

@@ -175,6 +175,19 @@ describe("slotBusyEvents", () => {
     expect(gym.allDay).toBe(false);
   });
 
+  test("a promoted slot (gcal_event_id) emits nothing — the real event supplies its busy time", () => {
+    const slots: RecurringSlot[] = [
+      {
+        rule_id: "r1",
+        occurred_on: "2026-07-06",
+        start_time: "07:00:00",
+        duration_min: 90,
+        gcal_event_id: "evt-1",
+      },
+    ];
+    expect(slotBusyEvents(slots, rules)).toEqual([]);
+  });
+
   test("a slot whose rule id is unknown is skipped", () => {
     const slots: RecurringSlot[] = [
       { rule_id: "ghost", occurred_on: "2026-07-06", start_time: "07:00:00", duration_min: 30 },

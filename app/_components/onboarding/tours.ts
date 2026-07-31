@@ -162,12 +162,12 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       anchor: "week-grid",
       title: "drag things around",
-      body: "on a desktop, grab a task or event and drop it on a better day — timed events snap to 15 minutes. on your phone, tap a day and edit from the list below.",
+      body: "on a desktop, grab a task, event, or routine and drop it somewhere better — timed things snap to 15 minutes. moving a routine pins that day only; its usual time is back tomorrow. on your phone, tap a day and edit from the list below.",
     },
     {
       anchor: "week-day-list",
       title: "the day, up close",
-      body: "tap any day and its full list shows up here. editable events open right in place.",
+      body: "tap any day and its full list shows up here. editable events open right in place, and make event → turns a routine into a real calendar event — name it, and it lands on your google calendar.",
     },
     {
       title: "that's the week",

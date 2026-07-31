@@ -252,9 +252,10 @@ function TimedTaskBlock({
 
 // A recurring occurrence with THREE states, one unconditional useDraggable so
 // hook order never shifts. A committed slot (slotStart) or a timed rule both
-// render as a bold, border-2 dashed hollow block — the slot draggable, the plain
-// timed rule inert (the rule owns its schedule). A soft-placed untimed rule
-// (plannedStart, no slot) renders as a lighter advisory ghost — 1px dashed
+// render as a bold, border-2 dashed hollow block, and both drag: moving a
+// rule-timed occurrence writes a that-day slot override (the rule's default
+// time is untouched on other days; unpin restores it). A soft-placed untimed
+// rule (plannedStart, no slot) renders as a lighter advisory ghost — 1px dashed
 // border, dimmed, muted title, an "auto" time line, an inline ✓ to approve it —
 // and is itself draggable into a committed slot. Position precedence: slot >
 // dueTime > planned. All strike + dim once completed today.
@@ -287,8 +288,10 @@ function RecurringTaskBlock({
         ? { start: planned.start, minutes: planned.end - planned.start }
         : null;
 
+  // A rule-timed occurrence shares the slot drag shape: its drop writes a
+  // that-day slot (fromDateKey clears nothing — there is no source slot).
   const dragData: DragData | null =
-    hasSlot && block
+    (hasSlot || ruleTimedNoSlot) && block
       ? {
           kind: "rtask-slot",
           id: item.id,
@@ -307,7 +310,7 @@ function RecurringTaskBlock({
           }
         : null;
 
-  const enabled = !ruleTimedNoSlot && !item.done && dragData !== null;
+  const enabled = !item.done && dragData !== null;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `rtask-drag-${item.id}`,
     disabled: !enabled,
@@ -320,12 +323,18 @@ function RecurringTaskBlock({
   const dragBind = enabled
     ? { ref: setNodeRef, ...attributes, ...listeners }
     : {};
+  // Short blocks can't fit two stacked lines inside their clamped height —
+  // collapse to one truncated line so nothing clips.
+  const compact =
+    Math.max(((end - start) / 60) * HOUR_HEIGHT, 32) < 40;
 
   if (hasSlot || item.dueTime !== null) {
     return (
       <div
         {...dragBind}
-        className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 border-dashed bg-page/85 px-1.5 py-0.5 z-10 transition-[opacity,box-shadow,border-color] duration-[120ms] ease-signal hover:bg-card-hover ${
+        className={`absolute left-1 right-1 overflow-hidden rounded-lg border-2 border-dashed bg-page/85 px-1.5 z-10 transition-[opacity,box-shadow,border-color] duration-[120ms] ease-signal hover:bg-card-hover ${
+          compact ? "flex items-center py-0" : "py-0.5"
+        } ${
           enabled ? "cursor-grab" : ""
         } ${isDragging ? "opacity-30" : ""} ${item.done ? "opacity-50" : ""}`}
         style={{
@@ -333,17 +342,34 @@ function RecurringTaskBlock({
           borderColor: item.color,
         }}
       >
-        <p
-          className={`truncate text-[11px] font-bold text-fg ${
-            item.done ? "line-through" : ""
-          }`}
-        >
-          <span aria-hidden>↻ </span>
-          {item.title}
-        </p>
-        <p className="truncate text-[10px] text-muted">
-          {minutesToTime(start)} – {minutesToTime(end)}
-        </p>
+        {compact ? (
+          <p
+            className={`truncate text-[11px] font-bold text-fg ${
+              item.done ? "line-through" : ""
+            }`}
+          >
+            <span aria-hidden>↻ </span>
+            {item.title}
+            <span className="font-normal text-muted">
+              {" "}
+              · {minutesToTime(start)}
+            </span>
+          </p>
+        ) : (
+          <>
+            <p
+              className={`truncate text-[11px] font-bold text-fg ${
+                item.done ? "line-through" : ""
+              }`}
+            >
+              <span aria-hidden>↻ </span>
+              {item.title}
+            </p>
+            <p className="truncate text-[10px] text-muted">
+              {minutesToTime(start)} – {minutesToTime(end)}
+            </p>
+          </>
+        )}
       </div>
     );
   }
@@ -351,7 +377,9 @@ function RecurringTaskBlock({
   return (
     <div
       {...dragBind}
-      className={`absolute left-1 right-1 overflow-hidden rounded-lg border border-dashed bg-page/85 px-1.5 py-0.5 z-10 transition-[opacity,box-shadow,border-color] duration-[120ms] ease-signal hover:bg-card-hover ${
+      className={`absolute left-1 right-1 overflow-hidden rounded-lg border border-dashed bg-page/85 px-1.5 z-10 transition-[opacity,box-shadow,border-color] duration-[120ms] ease-signal hover:bg-card-hover ${
+        compact ? "flex items-center py-0" : "py-0.5"
+      } ${
         enabled ? "cursor-grab" : ""
       } ${isDragging ? "opacity-30" : ""} ${
         item.done ? "opacity-50" : "opacity-70"
@@ -380,17 +408,30 @@ function RecurringTaskBlock({
           ✓
         </button>
       )}
-      <p
-        className={`truncate text-[11px] text-muted ${
-          item.done ? "line-through" : ""
-        }`}
-      >
-        <span aria-hidden>↻ </span>
-        {item.title}
-      </p>
-      <p className="truncate text-[10px] text-muted">
-        ~{minutesToTime(start)} – {minutesToTime(end)} · auto
-      </p>
+      {compact ? (
+        <p
+          className={`truncate pr-6 text-[11px] text-muted ${
+            item.done ? "line-through" : ""
+          }`}
+        >
+          <span aria-hidden>↻ </span>
+          {item.title} · ~{minutesToTime(start)} · auto
+        </p>
+      ) : (
+        <>
+          <p
+            className={`truncate text-[11px] text-muted ${
+              item.done ? "line-through" : ""
+            }`}
+          >
+            <span aria-hidden>↻ </span>
+            {item.title}
+          </p>
+          <p className="truncate text-[10px] text-muted">
+            ~{minutesToTime(start)} – {minutesToTime(end)} · auto
+          </p>
+        </>
+      )}
     </div>
   );
 }

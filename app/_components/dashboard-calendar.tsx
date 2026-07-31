@@ -9,6 +9,7 @@ import { updateTask } from "@/app/actions/tasks";
 import {
   approveRecurringSlot,
   clearRecurringSlot,
+  promoteRecurringToEvent,
 } from "@/app/actions/recurring-tasks";
 import { freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
 import type { ScheduleVitals } from "@/app/lib/snapshots/schedule";
@@ -29,6 +30,7 @@ import {
 } from "./date-utils";
 import { formatSignedChange } from "./money";
 import { EventEditPanel } from "./event-edit-panel";
+import { RtaskPromotePanel } from "./rtask-promote-panel";
 import { WeekView, type RescheduleEvent, type RescheduleTask } from "./week-view";
 import type { TaskWithGroup } from "./types";
 
@@ -202,6 +204,10 @@ export function DashboardCalendar({
   const [slotOverrides, setSlotOverrides] = useState<
     Record<string, { start: string; minutes: number } | null>
   >({});
+  // Occurrences promoted to real events this session, keyed `${ruleId}:${dateKey}`:
+  // hidden immediately, the refreshed fetch brings in the Google event.
+  const [promotedKeys, setPromotedKeys] = useState<Set<string>>(new Set());
+  const [promoteFor, setPromoteFor] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const itemsByDate = useMemo(() => {
@@ -288,6 +294,9 @@ export function DashboardCalendar({
           const overrideKey = `${rule.id}:${key}`;
           const override = slotOverrides[overrideKey];
           const slot = slotByKey.get(overrideKey);
+          // Promoted: the real Google event (fetched normally) stands in for
+          // this day's occurrence — no rtask item at all.
+          if (slot?.gcal_event_id || promotedKeys.has(overrideKey)) continue;
           let slotStart: string | null = null;
           let slotMinutes: number | null = null;
           if (override === null) {
@@ -389,6 +398,7 @@ export function DashboardCalendar({
     recurringCompletions,
     recurringSlots,
     slotOverrides,
+    promotedKeys,
     grid,
     today,
     wakeStartHour,
@@ -572,6 +582,28 @@ export function DashboardCalendar({
       });
       setErrorMessage(result.error || "couldn't schedule that routine");
     }
+  }
+
+  async function handlePromoteRtask(p: {
+    ruleId: string;
+    occurredOn: string;
+    title: string;
+    start: string;
+    durationMin: number;
+  }) {
+    setErrorMessage(null);
+    const result = await promoteRecurringToEvent(p);
+    if (result?.error) {
+      setErrorMessage(result.error || "couldn't create the event");
+      return false;
+    }
+    setPromotedKeys((keys) => {
+      const next = new Set(keys);
+      next.add(`${p.ruleId}:${p.occurredOn}`);
+      return next;
+    });
+    router.refresh();
+    return true;
   }
 
   async function handleClearRtaskSlot(ruleId: string, dateKey: string) {
@@ -903,7 +935,32 @@ export function DashboardCalendar({
                     />
                   )}
 
-                  {item.kind === "rtask" && item.slotStart !== null && (
+                  {item.kind === "rtask" && !item.done && (
+                    <div className="flex justify-end gap-1 border-t border-line px-3 py-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setPromoteFor((k) => (k === itemKey ? null : itemKey))
+                        }
+                        className="min-h-11 px-3 text-xs text-accent-ink hover:text-fg transition-colors"
+                      >
+                        make event →
+                      </button>
+                      {item.slotStart !== null && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleClearRtaskSlot(item.ruleId, selected)
+                          }
+                          className="min-h-11 px-3 text-xs text-muted hover:text-danger transition-colors"
+                        >
+                          unpin ×
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {item.kind === "rtask" && item.done && item.slotStart !== null && (
                     <div className="flex justify-end border-t border-line px-3 py-1">
                       <button
                         type="button"
@@ -915,6 +972,23 @@ export function DashboardCalendar({
                         unpin ×
                       </button>
                     </div>
+                  )}
+
+                  {item.kind === "rtask" && promoteFor === itemKey && (
+                    <RtaskPromotePanel
+                      item={item}
+                      dateKey={selected}
+                      onSubmit={async (p) => {
+                        const ok = await handlePromoteRtask({
+                          ruleId: item.ruleId,
+                          occurredOn: selected,
+                          ...p,
+                        });
+                        if (ok) setPromoteFor(null);
+                        return ok;
+                      }}
+                      onCancel={() => setPromoteFor(null)}
+                    />
                   )}
 
                   {item.kind === "rtask" &&

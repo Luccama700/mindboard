@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
+import { createEvent } from "@/utils/google/calendar";
+import { getUserPreferences } from "@/app/lib/data/settings";
 import { todayISO } from "@/app/_components/date-utils";
 import {
   RECURRING_TASK_COLUMNS,
@@ -9,6 +11,15 @@ import {
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function addMinutesToTime(time: string, minutes: number): string {
+  const [h, m] = time.split(":").map(Number);
+  const total = h * 60 + m + minutes;
+  const capped = Math.min(total, 23 * 60 + 59);
+  const hh = String(Math.floor(capped / 60)).padStart(2, "0");
+  const mm = String(capped % 60).padStart(2, "0");
+  return `${hh}:${mm}:00`;
+}
 const FREQUENCIES = new Set(["daily", "weekly", "monthly", "custom"]);
 const PRIORITIES = new Set(["low", "med", "high"]);
 
@@ -317,6 +328,95 @@ export async function approveRecurringSlot(input: {
       .eq("user_id", user.id);
     if (moveError) return { error: moveError.message };
   }
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+// Promote one occurrence into a real Google Calendar event: the event lands on
+// the rule's group-linked calendar (else primary), the slot row records the
+// event link, and the occurrence is marked done — composition then skips the
+// rtask that day and the event stands in. The rule itself is untouched.
+export async function promoteRecurringToEvent(input: {
+  ruleId: string;
+  occurredOn: string;
+  title: string;
+  start: string;
+  durationMin: number;
+}) {
+  if (!DATE_RE.test(input.occurredOn)) return { error: "invalid date" };
+  if (!TIME_RE.test(input.start)) return { error: "invalid time" };
+  const title = input.title.trim();
+  if (title.length === 0) return { error: "give the event a title" };
+  const durationMin = Math.trunc(Number(input.durationMin));
+  if (!Number.isFinite(durationMin) || durationMin < 15) {
+    return { error: "duration must be 15+ minutes" };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { data: rule, error: loadError } = await supabase
+    .from("recurring_tasks")
+    .select("id, group_id, groups(google_calendar_id)")
+    .eq("id", input.ruleId)
+    .eq("user_id", user.id)
+    .single();
+  if (loadError) return { error: loadError.message };
+  if (!rule) return { error: "routine not found" };
+
+  const groupRel = rule.groups as
+    | { google_calendar_id: string | null }
+    | { google_calendar_id: string | null }[]
+    | null;
+  const group = Array.isArray(groupRel) ? (groupRel[0] ?? null) : groupRel;
+  const calendarId = group?.google_calendar_id ?? "primary";
+
+  const prefs = await getUserPreferences(user.id);
+  const timeZone = prefs.timezone ?? "UTC";
+  const startTime = input.start.length === 5 ? `${input.start}:00` : input.start;
+  const endTime = addMinutesToTime(startTime.slice(0, 5), durationMin);
+
+  let eventId: string;
+  try {
+    eventId = await createEvent(user.id, calendarId, {
+      summary: title,
+      start: { dateTime: `${input.occurredOn}T${startTime}`, timeZone },
+      end: { dateTime: `${input.occurredOn}T${endTime}`, timeZone },
+      description: "from mindboard routine",
+    });
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "calendar event failed",
+    };
+  }
+
+  const { error: slotError } = await supabase
+    .from("recurring_task_slots")
+    .upsert(
+      {
+        user_id: user.id,
+        rule_id: input.ruleId,
+        occurred_on: input.occurredOn,
+        start_time: startTime,
+        duration_min: durationMin,
+        gcal_event_id: eventId,
+        gcal_calendar_id: calendarId,
+      },
+      { onConflict: "rule_id,occurred_on" },
+    );
+  if (slotError) return { error: slotError.message };
+
+  const { error: doneError } = await supabase
+    .from("recurring_task_completions")
+    .upsert(
+      { user_id: user.id, rule_id: input.ruleId, occurred_on: input.occurredOn },
+      { onConflict: "rule_id,occurred_on", ignoreDuplicates: true },
+    );
+  if (doneError) return { error: doneError.message };
 
   revalidatePath("/", "layout");
   return { error: null };

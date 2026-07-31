@@ -149,7 +149,7 @@ export async function buildPlanningSnapshot(params: {
       .gte("occurred_on", today),
     supabase
       .from("recurring_task_slots")
-      .select("rule_id, occurred_on, start_time, duration_min")
+      .select("rule_id, occurred_on, start_time, duration_min, gcal_event_id")
       .eq("user_id", userId)
       .gte("occurred_on", today),
     supabase
@@ -252,6 +252,7 @@ export async function buildPlanningSnapshot(params: {
     occurred_on: string;
     start_time: string;
     duration_min: number | null;
+    gcal_event_id: string | null;
   }[];
 
   type TaskRow = Omit<TaskWithGroup, "group_name" | "group_color"> & {

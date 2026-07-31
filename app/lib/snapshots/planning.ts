@@ -96,6 +96,7 @@ export type PlanningInput = {
     occurred_on: string;
     start_time: string; // "HH:MM" or "HH:MM:SS"
     duration_min: number | null;
+    gcal_event_id?: string | null; // promoted: the real event replaces the routine
   }[];
   tasks: TaskWithGroup[]; // every open task
 
@@ -307,6 +308,8 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
     }
     for (const slot of recurringSlots) {
       if (slot.occurred_on !== dateKey) continue;
+      // A promoted slot's time is supplied by the real Google event it created.
+      if (slot.gcal_event_id) continue;
       const rule = ruleById.get(slot.rule_id);
       if (!rule) continue;
       const hm = parseHms(slot.start_time);
@@ -443,6 +446,8 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
     for (const rule of recurringTasks) {
       if (!taskRuleLandsOn(rule, date)) continue;
       const slot = slotByKey.get(`${rule.id}|${dateKey}`);
+      // Promoted occurrences are replaced by their Google event that day.
+      if (slot?.gcal_event_id) continue;
       recurringOccurrences.push({
         ruleId: rule.id,
         title: rule.title,

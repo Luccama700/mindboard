@@ -19,6 +19,14 @@ vi.mock("@/app/lib/data/recurring-tasks", () => ({
   RECURRING_TASK_COLUMNS: "id",
 }));
 
+vi.mock("@/utils/google/calendar", () => ({
+  createEvent: vi.fn(),
+}));
+
+vi.mock("@/app/lib/data/settings", () => ({
+  getUserPreferences: vi.fn(async () => ({ timezone: "UTC" })),
+}));
+
 import { updateRecurringTask } from "@/app/actions/recurring-tasks";
 
 function mockUpdate() {

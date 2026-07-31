@@ -76,6 +76,9 @@ export type RecurringSlotRow = {
   occurred_on: string;
   start_time: string;
   duration_min: number | null;
+  // Promotion link (migration 0046): when set, this day's occurrence was
+  // turned into a real Google Calendar event and the event stands in.
+  gcal_event_id: string | null;
 };
 
 export const getRecurringSlots = cache(
@@ -87,7 +90,7 @@ export const getRecurringSlots = cache(
     const supabase = await createClient();
     const { data } = await supabase
       .from("recurring_task_slots")
-      .select("rule_id, occurred_on, start_time, duration_min")
+      .select("rule_id, occurred_on, start_time, duration_min, gcal_event_id")
       .eq("user_id", userId)
       .gte("occurred_on", startKey)
       .lte("occurred_on", endKey);

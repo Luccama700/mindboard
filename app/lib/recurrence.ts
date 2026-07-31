@@ -98,6 +98,9 @@ export type RecurringSlot = {
   occurred_on: string;
   start_time: string; // "HH:MM:SS" or "HH:MM"
   duration_min: number | null;
+  // Set when the occurrence was promoted into a real Google Calendar event
+  // (migration 0046): the event replaces the routine that day.
+  gcal_event_id?: string | null;
 };
 
 // Timed occurrences as synthetic busy events, for the free-time math
@@ -148,6 +151,9 @@ export function slotBusyEvents(
   const ruleById = new Map(rules.map((r) => [r.id, r]));
   const events: ScheduleEvent[] = [];
   for (const slot of slots) {
+    // A promoted slot's busy time comes from the real Google event it created —
+    // emitting it here would double-count.
+    if (slot.gcal_event_id) continue;
     const rule = ruleById.get(slot.rule_id);
     if (!rule) continue;
     const [h, m] = slot.start_time.split(":").map(Number);
