@@ -144,6 +144,9 @@ type DragData =
       dateKey: string;
       startMinutes: number;
       minutes: number;
+      // True when the position comes from the rule's due_time and no slot row
+      // exists yet: the drag-above-grid unpin gesture has nothing to clear.
+      slotless?: boolean;
     };
 
 export type RescheduleEvent = {
@@ -299,6 +302,7 @@ function RecurringTaskBlock({
           dateKey,
           startMinutes: block.start,
           minutes: block.minutes,
+          slotless: ruleTimedNoSlot,
         }
       : isPlanned && block
         ? {
@@ -324,9 +328,16 @@ function RecurringTaskBlock({
     ? { ref: setNodeRef, ...attributes, ...listeners }
     : {};
   // Short blocks can't fit two stacked lines inside their clamped height —
-  // collapse to one truncated line so nothing clips.
+  // collapse to one truncated line so nothing clips. Uses the same clamps as
+  // blockStyle so grid-edge blocks (e.g. 23:45) compare against their real
+  // rendered height, not their nominal span.
+  const clampedStart = Math.min(
+    Math.max(start, START_HOUR * 60),
+    END_HOUR * 60 - 30,
+  );
+  const clampedEnd = Math.max(Math.min(end, END_HOUR * 60), clampedStart + 30);
   const compact =
-    Math.max(((end - start) / 60) * HOUR_HEIGHT, 32) < 40;
+    Math.max(((clampedEnd - clampedStart) / 60) * HOUR_HEIGHT, 32) < 40;
 
   if (hasSlot || item.dueTime !== null) {
     return (
@@ -860,8 +871,9 @@ export function WeekView({
         const gridRect = grid.getBoundingClientRect();
         if (translated.top < gridRect.top - 12) {
           // Dragged back up above the grid: the commitment dissolves. Clear the
-          // ORIGINAL day's slot.
-          onClearRtaskSlot(data.ruleId, data.dateKey);
+          // ORIGINAL day's slot. A rule-timed occurrence has no slot to clear —
+          // returning avoids a pointless delete plus a sticky null override.
+          if (!data.slotless) onClearRtaskSlot(data.ruleId, data.dateKey);
           return;
         }
       }

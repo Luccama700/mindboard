@@ -37,7 +37,7 @@ land will not render.
 
 ### 2. Short-block display
 
-When the rendered block height is under 40px (< ~45 min at the current hour height),
+When the rendered block height is under 40px (< ~57 min at the current hour height),
 both routine variants switch to a single truncated line — `↻ title · 12:30` (ghost:
 `↻ title · ~12:30 · auto`) — with reduced vertical padding. Taller blocks keep the
 two-line layout.

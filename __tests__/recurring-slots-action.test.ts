@@ -32,6 +32,7 @@ import {
   approveRecurringSlot,
   clearRecurringSlot,
   promoteRecurringToEvent,
+  unpromoteRecurringEvent,
 } from "@/app/actions/recurring-tasks";
 
 type UpsertCall = { payload: Record<string, unknown>; opts: unknown };
@@ -176,33 +177,73 @@ describe("promoteRecurringToEvent", () => {
     mocks.authGetUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
   });
 
-  function mockPromoteClient(
-    ruleRow: Record<string, unknown> | null = {
-      id: "r1",
-      group_id: "g1",
-      groups: { google_calendar_id: "cal-group" },
-    },
-  ) {
+  function mockPromoteClient(opts?: {
+    ruleRow?: Record<string, unknown> | null;
+    existingSlot?: { gcal_event_id: string | null } | null;
+  }) {
+    const ruleRow =
+      opts?.ruleRow !== undefined
+        ? opts.ruleRow
+        : {
+            id: "r1",
+            group_id: "g1",
+            groups: { google_calendar_id: "cal-group" },
+          };
+    const existingSlot = opts?.existingSlot ?? null;
     const upserts: { table: string; payload: Record<string, unknown>; opts: unknown }[] = [];
-    const single = vi.fn(async () => ({ data: ruleRow, error: null }));
+    const ruleFilters: [string, unknown][] = [];
+    const guardFilters: [string, unknown][] = [];
+    const pushUpsert = (table: string) =>
+      vi.fn(async (payload: Record<string, unknown>, o: unknown) => {
+        upserts.push({ table, payload, opts: o });
+        return { error: null };
+      });
     mocks.from.mockImplementation((table: string) => {
       if (table === "recurring_tasks") {
         const chain = {
           select: vi.fn(() => chain),
-          eq: vi.fn(() => chain),
-          single,
+          eq: vi.fn((col: string, val: unknown) => {
+            ruleFilters.push([col, val]);
+            return chain;
+          }),
+          single: vi.fn(async () => ({ data: ruleRow, error: null })),
         };
         return chain;
       }
-      return {
-        upsert: vi.fn(async (payload: Record<string, unknown>, opts: unknown) => {
-          upserts.push({ table, payload, opts });
-          return { error: null };
-        }),
-      };
+      if (table === "recurring_task_slots") {
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn((col: string, val: unknown) => {
+            guardFilters.push([col, val]);
+            return chain;
+          }),
+          maybeSingle: vi.fn(async () => ({ data: existingSlot, error: null })),
+          upsert: pushUpsert(table),
+        };
+        return chain;
+      }
+      return { upsert: pushUpsert(table) };
     });
-    return { upserts, single };
+    return { upserts, ruleFilters, guardFilters };
   }
+
+  test("refuses to re-promote an occurrence that already has an event", async () => {
+    const { upserts } = mockPromoteClient({
+      existingSlot: { gcal_event_id: "evt-0" },
+    });
+
+    await expect(
+      promoteRecurringToEvent({
+        ruleId: "r1",
+        occurredOn: "2026-07-31",
+        title: "lunch",
+        start: "12:00",
+        durationMin: 30,
+      }),
+    ).resolves.toEqual({ error: "already on the calendar" });
+    expect(mocks.createEvent).not.toHaveBeenCalled();
+    expect(upserts).toEqual([]);
+  });
 
   test("rejects bad input without touching Google or the DB", async () => {
     mockPromoteClient();
@@ -232,7 +273,7 @@ describe("promoteRecurringToEvent", () => {
   });
 
   test("creates the event on the group's linked calendar and links the slot", async () => {
-    const { upserts } = mockPromoteClient();
+    const { upserts, ruleFilters, guardFilters } = mockPromoteClient();
     mocks.createEvent.mockResolvedValue("evt-1");
 
     await expect(
@@ -251,6 +292,14 @@ describe("promoteRecurringToEvent", () => {
       end: { dateTime: "2026-07-31T13:30:00", timeZone: "America/Vancouver" },
       description: "from mindboard routine",
     });
+
+    // The multi-tenant invariant, pinned: both reads are user-scoped.
+    expect(ruleFilters).toContainEqual(["user_id", "user-1"]);
+    expect(guardFilters).toEqual([
+      ["rule_id", "r1"],
+      ["occurred_on", "2026-07-31"],
+      ["user_id", "user-1"],
+    ]);
 
     const slotUpsert = upserts.find((u) => u.table === "recurring_task_slots");
     expect(slotUpsert?.payload).toEqual({
@@ -280,7 +329,9 @@ describe("promoteRecurringToEvent", () => {
   });
 
   test("falls back to the primary calendar when the group has no link", async () => {
-    mockPromoteClient({ id: "r1", group_id: null, groups: null });
+    mockPromoteClient({
+      ruleRow: { id: "r1", group_id: null, groups: null },
+    });
     mocks.createEvent.mockResolvedValue("evt-2");
 
     await promoteRecurringToEvent({
@@ -311,5 +362,29 @@ describe("promoteRecurringToEvent", () => {
       }),
     ).resolves.toEqual({ error: "google says no" });
     expect(upserts).toEqual([]);
+  });
+});
+
+describe("unpromoteRecurringEvent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.authGetUser.mockResolvedValue({ data: { user: { id: "user-1" } } });
+  });
+
+  test("deletes the slot and the completion, both user-scoped, and revalidates", async () => {
+    const { del, deleteCalls } = mockClient();
+
+    await expect(unpromoteRecurringEvent("r1", "2026-07-31")).resolves.toEqual({
+      error: null,
+    });
+    expect(del).toHaveBeenCalledTimes(2);
+    const scoped = [
+      ["rule_id", "r1"],
+      ["occurred_on", "2026-07-31"],
+      ["user_id", "user-1"],
+    ];
+    expect(deleteCalls[0].filters).toEqual(scoped);
+    expect(deleteCalls[1].filters).toEqual(scoped);
+    expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 });

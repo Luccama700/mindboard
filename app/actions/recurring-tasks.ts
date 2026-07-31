@@ -368,6 +368,19 @@ export async function promoteRecurringToEvent(input: {
   if (loadError) return { error: loadError.message };
   if (!rule) return { error: "routine not found" };
 
+  // Guard BEFORE creating anything on Google: a retry (or a second tab) must
+  // not mint a duplicate real event. Pre-migration this select fails on the
+  // missing column, which also fails the action before any event exists.
+  const { data: existingSlot, error: slotLoadError } = await supabase
+    .from("recurring_task_slots")
+    .select("gcal_event_id")
+    .eq("rule_id", input.ruleId)
+    .eq("occurred_on", input.occurredOn)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (slotLoadError) return { error: slotLoadError.message };
+  if (existingSlot?.gcal_event_id) return { error: "already on the calendar" };
+
   const groupRel = rule.groups as
     | { google_calendar_id: string | null }
     | { google_calendar_id: string | null }[]
@@ -416,6 +429,36 @@ export async function promoteRecurringToEvent(input: {
       { user_id: user.id, rule_id: input.ruleId, occurred_on: input.occurredOn },
       { onConflict: "rule_id,occurred_on", ignoreDuplicates: true },
     );
+  if (doneError) return { error: doneError.message };
+
+  revalidatePath("/", "layout");
+  return { error: null };
+}
+
+// Undo a promotion: drop the slot row (with its event link) and the completion,
+// so the occurrence composes again. Mindboard never deletes Google events —
+// the created event stays on the calendar until removed there.
+export async function unpromoteRecurringEvent(ruleId: string, dateKey: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error: slotError } = await supabase
+    .from("recurring_task_slots")
+    .delete()
+    .eq("rule_id", ruleId)
+    .eq("occurred_on", dateKey)
+    .eq("user_id", user.id);
+  if (slotError) return { error: slotError.message };
+
+  const { error: doneError } = await supabase
+    .from("recurring_task_completions")
+    .delete()
+    .eq("rule_id", ruleId)
+    .eq("occurred_on", dateKey)
+    .eq("user_id", user.id);
   if (doneError) return { error: doneError.message };
 
   revalidatePath("/", "layout");

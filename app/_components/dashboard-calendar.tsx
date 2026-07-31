@@ -10,6 +10,7 @@ import {
   approveRecurringSlot,
   clearRecurringSlot,
   promoteRecurringToEvent,
+  unpromoteRecurringEvent,
 } from "@/app/actions/recurring-tasks";
 import { freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
 import type { ScheduleVitals } from "@/app/lib/snapshots/schedule";
@@ -584,6 +585,21 @@ export function DashboardCalendar({
     }
   }
 
+  async function handleUnpromote(ruleId: string, occurredOn: string) {
+    setErrorMessage(null);
+    const result = await unpromoteRecurringEvent(ruleId, occurredOn);
+    if (result?.error) {
+      setErrorMessage(result.error || "couldn't restore the routine");
+      return;
+    }
+    setPromotedKeys((keys) => {
+      const next = new Set(keys);
+      next.delete(`${ruleId}:${occurredOn}`);
+      return next;
+    });
+    router.refresh();
+  }
+
   async function handlePromoteRtask(p: {
     ruleId: string;
     occurredOn: string;
@@ -622,6 +638,21 @@ export function DashboardCalendar({
       setErrorMessage(result.error || "couldn't clear that slot");
     }
   }
+
+  // Events that exist because a routine occurrence was promoted, keyed by the
+  // Google event id — these get a "back to routine" affordance in the day list.
+  const promotedByEventId = useMemo(() => {
+    const map = new Map<string, { ruleId: string; occurredOn: string }>();
+    for (const s of recurringSlots) {
+      if (s.gcal_event_id) {
+        map.set(s.gcal_event_id, {
+          ruleId: s.rule_id,
+          occurredOn: s.occurred_on,
+        });
+      }
+    }
+    return map;
+  }, [recurringSlots]);
 
   const selectedItems = itemsByDate.get(selected) ?? [];
   const selectedLabel = formatWeekdayMonthDay(
@@ -933,6 +964,25 @@ export function DashboardCalendar({
                       }}
                       onCancel={() => setExpandedItem(null)}
                     />
+                  )}
+
+                  {item.kind === "event" && promotedByEventId.has(item.id) && (
+                    <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-1">
+                      <span className="truncate text-[10px] text-muted">
+                        was a routine · the google event stays until deleted
+                        there
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const p = promotedByEventId.get(item.id);
+                          if (p) handleUnpromote(p.ruleId, p.occurredOn);
+                        }}
+                        className="min-h-11 shrink-0 px-3 text-xs text-muted hover:text-danger transition-colors"
+                      >
+                        back to routine ×
+                      </button>
+                    </div>
                   )}
 
                   {item.kind === "rtask" && !item.done && (
