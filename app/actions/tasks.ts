@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
+import { appendSection } from "@/app/lib/notes";
 import { TASK_COLUMNS } from "@/app/_components/types";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -384,6 +385,68 @@ export async function requestAgentRun() {
   );
   if (error) return { error: error.message };
   return { error: null };
+}
+
+// "✦ do it": dispatch one open task to the home worker with a one-shot
+// operator note (spec:
+// docs/superpowers/specs/2026-07-31-task-dispatch-design.md). The dispatch row
+// is the queue entry the worker claims; the note is ALSO appended to the task
+// notes, which stay the human-readable source of truth. Approving the task and
+// stamping the agent-run request is what makes the PC pick it up on its next
+// 5-minute poll. Owner-gated like requestAgentRun — only the owner's PAT polls.
+export async function requestTaskDispatch(input: {
+  taskId: string;
+  note: string;
+}): Promise<{ error: string | null; dispatchId?: string }> {
+  const note = input.note?.trim();
+  if (!note) return { error: "note required" };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  try {
+    const { ownerUserId } = await import("@/app/lib/mcp/config");
+    if (ownerUserId() !== user.id) {
+      return { error: "no agent PC serves this account" };
+    }
+  } catch {
+    return { error: "no agent PC serves this account" };
+  }
+
+  const { data: task, error: taskErr } = await supabase
+    .from("tasks")
+    .select("id, notes")
+    .eq("id", input.taskId)
+    .single();
+  if (taskErr || !task) return { error: "task not found" };
+
+  const { data: dispatch, error: insErr } = await supabase
+    .from("task_dispatches")
+    .insert({ user_id: user.id, task_id: task.id, note, status: "requested" })
+    .select("id")
+    .single();
+  if (insErr || !dispatch) return { error: "could not create dispatch" };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const { error: updErr } = await supabase
+    .from("tasks")
+    .update({
+      notes: appendSection(task.notes, `Operator note (${today})`, note),
+      ai_state: "approved",
+    })
+    .eq("id", task.id);
+  if (updErr) return { error: "could not update task" };
+
+  await supabase.from("user_settings").upsert(
+    { user_id: user.id, agent_run_requested_at: new Date().toISOString() },
+    { onConflict: "user_id" },
+  );
+
+  revalidatePath("/", "layout");
+  return { error: null, dispatchId: dispatch.id };
 }
 
 export async function deleteTask(id: string) {
