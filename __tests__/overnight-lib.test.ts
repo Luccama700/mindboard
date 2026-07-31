@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import {
+  FLAG_WITHOUT_VALUE,
   MODEL_CHOICES,
   appendSection,
   argValue,
@@ -323,11 +326,18 @@ describe("argValue", () => {
     expect(argValue(["--task=3f1c"], "--task")).toBe("3f1c");
   });
 
-  test("null when absent, trailing, or followed by another flag", () => {
+  test("null only when the flag is absent", () => {
     expect(argValue(["--dry"], "--task")).toBeNull();
-    expect(argValue(["--task"], "--task")).toBeNull();
-    expect(argValue(["--task", "--dry"], "--task")).toBeNull();
     expect(argValue([], "--task")).toBeNull();
+  });
+
+  // A valueless --task must never read as "no --task given" — that would turn
+  // a targeted run into a full sweep over the whole board.
+  test("a valueless flag is its own answer, not absence", () => {
+    expect(argValue(["--task"], "--task")).toBe(FLAG_WITHOUT_VALUE);
+    expect(argValue(["--task", "--dry"], "--task")).toBe(FLAG_WITHOUT_VALUE);
+    expect(argValue(["--dry", "--task"], "--task")).toBe(FLAG_WITHOUT_VALUE);
+    expect(argValue(["--task="], "--task")).toBe(FLAG_WITHOUT_VALUE);
   });
 });
 
@@ -347,6 +357,8 @@ describe("dispatchPrompt (Track C)", () => {
     expect(prompt).toContain("book the practice room");
     expect(prompt).toContain("prefer mornings");
     expect(prompt).toContain("check the booking site and hold 9am");
+    // the Track C manifest, not Track B's web-only capabilities.md
+    expect(prompt).toContain("YOUR DISPATCH CAPABILITIES MANIFEST:");
     expect(prompt).toContain("MANIFEST BODY");
     // the verbatim guardrail block
     expect(prompt).toContain("never submit");
@@ -354,6 +366,21 @@ describe("dispatchPrompt (Track C)", () => {
     expect(prompt).toContain("Graded coursework");
     expect(prompt).toContain("ai/*");
     expect(prompt).toContain("never main");
+  });
+
+  // run.mjs feeds this file to dispatchPrompt; capabilities.md (Track B) is
+  // web-only and would contradict the Track C profile it is paired with.
+  test("the Track C manifest exists and grants local powers under the hard rules", () => {
+    const manifest = readFileSync(
+      join(import.meta.dirname, "..", "overnight", "dispatch-capabilities.md"),
+      "utf8",
+    );
+    expect(manifest).toContain("dispatched");
+    expect(manifest).toContain("Shell");
+    expect(manifest).toContain("ai/*");
+    expect(manifest).toContain("Never");
+    expect(manifest).toContain("credentials");
+    expect(manifest).toContain("main");
   });
 
   test("survives a task with no notes and clips a huge one", () => {

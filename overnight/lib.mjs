@@ -71,20 +71,27 @@ export function pickBuildTasks(tasks, max) {
     .slice(0, max);
 }
 
-// Value of a `--flag value` (or `--flag=value`) argument. Returns null when the
-// flag is absent, trailing, or followed by another flag — callers then treat it
-// as "not given" rather than swallowing the next flag as a value.
+// A flag that was passed but carries no value. Distinct from null (absent) so
+// `--task` with a forgotten id is a usage error instead of silently becoming a
+// full sweep over the whole board.
+export const FLAG_WITHOUT_VALUE = Symbol("flag without value");
+
+// Value of a `--flag value` (or `--flag=value`) argument. null when the flag
+// is absent; FLAG_WITHOUT_VALUE when it is present but trailing, empty, or
+// followed by another flag (never swallow the next flag as a value).
 export function argValue(argv, flag) {
   const args = argv ?? [];
   for (let i = 0; i < args.length; i++) {
     const arg = String(args[i]);
     if (arg.startsWith(`${flag}=`)) {
       const value = arg.slice(flag.length + 1);
-      return value === "" ? null : value;
+      return value === "" ? FLAG_WITHOUT_VALUE : value;
     }
     if (arg === flag) {
       const next = args[i + 1];
-      if (next === undefined || String(next).startsWith("--")) return null;
+      if (next === undefined || String(next).startsWith("--")) {
+        return FLAG_WITHOUT_VALUE;
+      }
       return String(next);
     }
   }
@@ -307,11 +314,12 @@ export function parseTriage(text, validIds) {
 
 // ---------- Track C: dispatched tasks ("do this now") ----------
 
-// The operator picked THIS task and asked for it now, so the executor gets the
-// full Track A profile (shell, files, browser) instead of Track B's web-only
-// one — the guardrails below are what keep that safe, and they are carried
-// verbatim in the prompt (spec:
-// docs/superpowers/specs/2026-07-31-task-dispatch-design.md).
+// The user picked THIS task and asked for it now, so the executor gets full
+// local powers instead of Track B's web-only profile — the guardrails below
+// are what keep that safe, and they are carried verbatim in the prompt beside
+// the Track C manifest (overnight/dispatch-capabilities.md, NOT the web-only
+// capabilities.md). Spec:
+// docs/superpowers/specs/2026-07-31-task-dispatch-design.md.
 export function dispatchPrompt(task, note, manifest) {
   return [
     `You are the user's home agent, dispatched by them just now to work ONE`,
@@ -323,7 +331,7 @@ export function dispatchPrompt(task, note, manifest) {
     `act on it. No credential handling. Graded coursework submission stays a`,
     `human action. Code work happens on ai/* branches only, never main.`,
     ``,
-    `YOUR CAPABILITIES MANIFEST:`,
+    `YOUR DISPATCH CAPABILITIES MANIFEST:`,
     ``,
     manifest,
     ``,
