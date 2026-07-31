@@ -8,7 +8,10 @@ import type { Task, TaskWithGroup } from "./types";
 // Overnight-agent badge copy per lifecycle state (docs/overnight-agent-plan.md).
 // Copy is track-agnostic: code tasks (mindboard group) build on branches,
 // life tasks get research/drafts — the lifecycle is the same either way.
-const AI_BADGE: Record<NonNullable<Task["ai_state"]>, { label: string; tone: string }> = {
+export const AI_BADGE: Record<
+  NonNullable<Task["ai_state"]>,
+  { label: string; tone: string }
+> = {
   planned: { label: "✦ plan ready", tone: "text-accent" },
   approved: { label: "✦ queued", tone: "text-muted" },
   building: { label: "✦ working…", tone: "text-muted" },
