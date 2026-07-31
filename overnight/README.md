@@ -24,9 +24,11 @@ or on demand — it works the user's board over MCP, two tracks:
 **Track C — dispatched ("do this now"):**
 
 - one task the user picked in the app, with a one-shot note, run **now** at
-  full power (shell + files + browser, the Track A profile) instead of the
-  nightly sweep. The result is written back into the task notes as
-  `## Agent result` and the badge flips to `✦ done` / `✦ failed`.
+  full power (shell + files + web, its own manifest in
+  `dispatch-capabilities.md`) instead of the nightly sweep. The result is
+  written back into the task notes as `## Agent result`.
+- the task shows no agent badge while it waits — it wears `✦ working…` once
+  the run actually starts, then `✦ done` or `✦ failed`.
 
 Approve/dismiss happens on the task row in the app (the `ai build` controls
 in the edit panel) — same button for both tracks. The agent never touches
@@ -39,9 +41,11 @@ in the edit panel) — same button for both tracks. The agent never touches
   `run.mjs --if-requested`) claims it via the `claim_agent_run` MCP tool and
   fires a full run.
 - **`✦ do it` on a task** (the day stream): writes a `task_dispatches` row +
-  an `## Operator note` into the task and stamps the same run request. The
-  next poll claims the dispatch (`claim_task_dispatch`) and runs **that task
-  only**, then exits — no sweep.
+  an `## Operator note` into the task and stamps the same run request. **Every**
+  run — poll or nightly — drains the dispatch queue first (up to 3 per run,
+  oldest fresh request first), whether or not a run was requested; the stamp
+  gates only the sweep that follows. One task may have one live dispatch at a
+  time.
 - **From Claude Code**: the `/overnight` skill, or directly, e.g.
   `node overnight\run.mjs --life-only --plan-only` (triage + propose only).
 
@@ -54,9 +58,13 @@ node overnight\run.mjs --dry --task <task-uuid>    # print the prompt + profile,
 
 `--task` claims the pending dispatch for that one task
 (`claim_task_dispatch { taskId }`); with none pending it logs and exits 0. The
-id must be a task uuid — anything else exits before touching the network. A
-claim that dies (machine asleep, crash) goes stale after 60 minutes and the
-next poll re-claims it.
+id must be a task uuid, and a bare `--task` with no id is a usage error
+(exit 2) — never a silent full sweep; both exit before touching the network.
+
+A claim that dies (machine asleep, crash) goes stale after 60 minutes, and
+because every poll drains the queue, the next one re-claims it. A dispatch
+that keeps killing its run is retired as failed after **3** claims
+(`gave up after 3 attempts`) rather than eating a poll forever.
 
 ### First-run checklist (do this once, before pointing it at anything real)
 
@@ -135,12 +143,15 @@ next poll re-claims it.
   the `ai_audit_log` (`list_proposals`).
 - Plan runs are read-only (plan mode). Build runs are confined to their
   worktree with a whitelisted tool set; the orchestrator does all git.
-- Dispatched (`✦ do it`) runs get the widest profile — shell, files, browser,
-  inside `../mindboard-agent-workspace` — so their guardrails ride in the
-  prompt verbatim: prepare/research/build/draft only, never send, sign,
-  purchase, publish, or submit in the user's name; no credential handling;
-  graded coursework submission stays a human action; code work on `ai/*`
-  branches, never `main`.
+- Dispatched (`✦ do it`) runs get the widest profile — shell and files inside
+  `../mindboard-agent-workspace` — so they are fenced twice. Mechanically:
+  `--allowedTools Bash(*)` with `--strict-mcp-config` (no MCP servers reach
+  the child; the orchestrator owns every Mindboard write) and a disallow list
+  covering `git push`, `git checkout main`, and `git switch main`. In the
+  prompt, verbatim, beside `dispatch-capabilities.md`: prepare/research/
+  build/draft only, never send, sign, purchase, publish, or submit in the
+  user's name; no credential handling; graded coursework submission stays a
+  human action; code work on `ai/*` branches, never `main`.
 - Per-run `--max-budget-usd` and `--max-turns`, plus nightly plan/build caps.
 - Kill switch: `Disable-ScheduledTask -TaskName "Mindboard Overnight Agent"`,
   or revoke the PAT in settings (every MCP call dies instantly).
