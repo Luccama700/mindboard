@@ -34,15 +34,19 @@ type Recorded = {
   insert: Record<string, unknown> | null;
   taskUpdate: Record<string, unknown> | null;
   upsert: { payload: Record<string, unknown>; opts: unknown } | null;
+  deleted: string[];
 };
 
-// One router for the three tables the action touches, recording the call
-// order so the note lands before the task flip before the wake-up stamp.
+// One router for the three tables the action touches, recording the call order
+// so the guards run before the insert, the note before the wake-up stamp, and
+// any rollback after the failure that caused it.
 function mockTables(
   over: {
     task?: { data: unknown; error: unknown };
+    openDispatches?: unknown[];
     dispatch?: { data: unknown; error: unknown };
     taskUpdateError?: unknown;
+    stampError?: unknown;
   } = {},
 ): Recorded {
   const rec: Recorded = {
@@ -50,6 +54,7 @@ function mockTables(
     insert: null,
     taskUpdate: null,
     upsert: null,
+    deleted: [],
   };
 
   mocks.from.mockImplementation((table: string) => {
@@ -61,7 +66,7 @@ function mockTables(
               rec.order.push("task:load");
               return (
                 over.task ?? {
-                  data: { id: "task-1", notes: "old notes" },
+                  data: { id: "task-1", notes: "old notes", status: "todo" },
                   error: null,
                 }
               );
@@ -78,7 +83,16 @@ function mockTables(
       };
     }
     if (table === "task_dispatches") {
+      const openQuery = {
+        eq: vi.fn(() => openQuery),
+        in: vi.fn(() => openQuery),
+        limit: vi.fn(async () => {
+          rec.order.push("dispatch:open-check");
+          return { data: over.openDispatches ?? [], error: null };
+        }),
+      };
       return {
+        select: vi.fn(() => openQuery),
         insert: vi.fn((payload: Record<string, unknown>) => ({
           select: vi.fn(() => ({
             single: vi.fn(async () => {
@@ -90,6 +104,13 @@ function mockTables(
             }),
           })),
         })),
+        delete: vi.fn(() => ({
+          eq: vi.fn(async (_col: string, id: string) => {
+            rec.order.push("dispatch:delete");
+            rec.deleted.push(id);
+            return { error: null };
+          }),
+        })),
       };
     }
     if (table === "user_settings") {
@@ -97,7 +118,7 @@ function mockTables(
         upsert: vi.fn(async (payload: Record<string, unknown>, opts: unknown) => {
           rec.order.push("settings:upsert");
           rec.upsert = { payload, opts };
-          return { error: null };
+          return { error: over.stampError ?? null };
         }),
       };
     }
@@ -169,6 +190,7 @@ describe("requestTaskDispatch", () => {
 
     expect(rec.order).toEqual([
       "task:load",
+      "dispatch:open-check",
       "dispatch:insert",
       "task:update",
       "settings:upsert",
@@ -179,10 +201,10 @@ describe("requestTaskDispatch", () => {
       note: "book the room",
       status: "requested",
     });
+    // No ai_state: 'approved' is the nightly sweep's queue, not this one.
     expect(rec.taskUpdate).toEqual({
       notes:
         "old notes\n\n---\n\n## Operator note (2026-07-31)\n\nbook the room",
-      ai_state: "approved",
     });
     expect(rec.upsert).toEqual({
       payload: {
@@ -206,12 +228,53 @@ describe("requestTaskDispatch", () => {
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
-  test("reports a failed task update without stamping the run request", async () => {
+  test("reports a failed task update, rolls the dispatch back, and never stamps", async () => {
     const rec = mockTables({ taskUpdateError: { message: "nope" } });
     await expect(
       requestTaskDispatch({ taskId: "task-1", note: "do it" }),
     ).resolves.toEqual({ error: "could not update task" });
     expect(rec.upsert).toBeNull();
+    expect(rec.deleted).toEqual(["dispatch-1"]);
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test("a failed wake-up stamp propagates and rolls the dispatch back", async () => {
+    const rec = mockTables({ stampError: { message: "settings offline" } });
+    await expect(
+      requestTaskDispatch({ taskId: "task-1", note: "do it" }),
+    ).resolves.toEqual({ error: "could not wake the agent" });
+    expect(rec.deleted).toEqual(["dispatch-1"]);
+    expect(rec.order[rec.order.length - 1]).toBe("dispatch:delete");
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  test.each(["done", "missed"])("refuses a %s task", async (status) => {
+    const rec = mockTables({
+      task: { data: { id: "task-1", notes: null, status }, error: null },
+    });
+    await expect(
+      requestTaskDispatch({ taskId: "task-1", note: "do it" }),
+    ).resolves.toEqual({ error: `task is already ${status}` });
+    expect(rec.insert).toBeNull();
+  });
+
+  test("refuses a second dispatch while one is still in flight", async () => {
+    const rec = mockTables({ openDispatches: [{ id: "dispatch-0" }] });
+    await expect(
+      requestTaskDispatch({ taskId: "task-1", note: "do it again" }),
+    ).resolves.toEqual({ error: "already dispatched" });
+    expect(rec.insert).toBeNull();
+    expect(rec.taskUpdate).toBeNull();
+  });
+
+  test("a unique-violation on insert reads as already dispatched", async () => {
+    const rec = mockTables({
+      dispatch: { data: null, error: { code: "23505", message: "duplicate" } },
+    });
+    await expect(
+      requestTaskDispatch({ taskId: "task-1", note: "do it" }),
+    ).resolves.toEqual({ error: "already dispatched" });
+    expect(rec.taskUpdate).toBeNull();
+    expect(rec.deleted).toEqual([]);
   });
 });

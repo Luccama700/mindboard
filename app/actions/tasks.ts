@@ -418,32 +418,64 @@ export async function requestTaskDispatch(input: {
 
   const { data: task, error: taskErr } = await supabase
     .from("tasks")
-    .select("id, notes")
+    .select("id, notes, status")
     .eq("id", input.taskId)
     .single();
   if (taskErr || !task) return { error: "task not found" };
+  if (task.status === "done" || task.status === "missed") {
+    return { error: `task is already ${task.status}` };
+  }
+
+  // One live dispatch per task: a second note while the first is still in
+  // flight would race the worker's own write-back.
+  const { data: open } = await supabase
+    .from("task_dispatches")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("task_id", task.id)
+    .in("status", ["requested", "claimed", "running"])
+    .limit(1);
+  if ((open ?? []).length > 0) return { error: "already dispatched" };
 
   const { data: dispatch, error: insErr } = await supabase
     .from("task_dispatches")
     .insert({ user_id: user.id, task_id: task.id, note, status: "requested" })
     .select("id")
     .single();
-  if (insErr || !dispatch) return { error: "could not create dispatch" };
+  if (insErr || !dispatch) {
+    // 23505: the partial unique index caught a double-tap the read missed.
+    const raced = (insErr as { code?: string } | null)?.code === "23505";
+    return { error: raced ? "already dispatched" : "could not create dispatch" };
+  }
 
+  // Anything that fails from here leaves a queue row nothing will ever run,
+  // so the row goes back out before the error does.
+  const rollback = async () => {
+    await supabase.from("task_dispatches").delete().eq("id", dispatch.id);
+  };
+
+  // No ai_state here: 'approved' is the nightly sweep's queue, and a dispatch
+  // is not that. The worker stamps 'building' when it actually starts.
   const today = new Date().toISOString().slice(0, 10);
   const { error: updErr } = await supabase
     .from("tasks")
     .update({
       notes: appendSection(task.notes, `Operator note (${today})`, note),
-      ai_state: "approved",
     })
     .eq("id", task.id);
-  if (updErr) return { error: "could not update task" };
+  if (updErr) {
+    await rollback();
+    return { error: "could not update task" };
+  }
 
-  await supabase.from("user_settings").upsert(
+  const { error: stampErr } = await supabase.from("user_settings").upsert(
     { user_id: user.id, agent_run_requested_at: new Date().toISOString() },
     { onConflict: "user_id" },
   );
+  if (stampErr) {
+    await rollback();
+    return { error: "could not wake the agent" };
+  }
 
   revalidatePath("/", "layout");
   return { error: null, dispatchId: dispatch.id };

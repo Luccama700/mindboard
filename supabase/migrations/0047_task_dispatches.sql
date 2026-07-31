@@ -29,3 +29,9 @@ create policy "task_dispatches_update_own" on public.task_dispatches
 
 create index task_dispatches_pending_idx
   on public.task_dispatches (user_id, status, created_at);
+
+-- One live dispatch per task. The app checks first for a clean error; this is
+-- what makes it true under a double-tap.
+create unique index task_dispatches_one_open_per_task
+  on public.task_dispatches (task_id)
+  where status in ('requested', 'claimed', 'running');
