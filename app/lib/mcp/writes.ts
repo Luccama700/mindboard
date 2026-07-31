@@ -2859,6 +2859,7 @@ const DISPATCH_CANDIDATE_SCAN = 10;
 
 type DispatchCandidate = {
   id: string;
+  task_id: string;
   status: DispatchStatus;
   claimed_at: string | null;
   created_at: string;
@@ -2880,7 +2881,7 @@ async function scanDispatchCandidates(
   const base = () => {
     const q = supabase
       .from("task_dispatches")
-      .select("id, status, claimed_at, created_at, attempts")
+      .select("id, task_id, status, claimed_at, created_at, attempts")
       .eq("user_id", userId);
     return taskId ? q.eq("task_id", taskId) : q;
   };
@@ -2922,12 +2923,17 @@ async function scanDispatchCandidates(
 
 // Retire rows that have burned their attempts. Guarded on a non-terminal
 // status so a row someone else just finished is left alone.
+//
+// Their tasks are failed too: a retired dispatch died mid-run, so the card
+// would otherwise read ✦ working… forever — and the nightly sweep treats a
+// stale 'building' as a crashed claim and would re-run the task as a Track B
+// life task, on the wrong track entirely.
 async function retireExhaustedDispatches(
   supabase: SupabaseClient,
   userId: string,
-  ids: string[],
+  rows: DispatchCandidate[],
 ): Promise<void> {
-  if (ids.length === 0) return;
+  if (rows.length === 0) return;
   await supabase
     .from("task_dispatches")
     .update({
@@ -2935,9 +2941,24 @@ async function retireExhaustedDispatches(
       result_summary: `gave up after ${DISPATCH_MAX_ATTEMPTS} attempts`,
       finished_at: new Date().toISOString(),
     })
-    .in("id", ids)
+    .in(
+      "id",
+      rows.map((row) => row.id),
+    )
     .eq("user_id", userId)
     .in("status", ["requested", "claimed", "running"]);
+
+  // Only the badge this dispatch set: a task the user has since re-planned
+  // must keep its own state.
+  await supabase
+    .from("tasks")
+    .update({ ai_state: "failed" })
+    .in(
+      "id",
+      rows.map((row) => row.task_id),
+    )
+    .eq("user_id", userId)
+    .eq("ai_state", "building");
 }
 
 // Next row worth claiming: a fresh request beats a stale reclaim, so a sick
@@ -2954,11 +2975,7 @@ async function pickDispatchCandidate(
   const exhausted = [...scan.value.requested, ...scan.value.reclaimable].filter(
     (row) => row.attempts >= DISPATCH_MAX_ATTEMPTS,
   );
-  await retireExhaustedDispatches(
-    supabase,
-    userId,
-    exhausted.map((row) => row.id),
-  );
+  await retireExhaustedDispatches(supabase, userId, exhausted);
 
   const live = (rows: DispatchCandidate[]) =>
     rows.find((row) => row.attempts < DISPATCH_MAX_ATTEMPTS) ?? null;

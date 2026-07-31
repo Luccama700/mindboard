@@ -201,6 +201,45 @@ describe("claimTaskDispatch", () => {
     expect(row.finished_at).toBe(NOW.toISOString());
   });
 
+  // Otherwise the card reads ✦ working… forever, and the nightly sweep reads
+  // a stale 'building' as a crashed claim and re-runs the task as a life task.
+  test("retiring a dispatch fails its task's badge too", async () => {
+    const db = install(
+      [dispatch({ id: "poison", status: "running", claimed_at: STALE, attempts: 3 })],
+      [
+        {
+          id: "task-1",
+          user_id: "user-1",
+          title: "Book the room",
+          notes: null,
+          ai_state: "building",
+        },
+      ],
+    );
+
+    await claimTaskDispatch("user-1");
+    expect(db.tables.tasks[0].ai_state).toBe("failed");
+  });
+
+  test("retiring leaves a task the user has since re-planned alone", async () => {
+    const db = install(
+      [dispatch({ id: "poison", status: "running", claimed_at: STALE, attempts: 3 })],
+      [
+        {
+          id: "task-1",
+          user_id: "user-1",
+          title: "Book the room",
+          notes: null,
+          ai_state: "planned",
+        },
+      ],
+    );
+
+    await claimTaskDispatch("user-1");
+    expect(db.tables.tasks[0].ai_state).toBe("planned");
+    expect(db.tables.task_dispatches[0].status).toBe("failed");
+  });
+
   test("retiring an exhausted row does not block the next healthy one", async () => {
     const db = install([
       dispatch({
