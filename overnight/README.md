@@ -21,6 +21,15 @@ or on demand — it works the user's board over MCP, two tracks:
   file edits, and a hard draft-never-submit rule. Summary lands in the task
   notes, the full result in the brain vault.
 
+**Track C — dispatched ("do this now"):**
+
+- one task the user picked in the app, with a one-shot note, run **now** at
+  full power (shell + files + web, its own manifest in
+  `dispatch-capabilities.md`) instead of the nightly sweep. The result is
+  written back into the task notes as `## Agent result`.
+- the task shows no agent badge while it waits — it wears `✦ working…` once
+  the run actually starts, then `✦ done` or `✦ failed`.
+
 Approve/dismiss happens on the task row in the app (the `ai build` controls
 in the edit panel) — same button for both tracks. The agent never touches
 `main`, and never submits anything anywhere.
@@ -31,8 +40,44 @@ in the edit panel) — same button for both tracks. The agent never touches
   the `Mindboard Agent Poll` scheduled task (every 5 min,
   `run.mjs --if-requested`) claims it via the `claim_agent_run` MCP tool and
   fires a full run.
+- **`✦ do it` on a task** (the day stream): writes a `task_dispatches` row +
+  an `## Operator note` into the task. It stamps **no** run request — **every**
+  run, poll or nightly, drains the dispatch queue first (up to 3 per run,
+  oldest fresh request first), so the row alone is enough and a dispatch never
+  drags a full sweep along behind it. One task may have one live dispatch at a
+  time. A narrowed run (`--plan-only`, `--build-only`, `--code-only`,
+  `--life-only`) skips the drain.
 - **From Claude Code**: the `/overnight` skill, or directly, e.g.
   `node overnight\run.mjs --life-only --plan-only` (triage + propose only).
+
+## Targeted runs (`--task`)
+
+```powershell
+node overnight\run.mjs --task <task-uuid>          # claim + run that task's dispatch
+node overnight\run.mjs --dry --task <task-uuid>    # print the prompt + profile, claim nothing
+```
+
+`--task` claims the pending dispatch for that one task
+(`claim_task_dispatch { taskId }`); with none pending it logs and exits 0. The
+id must be a task uuid, and a bare `--task` with no id is a usage error
+(exit 2) — never a silent full sweep; both exit before touching the network.
+
+A claim that dies (machine asleep, crash) goes stale after 60 minutes, and
+because every poll drains the queue, the next one re-claims it. A dispatch
+that keeps killing its run is retired as failed after **3** claims
+(`gave up after 3 attempts`) rather than eating a poll forever.
+
+### First-run checklist (do this once, before pointing it at anything real)
+
+1. Apply `supabase/migrations/0047_task_dispatches.sql` (agents never apply
+   migrations — this one is yours to run).
+2. Make a sandbox task, e.g. "agent smoke test".
+3. On the day stream, tap `✦ do it` and send the note
+   `write hello.md in the agent workspace`.
+4. Run it in the foreground: `node overnight\run.mjs --task <task-uuid>`.
+5. Check all three: `../mindboard-agent-workspace/hello.md` exists, the task
+   notes carry `## Operator note` + `## Agent result`, and the
+   `task_dispatches` row reads `done` with a `finished_at`.
 
 ## Setup (once)
 
@@ -55,6 +100,9 @@ in the edit panel) — same button for both tracks. The agent never touches
    # OVERNIGHT_MAX_LIFE=3           # life-task executions per run
    # OVERNIGHT_LIFE_BUDGET_USD=5    # per life-task run
    # OVERNIGHT_TRIAGE_MODEL=haiku   # cheap triage model
+   # OVERNIGHT_DISPATCH_BUDGET_USD=10   # per dispatched (✦ do it) run
+   # OVERNIGHT_DISPATCH_TIMEOUT_MIN=45  # hard timeout for one dispatch; clamped
+   #                                    # to 50 — a claim goes stale at 60 min
    # OVERNIGHT_CLAUDE_BIN=claude    # or a proxy shim, e.g. claudex for gpt-5.6-sol
    # OVERNIGHT_REVIEW=1             # 0 disables the post-push build review
    # OVERNIGHT_REVIEW_MODEL=opus-5
@@ -97,6 +145,21 @@ in the edit panel) — same button for both tracks. The agent never touches
   the `ai_audit_log` (`list_proposals`).
 - Plan runs are read-only (plan mode). Build runs are confined to their
   worktree with a whitelisted tool set; the orchestrator does all git.
+- Dispatched (`✦ do it`) runs get the widest profile: shell and files, with
+  `--allowedTools Bash(*)` and `--strict-mcp-config` (no MCP server reaches
+  the child — the orchestrator owns every Mindboard write). **The real
+  isolation is the working directory**: the run happens in
+  `../mindboard-agent-workspace`, not in a repo you care about.
+- On top of that sit two *best-effort* layers, not a sandbox. A disallowed
+  pattern list (`git push*`, `git -C*`, `git merge*`, `git rebase*`,
+  `git reset --hard*`, and the `main` checkout/switch/branch spellings)
+  catches the obvious ways to wreck a checkout — a determined or creative
+  command line can still get around pattern matching. And the prompt carries
+  `dispatch-capabilities.md` verbatim: prepare/research/build/draft only,
+  never send, sign, purchase, publish, or submit in the user's name; no
+  credential handling; graded coursework submission stays a human action;
+  never operate on a repo outside the workspace (clone or worktree it in
+  instead); `ai/*` branches only, never `main`.
 - Per-run `--max-budget-usd` and `--max-turns`, plus nightly plan/build caps.
 - Kill switch: `Disable-ScheduledTask -TaskName "Mindboard Overnight Agent"`,
   or revoke the PAT in settings (every MCP call dies instantly).

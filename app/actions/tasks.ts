@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
+import { appendSection } from "@/app/lib/notes";
 import { TASK_COLUMNS } from "@/app/_components/types";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -384,6 +385,95 @@ export async function requestAgentRun() {
   );
   if (error) return { error: error.message };
   return { error: null };
+}
+
+// "✦ do it": dispatch one open task to the home worker with a one-shot
+// operator note (spec:
+// docs/superpowers/specs/2026-07-31-task-dispatch-design.md). The dispatch row
+// is the queue entry the worker claims; the note is ALSO appended to the task
+// notes, which stay the human-readable source of truth.
+//
+// Deliberately does NOT stamp agent_run_requested_at: the PC's 5-minute poll
+// drains this queue unconditionally, so the row alone is enough to be picked
+// up. That stamp stays what it has always been — the "run the full sweep now"
+// signal owned by ✦ run agent now — and a dispatch must not trigger a nightly
+// sweep as a side effect. Owner-gated like requestAgentRun: only the owner's
+// PAT polls, so for anyone else the row would never be claimed.
+export async function requestTaskDispatch(input: {
+  taskId: string;
+  note: string;
+}): Promise<{ error: string | null; dispatchId?: string }> {
+  const note = input.note?.trim();
+  if (!note) return { error: "note required" };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  try {
+    const { ownerUserId } = await import("@/app/lib/mcp/config");
+    if (ownerUserId() !== user.id) {
+      return { error: "no agent PC serves this account" };
+    }
+  } catch {
+    return { error: "no agent PC serves this account" };
+  }
+
+  const { data: task, error: taskErr } = await supabase
+    .from("tasks")
+    .select("id, notes, status")
+    .eq("id", input.taskId)
+    .single();
+  if (taskErr || !task) return { error: "task not found" };
+  if (task.status === "done" || task.status === "missed") {
+    return { error: `task is already ${task.status}` };
+  }
+
+  // One live dispatch per task: a second note while the first is still in
+  // flight would race the worker's own write-back.
+  const { data: open } = await supabase
+    .from("task_dispatches")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("task_id", task.id)
+    .in("status", ["requested", "claimed", "running"])
+    .limit(1);
+  if ((open ?? []).length > 0) return { error: "already dispatched" };
+
+  // The note goes in BEFORE the queue row, so a half-done dispatch can only
+  // ever leave a harmless extra note section — never a queue row the worker
+  // will act on without its note, and never a state that needs undoing (a
+  // rollback here would run on the same connection that just failed).
+  //
+  // ai_state goes to null in the same write: 'approved' is the nightly
+  // sweep's queue and a dispatch is not that, and clearing a stale ✦ done /
+  // ✦ failed stops the card contradicting the sheet. The worker sets
+  // 'building' when the run actually starts.
+  const today = new Date().toISOString().slice(0, 10);
+  const { error: updErr } = await supabase
+    .from("tasks")
+    .update({
+      notes: appendSection(task.notes, `Operator note (${today})`, note),
+      ai_state: null,
+    })
+    .eq("id", task.id);
+  if (updErr) return { error: "could not update task" };
+
+  const { data: dispatch, error: insErr } = await supabase
+    .from("task_dispatches")
+    .insert({ user_id: user.id, task_id: task.id, note, status: "requested" })
+    .select("id")
+    .single();
+  if (insErr || !dispatch) {
+    // 23505: the partial unique index caught a double-tap the read missed.
+    const raced = (insErr as { code?: string } | null)?.code === "23505";
+    return { error: raced ? "already dispatched" : "could not create dispatch" };
+  }
+
+  revalidatePath("/", "layout");
+  return { error: null, dispatchId: dispatch.id };
 }
 
 export async function deleteTask(id: string) {

@@ -41,6 +41,7 @@ import {
 import {
   cancelAction,
   claimAgentRun,
+  claimTaskDispatch,
   confirmAction,
   lookupShoppingPrices,
   proposeArchiveRecurringTask,
@@ -64,6 +65,7 @@ import {
   proposeUpdateStock,
   proposeUpdateTask,
   proposeUpsertGoal,
+  updateTaskDispatch,
 } from "@/app/lib/mcp/writes";
 import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
 import { MAX_FINANCE_OPS } from "@/app/lib/mcp/finance-ops";
@@ -1342,6 +1344,46 @@ const mcpHandler = createMcpHandler(
       (_args, extra) =>
         guard(async () => {
           const r = await claimAgentRun(uid(extra));
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "claim_task_dispatch",
+      {
+        title: "Claim a pending task dispatch",
+        description:
+          "Operational tool for the overnight orchestrator: atomically claims the oldest pending 'do this now' dispatch (optionally for one taskId) and returns it with the task title, or null when none is pending. Claims older than 60 minutes are treated as dead and re-claimed. Not useful to chat clients.",
+        inputSchema: {
+          taskId: z
+            .string()
+            .uuid()
+            .optional()
+            .describe("Only claim a dispatch for this task."),
+        },
+      },
+      (args, extra) =>
+        guard(async () => {
+          const r = await claimTaskDispatch(uid(extra), args.taskId);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "update_task_dispatch",
+      {
+        title: "Report progress on a claimed task dispatch",
+        description:
+          "Operational tool for the overnight orchestrator: moves a claimed dispatch to running, done, or failed, optionally attaching a short result summary. done/failed are terminal. Not useful to chat clients.",
+        inputSchema: {
+          dispatchId: z.string().uuid(),
+          status: z.enum(["running", "done", "failed"]),
+          resultSummary: z.string().max(4000).optional(),
+        },
+      },
+      (args, extra) =>
+        guard(async () => {
+          const r = await updateTaskDispatch(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );

@@ -32,6 +32,8 @@ import {
   type SpendAccount,
   type SpendCategory,
 } from "./stream-sheets";
+import { DispatchSheet } from "./dispatch-sheet";
+import { AI_BADGE } from "./task-row";
 import { RecurringEditPanel } from "./recurring-edit-panel";
 import { MindspaceBar } from "./mindspace-bar";
 import type { MindshareBar } from "@/app/lib/mindspace/share-bar";
@@ -84,6 +86,8 @@ function CardRow({
   onOpenLog,
   onRtaskUpdate,
   onRtaskArchive,
+  onDispatch,
+  agentServiced,
   boughtIds,
 }: {
   card: StreamCard;
@@ -104,6 +108,8 @@ function CardRow({
   onOpenLog: () => void;
   onRtaskUpdate: (card: StreamCard, patch: Partial<RecurringTaskInput>) => void;
   onRtaskArchive: (card: StreamCard) => void;
+  onDispatch: (card: StreamCard) => void;
+  agentServiced: boolean;
   boughtIds: Set<string>;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
@@ -315,6 +321,25 @@ function CardRow({
         )}
       </div>,
     );
+    // "✦ do it": hand this task to the home worker with a note. Only where a
+    // PC actually polls this account, and only while the task is still open.
+    if (
+      agentServiced &&
+      cardTask !== null &&
+      cardTask.status !== "done" &&
+      cardTask.status !== "missed"
+    ) {
+      actions.push(
+        <button
+          key="dispatch"
+          type="button"
+          onClick={() => onDispatch(card)}
+          className="press min-h-11 px-3 text-action lowercase border rounded-full border-hairline text-muted hover:text-accent hover:border-accent transition-colors"
+        >
+          ✦ do it
+        </button>,
+      );
+    }
   } else if (card.entity.kind === "rtask") {
     // Recurring occurrences: done only — no snooze/schedule, tomorrow's
     // occurrence regenerates itself.
@@ -421,6 +446,13 @@ function CardRow({
   }
   const factStruck = leaving === "done";
 
+  // Where a task sits in the agent lifecycle (dispatched → working → done),
+  // in the same badge language the task row uses.
+  const aiBadge = cardTask?.ai_state ? AI_BADGE[cardTask.ai_state] : null;
+  const aiBadgeNode = aiBadge ? (
+    <span className={`text-meta shrink-0 ${aiBadge.tone}`}>{aiBadge.label}</span>
+  ) : null;
+
   const restMax = isFocus || editOpen ? "max-h-[40rem]" : "max-h-40";
   const leaveClass =
     leaving === "missed"
@@ -485,11 +517,12 @@ function CardRow({
                 {card.fact}
               </span>
             </p>
-            {(focusEstimate || focusLate) && (
+            {(focusEstimate || focusLate || aiBadgeNode) && (
               <p className="text-meta text-muted mt-1 flex items-center gap-1.5">
                 {focusEstimate && <span>{focusEstimate}</span>}
                 {focusEstimate && focusLate && <span aria-hidden>·</span>}
                 {focusLate}
+                {aiBadgeNode}
               </p>
             )}
             {actions.length > 0 && (
@@ -527,6 +560,7 @@ function CardRow({
               {card.meta && (
                 <span className="text-meta text-muted shrink-0">{card.meta}</span>
               )}
+              {aiBadgeNode}
             </p>
             {rtaskRule && editOpen && (
               <RecurringEditPanel
@@ -559,6 +593,7 @@ export function StreamClient({
   mindshare,
   todayLabel,
   clockLabel,
+  agentServiced = false,
 }: {
   snapshot: StreamSnapshot;
   accounts: SpendAccount[];
@@ -570,6 +605,7 @@ export function StreamClient({
   mindshare: MindshareBar | null;
   todayLabel: string;
   clockLabel: string;
+  agentServiced?: boolean;
 }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [leaving, setLeaving] = useState<Map<string, "done" | "missed">>(
@@ -582,6 +618,10 @@ export function StreamClient({
   const [logOpen, setLogOpen] = useState(false);
   const [mood, setMood] = useState<number | null>(snapshot.pulse.mood);
   const [spendCard, setSpendCard] = useState<{ card: StreamCard; section: SectionKey } | null>(null);
+  const [dispatchTask, setDispatchTask] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   // Optimistic meta overrides (schedule + group changes): the card stays in
   // place with its new label instead of vanishing (these edits usually
   // re-bucket into the same section, so hiding would keep the card hidden
@@ -767,6 +807,12 @@ export function StreamClient({
     };
   }
 
+  function onDispatch(card: StreamCard) {
+    if (card.entity.kind !== "task") return;
+    const task = card.entity.task;
+    setDispatchTask({ id: task.id, title: task.title });
+  }
+
   function onGroup(card: StreamCard, group: StreamGroup | null) {
     if (card.entity.kind !== "task") return;
     const task = card.entity.task;
@@ -925,6 +971,8 @@ export function StreamClient({
               onOpenLog={() => setLogOpen(true)}
               onRtaskUpdate={onRtaskUpdate}
               onRtaskArchive={onRtaskArchive(key)}
+              onDispatch={onDispatch}
+              agentServiced={agentServiced}
               boughtIds={bought}
             />
           ))}
@@ -1064,6 +1112,12 @@ export function StreamClient({
           categories={categories}
           onClose={() => setSpendCard(null)}
           onLogged={() => resolve(spendCard.section, spendCard.card.id)}
+        />
+      )}
+      {dispatchTask && (
+        <DispatchSheet
+          task={dispatchTask}
+          onClose={() => setDispatchTask(null)}
         />
       )}
     </div>

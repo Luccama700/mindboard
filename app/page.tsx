@@ -36,6 +36,7 @@ import {
   getRecurringSlots,
 } from "./lib/data/recurring-tasks";
 import { getUserPreferences } from "./lib/data/settings";
+import { ownerUserId } from "./lib/mcp/config";
 import {
   occurrenceBusyEvents,
   slotBusyEvents,
@@ -307,6 +308,18 @@ const getStreamData = cache(
   },
 );
 
+// "✦ do it" only renders for the owner: the PC's poll runs on the owner's PAT
+// alone, so for anyone else the "picks it up in ~5 min" promise would be false
+// (same gate as the ✦ run agent now button on /tasks).
+function agentServicesUser(userId: string): boolean {
+  try {
+    return ownerUserId() === userId;
+  } catch {
+    // env unset (e.g. local dev) — keep the affordance hidden
+    return false;
+  }
+}
+
 async function StreamSection({ userId }: { userId: string }) {
   const [
     {
@@ -336,6 +349,7 @@ async function StreamSection({ userId }: { userId: string }) {
       mindshare={mindshare}
       todayLabel={formatLongWeekdayMonthDay(now, timeZone).toLowerCase()}
       clockLabel={formatClock12(now, timeZone)}
+      agentServiced={agentServicesUser(userId)}
     />
   );
 }

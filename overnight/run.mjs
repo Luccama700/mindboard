@@ -35,10 +35,13 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
+  FLAG_WITHOUT_VALUE,
   appendSection,
+  argValue,
   branchNameFor,
   buildPrompt,
   clip,
+  dispatchPrompt,
   execPrompt,
   extractPlan,
   extractSection,
@@ -48,6 +51,7 @@ import {
   MODEL_CHOICES,
   pickBuildTasks,
   resolveModel,
+  shouldDrainDispatches,
   pickExecTasks,
   pickLifeTasks,
   pickPlanTasks,
@@ -71,6 +75,19 @@ function loadDotEnv() {
   }
 }
 loadDotEnv();
+
+// A dispatch claim goes stale after a hardcoded 60 minutes server-side, and
+// the next poll reclaims it. A local timeout at or past that would let a
+// second run adopt a dispatch the first is still working — so the ceiling
+// stays under it, whatever the env says. (Warned about once `log` exists.)
+const DISPATCH_TIMEOUT_MAX_MIN = 50;
+const DISPATCH_TIMEOUT_REQUESTED_MIN = Number(
+  process.env.OVERNIGHT_DISPATCH_TIMEOUT_MIN ?? 45,
+);
+const DISPATCH_TIMEOUT_MIN =
+  Number.isFinite(DISPATCH_TIMEOUT_REQUESTED_MIN) && DISPATCH_TIMEOUT_REQUESTED_MIN > 0
+    ? Math.min(DISPATCH_TIMEOUT_REQUESTED_MIN, DISPATCH_TIMEOUT_MAX_MIN)
+    : 45;
 
 const CONFIG = {
   url: (process.env.MINDBOARD_URL ?? "").replace(/\/$/, ""),
@@ -104,6 +121,9 @@ const CONFIG = {
   lifeBudgetUsd: process.env.OVERNIGHT_LIFE_BUDGET_USD ?? "5",
   lifeTimeoutMs: Number(process.env.OVERNIGHT_LIFE_TIMEOUT_MIN ?? 30) * 60_000,
   triageModel: process.env.OVERNIGHT_TRIAGE_MODEL ?? "haiku",
+  // Track C (dispatched tasks): one task, asked for by hand, full powers.
+  dispatchBudgetUsd: process.env.OVERNIGHT_DISPATCH_BUDGET_USD ?? "10",
+  dispatchTimeoutMs: DISPATCH_TIMEOUT_MIN * 60_000,
   // Life runs execute OUTSIDE the repo so claude doesn't load Mindboard's
   // project context for an apartment search.
   workspace: process.env.OVERNIGHT_WORKSPACE ?? resolve(REPO, "..", "mindboard-agent-workspace"),
@@ -111,6 +131,7 @@ const CONFIG = {
 
 const FLAGS = new Set(process.argv.slice(2));
 const DRY = FLAGS.has("--dry");
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ---------- logging ----------
 
@@ -123,6 +144,13 @@ function log(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
   console.log(line);
   appendFileSync(logFile, `${line}\n`);
+}
+
+if (DISPATCH_TIMEOUT_REQUESTED_MIN > DISPATCH_TIMEOUT_MAX_MIN) {
+  log(
+    `warning: OVERNIGHT_DISPATCH_TIMEOUT_MIN=${DISPATCH_TIMEOUT_REQUESTED_MIN} clamped to ` +
+      `${DISPATCH_TIMEOUT_MAX_MIN} — a dispatch claim goes stale at 60 min and would be reclaimed mid-run`,
+  );
 }
 
 // ---------- subprocesses ----------
@@ -257,16 +285,20 @@ async function openTasksFeed() {
 // Always re-fetch right before composing a notes write so we append to the
 // current text, not the copy from run start. Track A tasks live in the code
 // feed; Track B tasks only exist in the full list.
-async function freshNotes(taskId, fallback) {
+async function findTask(taskId) {
   try {
     const feed = await tool("list_code_tasks");
     const found = feed.tasks?.find((t) => t.id === taskId);
-    if (found) return found.notes;
-    const life = (await openTasksFeed()).find((t) => t.id === taskId);
-    return life ? life.notes : fallback;
+    if (found) return found;
+    return (await openTasksFeed()).find((t) => t.id === taskId) ?? null;
   } catch {
-    return fallback;
+    return null;
   }
+}
+
+async function freshNotes(taskId, fallback) {
+  const task = await findTask(taskId);
+  return task ? task.notes : fallback;
 }
 
 // ---------- engines (per-phase models) ----------
@@ -308,6 +340,37 @@ async function ensureProxy() {
   return proxyReachable();
 }
 
+// Per-phase engines: app setting → env default; proxy models fall back to opus
+// when claudex is unreachable rather than failing the run. Lazy and idempotent
+// — an idle 5-minute poll must not spend a get_preferences call (or a log
+// line) to discover there is nothing to do.
+let enginesResolved = false;
+
+async function resolveEngines() {
+  if (enginesResolved) return;
+  enginesResolved = true;
+
+  let prefs = {};
+  try {
+    prefs = await tool("get_preferences");
+  } catch {
+    log("get_preferences failed — using env-default models");
+  }
+  const planChoice = prefs.agentPlanModel ?? CONFIG.planModel;
+  const buildChoice = prefs.agentBuildModel ?? CONFIG.buildModel;
+  const needsProxy = [planChoice, buildChoice].some((c) => MODEL_CHOICES[c]?.proxy);
+  const proxyOk = needsProxy ? await ensureProxy() : false;
+  ENGINES.plan = resolveModel(planChoice, proxyOk, "fable-5");
+  ENGINES.build = resolveModel(buildChoice, proxyOk, "gpt-5.6-sol");
+  ENGINES.review = resolveModel(CONFIG.reviewModel, proxyOk, "opus-5");
+  log(
+    `engines: plan=${ENGINES.plan.id}${ENGINES.plan.fellBack ? " (proxy down → fallback)" : ""}, ` +
+      `build=${ENGINES.build.id}${ENGINES.build.fellBack ? " (proxy down → fallback)" : ""}, ` +
+      `review=${CONFIG.reviewEnabled ? `${ENGINES.review.id}@${CONFIG.reviewEffort}` : "off"}, ` +
+      `effort=${CONFIG.effort}`,
+  );
+}
+
 // ---------- single-runner lock ----------
 
 // The 4am task, the 5-minute poll, and manual /overnight runs are separate
@@ -331,7 +394,13 @@ const LOCK_FILE = join(HERE, ".lock");
 // margin: a genuinely crashed holder delays the next takeover by ~the same
 // window — the polls pick it up afterward.
 const LOCK_STALE_MS =
-  Math.max(CONFIG.buildTimeoutMs, CONFIG.planTimeoutMs, CONFIG.lifeTimeoutMs, 20 * 60_000) +
+  Math.max(
+    CONFIG.buildTimeoutMs,
+    CONFIG.planTimeoutMs,
+    CONFIG.lifeTimeoutMs,
+    CONFIG.dispatchTimeoutMs,
+    20 * 60_000,
+  ) +
   15 * 60_000;
 const LOCK_OPTS = {
   lockfilePath: LOCK_FILE,
@@ -729,6 +798,206 @@ async function execPhase(allTasks, codeGroupId) {
   return outcomes;
 }
 
+// ---------- Track C: dispatched tasks ("do this now") ----------
+
+// At most this many dispatches per run: a drain is meant to clear the queue
+// the user just filled, not to become an unbounded night of its own.
+const MAX_DISPATCH_DRAIN = 3;
+
+// The Track C contract, NOT capabilities.md — that one is Track B's web-only
+// manifest and would contradict the powers this phase actually grants.
+const DISPATCH_MANIFEST = join(HERE, "dispatch-capabilities.md");
+
+// Full local powers: --allowedTools Bash(*) is how this codebase grants shell,
+// and --strict-mcp-config drops every MCP server (the orchestrator owns the
+// Mindboard writes, not the child).
+//
+// The disallow list is PATTERN blocking, not a sandbox — it catches the
+// obvious spellings of "wreck a repo", nothing more. `git -C` is banned
+// wholesale because it is how you reach a repo you are not standing in, and
+// it has no legitimate use here. The real isolation is the cwd: the run lives
+// in the agent workspace, and the prompt + manifest forbid touching any repo
+// outside it.
+const DISPATCH_DISALLOWED_TOOLS = [
+  "Bash(git push*)",
+  "Bash(git -C*)",
+  "Bash(git checkout main*)",
+  "Bash(git switch main*)",
+  "Bash(git checkout -B main*)",
+  "Bash(git branch -f main*)",
+  "Bash(git merge*)",
+  "Bash(git rebase*)",
+  "Bash(git reset --hard*)",
+].join(",");
+
+const DISPATCH_TOOL_PROFILE = {
+  permissionMode: "acceptEdits",
+  allowedTools: "Bash(*)",
+  strictMcp: true,
+  disallowedTools: DISPATCH_DISALLOWED_TOOLS,
+};
+
+// Append the run's outcome to the task's notes. The base is the task's CURRENT
+// notes, falling back to the copy taken at claim time — never "", which would
+// replace whatever the user had written with just our section. With neither in
+// hand the task is gone (or unreadable), so the note is skipped entirely; the
+// deliverable is already on disk beside the logs and the dispatch row still
+// reaches a terminal status.
+async function writeBackResult(dispatch, claimNotes, heading, body, aiState) {
+  const task = await findTask(dispatch.task_id);
+  if (!task && claimNotes === null) {
+    log("  task not readable at write-back — skipping the notes update");
+    return;
+  }
+  await updateTask(dispatch.task_id, {
+    notes: appendSection(task ? task.notes : claimNotes, heading, body),
+    aiState,
+  });
+}
+
+// The user picked one task in the app and asked for it now, so this runs the
+// full-power profile against that single task instead of sweeping the board.
+// Any throw is contained: the dispatch is marked failed and the drain moves
+// on, because a row left 'running' wedges its task for an hour.
+async function dispatchPhase(dispatch) {
+  log(`dispatch ${dispatch.id} → task ${dispatch.task_id} (attempt ${dispatch.attempts})`);
+  const claimNotes = dispatch.task_notes ?? null;
+
+  try {
+    await tool("update_task_dispatch", { dispatchId: dispatch.id, status: "running" });
+    // The badge says 'working…' from here; the action deliberately sets no
+    // ai_state, so this is the first one the task gets.
+    await updateTask(dispatch.task_id, { aiState: "building" });
+
+    const notes = await freshNotes(dispatch.task_id, claimNotes);
+    const task = {
+      id: dispatch.task_id,
+      title: dispatch.task_title || dispatch.task_id,
+      notes,
+    };
+    const manifest = readFileSync(DISPATCH_MANIFEST, "utf8");
+    mkdirSync(CONFIG.workspace, { recursive: true });
+
+    const result = runClaude({
+      prompt: dispatchPrompt(task, dispatch.note, manifest),
+      cwd: CONFIG.workspace,
+      engine: ENGINES.build,
+      budgetUsd: CONFIG.dispatchBudgetUsd,
+      maxTurns: 120,
+      timeoutMs: CONFIG.dispatchTimeoutMs,
+      ...DISPATCH_TOOL_PROFILE,
+    });
+
+    // The deliverable is never lost: a local copy lands next to the logs
+    // before any network write is attempted (same rule as the life executor).
+    if (!DRY && result.ok) {
+      writeFileSync(join(logDir, `dispatch-${dispatch.id}-${today}.md`), result.text);
+    }
+
+    if (result.ok) {
+      await writeBackResult(
+        dispatch,
+        claimNotes,
+        `Agent result — ${today}`,
+        clip(result.text, 6000),
+        "built",
+      );
+    } else {
+      log(`  dispatch FAILED: ${clip(result.text, 400)}`);
+      await writeBackResult(
+        dispatch,
+        claimNotes,
+        `Agent result — failed — ${today}`,
+        clip(result.text || "run failed; see overnight/logs", 2000),
+        "failed",
+      );
+    }
+    await tool("update_task_dispatch", {
+      dispatchId: dispatch.id,
+      status: result.ok ? "done" : "failed",
+      resultSummary: clip(result.text || "failed", 1000),
+    });
+    if (result.ok) log(`  dispatch done (cost $${result.costUsd?.toFixed?.(2) ?? "?"})`);
+    return result.ok;
+  } catch (error) {
+    // Both recoveries are independently best-effort: a missing note is a
+    // nuisance, a dispatch row stuck on 'running' is an hour of dead queue.
+    const message = error instanceof Error ? error.message : String(error);
+    log(`  dispatch ERROR: ${clip(message, 500)}`);
+    try {
+      await writeBackResult(
+        dispatch,
+        claimNotes,
+        `Agent result — failed — ${today}`,
+        clip(message, 1500),
+        "failed",
+      );
+    } catch (writeError) {
+      log(`  could not record the failure on the task: ${clip(String(writeError), 200)}`);
+    }
+    try {
+      await tool("update_task_dispatch", {
+        dispatchId: dispatch.id,
+        status: "failed",
+        resultSummary: clip(message, 1000),
+      });
+    } catch (statusError) {
+      log(`  could not close the dispatch row: ${clip(String(statusError), 200)}`);
+    }
+    return false;
+  }
+}
+
+// Drain the queue, every run. The "run agent now" stamp gates the nightly
+// sweep, NOT this — a second ✦ do it sent while the first was running shares
+// one stamp, so a stamp-gated drain would strand it until the user tapped
+// again, and the 60-minute stale reclaim would never come due either.
+async function drainDispatches() {
+  let drained = 0;
+  for (let i = 0; i < MAX_DISPATCH_DRAIN; i++) {
+    const claim = await tool("claim_task_dispatch", {});
+    if (!claim.dispatch) break;
+    // Only pay for model resolution once there is real work.
+    await resolveEngines();
+    await dispatchPhase(claim.dispatch);
+    drained++;
+  }
+  if (drained > 0) log(`drained ${drained} dispatch(es)`);
+  return drained;
+}
+
+// `--task <uuid>`: watch-it-work runs from the shell. `--dry` composes and
+// prints the prompt + permission profile without claiming anything (the
+// spec's dry-run integration check).
+async function dispatchDirect(taskId) {
+  const manifest = readFileSync(DISPATCH_MANIFEST, "utf8");
+  if (DRY) {
+    const task = await findTask(taskId);
+    log(
+      `dry --task: profile permissionMode=${DISPATCH_TOOL_PROFILE.permissionMode} ` +
+        `allowedTools=${DISPATCH_TOOL_PROFILE.allowedTools} strictMcp=true ` +
+        `disallowed=${DISPATCH_TOOL_PROFILE.disallowedTools} engine=${ENGINES.build.id} ` +
+        `budget=$${CONFIG.dispatchBudgetUsd} timeout=${Math.round(CONFIG.dispatchTimeoutMs / 60_000)}min ` +
+        `cwd=${CONFIG.workspace} (nothing claimed)`,
+    );
+    console.log(
+      dispatchPrompt(
+        { id: taskId, title: task?.title ?? taskId, notes: task?.notes ?? null },
+        "(dry run — the real note comes from the claimed dispatch)",
+        manifest,
+      ),
+    );
+    return;
+  }
+
+  const claim = await tool("claim_task_dispatch", { taskId });
+  if (!claim.dispatch) {
+    log("no pending dispatch for that task — nothing to do");
+    return;
+  }
+  await dispatchPhase(claim.dispatch);
+}
+
 async function nightReport(planned, built, lifeProposed = [], lifeDone = []) {
   if (
     planned.length === 0 &&
@@ -765,6 +1034,22 @@ async function main() {
   if (!CONFIG.url || !CONFIG.pat) {
     throw new Error("MINDBOARD_URL and MINDBOARD_PAT are required (overnight/.env)");
   }
+
+  // Targeted dispatch (Track C). The id is a uuid from the app, never free
+  // text — validated here because it is the one argv value a human types. A
+  // bare `--task` is a usage error, NOT "no --task given": falling through
+  // would silently turn a targeted run into a full sweep of the board.
+  const directTaskId = argValue(process.argv.slice(2), "--task");
+  if (directTaskId === FLAG_WITHOUT_VALUE) {
+    log("usage: --task <task-uuid> — the flag needs a task id");
+    process.exitCode = 2;
+    return;
+  }
+  if (directTaskId !== null && !UUID_RE.test(directTaskId)) {
+    log("usage: --task expects a task uuid");
+    process.exitCode = 2;
+    return;
+  }
   // Lock BEFORE claiming: if another run is live, a pending "run now"
   // request must survive untouched for the next poll to pick up. Polls give
   // up immediately (the next one comes in 5 min); real runs wait out
@@ -778,10 +1063,23 @@ async function main() {
 
   await connect();
 
+  // Track C — targeted dispatch, ahead of and independent of the sweep gate.
+  if (directTaskId) {
+    await resolveEngines();
+    await dispatchDirect(directTaskId);
+    return;
+  }
+  // The queue drains on every poll and every full run (a dry run claims
+  // nothing, a narrowed one opts out) — the "run agent now" stamp below gates
+  // the nightly sweep, not this.
+  if (!DRY && shouldDrainDispatches(process.argv.slice(2))) {
+    await drainDispatches();
+  }
+
   // Poll mode (the 5-minute scheduled task): exit silently unless the user
   // tapped "run agent now" in the app since the last poll. A dry poll never
   // claims — claiming would consume the user's real request.
-  if (FLAGS.has("--if-requested")) {
+  if (isPoll) {
     if (DRY) return;
     const claim = await tool("claim_agent_run");
     if (!claim.requested) return;
@@ -789,28 +1087,7 @@ async function main() {
   }
 
   log(`overnight run start${DRY ? " (dry)" : ""}`);
-
-  // Per-phase engines: app setting → env default; proxy models fall back to
-  // opus when claudex is unreachable rather than failing the night.
-  let prefs = {};
-  try {
-    prefs = await tool("get_preferences");
-  } catch {
-    log("get_preferences failed — using env-default models");
-  }
-  const planChoice = prefs.agentPlanModel ?? CONFIG.planModel;
-  const buildChoice = prefs.agentBuildModel ?? CONFIG.buildModel;
-  const needsProxy = [planChoice, buildChoice].some((c) => MODEL_CHOICES[c]?.proxy);
-  const proxyOk = needsProxy ? await ensureProxy() : false;
-  ENGINES.plan = resolveModel(planChoice, proxyOk, "fable-5");
-  ENGINES.build = resolveModel(buildChoice, proxyOk, "gpt-5.6-sol");
-  ENGINES.review = resolveModel(CONFIG.reviewModel, proxyOk, "opus-5");
-  log(
-    `engines: plan=${ENGINES.plan.id}${ENGINES.plan.fellBack ? " (proxy down → fallback)" : ""}, ` +
-      `build=${ENGINES.build.id}${ENGINES.build.fellBack ? " (proxy down → fallback)" : ""}, ` +
-      `review=${CONFIG.reviewEnabled ? `${ENGINES.review.id}@${CONFIG.reviewEffort}` : "off"}, ` +
-      `effort=${CONFIG.effort}`,
-  );
+  await resolveEngines();
 
   const doCode = !FLAGS.has("--life-only");
   const doLife = !FLAGS.has("--code-only");
@@ -863,7 +1140,8 @@ async function main() {
 main()
   .then(() => {
     releaseLock();
-    process.exit(0);
+    // Usage errors set exitCode 2 before returning; everything else is 0.
+    process.exit(process.exitCode ?? 0);
   })
   .catch((error) => {
     log(`FATAL: ${error instanceof Error ? (error.stack ?? error.message) : error}`);
