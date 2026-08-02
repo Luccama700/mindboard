@@ -129,6 +129,7 @@ export async function buildFinanceForecast(params: {
         .gte("occurred_at", historyStart)
         .order("occurred_at", { ascending: false })
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(2000),
       supabase
         .from("spend_overrides")

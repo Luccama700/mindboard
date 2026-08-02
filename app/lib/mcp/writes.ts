@@ -261,6 +261,7 @@ async function baseCurrency(
     .eq("user_id", ownerId)
     .eq("archived", false)
     .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
     .limit(1);
   return ((data ?? []) as { currency: string }[])[0]?.currency ?? "USD";
 }
@@ -294,6 +295,7 @@ export async function spendLimitWarningBlock(
         .gte("occurred_at", windowStart)
         .order("occurred_at", { ascending: false })
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(2000),
       supabase
         .from("spending_categories")
@@ -305,6 +307,7 @@ export async function spendLimitWarningBlock(
         .eq("user_id", ownerId)
         .eq("archived", false)
         .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
         .limit(1),
     ]);
 
@@ -541,6 +544,7 @@ export async function proposeUpdateFinanceFor(
             .lte("occurred_at", span.max)
             .order("occurred_at", { ascending: false })
             .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
             .limit(1000)
         : Promise.resolve({ data: [] as unknown[] }),
       changeIds.length > 0

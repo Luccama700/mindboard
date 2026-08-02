@@ -108,6 +108,11 @@ export const getSpendOverrides = cache(
 // volume and the baseline would train on it while still reporting confident.
 // Descending, so an overflowing window costs historical depth (older weeks
 // drop out of the 12-week median) rather than erasing the present.
+//
+// The order ends in `id` to make it TOTAL. `occurred_at` is a `date`, and
+// `created_at` defaults to now() = TRANSACTION time, so every row of one
+// statement-import batch carries an identical timestamp; without the primary
+// key the cap boundary would still fall arbitrarily inside that tie group.
 export const getSpendHistory = cache(
   async (
     userId: string,
@@ -123,6 +128,7 @@ export const getSpendHistory = cache(
       .gte("occurred_at", startKey)
       .order("occurred_at", { ascending: false })
       .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
       .limit(2000);
     return ((data ?? []) as SpendHistoryRow[]).map((row) => ({
       ...row,

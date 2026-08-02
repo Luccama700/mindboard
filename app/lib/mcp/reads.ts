@@ -203,6 +203,7 @@ export async function buildSpendLimitStatus(
         .gte("occurred_at", windowStart)
         .order("occurred_at", { ascending: false })
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(2000),
       supabase
         .from("spending_categories")
