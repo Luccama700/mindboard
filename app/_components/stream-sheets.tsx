@@ -1,10 +1,13 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { saveDailyLog } from "@/app/actions/daily-log";
 import { recordBalanceChange } from "@/app/actions/finance";
 import { Button, INPUT_CLASS } from "./ui";
 import { formatMoney } from "./money";
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function Sheet({
   title,
@@ -15,15 +18,93 @@ export function Sheet({
   onClose: () => void;
   children: React.ReactNode;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  /* Focus starts on the panel — it carries the dialog role and the title, so a
+     screen reader announces the sheet rather than its dismiss button. */
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
+    return () => {
+      /* The opener is usually gone by now: saving the daily log removes the
+         very card whose button opened this, in the same commit that unmounts
+         the sheet, so the node is already detached when cleanup runs. Falling
+         back to the main landmark keeps a keyboard or VoiceOver user where
+         they were instead of dumping them at the top of the document. */
+      if (opener?.isConnected) {
+        opener.focus();
+        return;
+      }
+      const main = document.querySelector<HTMLElement>("main");
+      if (!main) return;
+      main.setAttribute("tabindex", "-1");
+      main.focus();
+    };
+  }, []);
+
+  /* Bound to the document rather than the dialog. The sheets disable their save
+     button while the transition runs, and browsers blur a disabled element to
+     <body> — a container-scoped handler stops seeing Escape and Tab entirely at
+     exactly that moment, which is also when a failed save leaves the sheet open. */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (items.length === 0) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      /* The panel itself is tabbable-by-script (tabIndex -1), and clicking any
+         inert part of it parks focus there. It contains itself, so it has to be
+         treated as "not on a control" or Tab falls through to the page behind. */
+      if (!active || active === panel || !panel.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-label={title}>
-      <button
-        type="button"
-        aria-label="close"
+    <div className="fixed inset-0 z-50">
+      {/* An aria-hidden div, not a button: as a button this was a focusable
+          full-viewport control with no visible affordance. Escape and the ×
+          carry the keyboard path. */}
+      <div
+        aria-hidden="true"
         onClick={onClose}
         className="absolute inset-0 glass-scrim scrim-fade"
       />
-      <div className="absolute left-0 right-0 bottom-0 glass rounded-t-sheet rounded-b-none border-b-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] max-h-[80vh] overflow-y-auto lg:left-1/2 lg:right-auto lg:w-[28rem] lg:-translate-x-1/2">
+      {/* aria-modal is what stops VoiceOver's swipe-right from walking out into
+          the dashboard underneath, which the scrim only hides visually. */}
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="absolute left-0 right-0 bottom-0 glass rounded-t-sheet rounded-b-none border-b-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] max-h-[80vh] overflow-y-auto focus:outline-none lg:left-1/2 lg:right-auto lg:w-[28rem] lg:-translate-x-1/2"
+      >
         <div className="sheet-rise">
           <div className="flex items-center justify-between mb-4">
             <p className="text-label uppercase text-muted">{title}</p>
@@ -120,6 +201,7 @@ export function DailyLogSheet({
           </p>
           <input
             type="number"
+            aria-label="sleep last night (hours)"
             inputMode="decimal"
             min={0}
             max={24}
@@ -201,6 +283,7 @@ export function SpendSheet({
           <p className="text-label uppercase text-muted mb-1.5">amount</p>
           <input
             type="number"
+            aria-label="amount"
             inputMode="decimal"
             min={0}
             step="0.01"
