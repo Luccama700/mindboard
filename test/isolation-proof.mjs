@@ -21,9 +21,18 @@
 // Usage:  node test/isolation-proof.mjs            # RLS checks only
 //         MCP_URL=http://localhost:3000/api/mcp/mcp node test/isolation-proof.mjs
 //
-// Run it against a LOCAL dev server. Pointing MCP_URL at a deployed preview
-// writes throwaway users into that deployment's database — the owner's call to
-// make, not the probe's.
+// !! THIS WRITES TO WHATEVER SUPABASE PROJECT .env.local POINTS AT. A local
+// !! dev server is NOT a local database. On a normal Mindboard checkout
+// !! .env.local holds the single LIVE project, so running this against
+// !! localhost still creates two real auth users and seeds ~35 tables in
+// !! production. Everything is deleted in the `finally` and the deletion is
+// !! verified — but an interrupted or crashed run against production is a real
+// !! possibility, which is why teardown is registered before anything else can
+// !! throw and SIGINT/SIGTERM are handled. Point NEXT_PUBLIC_SUPABASE_URL and
+// !! SUPABASE_SERVICE_ROLE_KEY at a throwaway project if you have one.
+//
+// Pointing MCP_URL at a deployed preview additionally writes into that
+// deployment's database — the owner's call to make, not the probe's.
 //
 // The audit asks for a preview run eventually. Wiring it up needs, in order:
 //   1. a preview deployment whose Supabase project is NOT production (the
@@ -50,8 +59,14 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { createReporter, loadEnv, toolJson } from "./isolation/harness.mjs";
-import { diffSnapshots, seedTenant, snapshotTenant } from "./isolation/seed.mjs";
+import {
+  diffSnapshots,
+  seedTenant,
+  snapshotTenant,
+  unreadableTables,
+} from "./isolation/seed.mjs";
 import { reportCoverage, runToolMatrix } from "./isolation/mcp-probe.mjs";
+import { runForgedProposalProbe } from "./isolation/forged-proposal.mjs";
 import { makeSessionClient, runOauthProbe } from "./isolation/oauth-probe.mjs";
 
 const env = loadEnv(new URL("../.env.local", import.meta.url));
@@ -76,6 +91,14 @@ const check = (label, ok, detail) => reporter.check(label, ok, detail);
 // leftovers — a needle match is then unambiguous proof, not a coincidence.
 const RUN = randomBytes(3).toString("hex");
 
+// Every auth user this run has created, registered the instant it exists.
+// Teardown walks THIS, never the a/b handles: `makeUser` does two sign-ins
+// after creating the user (an auth rate-limit 429 is the realistic failure),
+// and if either throws before the handle is assigned, a `finally` that iterated
+// [a, b] would skip a user that exists — orphaning it permanently in a live
+// project.
+const createdUserIds = [];
+
 async function makeUser(tag) {
   const email = `isolation-${tag}-${Date.now()}@mindboard-test.invalid`;
   const password = randomBytes(24).toString("base64url");
@@ -85,6 +108,7 @@ async function makeUser(tag) {
     email_confirm: true,
   });
   if (error) throw new Error(`createUser(${tag}): ${error.message}`);
+  createdUserIds.push(data.user.id);
 
   const client = createClient(SUPABASE_URL, ANON, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -120,6 +144,35 @@ let b = null;
 let mcpA = null;
 let mcpB = null;
 
+// Idempotent: the signal handlers and the `finally` may both reach it.
+let teardownDone = false;
+async function teardown({ quiet = false } = {}) {
+  if (teardownDone) return;
+  teardownDone = true;
+  for (const client of [mcpA, mcpB]) {
+    if (client) await client.close().catch(() => {});
+  }
+  if (!quiet) reporter.section("cleanup");
+  for (const userId of createdUserIds) {
+    const { error } = await admin.auth.admin.deleteUser(userId);
+    check(`deleted throwaway user ${userId}`, !error, error?.message);
+    const { data: stillThere } = await admin.auth.admin.getUserById(userId);
+    check(`user ${userId} is really gone from auth`, !stillThere?.user);
+    const { data: orphans } = await admin.from("tasks").select("id").eq("user_id", userId);
+    check(`user ${userId}'s rows cascaded away`, (orphans ?? []).length === 0);
+  }
+}
+
+// An interrupt mid-run would otherwise strand both tenants in a live project.
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    console.log(`\n${signal} — tearing down before exit`);
+    teardown()
+      .catch((e) => console.error("teardown failed:", e instanceof Error ? e.message : e))
+      .finally(() => process.exit(130));
+  });
+}
+
 try {
   reporter.section("setup: two throwaway tenants");
   a = await makeUser("a");
@@ -136,10 +189,15 @@ try {
     admin,
     userId: a.id,
     marker: `zzp${RUN}a`,
-    // Deliberately different zones: "today" resolved in the wrong tenant's zone
-    // is a leak the timezone needle catches, and it is a defect class this
-    // codebase has shipped before (see the audit's second CRITICAL).
+    // Deliberately different zones, wake windows and currencies: several tools
+    // return only derived numbers, so a differing PREFERENCE is the only thing
+    // that can make a scoping breach observable at all. "today" resolved in the
+    // wrong tenant's zone is also a defect class this codebase has shipped
+    // before (the audit's second CRITICAL).
     timezone: "Pacific/Kiritimati",
+    wakeStartHour: 5,
+    wakeEndHour: 23,
+    currency: "CAD",
     patHash: patA.hash,
     patHint: patA.token.slice(-4),
   });
@@ -149,6 +207,12 @@ try {
     userId: b.id,
     marker: `zzp${RUN}b`,
     timezone: "America/Adak",
+    // 10/16 rather than 9/17 so neither boundary can coincide with a clock time
+    // A's own data produces (A's seeded habit blocks 09:00-09:30) — otherwise
+    // "no gap boundary comes from B" could pass or fail by coincidence.
+    wakeStartHour: 10,
+    wakeEndHour: 16,
+    currency: "SEK",
     patHash: patB.hash,
     patHint: patB.token.slice(-4),
   });
@@ -256,8 +320,14 @@ try {
     // Freeze B's world here: everything after this point is A attacking, and
     // nothing of B's may move.
     const before = await snapshotTenant(admin, b.id);
+    check(
+      "every table in the snapshot list is readable (a stale entry blinds the diff)",
+      unreadableTables(before).length === 0,
+      unreadableTables(before).join("; "),
+    );
 
     const exercised = await runToolMatrix({ mcpA, ctx, reporter });
+    await runForgedProposalProbe({ mcpA, ctx, reporter });
 
     reporter.section("post-sweep: nothing of B's changed");
     const after = await snapshotTenant(admin, b.id);
@@ -356,20 +426,7 @@ try {
 } catch (e) {
   reporter.fail("probe aborted", e instanceof Error ? `${e.message}\n${e.stack}` : String(e));
 } finally {
-  for (const client of [mcpA, mcpB]) {
-    if (client) await client.close().catch(() => {});
-  }
-
-  reporter.section("cleanup");
-  for (const u of [a, b]) {
-    if (!u) continue;
-    const { error } = await admin.auth.admin.deleteUser(u.id);
-    check(`deleted throwaway user ${u.id}`, !error, error?.message);
-    const { data: stillThere } = await admin.auth.admin.getUserById(u.id);
-    check(`user ${u.id} is really gone from auth`, !stillThere?.user);
-    const { data: orphans } = await admin.from("tasks").select("id").eq("user_id", u.id);
-    check(`user ${u.id}'s rows cascaded away`, (orphans ?? []).length === 0);
-  }
+  await teardown();
 }
 
 console.log(

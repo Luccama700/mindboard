@@ -197,10 +197,21 @@ export const TOOL_MATRIX = [
   },
   {
     tool: "schedule_snapshot",
-    attack: "free-time rollup must not read B's calendar or blocks",
+    // getScheduleSnapshot calls listEvents unconditionally, which THROWS for a
+    // tenant with no google_tokens row — so this tool never reaches its
+    // preferences-scoping code here and is listed in BLIND_SPOTS. The
+    // wake-window assertion the isolation of this rollup deserves lives on
+    // get_snapshot instead, which survives the missing token and exposes the
+    // same wake-window-derived gaps. Seed a google_tokens row per tenant and
+    // this entry can be upgraded to the same value check.
+    attack: "free-time rollup is unreachable without A's own Google token",
     args: () => ({}),
     assert: (r, ctx, check) =>
-      check("schedule_snapshot returns an object with no B data", r.json !== null),
+      check(
+        "schedule_snapshot reaches no calendar without A's own Google token",
+        blockedExternally(r),
+        r.text.slice(0, 120),
+      ),
   },
   {
     tool: "get_snapshot",
@@ -220,6 +231,43 @@ export const TOOL_MATRIX = [
         r.json?.timeZone === ctx.a.timezone,
         `timeZone=${r.json?.timeZone}`,
       );
+      // The preferences row made observable. Free gaps are derived from
+      // wake_start_hour/wake_end_hour, and with no calendar events a future
+      // day's single gap spans the whole window — so these clock strings ARE
+      // A's settings row. Read from the wrong tenant and they change. This is
+      // the only reachable assertion on preference scoping: schedule_snapshot,
+      // which exists to serve exactly this, dies at the missing Google token.
+      const pad = (h) => `${String(h).padStart(2, "0")}:00`;
+      const days = r.json?.schedule?.days ?? [];
+      const future = days.filter((d) => d.date > todayKey()).flatMap((d) => d.freeGaps ?? []);
+      check(
+        "get_snapshot returns future free gaps to assert a wake window on",
+        future.length > 0,
+        `days=${days.length} futureGaps=${future.length}`,
+      );
+      // The gaps are bounded by, not equal to, the window: A's own seeded
+      // recurring task blocks 09:00-09:30, so a future day reads
+      // 05:00-09:00 + 09:30-23:00. Assert the envelope — that is the
+      // preferences row — rather than a single unbroken gap.
+      const earliest = future.map((g) => g.start).sort()[0];
+      const latest = future.map((g) => g.end).sort().at(-1);
+      check(
+        "future free gaps are bounded by A's own wake window",
+        earliest === pad(ctx.a.wakeStartHour) && latest === pad(ctx.a.wakeEndHour),
+        `envelope ${earliest}-${latest}, expected ${pad(ctx.a.wakeStartHour)}-${pad(ctx.a.wakeEndHour)}`,
+      );
+      check(
+        "no free gap boundary comes from B's wake window",
+        !future.some((g) =>
+          [g.start, g.end].some(
+            (t) => t === pad(ctx.b.wakeStartHour) || t === pad(ctx.b.wakeEndHour),
+          ),
+        ),
+        future
+          .slice(0, 4)
+          .map((g) => `${g.start}-${g.end}`)
+          .join(", "),
+      );
     },
   },
   {
@@ -235,13 +283,35 @@ export const TOOL_MATRIX = [
   },
   {
     tool: "finance_forecast",
-    attack: "90-day cashflow must project only A's money",
+    // buildFinanceForecast returns ONLY derived numbers — no account id, no
+    // bill name, breach or not — so a string scan here can never fail. Six
+    // queries feed it (accounts, recurring_expenses, income_sources,
+    // balance_changes, spend_overrides, inventory); dropping the user_id filter
+    // on any of them silently doubles A's financial position with B's. The
+    // value check is the only thing that catches that.
+    attack: "90-day cashflow must project only A's money (value check)",
     args: () => ({ days: 90 }),
     assert: (r, ctx, check) => {
-      const text = JSON.stringify(r.json ?? null);
+      const soloNetWorth = ctx.a.accountBalance;
+      const bothNetWorth = ctx.a.accountBalance + ctx.b.accountBalance;
       check(
-        "finance_forecast contains neither B's account nor B's bill",
-        !text.includes(ctx.b.accountId) && !text.includes(ctx.b.recurringExpenseName),
+        "finance_forecast anchors on A's balance alone, not A+B",
+        typeof r.json?.netWorthToday === "number" &&
+          r.json.netWorthToday <= soloNetWorth &&
+          r.json.netWorthToday !== bothNetWorth,
+        `netWorthToday=${r.json?.netWorthToday} (A alone=${soloNetWorth}, A+B=${bothNetWorth})`,
+      );
+      const firstDay = (r.json?.days ?? [])[0];
+      check(
+        "finance_forecast's projection starts from A's position alone",
+        typeof firstDay?.projectedNetWorth === "number" &&
+          firstDay.projectedNetWorth <= soloNetWorth,
+        `day0=${firstDay?.projectedNetWorth}`,
+      );
+      check(
+        "finance_forecast reports A's own currency",
+        r.json?.currency === ctx.a.currency,
+        `currency=${r.json?.currency}`,
       );
     },
   },
@@ -785,3 +855,23 @@ export const TOOL_MATRIX = [
 // genuinely cannot be exercised — silent partial coverage is the failure mode
 // this table exists to prevent.
 export const DECLARED_SKIPS = {};
+
+// Tools whose entry above passes because a PRECONDITION is missing, not because
+// isolation was demonstrated. Each fails before its code reaches the data path,
+// so a scoping bug inside it would not turn this probe red. Printed in the
+// coverage table so the number at the bottom is never read as more than it is.
+// Making them real tests means seeding per-tenant credentials (a Google token,
+// a vault_settings row, an Anthropic key, worker allowlisting).
+export const BLIND_SPOTS = {
+  list_events: "no google_tokens row for either tenant — fails before the calendar read",
+  schedule_snapshot:
+    "listEvents throws without a google_tokens row; wake-window scoping is asserted on get_snapshot instead",
+  create_event: "confirm fails at the missing Google token, not at a scoping check",
+  reschedule_event: "confirm fails at the missing Google token, not at a scoping check",
+  list_brain_notes: "no vault_settings row — fails before the vault read",
+  read_brain_note: "no vault_settings row — fails before the vault read",
+  capture_to_brain: "no vault_settings row — fails before the vault write",
+  lookup_prices: "no Anthropic key — refusal is credential-shaped, though the price row IS checked",
+  process_reel: "tenant is not worker-allowlisted — fails before the vault/jobs path",
+  list_code_tasks: "neither tenant has a group named 'mindboard' — returns the empty shape",
+};
