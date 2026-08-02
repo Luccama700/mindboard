@@ -62,6 +62,10 @@ const getStreamData = cache(
   async (
     userId: string,
   ): Promise<{
+    // The USER'S day (user_settings.timezone). The stream is classified
+    // server-side against it, so the client must compare against the same key
+    // rather than re-deriving one from the device clock.
+    today: string;
     snapshot: StreamSnapshot;
     accounts: SpendAccount[];
     categories: SpendCategory[];
@@ -291,6 +295,7 @@ const getStreamData = cache(
     });
 
     return {
+      today,
       snapshot,
       accounts: accounts.map((a) => ({
         id: a.id,
@@ -311,6 +316,7 @@ const getStreamData = cache(
 async function StreamSection({ userId }: { userId: string }) {
   const [
     {
+      today,
       snapshot,
       accounts,
       categories,
@@ -335,6 +341,7 @@ async function StreamSection({ userId }: { userId: string }) {
       weekDone={weekDone}
       weekMissed={weekMissed}
       mindshare={mindshare}
+      today={today}
       todayLabel={formatLongWeekdayMonthDay(now, timeZone).toLowerCase()}
       clockLabel={formatClock12(now, timeZone)}
     />

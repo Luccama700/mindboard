@@ -134,6 +134,7 @@ function renderStream(snap: StreamSnapshot) {
       weekDone={0}
       weekMissed={0}
       mindshare={null}
+      today="2026-07-08"
       todayLabel="tuesday, jul 8"
       clockLabel="9:41 am"
     />,
@@ -141,7 +142,9 @@ function renderStream(snap: StreamSnapshot) {
 }
 
 // A NOW task card with explicit overrides for the fields tier/overdue logic
-// reads. due_date "2020-01-01" is always overdue; "2999-01-01" never is.
+// reads. `today` is pinned to 2026-07-08 (matching todayLabel), so these are
+// deterministic rather than relative to the real clock: due_date "2020-01-01"
+// is overdue, "2999-01-01" is not.
 function nowCard(
   id: string,
   over: Partial<StreamCard> & { taskOver?: Partial<Task> } = {},
@@ -270,6 +273,7 @@ describe("StreamClient rendering", () => {
           otherShare: 0,
           unclassifiedShare: 0,
         }}
+        today="2026-07-08"
         todayLabel="tuesday, jul 8"
         clockLabel="9:41 am"
       />,
