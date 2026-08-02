@@ -153,8 +153,12 @@ export async function generateItemIcon(input: {
   const bytes = Buffer.from(generated.b64, "base64");
   const path = `${user.id}/${input.id}/${crypto.randomUUID()}.png`;
 
-  // supabase-js reports StorageErrors through `error`, but rethrows anything it
-  // does not recognise — a failed fetch included. Same contract, same guard.
+  // storage-js already routes request failures — a rejected fetch included —
+  // into a StorageError and returns them through `error` (_handleRequest wraps
+  // them, handleOperation returns anything isStorageError). What it rethrows is
+  // everything else: a throw while it builds the request body, or any error at
+  // all under shouldThrowOnError. Defense in depth so nothing can escape this
+  // action's typed contract, not a claim that the common path throws.
   let uploadError: { message: string } | null;
   try {
     ({ error: uploadError } = await supabase.storage
