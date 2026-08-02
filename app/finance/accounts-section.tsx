@@ -310,7 +310,7 @@ export function BalanceUpdatePanel({
 }) {
   const current = Number(account.balance);
   const [amountDraft, setAmountDraft] = useState(String(current));
-  const [occurredAt, setOccurredAt] = useState(todayISO());
+  const [occurredAt, setOccurredAt] = useState(todayISO(null));
   const [categoryId, setCategoryId] = useState<string | null>(null);
   // null = single-category mode; an array = split across multiple categories.
   const [splits, setSplits] = useState<
@@ -567,7 +567,7 @@ export function BalanceUpdatePanel({
           id={`date-${account.id}`}
           type="date"
           value={occurredAt}
-          onChange={(e) => setOccurredAt(e.target.value || todayISO())}
+          onChange={(e) => setOccurredAt(e.target.value || todayISO(null))}
           className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
         />
       </div>

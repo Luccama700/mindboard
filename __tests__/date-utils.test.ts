@@ -24,7 +24,7 @@ describe("date utilities", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 23, 12));
 
-    expect(todayISO()).toBe("2026-05-23");
+    expect(todayISO(null)).toBe("2026-05-23");
     expect(formatDue("2026-05-23")).toBe("today");
     expect(formatDue("2026-05-25")).toBe("May 25");
     expect(daysFromToday("2026-05-22")).toBe(-1);

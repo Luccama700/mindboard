@@ -98,7 +98,7 @@ export function FinanceCalendar({
   // day), computed server-side; empty when no shopping day is set.
   groceryTrips: Record<string, GroceryTrip>;
 }) {
-  const today = todayISO();
+  const today = todayISO(null);
   const gridDays = useMemo(() => buildGrid(month), [month]);
 
   // Per-day overrides, edited optimistically by the selected-day slider and

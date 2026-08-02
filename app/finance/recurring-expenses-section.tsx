@@ -161,7 +161,7 @@ function RecurrencePicker({
             <input
               type="date"
               value={startDate}
-              onChange={(e) => onStartDate(e.target.value || todayISO())}
+              onChange={(e) => onStartDate(e.target.value || todayISO(null))}
               className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
             />
           </div>
@@ -258,7 +258,7 @@ function ExpenseForm({
   const [dayOfMonth, setDayOfMonth] = useState(1);
   const [weekday, setWeekday] = useState(1);
   const [intervalDays, setIntervalDays] = useState(14);
-  const [startDate, setStartDate] = useState(todayISO());
+  const [startDate, setStartDate] = useState(todayISO(null));
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -485,7 +485,7 @@ function ExpenseRow({
             dayOfMonth={expense.day_of_month ?? 1}
             weekday={expense.weekday ?? 1}
             intervalDays={expense.interval_days ?? 14}
-            startDate={expense.start_date ?? todayISO()}
+            startDate={expense.start_date ?? todayISO(null)}
             onFrequency={(f) =>
               onUpdate(expense.id, {
                 frequency: f,
@@ -493,7 +493,7 @@ function ExpenseRow({
                 weekday: f === "weekly" ? (expense.weekday ?? 1) : null,
                 interval_days: f === "custom" ? (expense.interval_days ?? 14) : null,
                 start_date:
-                  f === "custom" ? (expense.start_date ?? todayISO()) : null,
+                  f === "custom" ? (expense.start_date ?? todayISO(null)) : null,
               })
             }
             onDayOfMonth={(d) => onUpdate(expense.id, { day_of_month: d })}

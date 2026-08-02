@@ -257,7 +257,7 @@ function EditPanel({
     });
   }
 
-  const today = todayISO();
+  const today = todayISO(null);
   const isToday = task.due_date === today;
   const isCustomDate = task.due_date !== null && !isToday;
 

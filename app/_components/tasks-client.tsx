@@ -195,7 +195,7 @@ export function TasksClient({
     });
   }
 
-  const today = todayISO();
+  const today = todayISO(null);
   const active = tasks.filter(
     (t) => t.status !== "done" && t.status !== "missed",
   );

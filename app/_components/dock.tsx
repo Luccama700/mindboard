@@ -113,7 +113,7 @@ export function Dock({
 
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
-  const [dueDate, setDueDate] = useState<string | null>(() => todayISO());
+  const [dueDate, setDueDate] = useState<string | null>(() => todayISO(null));
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [priority, setPriority] = useState<"low" | "med" | "high">("med");
   const [groupOpen, setGroupOpen] = useState(false);
@@ -150,7 +150,7 @@ export function Dock({
   const inputRef = useRef<HTMLInputElement>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
 
-  const today = todayISO();
+  const today = todayISO(null);
   const isToday = dueDate === today;
   const isCustomDate = dueDate !== null && !isToday;
   const hasNotes = Boolean(notes.trim());

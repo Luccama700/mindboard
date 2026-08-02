@@ -112,7 +112,7 @@ function CardRow({
   const [editOpen, setEditOpen] = useState(false);
   const [dx, setDx] = useState(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const today = todayISO();
+  const today = todayISO(null);
 
   const isTask = card.entity.kind === "task" || card.entity.kind === "rtask";
   const cardTask = card.entity.kind === "task" ? card.entity.task : null;
@@ -661,7 +661,7 @@ export function StreamClient({
     };
     return subscribeCapture({
       onOptimisticAdd: (task: Task) => {
-        if (task.due_date !== todayISO()) return;
+        if (task.due_date !== todayISO(null)) return;
         setExtraNext((cards) => [
           {
             id: `task:${task.id}`,
@@ -752,7 +752,7 @@ export function StreamClient({
     return (card: StreamCard, gap: FreeGap) => {
       if (card.entity.kind !== "task") return;
       const task = card.entity.task;
-      const day = gap.dateKey === todayISO() ? "today" : "tomorrow";
+      const day = gap.dateKey === todayISO(null) ? "today" : "tomorrow";
       setRetimed((prev) => ({
         ...prev,
         [card.id]: `${day} ${gap.start}`,
@@ -818,7 +818,7 @@ export function StreamClient({
       await createTask({
         title: `buy ${name}`,
         groupId: null,
-        dueDate: todayISO(),
+        dueDate: todayISO(null),
         notes: null,
         priority: "med",
       });

@@ -184,7 +184,7 @@ export function FinanceClient({
   const mixedCurrency = accounts.some((a) => a.currency !== baseCurrency);
   const netWorth = accounts.reduce((sum, a) => sum + Number(a.balance), 0);
 
-  const today = todayISO();
+  const today = todayISO(null);
   const todayDeltaByAccount = useMemo(() => {
     const map = new Map<string, number>();
     for (const ch of changes) {

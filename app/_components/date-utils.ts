@@ -1,4 +1,11 @@
-export function todayISO(timeZone?: string | null) {
+// The timeZone argument is REQUIRED on purpose: the process clock is UTC on
+// Vercel, so an omitted zone silently produced the wrong day for every
+// server-side caller. Pass an explicit `null` to mean "process clock,
+// deliberately" — correct in client components, where the process clock IS the
+// browser. On the server, resolve the user's stored zone first: `safeTimeZone`
+// (below) or `todayKey(supabase, userId)` (app/lib/mcp/config.ts) are the only
+// blessed resolvers.
+export function todayISO(timeZone: string | null) {
   const d = new Date();
   if (timeZone) {
     return new Intl.DateTimeFormat("en-CA", {
@@ -38,8 +45,11 @@ export function formatClock12(date: Date, timeZone?: string | null) {
     .replace(" ", "");
 }
 
+// Display-only, and only ever rendered from client components, so the process
+// clock is the browser's — hence the deliberate `null`. Do not call from a
+// Server Component or action without giving it the user's zone first.
 export function formatDue(iso: string) {
-  if (iso === todayISO()) return "today";
+  if (iso === todayISO(null)) return "today";
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString("en-US", {
     month: "short",
@@ -103,9 +113,10 @@ export function formatRelativeToNow(iso: string): string {
   return `in ${Math.round(minutes / (60 * 24))}d`;
 }
 
-// Negative = overdue, 0 = today, positive = future.
+// Negative = overdue, 0 = today, positive = future. Browser-side helper: the
+// `null` picks the process clock deliberately (see formatDue).
 export function daysFromToday(iso: string): number {
-  const today = new Date(todayISO() + "T00:00:00");
+  const today = new Date(todayISO(null) + "T00:00:00");
   const date = new Date(iso + "T00:00:00");
   const diffMs = date.getTime() - today.getTime();
   return Math.round(diffMs / (1000 * 60 * 60 * 24));

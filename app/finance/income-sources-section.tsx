@@ -61,9 +61,9 @@ const PAY_FREQUENCIES: PayFrequency[] = ["weekly", "biweekly", "monthly"];
 function defaultSchedule(source?: IncomeSource): PaySchedule {
   return {
     payFrequency: source?.pay_frequency ?? null,
-    anchorPayday: source?.anchor_payday ?? todayISO(),
-    periodStart: source?.period_start ?? addDaysKey(todayISO(), -13),
-    periodEnd: source?.period_end ?? addDaysKey(todayISO(), -1),
+    anchorPayday: source?.anchor_payday ?? todayISO(null),
+    periodStart: source?.period_start ?? addDaysKey(todayISO(null), -13),
+    periodEnd: source?.period_end ?? addDaysKey(todayISO(null), -1),
   };
 }
 
@@ -121,7 +121,7 @@ function PaySchedulePicker({
               type="date"
               value={value.anchorPayday}
               onChange={(e) =>
-                onChange({ ...value, anchorPayday: e.target.value || todayISO() })
+                onChange({ ...value, anchorPayday: e.target.value || todayISO(null) })
               }
               className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
             />
