@@ -4,12 +4,17 @@
 // the other half: a component whose date chip WRITES tasks.due_date must write
 // the user's day (threaded from the server), not the device's.
 //
-// The device clock is frozen to a Vancouver evening — 2026-07-27T23:10Z is
-// 16:10 on the 27th locally — while the server's day is 2026-07-28. Those
-// differ for a default-configured account every evening, because
-// user_settings.timezone is null until the user visits /settings, so the server
-// falls back to UTC. Reverting TaskRow to todayISO(null) makes both assertions
-// below fail on a Vancouver box and the second one fail anywhere.
+// The device clock is frozen to 2026-07-27T23:10Z while the server's day is
+// 2026-07-28. That split is real for any unconfigured account, whose server day
+// is UTC (user_settings.timezone is `not null default 'UTC'`, and a missing row
+// falls back to the process clock).
+//
+// The host zone matters and is NOT left to chance: vitest.config.mts pins
+// process.env.TZ = "UTC". Pinning the instant alone is not enough — at the
+// instant below, a host at >= UTC+1 (Berlin, Tokyo, Sydney) computes the device
+// day as 2026-07-28 too, so a reverted TaskRow would produce exactly
+// SERVER_TODAY and both tests would pass with the bug present. Mutation-checked
+// under the pin: reverting TaskRow to todayISO(null) fails both.
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";

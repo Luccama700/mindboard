@@ -10,14 +10,14 @@
 // covered: spring-forward 2026-03-08 (02:00 PST -> 03:00 PDT, i.e. 10:00Z) and
 // fall-back 2026-11-01 (02:00 PDT -> 01:00 PST, i.e. 09:00Z).
 //
-// CAVEAT ON "how many of these catch a regression": that count is HOST-TZ
-// DEPENDENT, so do not quote a number. Rows whose zone happens to match the
-// runner's own zone pass coincidentally against pre-fix code — on a Vancouver
-// dev box the Vancouver rows do, on a UTC CI runner the UTC rows do. At least
-// two of the three zones always bite, which is why three are here. The
-// host-independent assertions live in __tests__/timezone-call-sites.test.ts,
-// which pins Asia/Tokyo at an instant whose day differs from both UTC and
-// Vancouver.
+// ON "how many of these catch a regression": vitest.config.mts now pins
+// process.env.TZ = "UTC", so the answer is stable rather than a property of
+// whoever ran it. It is still not a meaningful headline number — under the pin
+// the UTC rows agree with pre-fix code by construction, which is the point of
+// having Vancouver and Tokyo rows beside them. The assertions that hold
+// regardless of any host setting live in __tests__/timezone-call-sites.test.ts
+// (Asia/Tokyo at an instant whose day differs from both UTC and Vancouver) and
+// __tests__/timezone-write-paths.test.tsx.
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
