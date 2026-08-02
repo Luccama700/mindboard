@@ -38,21 +38,10 @@ import {
 } from "@/app/lib/data/settings";
 import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
+import { normalizeMonth } from "@/app/lib/data/dashboard";
 import { FinanceClient } from "./finance-client";
 
 type GoogleStatus = "connected" | "connect" | "error";
-
-function normalizeMonth(
-  value: string | string[] | undefined,
-  currentMonth: string,
-) {
-  const month = Array.isArray(value) ? value[0] : value;
-  if (!month || !/^\d{4}-\d{2}$/.test(month)) return currentMonth;
-  const [year, monthNumber] = month.split("-").map(Number);
-  if (monthNumber < 1 || monthNumber > 12) return currentMonth;
-  if (year < 1970 || year > 2100) return currentMonth;
-  return month;
-}
 
 // Range covering the visible 42-cell grid, extended back to today so the
 // forward forecast between today and a future month stays anchored.
@@ -112,7 +101,7 @@ export default async function FinancePage({
   const timeZone = safeTimeZone((await getUserPreferences(user.id)).timezone);
   // Every date fact on this page keys off the user's day, not the server's.
   const today = todayISO(timeZone);
-  const financeMonth = normalizeMonth(query.fm, today.slice(0, 7));
+  const financeMonth = normalizeMonth(query.fm, timeZone);
 
   const [
     accountsResult,
@@ -294,6 +283,7 @@ export default async function FinancePage({
         spendOverrides={spendOverrides}
         groceryTrips={groceryTrips}
         initialSpendLimits={spendLimits as SpendLimit[]}
+        today={today}
       />
     </main>
   );

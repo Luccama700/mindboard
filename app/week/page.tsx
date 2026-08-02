@@ -23,7 +23,6 @@ export default async function WeekPage({
 }) {
   const query = await searchParams;
   const selectedDay = normalizeDay(query.d);
-  const month = selectedDay ? selectedDay.slice(0, 7) : normalizeMonth(query.m);
 
   const supabase = await createClient();
   const {
@@ -31,24 +30,27 @@ export default async function WeekPage({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const [
-    {
-      calendarTasks,
-      events,
-      finance,
-      calendarStatus,
-      calendarLinks,
-      recurringTasks,
-      recurringCompletions,
-      recurringSlots,
-    },
-    prefs,
-  ] = await Promise.all([
-    getDashboardData(user.id, month),
-    getUserPreferences(user.id),
-  ]);
-
+  // The default month is the USER'S current month: on the process clock the
+  // last evening of a month fetched next month's grid, so the week actually
+  // being viewed had no events or completions loaded at all. getUserPreferences
+  // is cache()-deduped, so resolving the zone here costs no extra round-trip.
+  const prefs = await getUserPreferences(user.id);
   const timeZone = safeTimeZone(prefs.timezone);
+  const month = selectedDay
+    ? selectedDay.slice(0, 7)
+    : normalizeMonth(query.m, timeZone);
+
+  const {
+    calendarTasks,
+    events,
+    finance,
+    calendarStatus,
+    calendarLinks,
+    recurringTasks,
+    recurringCompletions,
+    recurringSlots,
+  } = await getDashboardData(user.id, month);
+
   const today = todayISO(timeZone);
   const slotKeys = new Set(
     recurringSlots.map((s) => `${s.rule_id}:${s.occurred_on}`),

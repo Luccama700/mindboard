@@ -11,6 +11,7 @@ import type { FinanceChange } from "@/app/_components/dashboard-calendar";
 import type { TaskWithGroup } from "@/app/_components/types";
 import type { TaskRecurrence } from "@/app/lib/recurrence";
 import type { RecurringSlotRow } from "@/app/lib/data/recurring-tasks";
+import { todayISO } from "@/app/_components/date-utils";
 
 // Recurring-task rules for the calendar: occurrences are computed client-side
 // per grid day; completions mark them done/struck. Untimed rules also reach the
@@ -106,19 +107,26 @@ function toDateKey(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-export function currentMonth() {
-  const today = new Date();
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  return `${today.getFullYear()}-${month}`;
+// The month whose 42-cell grid gets fetched. `timeZone` is REQUIRED for the
+// same reason todayISO's is: this drives a SERVER-SIDE data window, and on the
+// process clock (UTC on Vercel) a Vancouver user opening /week at 18:00 on the
+// last day of a month fetched next month's grid — so the current week's events
+// and completions were never loaded at all, and the calendar silently fell back
+// to the first of the wrong month. Pass `null` only from the browser.
+export function currentMonth(timeZone: string | null) {
+  return todayISO(timeZone).slice(0, 7);
 }
 
-export function normalizeMonth(value: string | string[] | undefined) {
+export function normalizeMonth(
+  value: string | string[] | undefined,
+  timeZone: string | null,
+) {
   const month = Array.isArray(value) ? value[0] : value;
-  if (!month || !/^\d{4}-\d{2}$/.test(month)) return currentMonth();
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return currentMonth(timeZone);
 
   const [year, monthNumber] = month.split("-").map(Number);
-  if (monthNumber < 1 || monthNumber > 12) return currentMonth();
-  if (year < 1970 || year > 2100) return currentMonth();
+  if (monthNumber < 1 || monthNumber > 12) return currentMonth(timeZone);
+  if (year < 1970 || year > 2100) return currentMonth(timeZone);
 
   return month;
 }

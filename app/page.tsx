@@ -104,7 +104,7 @@ const getStreamData = cache(
       weekMissedResult,
       mindshare,
     ] = await Promise.all([
-      getDashboardData(userId, currentMonth()),
+      getDashboardData(userId, currentMonth(timeZone)),
       getOpenTasks(userId),
       getAccounts(userId),
       getActiveRecurringExpenses(userId),
@@ -458,8 +458,6 @@ export default async function Home({
 }) {
   const query = await searchParams;
   const selectedDay = normalizeDay(query.d);
-  // The selected day owns the month it lives in, so its week's data loads.
-  const month = selectedDay ? selectedDay.slice(0, 7) : normalizeMonth(query.m);
 
   const supabase = await createClient();
   const {
@@ -469,6 +467,17 @@ export default async function Home({
   if (!user) {
     return <Landing />;
   }
+
+  // The selected day owns the month it lives in, so its week's data loads.
+  // Resolved after auth because the default month is the USER'S current month:
+  // on the process clock the last evening of a month fetched the next one.
+  // getUserPreferences is cache()-deduped, so WeekPaneSection reuses this read.
+  const month = selectedDay
+    ? selectedDay.slice(0, 7)
+    : normalizeMonth(
+        query.m,
+        safeTimeZone((await getUserPreferences(user.id)).timezone),
+      );
 
   return (
     <main className="min-h-screen px-5 pt-6 pb-64 mx-auto max-w-2xl lg:max-w-none lg:px-10 2xl:max-w-[110rem]">
