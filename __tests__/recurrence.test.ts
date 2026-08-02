@@ -111,7 +111,12 @@ describe("occurrenceBusyEvents", () => {
   };
 
   test("timed rules become 30min-default busy events; untimed contribute nothing", () => {
-    const events = occurrenceBusyEvents([timed, untimed], ["2026-07-06"]);
+    const events = occurrenceBusyEvents(
+      [timed, untimed],
+      ["2026-07-06"],
+      undefined,
+      null,
+    );
     expect(events).toHaveLength(1);
     const start = new Date(events[0].start);
     const end = new Date(events[0].end);
@@ -129,7 +134,12 @@ describe("occurrenceBusyEvents", () => {
       duration_min: 60,
       ...rule({ frequency: "weekly", weekdays: [1] }),
     };
-    const events = occurrenceBusyEvents([gym], ["2026-07-06", "2026-07-07"]);
+    const events = occurrenceBusyEvents(
+      [gym],
+      ["2026-07-06", "2026-07-07"],
+      undefined,
+      null,
+    );
     expect(events).toHaveLength(1); // Monday only
     const start = new Date(events[0].start);
     const end = new Date(events[0].end);
@@ -141,6 +151,7 @@ describe("occurrenceBusyEvents", () => {
       [timed],
       ["2026-07-06"],
       new Set(["r1:2026-07-06"]),
+      null,
     );
     expect(events).toEqual([]);
   });
@@ -157,7 +168,7 @@ describe("slotBusyEvents", () => {
       { rule_id: "r1", occurred_on: "2026-07-06", start_time: "07:00:00", duration_min: 90 },
       { rule_id: "r2", occurred_on: "2026-07-06", start_time: "20:00:00", duration_min: null },
     ];
-    const events = slotBusyEvents(slots, rules);
+    const events = slotBusyEvents(slots, rules, null);
     expect(events).toHaveLength(2);
     // slot duration wins over the rule's 60
     const gym = events[0];
@@ -185,14 +196,14 @@ describe("slotBusyEvents", () => {
         gcal_event_id: "evt-1",
       },
     ];
-    expect(slotBusyEvents(slots, rules)).toEqual([]);
+    expect(slotBusyEvents(slots, rules, null)).toEqual([]);
   });
 
   test("a slot whose rule id is unknown is skipped", () => {
     const slots: RecurringSlot[] = [
       { rule_id: "ghost", occurred_on: "2026-07-06", start_time: "07:00:00", duration_min: 30 },
     ];
-    expect(slotBusyEvents(slots, rules)).toEqual([]);
+    expect(slotBusyEvents(slots, rules, null)).toEqual([]);
   });
 
   test("skipped occurrence + its slot together yield exactly one event", () => {
@@ -210,8 +221,9 @@ describe("slotBusyEvents", () => {
       [timedGym],
       ["2026-07-06"],
       new Set(["r1:2026-07-06"]),
+      null,
     );
-    const slot = slotBusyEvents(slots, [timedGym]);
+    const slot = slotBusyEvents(slots, [timedGym], null);
     expect(occ).toEqual([]);
     expect(slot).toHaveLength(1);
     expect(new Date(slot[0].start).getHours()).toBe(7);

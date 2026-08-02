@@ -161,8 +161,9 @@ const getStreamData = cache(
         recurringTasks,
         [today, addDaysKey(today, 1)],
         slotKeys,
+        timeZone,
       ),
-      ...slotBusyEvents(recurringSlots, recurringTasks),
+      ...slotBusyEvents(recurringSlots, recurringTasks, timeZone),
     ];
     const schedule = scheduleSnapshot({
       events: busyEvents,
@@ -381,8 +382,9 @@ async function WeekPaneSection({
         recurringTasks,
         [today, addDaysKey(today, 1)],
         slotKeys,
+        timeZone,
       ),
-      ...slotBusyEvents(recurringSlots, recurringTasks),
+      ...slotBusyEvents(recurringSlots, recurringTasks, timeZone),
     ],
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,

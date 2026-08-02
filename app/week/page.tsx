@@ -10,7 +10,7 @@ import {
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { occurrenceBusyEvents, slotBusyEvents } from "@/app/lib/recurrence";
 import { scheduleSnapshot } from "@/app/lib/snapshots/schedule";
-import { todayISO } from "@/app/_components/date-utils";
+import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { addDaysKey } from "@/app/lib/snapshots/stream";
 
 export default async function WeekPage({
@@ -48,7 +48,8 @@ export default async function WeekPage({
     getUserPreferences(user.id),
   ]);
 
-  const today = todayISO();
+  const timeZone = safeTimeZone(prefs.timezone);
+  const today = todayISO(timeZone);
   const slotKeys = new Set(
     recurringSlots.map((s) => `${s.rule_id}:${s.occurred_on}`),
   );
@@ -59,12 +60,14 @@ export default async function WeekPage({
         recurringTasks,
         [today, addDaysKey(today, 1)],
         slotKeys,
+        timeZone,
       ),
-      ...slotBusyEvents(recurringSlots, recurringTasks),
+      ...slotBusyEvents(recurringSlots, recurringTasks, timeZone),
     ],
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,
     wakeEndHour: prefs.wake_end_hour,
+    timeZone,
   });
 
   return (
