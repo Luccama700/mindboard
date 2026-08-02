@@ -234,6 +234,17 @@ export const gatherMindspaceItems = cache(
           .select("id, google_calendar_id")
           .eq("user_id", userId)
           .not("google_calendar_id", "is", null),
+        // Every capped read below is ordered descending: without ORDER BY,
+        // Postgres row order is unspecified, so ROW_LIMIT would truncate an
+        // arbitrary slice at any volume and the corpus would be built from it
+        // silently. Each order ends in `id` so it is TOTAL — `created_at`
+        // defaults to now(), which is transaction time, so a bulk import gives
+        // every row the same timestamp and ties would otherwise be arbitrary.
+        //
+        // Tasks sort on created_at: a row can also qualify via completed_at, so
+        // an old task completed yesterday drops before a task created
+        // yesterday. max(created_at, completed_at) isn't expressible here, and
+        // creation recency is the closer proxy for what the corpus wants.
         supabase
           .from("tasks")
           .select(
@@ -241,6 +252,8 @@ export const gatherMindspaceItems = cache(
           )
           .eq("user_id", userId)
           .or(`created_at.gte.${cutoffIso},completed_at.gte.${cutoffIso}`)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
           .limit(ROW_LIMIT),
         supabase
           .from("ai_messages")
@@ -266,6 +279,9 @@ export const gatherMindspaceItems = cache(
           .eq("user_id", userId)
           .gte("occurred_at", cutoffDate)
           .not("note", "is", null)
+          .order("occurred_at", { ascending: false })
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
           .limit(ROW_LIMIT),
         supabase
           .from("mindspace_sessions")
@@ -274,6 +290,8 @@ export const gatherMindspaceItems = cache(
           )
           .eq("user_id", userId)
           .gte("ended_at", cutoffIso)
+          .order("ended_at", { ascending: false })
+          .order("id", { ascending: true })
           .limit(ROW_LIMIT),
       ]);
 
