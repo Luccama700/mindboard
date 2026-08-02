@@ -1028,7 +1028,7 @@ export function InventoryClient({
               data-tour="shopping"
               onClick={() => (shoppingOpen ? setShoppingOpen(false) : openShopping())}
               aria-pressed={shoppingOpen}
-              className={`min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors mr-auto ${
+              className={`min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors mr-auto ${
                 shoppingOpen
                   ? "border-accent bg-accent text-accent-fg"
                   : "border-line bg-page text-muted hover:text-fg"
@@ -1040,7 +1040,7 @@ export function InventoryClient({
               type="button"
               onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
               aria-pressed={selectMode}
-              className={`min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors ${
+              className={`min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors ${
                 selectMode
                   ? "border-accent bg-accent text-accent-fg"
                   : "border-line bg-page text-muted hover:text-fg"
@@ -1056,7 +1056,7 @@ export function InventoryClient({
                     type="button"
                     onClick={() => setCountMode(m)}
                     aria-pressed={countMode === m}
-                    className={`min-h-9 px-3 text-[10px] tracking-widest uppercase transition-colors ${
+                    className={`min-h-11 px-3 text-[10px] tracking-widest uppercase transition-colors ${
                       countMode === m
                         ? "bg-accent text-accent-fg"
                         : "bg-page text-muted hover:text-fg"
@@ -1074,7 +1074,7 @@ export function InventoryClient({
                   type="button"
                   onClick={() => setViewMode(m)}
                   aria-pressed={view === m}
-                  className={`min-h-9 px-3 text-[10px] tracking-widest uppercase transition-colors ${
+                  className={`min-h-11 px-3 text-[10px] tracking-widest uppercase transition-colors ${
                     view === m
                       ? "bg-accent text-accent-fg"
                       : "bg-page text-muted hover:text-fg"
@@ -1177,7 +1177,7 @@ export function InventoryClient({
             <button
               type="button"
               onClick={() => onSetArchived(suggestion.item.id, true)}
-              className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+              className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
             >
               stop tracking
             </button>
@@ -1188,7 +1188,7 @@ export function InventoryClient({
                   new Set(prev).add(suggestion.item.id),
                 )
               }
-              className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+              className="min-h-11 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
             >
               keep
             </button>
@@ -1277,7 +1277,7 @@ export function InventoryClient({
                   type="button"
                   onClick={bulkArchive}
                   disabled={checkedIds.size === 0}
-                  className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
+                  className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
                 >
                   stop tracking
                 </button>
@@ -1289,7 +1289,7 @@ export function InventoryClient({
                   }}
                   disabled={checkedIds.size === 0}
                   aria-label="move selected to group"
-                  className="min-h-9 bg-glass-well rounded-field border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
+                  className="min-h-11 bg-glass-well rounded-field border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
                 >
                   <option value="">move to…</option>
                   <option value="__none">ungrouped</option>
@@ -1303,14 +1303,14 @@ export function InventoryClient({
                   type="button"
                   onClick={bulkDelete}
                   disabled={checkedIds.size === 0}
-                  className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors disabled:opacity-40"
+                  className="min-h-11 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors disabled:opacity-40"
                 >
                   delete
                 </button>
                 <button
                   type="button"
                   onClick={exitSelectMode}
-                  className="ml-auto min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+                  className="ml-auto min-h-11 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
                 >
                   done
                 </button>
@@ -1782,7 +1782,7 @@ function ArchivedRow({
     : null;
 
   return (
-    <li className="flex items-center gap-2 min-h-11 py-1">
+    <li className="flex items-center gap-2 min-h-11">
       <span className="flex-1 min-w-0 truncate text-sm text-muted">
         {item.name}
         {since && <span className="text-meta"> · since {since}</span>}
@@ -1790,14 +1790,14 @@ function ArchivedRow({
       <button
         type="button"
         onClick={() => onRestore(item.id)}
-        className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+        className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
       >
         restore
       </button>
       <button
         type="button"
         onClick={() => onDelete(item.id)}
-        className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
+        className="min-h-11 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
       >
         delete forever
       </button>
@@ -2409,7 +2409,7 @@ function ItemDetail({
         <button
           type="button"
           onClick={() => onArchive(item.id)}
-          className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+          className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
         >
           stop tracking
         </button>
@@ -2424,7 +2424,7 @@ function ItemDetail({
               onDelete(item.id);
             }
           }}
-          className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
+          className="min-h-11 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
         >
           delete forever
         </button>
