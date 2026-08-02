@@ -5,7 +5,7 @@ import { createClient } from "@/utils/supabase/server";
 import { decryptSecret } from "@/app/lib/assistant/crypto";
 import { proposeUpdateStockFor } from "@/app/lib/mcp/writes";
 import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
-import { todayISO } from "@/app/_components/date-utils";
+import { todayKey } from "@/app/lib/mcp/config";
 
 // The /inventory capture bar's server side. Two entry points, one outcome: a
 // propose-only stock proposal (receipt preview + proposalId) that the page
@@ -127,7 +127,7 @@ export async function proposeStockFromText(input: {
     .map((g) => g.name)
     .join(", ");
 
-  const system = `You translate a user's quick stock note into inventory operations. Today is ${todayISO()}.
+  const system = `You translate a user's quick stock note into inventory operations. Today is ${await todayKey(supabase, user.id)}.
 
 Current inventory:
 ${catalog || "(empty)"}
