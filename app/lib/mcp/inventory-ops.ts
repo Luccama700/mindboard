@@ -52,7 +52,18 @@ export type StockOp =
 // the same batch; the executor resolves it after that insert.
 export type ResolvedStockOp =
   | { kind: "adjust"; itemId: string; name: string; unit: string; delta: number; before: number; after: number }
-  | { kind: "recount"; itemId: string; name: string; unit: string; quantity: number; before: number }
+  // restored: the recount matched an archived item. A recount is a statement
+  // about what is on the shelf, so it un-archives rather than leaving a second
+  // row behind — the receipt says so before anything is applied.
+  | {
+      kind: "recount";
+      itemId: string;
+      name: string;
+      unit: string;
+      quantity: number;
+      before: number;
+      restored?: boolean;
+    }
   | {
       kind: "create";
       name: string;
@@ -401,6 +412,30 @@ export function resolveItemRef(
   return { ok: false, error: `no item matching "${ref}"` };
 }
 
+// Whether a ref points at *anything* in a pool, ambiguous or not. Used to tell
+// "the active shelf has no such item" apart from "the active shelf has several"
+// without sniffing error strings.
+export function hasRefCandidate(ref: string, pool: ResolvableItem[]): boolean {
+  const needle = ref.toLowerCase();
+  return pool.some(
+    (it) => it.id === ref || it.name.toLowerCase().includes(needle),
+  );
+}
+
+// Same contract as resolveItemRef (id → exact → unique substring, ambiguity
+// fails with candidates), applied to the active shelf first and only then to
+// the archive. Active wins outright, and an ambiguity among active items is
+// still reported as an ambiguity — the archive is a fallback, never a tiebreak.
+export function resolveItemRefIncludingArchived(
+  ref: string,
+  active: ResolvableItem[],
+  archived: ResolvableItem[],
+): Result<ResolvableItem> {
+  const inActive = resolveItemRef(ref, active);
+  if (inActive.ok || hasRefCandidate(ref, active)) return inActive;
+  return resolveItemRef(ref, archived);
+}
+
 function matchGroup(ref: string, groups: ResolvableGroup[]): Result<ResolvableGroup> {
   const byId = groups.find((g) => g.id === ref);
   if (byId) return { ok: true, value: byId };
@@ -474,7 +509,10 @@ export function resolveStockOps(
         break;
       }
       case "set": {
-        const found = resolveItemRef(op.item, active);
+        // A recount also looks in the archive: "there are 5 rice" against an
+        // item you stopped tracking means it is back on the shelf, not that a
+        // second rice row should exist.
+        const found = resolveItemRefIncludingArchived(op.item, active, archived);
         if (!found.ok) return found;
         const it = found.value;
         const before = running.get(it.id) ?? 0;
@@ -486,6 +524,7 @@ export function resolveStockOps(
           unit: it.unit,
           quantity: op.quantity,
           before,
+          restored: it.archived,
         });
         break;
       }
@@ -496,6 +535,15 @@ export function resolveStockOps(
           return {
             ok: false,
             error: `"${existing.name}" already exists — use add/set instead of create`,
+          };
+        }
+        // Archived items are invisible to the shelf but still occupy the name.
+        // Creating over one is how the shelf ends up with two divergent rows.
+        const shelved = archived.find((it) => it.name.toLowerCase() === needle);
+        if (shelved) {
+          return {
+            ok: false,
+            error: `"${shelved.name}" already exists but is not being tracked — use set to restore it with a new count`,
           };
         }
         if (createdNames.has(needle)) {
@@ -723,7 +771,7 @@ export function receiptLine(op: ResolvedStockOp): string {
       return `${op.name}  ${formatQty(op.before)} → ${withUnit(op.after, op.unit)}  (${note})`;
     }
     case "recount":
-      return `${op.name}  ${formatQty(op.before)} → ${withUnit(op.quantity, op.unit)}  (recount)`;
+      return `${op.name}  ${formatQty(op.before)} → ${withUnit(op.quantity, op.unit)}  (recount${op.restored ? " · restored, tracking again" : ""})`;
     case "create":
       return `${op.name}  new · ${withUnit(op.quantity, op.unit)}${op.groupName ? ` · ${op.groupName}` : ""}${op.price != null ? ` · ~$${op.price.toFixed(2)}` : ""}`;
     case "archive":
@@ -814,6 +862,7 @@ export function validateResolvedOps(raw: unknown): Result<ResolvedStockOp[]> {
           unit: String(entry.unit ?? ""),
           quantity,
           before: Number(entry.before) || 0,
+          restored: entry.restored === true,
         });
         break;
       }

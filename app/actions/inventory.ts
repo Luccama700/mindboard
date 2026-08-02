@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { lookupPrices } from "@/app/lib/shopping/price-lookup";
+import { adjustQuantity, itemQuantityStore } from "@/app/lib/inventory/quantity";
 
 const ITEM_COLUMNS =
   "id, name, quantity, unit, notes, image_url, inventory_group_id, reorder_threshold, priority, archived, archived_at, last_restocked_at, shopping_pinned, buy_amount, est_price, price_source, price_checked_at, created_at";
@@ -273,6 +274,39 @@ export async function updateInventoryItem(input: {
   // optimistic override reconciles against a fresh quantity (not a stale one).
   revalidatePath("/", "layout");
   return { error: null };
+}
+
+// Steppers and "+2 milk" capture go through here, never through
+// updateInventoryItem's absolute `quantity`: the delta is applied server-side
+// against the live row so a stale tab can't overwrite another surface's write.
+export async function adjustInventoryQuantity(input: {
+  id: string;
+  delta: number;
+}) {
+  const delta = Number(input.delta);
+  if (!Number.isFinite(delta) || delta === 0) return { error: "invalid delta" };
+  if (!input.id || typeof input.id !== "string") {
+    return { error: "invalid item" };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const outcome = await adjustQuantity(
+    itemQuantityStore(supabase, input.id, user.id, new Date().toISOString()),
+    delta,
+  );
+  if (!outcome.ok) return { error: outcome.error };
+
+  revalidatePath("/inventory");
+  // The dashboard stream shows inventory vitals and its quantity stepper reads
+  // the server snapshot; revalidate it so a step is reflected and the stepper's
+  // optimistic override reconciles against a fresh quantity (not a stale one).
+  revalidatePath("/", "layout");
+  return { error: null, quantity: outcome.after };
 }
 
 export async function setInventoryItemArchived(id: string, archived: boolean) {

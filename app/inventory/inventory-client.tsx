@@ -28,6 +28,7 @@ import {
   readImageGenSettings,
 } from "@/app/_components/image-gen-settings";
 import {
+  adjustInventoryQuantity,
   createInventoryGroup,
   createInventoryItem,
   createInventoryUsage,
@@ -69,7 +70,9 @@ import {
   type ShoppingEntry,
 } from "@/app/_components/shopping-list";
 import {
+  hasRefCandidate,
   resolveItemRef,
+  resolveItemRefIncludingArchived,
   type ResolvableItem,
   type StockOp,
 } from "@/app/lib/mcp/inventory-ops";
@@ -284,6 +287,12 @@ export function InventoryClient({
   const [proposalPending, setProposalPending] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
 
+  // Every server action here returns { error }. Dropping it leaves the
+  // optimistic value on screen until the transition settles and then snaps back
+  // with no explanation, so the user acts on a number the DB never accepted.
+  const [actionError, setActionError] = useState<string | null>(null);
+  const failureCount = useRef(0);
+
   const [selectMode, setSelectMode] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(
@@ -464,6 +473,27 @@ export function InventoryClient({
     scrollDetailIntoView();
   }
 
+  // Runs one server action and reports a rejected write. The optimistic patch
+  // itself needs no manual undo: useOptimistic drops it when the transition
+  // settles, and a failed action never revalidates, so the shelf falls back to
+  // the last server truth. What was missing was saying so.
+  async function runAction<T extends { error: string | null }>(
+    label: string,
+    call: Promise<T>,
+  ): Promise<T> {
+    // Transitions are not serialized — each tap starts its own — so a success
+    // already in flight must not clear a failure that landed while it waited.
+    const seenFailures = failureCount.current;
+    const result = await call;
+    if (result?.error) {
+      failureCount.current += 1;
+      setActionError(`${label} — ${result.error}`);
+    } else if (failureCount.current === seenFailures) {
+      setActionError(null);
+    }
+    return result;
+  }
+
   function onCreateItem(input: {
     name: string;
     quantity: number;
@@ -495,48 +525,93 @@ export function InventoryClient({
     setSelectedId(tempId);
     startTransition(async () => {
       dispatchItems({ kind: "add", item: optimistic });
-      const result = await createInventoryItem({
-        groupId: input.groupId,
-        name: input.name,
-        quantity: input.quantity,
-        unit: input.unit,
-      });
+      const result = await runAction(
+        `couldn't add ${input.name}`,
+        createInventoryItem({
+          groupId: input.groupId,
+          name: input.name,
+          quantity: input.quantity,
+          unit: input.unit,
+        }),
+      );
       if (!result.error && result.item) {
         const real = result.item as InventoryItem;
         dispatchItems({ kind: "replace", tempId, item: real });
         setSelectedId(real.id);
+      } else {
+        // The optimistic row is about to disappear; don't leave the detail
+        // panel pointed at an id that never existed.
+        setSelectedId((prev) => (prev === tempId ? null : prev));
       }
     });
   }
 
-  function onAdjustQuantity(id: string, delta: number) {
+  // Every +/− on the page — shelf rows, grid tiles, the detail panel's stepper,
+  // "+2 milk" in the omnibox — lands here. The delta is what travels; the
+  // server applies it to the live row (compare-and-swap), so a stale tab or a
+  // concurrent agent write can't be overwritten by this view's arithmetic. The
+  // quantity passed along is optimistic paint only, and recounts do NOT come
+  // through here.
+  function onStepQuantity(id: string, delta: number) {
     const current = items.find((it) => it.id === id);
     if (!current) return;
+    // No "nothing changed, skip the write" guard: that call would be made from
+    // this view's possibly-stale number. A − on a shelf showing 0 still means
+    // "one less than whatever is really there".
     const next = Math.max(
       0,
       Math.round((Number(current.quantity) + delta) * 1000) / 1000,
     );
-    if (next === Number(current.quantity)) return;
-    onUpdateItem(id, { quantity: next });
+    onUpdateItem(id, { quantity: next }, delta);
   }
 
-  function onUpdateItem(id: string, patch: Partial<InventoryItem>) {
+  // The one write path for an item row. `delta` marks a relative quantity
+  // change (a stepper, "+2 milk") and is applied server-side; everything else,
+  // including a recount, is an absolute patch.
+  //
+  // The step path shares this transition deliberately: pulling it into its own
+  // startTransition — or routing both through a discriminated-union helper —
+  // makes the React Compiler give up on this whole component
+  // (react-hooks/preserve-manual-memoization, an error here; both shapes were
+  // tried and reproduce it). The overload signatures blunt the extra
+  // parameter: with a delta the patch may declare `{ quantity }` and nothing
+  // else, so a fresh literal carrying any other field is a compile error. That
+  // is excess-property checking, not a guarantee — a pre-built variable still
+  // slips through and its extra fields are dropped at runtime. Every call site
+  // here passes a literal; keep it that way.
+  function onUpdateItem(id: string, patch: Partial<InventoryItem>): void;
+  function onUpdateItem(
+    id: string,
+    patch: { quantity: number },
+    delta: number,
+  ): void;
+  function onUpdateItem(
+    id: string,
+    patch: Partial<InventoryItem>,
+    delta?: number,
+  ) {
+    const label = items.find((it) => it.id === id)?.name ?? "item";
     startTransition(async () => {
       dispatchItems({ kind: "update", id, patch });
-      await updateInventoryItem({
-        id,
-        name: patch.name,
-        quantity: patch.quantity,
-        unit: patch.unit,
-        notes: patch.notes,
-        groupId: patch.inventory_group_id,
-        imageUrl: patch.image_url,
-        reorderThreshold: patch.reorder_threshold,
-        priority: patch.priority,
-        shoppingPinned: patch.shopping_pinned,
-        buyAmount: patch.buy_amount,
-        estPrice: patch.est_price,
-      });
+      await runAction(
+        `couldn't update ${label}`,
+        delta === undefined
+          ? updateInventoryItem({
+              id,
+              name: patch.name,
+              quantity: patch.quantity,
+              unit: patch.unit,
+              notes: patch.notes,
+              groupId: patch.inventory_group_id,
+              imageUrl: patch.image_url,
+              reorderThreshold: patch.reorder_threshold,
+              priority: patch.priority,
+              shoppingPinned: patch.shopping_pinned,
+              buyAmount: patch.buy_amount,
+              estPrice: patch.est_price,
+            })
+          : adjustInventoryQuantity({ id, delta }),
+      );
       // Pinning can trigger a post-response AI price lookup server-side;
       // refresh so the filled price lands without a manual reload.
       if (patch.shopping_pinned === true) {
@@ -552,11 +627,15 @@ export function InventoryClient({
     if (input.store !== undefined) setShoppingStore(input.store);
     if (input.shoppingDay !== undefined) setShoppingDay(input.shoppingDay);
     startTransition(async () => {
-      await saveShoppingSettings(input);
+      await runAction(
+        "couldn't save shopping settings",
+        saveShoppingSettings(input),
+      );
     });
   }
 
   function onSetArchived(id: string, archived: boolean) {
+    const label = items.find((it) => it.id === id)?.name ?? "item";
     startTransition(async () => {
       if (archived && selectedId === id) setSelectedId(null);
       dispatchItems({
@@ -567,7 +646,10 @@ export function InventoryClient({
           archived_at: archived ? new Date().toISOString() : null,
         },
       });
-      await setInventoryItemArchived(id, archived);
+      await runAction(
+        `couldn't ${archived ? "stop tracking" : "restore"} ${label}`,
+        setInventoryItemArchived(id, archived),
+      );
     });
   }
 
@@ -587,12 +669,15 @@ export function InventoryClient({
     };
     startTransition(async () => {
       dispatchUsages({ kind: "add", usage: optimistic });
-      const result = await createInventoryUsage({
-        itemId,
-        amount: input.amount,
-        period: input.period,
-        intervalDays: input.intervalDays,
-      });
+      const result = await runAction(
+        "couldn't save the usage rule",
+        createInventoryUsage({
+          itemId,
+          amount: input.amount,
+          period: input.period,
+          intervalDays: input.intervalDays,
+        }),
+      );
       if (!result.error && result.usage) {
         dispatchUsages({
           kind: "replace",
@@ -617,38 +702,48 @@ export function InventoryClient({
           interval_days: input.intervalDays,
         },
       });
-      await updateInventoryUsage({
-        id,
-        amount: input.amount,
-        period: input.period,
-        intervalDays: input.intervalDays,
-      });
+      await runAction(
+        "couldn't save the usage rule",
+        updateInventoryUsage({
+          id,
+          amount: input.amount,
+          period: input.period,
+          intervalDays: input.intervalDays,
+        }),
+      );
     });
   }
 
   function onDeleteUsage(id: string) {
     startTransition(async () => {
       dispatchUsages({ kind: "remove", id });
-      await deleteInventoryUsage(id);
+      await runAction(
+        "couldn't clear the usage rule",
+        deleteInventoryUsage(id),
+      );
     });
   }
 
   function onDeleteItem(id: string) {
+    const label = items.find((it) => it.id === id)?.name ?? "item";
     startTransition(async () => {
       if (selectedId === id) setSelectedId(null);
       dispatchItems({ kind: "remove", id });
-      await deleteInventoryItem(id);
+      await runAction(`couldn't delete ${label}`, deleteInventoryItem(id));
     });
   }
 
   function onUpdateGroup(id: string, patch: Partial<InventoryGroup>) {
     startTransition(async () => {
       dispatchGroups({ kind: "update", id, patch });
-      await updateInventoryGroup({
-        id,
-        name: patch.name,
-        color: patch.color,
-      });
+      await runAction(
+        "couldn't update the group",
+        updateInventoryGroup({
+          id,
+          name: patch.name,
+          color: patch.color,
+        }),
+      );
     });
   }
 
@@ -664,7 +759,7 @@ export function InventoryClient({
           });
         }
       }
-      await deleteInventoryGroup(id);
+      await runAction("couldn't delete the group", deleteInventoryGroup(id));
     });
   }
 
@@ -701,7 +796,13 @@ export function InventoryClient({
           patch: { archived: true, archived_at: now },
         });
       }
-      for (const id of ids) await setInventoryItemArchived(id, true);
+      for (const id of ids) {
+        const result = await runAction(
+          "couldn't stop tracking every selected item",
+          setInventoryItemArchived(id, true),
+        );
+        if (result.error) return;
+      }
     });
   }
 
@@ -717,7 +818,11 @@ export function InventoryClient({
         });
       }
       for (const id of ids) {
-        await updateInventoryItem({ id, groupId });
+        const result = await runAction(
+          "couldn't move every selected item",
+          updateInventoryItem({ id, groupId }),
+        );
+        if (result.error) return;
       }
     });
   }
@@ -737,7 +842,13 @@ export function InventoryClient({
         if (selectedId === id) setSelectedId(null);
         dispatchItems({ kind: "remove", id });
       }
-      for (const id of ids) await deleteInventoryItem(id);
+      for (const id of ids) {
+        const result = await runAction(
+          "couldn't delete every selected item",
+          deleteInventoryItem(id),
+        );
+        if (result.error) return;
+      }
     });
   }
 
@@ -777,29 +888,46 @@ export function InventoryClient({
       return;
     }
 
-    const pool: ResolvableItem[] = activeItems.map((it) => ({
+    const toResolvable = (it: InventoryItem): ResolvableItem => ({
       id: it.id,
       name: it.name,
       quantity: Number(it.quantity),
       unit: it.unit,
-      archived: false,
-    }));
+      archived: it.archived,
+    });
+    const activePool = activeItems.map(toResolvable);
+    // Archived items are considered too, so "12 rice" against something you
+    // stopped tracking restores that row instead of creating a second rice.
+    const archivedPool = archivedItems.map(toResolvable);
 
-    const running = new Map<string, number>();
+    // Per item: the net relative change, or an absolute value once a recount in
+    // the same line pins one. Relative changes are what get sent, so a stale
+    // shelf can't overwrite a concurrent write.
+    const pending = new Map<string, { delta: number; absolute: number | null }>();
     const ops: StockOp[] = [];
-    let hasCreate = false;
+    // Creates and archived matches both change more than a number, so they go
+    // through the receipt instead of applying silently.
+    let needsReceipt = false;
     for (const seg of segments) {
-      const found = resolveItemRef(seg.ref, pool);
+      const found = resolveItemRefIncludingArchived(
+        seg.ref,
+        activePool,
+        archivedPool,
+      );
       if (found.ok) {
         const it = found.value;
-        const before = running.get(it.id) ?? it.quantity;
-        const next =
-          seg.sign === "+"
-            ? before + seg.value
-            : seg.sign === "-"
-              ? Math.max(0, before - seg.value)
-              : seg.value;
-        running.set(it.id, Math.round(next * 1000) / 1000);
+        if (it.archived) needsReceipt = true;
+        const acc = pending.get(it.id) ?? { delta: 0, absolute: null };
+        if (seg.sign === null) {
+          // A recount inside the same line pins the value from here on.
+          acc.absolute = seg.value;
+          acc.delta = 0;
+        } else {
+          const signed = seg.sign === "+" ? seg.value : -seg.value;
+          if (acc.absolute === null) acc.delta += signed;
+          else acc.absolute = Math.max(0, acc.absolute + signed);
+        }
+        pending.set(it.id, acc);
         ops.push(
           seg.sign === "+"
             ? { op: "add", item: it.id, amount: seg.value }
@@ -807,10 +935,14 @@ export function InventoryClient({
               ? { op: "remove", item: it.id, amount: seg.value }
               : { op: "set", item: it.id, quantity: seg.value },
         );
-      } else if (seg.sign === null && found.error.startsWith("no item matching")) {
-        // A bare recount of something we don't track yet = a new item, which
-        // deserves a receipt (typo guard) instead of a silent create.
-        hasCreate = true;
+      } else if (seg.sign === null && !hasRefCandidate(seg.ref, activePool)) {
+        // Nothing on the shelf matches, so a bare recount is naming a new item
+        // — which deserves a receipt (typo guard) instead of a silent create.
+        // This also covers an archive that matched several ("rice" against a
+        // hidden "brown rice" + "white rice"): a candidate list of rows the
+        // collapsed "not tracking" section keeps invisible, remediable only by
+        // typing a uuid, is worse than proposing the create the user meant.
+        needsReceipt = true;
         ops.push({ op: "create", name: seg.ref, quantity: seg.value });
       } else {
         setCaptureError(found.error);
@@ -818,17 +950,22 @@ export function InventoryClient({
       }
     }
 
-    if (hasCreate) {
+    if (needsReceipt) {
       void runPropose(() => proposeStockOps({ operations: ops }));
       return;
     }
 
-    // Every ref resolved to an existing item: the user typed the exact edit,
-    // apply it instantly (same trust level as tapping the steppers).
-    for (const [id, next] of running) {
-      const current = items.find((it) => it.id === id);
-      if (!current || Number(current.quantity) === next) continue;
-      onUpdateItem(id, { quantity: next });
+    // Every ref resolved to an item already on the shelf: the user typed the
+    // exact edit, apply it instantly (same trust level as tapping the
+    // steppers). "+2"/"-2" send their delta; only a recount overwrites — and a
+    // recount is sent even when it matches the number on screen, because the
+    // user just asserted ground truth and this view may be stale.
+    for (const [id, acc] of pending) {
+      if (acc.absolute !== null) {
+        onUpdateItem(id, { quantity: acc.absolute });
+      } else if (acc.delta !== 0) {
+        onStepQuantity(id, acc.delta);
+      }
     }
     setQuery("");
   }
@@ -916,7 +1053,7 @@ export function InventoryClient({
               data-tour="shopping"
               onClick={() => (shoppingOpen ? setShoppingOpen(false) : openShopping())}
               aria-pressed={shoppingOpen}
-              className={`min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors mr-auto ${
+              className={`min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors mr-auto ${
                 shoppingOpen
                   ? "border-accent bg-accent text-accent-fg"
                   : "border-line bg-page text-muted hover:text-fg"
@@ -928,7 +1065,7 @@ export function InventoryClient({
               type="button"
               onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
               aria-pressed={selectMode}
-              className={`min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors ${
+              className={`min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border transition-colors ${
                 selectMode
                   ? "border-accent bg-accent text-accent-fg"
                   : "border-line bg-page text-muted hover:text-fg"
@@ -944,7 +1081,7 @@ export function InventoryClient({
                     type="button"
                     onClick={() => setCountMode(m)}
                     aria-pressed={countMode === m}
-                    className={`min-h-9 px-3 text-[10px] tracking-widest uppercase transition-colors ${
+                    className={`min-h-11 px-3 text-[10px] tracking-widest uppercase transition-colors ${
                       countMode === m
                         ? "bg-accent text-accent-fg"
                         : "bg-page text-muted hover:text-fg"
@@ -962,7 +1099,7 @@ export function InventoryClient({
                   type="button"
                   onClick={() => setViewMode(m)}
                   aria-pressed={view === m}
-                  className={`min-h-9 px-3 text-[10px] tracking-widest uppercase transition-colors ${
+                  className={`min-h-11 px-3 text-[10px] tracking-widest uppercase transition-colors ${
                     view === m
                       ? "bg-accent text-accent-fg"
                       : "bg-page text-muted hover:text-fg"
@@ -1002,7 +1139,7 @@ export function InventoryClient({
                 }
                 selected={it.id === selectedId}
                 onSelect={onSelect}
-                onAdjust={onAdjustQuantity}
+                onAdjust={onStepQuantity}
               />
             ))}
           </div>
@@ -1042,7 +1179,7 @@ export function InventoryClient({
                         checked={checkedIds.has(it.id)}
                         onToggleCheck={toggleChecked}
                         onSelect={onSelect}
-                        onAdjust={onAdjustQuantity}
+                        onAdjust={onStepQuantity}
                         onArchive={(id) => onSetArchived(id, true)}
                       />
                     );
@@ -1065,7 +1202,7 @@ export function InventoryClient({
             <button
               type="button"
               onClick={() => onSetArchived(suggestion.item.id, true)}
-              className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+              className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
             >
               stop tracking
             </button>
@@ -1076,7 +1213,7 @@ export function InventoryClient({
                   new Set(prev).add(suggestion.item.id),
                 )
               }
-              className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+              className="min-h-11 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
             >
               keep
             </button>
@@ -1145,52 +1282,65 @@ export function InventoryClient({
           </div>
         </details>
 
-        {selectMode && (
-          <div className="sticky bottom-64 z-50 lg:bottom-52 flex flex-wrap items-center gap-2 glass rounded-2xl px-3 py-2">
-            <span className="text-label uppercase text-muted tabular-nums">
-              {checkedIds.size} selected
-            </span>
-            <button
-              type="button"
-              onClick={bulkArchive}
-              disabled={checkedIds.size === 0}
-              className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
-            >
-              stop tracking
-            </button>
-            <select
-              value=""
-              onChange={(e) => {
-                if (e.target.value === "") return;
-                bulkMove(e.target.value === "__none" ? null : e.target.value);
-              }}
-              disabled={checkedIds.size === 0}
-              aria-label="move selected to group"
-              className="min-h-9 bg-glass-well rounded-field border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
-            >
-              <option value="">move to…</option>
-              <option value="__none">ungrouped</option>
-              {groups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={bulkDelete}
-              disabled={checkedIds.size === 0}
-              className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors disabled:opacity-40"
-            >
-              delete
-            </button>
-            <button
-              type="button"
-              onClick={exitSelectMode}
-              className="ml-auto min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
-            >
-              done
-            </button>
+        {(actionError || selectMode) && (
+          <div className="sticky bottom-64 z-50 lg:bottom-52 space-y-2">
+            {actionError && (
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                className="block w-full min-h-11 text-left text-meta text-danger glass rounded-2xl px-3 py-2"
+              >
+                {actionError} · tap to dismiss
+              </button>
+            )}
+            {selectMode && (
+              <div className="flex flex-wrap items-center gap-2 glass rounded-2xl px-3 py-2">
+                <span className="text-label uppercase text-muted tabular-nums">
+                  {checkedIds.size} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={bulkArchive}
+                  disabled={checkedIds.size === 0}
+                  className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
+                >
+                  stop tracking
+                </button>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value === "") return;
+                    bulkMove(e.target.value === "__none" ? null : e.target.value);
+                  }}
+                  disabled={checkedIds.size === 0}
+                  aria-label="move selected to group"
+                  className="min-h-11 bg-glass-well rounded-field border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
+                >
+                  <option value="">move to…</option>
+                  <option value="__none">ungrouped</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={bulkDelete}
+                  disabled={checkedIds.size === 0}
+                  className="min-h-11 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors disabled:opacity-40"
+                >
+                  delete
+                </button>
+                <button
+                  type="button"
+                  onClick={exitSelectMode}
+                  className="ml-auto min-h-11 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+                >
+                  done
+                </button>
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -1226,6 +1376,7 @@ export function InventoryClient({
               (u) => u.inventory_item_id === selectedItem.id,
             )}
             onUpdate={onUpdateItem}
+            onStep={onStepQuantity}
             onArchive={(id) => onSetArchived(id, true)}
             onDelete={onDeleteItem}
             onCreateUsage={onCreateUsage}
@@ -1657,7 +1808,7 @@ function ArchivedRow({
     : null;
 
   return (
-    <li className="flex items-center gap-2 min-h-11 py-1">
+    <li className="flex items-center gap-2 min-h-11">
       <span className="flex-1 min-w-0 truncate text-sm text-muted">
         {item.name}
         {since && <span className="text-meta"> · since {since}</span>}
@@ -1665,14 +1816,14 @@ function ArchivedRow({
       <button
         type="button"
         onClick={() => onRestore(item.id)}
-        className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+        className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
       >
         restore
       </button>
       <button
         type="button"
         onClick={() => onDelete(item.id)}
-        className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
+        className="min-h-11 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
       >
         delete forever
       </button>
@@ -1771,18 +1922,40 @@ function ItemTile({
   );
 }
 
-function QuantityField({
+// Two different writes wear one control. Typing a number is a RECOUNT and
+// commits absolutely (onCommit). The −/+ buttons are a STEP: when the field is
+// bound to a stored row, onStep sends the delta so the server applies it to the
+// live quantity — without it those buttons read the on-screen number and write
+// back an absolute, which is the stale overwrite this path exists to prevent.
+// onStep is omitted only where there is no row yet (the add form), where the
+// local draft is the only truth there is.
+//
+// Exported for __tests__/inventory-quantity-field.test.tsx — the recount/step
+// split is silent in both directions when it breaks, so it is pinned directly
+// rather than through the whole client.
+export function QuantityField({
   value,
   onCommit,
+  onStep,
 }: {
   value: number;
   onCommit: (n: number) => void;
+  onStep?: (delta: number) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
   const [prevValue, setPrevValue] = useState(value);
+  // Whether the draft is the user's own typing rather than a mirror of `value`.
+  // It is what tells an assertion ("I counted 2") apart from a stray focus.
+  //
+  // Set from keydown as well as change, because re-typing the number already in
+  // the box fires no change event — the DOM value never differs, so React
+  // dedupes it away. That is browser behaviour, not a test artifact, and
+  // select-all-then-retype is exactly how someone confirms a count.
+  const [typed, setTyped] = useState(false);
   if (value !== prevValue) {
     setPrevValue(value);
     setDraft(String(value));
+    setTyped(false);
   }
 
   // An emptied field means "I'm retyping", never "set this to zero" — Number("")
@@ -1793,19 +1966,36 @@ function QuantityField({
     const n = trimmed === "" ? NaN : Number(trimmed);
     if (!Number.isFinite(n) || n < 0) {
       setDraft(String(value));
+      setTyped(false);
       return;
     }
     const rounded = Math.round(n * 1000) / 1000;
-    if (rounded !== value) onCommit(rounded);
+    // Deliberately NOT `if (rounded !== value)`. A recount is the user
+    // asserting ground truth about the shelf, and this view's number may be
+    // stale — typing 2 against a row an agent pushed to 5 has to land, and
+    // comparing against the stale 2 would skip the write and leave the
+    // divergence in place with no feedback. An untouched field asserts
+    // nothing, so blurring without typing writes nothing (that would be the
+    // stale overwrite in the other direction).
+    if (typed) onCommit(rounded);
     setDraft(String(rounded));
+    setTyped(false);
   }
 
   function step(delta: number) {
+    if (onStep) {
+      // The draft is deliberately left alone: the server decides the number
+      // from the row, and the parent's optimistic update flows back through
+      // `value`. Synthesizing a draft here strands it when the write doesn't
+      // move `value` (a − clamped at 0), and the next blur would commit that
+      // invented number as a recount nobody typed.
+      onStep(delta);
+      return;
+    }
     const trimmed = draft.trim();
     const parsed = trimmed === "" ? NaN : Number(trimmed);
     const base = Number.isFinite(parsed) ? parsed : value;
-    const next = Math.max(0, Math.round((base + delta) * 1000) / 1000);
-    onCommit(next);
+    onCommit(Math.max(0, Math.round((base + delta) * 1000) / 1000));
   }
 
   return (
@@ -1824,12 +2014,21 @@ function QuantityField({
         step="any"
         min={0}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setTyped(true);
+        }}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
             e.currentTarget.blur();
+            return;
+          }
+          // Only keys that can alter the text count, so tabbing or arrowing
+          // through the field is still not an assertion.
+          if (e.key === "Backspace" || e.key === "Delete" || e.key.length === 1) {
+            setTyped(true);
           }
         }}
         aria-label="quantity"
@@ -1975,6 +2174,7 @@ function ItemDetail({
   recentUnits,
   usages,
   onUpdate,
+  onStep,
   onArchive,
   onDelete,
   onCreateUsage,
@@ -1987,6 +2187,7 @@ function ItemDetail({
   recentUnits: string[];
   usages: InventoryUsage[];
   onUpdate: (id: string, patch: Partial<InventoryItem>) => void;
+  onStep: (id: string, delta: number) => void;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
   onCreateUsage: (
@@ -2171,6 +2372,7 @@ function ItemDetail({
         <QuantityField
           value={Number(item.quantity)}
           onCommit={(n) => onUpdate(item.id, { quantity: n })}
+          onStep={(delta) => onStep(item.id, delta)}
         />
       </div>
 
@@ -2284,7 +2486,7 @@ function ItemDetail({
         <button
           type="button"
           onClick={() => onArchive(item.id)}
-          className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+          className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
         >
           stop tracking
         </button>
@@ -2299,7 +2501,7 @@ function ItemDetail({
               onDelete(item.id);
             }
           }}
-          className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
+          className="min-h-11 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors"
         >
           delete forever
         </button>
