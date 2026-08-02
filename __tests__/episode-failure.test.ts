@@ -66,40 +66,62 @@ const COURSE = {
 };
 
 type Update = { table: string; payload: Record<string, unknown> };
+type WriteResult = { error: { message: string } | null };
 
-function fakeSupabase(upload: () => Promise<{ error: { message: string } | null }>) {
+function fakeSupabase(
+  upload: () => Promise<WriteResult>,
+  // Lets a test make one specific update return an error, or throw.
+  updateResult: (payload: Record<string, unknown>) => WriteResult = () => ({
+    error: null,
+  }),
+) {
   const updates: Update[] = [];
+  const inserts: string[] = [];
 
-  const thenable = <T,>(value: T) => {
+  // A postgrest builder is a thenable, and it can reject as well as resolve —
+  // honour both, or a throwing produce() becomes an unhandled rejection that
+  // never settles the await.
+  const thenable = <T,>(produce: () => T) => {
     const q = {
       select: () => q,
       eq: () => q,
-      then: (resolve: (v: T) => unknown) => Promise.resolve(resolve(value)),
+      then: (resolve: (v: T) => unknown, reject?: (e: unknown) => unknown) => {
+        try {
+          return Promise.resolve(resolve(produce()));
+        } catch (error) {
+          return reject ? Promise.resolve(reject(error)) : Promise.reject(error);
+        }
+      },
     };
     return q;
   };
 
   const client = {
     from(table: string) {
-      if (table === "courses") return thenable({ data: [COURSE], error: null });
+      if (table === "courses") {
+        return thenable(() => ({ data: [COURSE], error: null }));
+      }
       return {
-        insert: () => ({
-          select: () => ({
-            single: async () => ({ data: { id: "ep1" }, error: null }),
-          }),
-          then: (resolve: (v: unknown) => unknown) =>
-            Promise.resolve(resolve({ error: null })),
-        }),
+        insert: () => {
+          inserts.push(table);
+          return {
+            select: () => ({
+              single: async () => ({ data: { id: "ep1" }, error: null }),
+            }),
+            then: (resolve: (v: unknown) => unknown) =>
+              Promise.resolve(resolve({ error: null })),
+          };
+        },
         update: (payload: Record<string, unknown>) => {
           updates.push({ table, payload });
-          return thenable({ error: null });
+          return thenable(() => updateResult(payload));
         },
       };
     },
     storage: { from: () => ({ upload }) },
   };
 
-  return { client: client as unknown as SupabaseClient, updates };
+  return { client: client as unknown as SupabaseClient, updates, inserts };
 }
 
 const RAW = {
@@ -113,6 +135,21 @@ function lastUpdate(updates: Update[]) {
   return updates[updates.length - 1]?.payload ?? {};
 }
 
+// A Gemini TTS success body: 48 000 bytes of PCM at 24 kHz mono 16-bit = 1s.
+function renderedAudio(): Response {
+  return Response.json({
+    candidates: [
+      {
+        content: {
+          parts: [
+            { inlineData: { data: Buffer.alloc(48_000).toString("base64") } },
+          ],
+        },
+      },
+    ],
+  });
+}
+
 const okUpload = async () => ({ error: null });
 
 beforeEach(() => {
@@ -120,6 +157,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -185,20 +223,28 @@ describe("generateEpisodeFor failure paths", () => {
     expect(lastUpdate(updates).status).toBe("failed");
   });
 
-  test("a throwing storage upload fails the episode rather than stranding it", async () => {
-    const pcm = Buffer.alloc(48_000).toString("base64");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          candidates: [
-            { content: { parts: [{ inlineData: { data: pcm } }] } },
-          ],
-        }),
-      ),
-    );
+  test("a storage upload that reports an error fails the episode", async () => {
+    // The ordinary path: storage-js turns request failures into a StorageError
+    // and hands it back through `error` rather than throwing.
+    vi.stubGlobal("fetch", vi.fn(async () => renderedAudio()));
+    const { client, updates } = fakeSupabase(async () => ({
+      error: { message: "Bucket not found" },
+    }));
+
+    const result = await generateEpisodeFor(client, "u1", RAW);
+
+    expect(result.ok).toBe(false);
+    const payload = lastUpdate(updates);
+    expect(payload.status).toBe("failed");
+    expect(String(payload.error)).toContain("audio upload failed");
+  });
+
+  test("an upload throwing something storage-js does not wrap still fails the episode", async () => {
+    // handleOperation rethrows anything that isn't a StorageError — a throw
+    // while building the request body, or any error under shouldThrowOnError.
+    vi.stubGlobal("fetch", vi.fn(async () => renderedAudio()));
     const { client, updates } = fakeSupabase(async () => {
-      throw new TypeError("fetch failed");
+      throw new Error("Invalid metadata");
     });
 
     const result = await generateEpisodeFor(client, "u1", RAW);
@@ -207,6 +253,73 @@ describe("generateEpisodeFor failure paths", () => {
     const payload = lastUpdate(updates);
     expect(payload.status).toBe("failed");
     expect(String(payload.error)).toContain("episode generation failed");
+  });
+
+  test("a rejecting fail() does not reject the caller, and says the row is stuck", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response("<html>502</html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      ),
+    );
+    // Only the recovery write blows up — a throw from inside the catch handler
+    // is not caught by its own try, so this used to reject the whole call.
+    const { client } = fakeSupabase(okUpload, (payload) => {
+      if (payload.status === "failed") throw new Error("JWT expired");
+      return { error: null };
+    });
+
+    const result = await generateEpisodeFor(client, "u1", RAW);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain(
+      "could not be marked failed",
+    );
+    expect(result.ok === false && result.error).toContain("JWT expired");
+  });
+
+  test("a fail() whose write is refused reports that, not a clean failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    const { client } = fakeSupabase(okUpload, (payload) =>
+      payload.status === "failed"
+        ? { error: { message: "new row violates row-level security policy" } }
+        : { error: null },
+    );
+
+    const result = await generateEpisodeFor(client, "u1", RAW);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain(
+      "could not be marked failed",
+    );
+  });
+
+  test("a failed 'queued' write stops the vibevoice job from being enqueued", async () => {
+    // The script lives on that row; a job whose script never landed burns all
+    // three worker attempts on "episode has no script" before dead-lettering.
+    vi.stubEnv("MINDBOARD_OWNER_USER_ID", "u1");
+    const { client, updates, inserts } = fakeSupabase(okUpload, (payload) =>
+      payload.status === "queued"
+        ? { error: { message: "payload too large" } }
+        : { error: null },
+    );
+
+    const result = await generateEpisodeFor(client, "u1", {
+      ...RAW,
+      engine: "vibevoice",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(inserts).not.toContain("jobs");
+    expect(lastUpdate(updates).status).toBe("failed");
   });
 
   test("no failure message echoes the provider api key", async () => {
@@ -224,17 +337,7 @@ describe("generateEpisodeFor failure paths", () => {
   });
 
   test("the happy path still lands 'done' with a duration", async () => {
-    const pcm = Buffer.alloc(48_000).toString("base64");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
-          candidates: [
-            { content: { parts: [{ inlineData: { data: pcm } }] } },
-          ],
-        }),
-      ),
-    );
+    vi.stubGlobal("fetch", vi.fn(async () => renderedAudio()));
     const { client, updates } = fakeSupabase(okUpload);
 
     const result = await generateEpisodeFor(client, "u1", RAW);
