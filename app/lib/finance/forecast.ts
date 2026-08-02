@@ -100,11 +100,17 @@ export async function buildFinanceForecast(params: {
 
   const [accountsRes, expensesRes, incomeRes, historyRes, overridesRes] =
     await Promise.all([
+      // Ordered because `currency` below is read off accounts[0]: unordered,
+      // the forecast could label the same user's money differently between
+      // requests, and differently again from writes.ts's baseCurrency. Oldest
+      // account wins everywhere (matches getAccounts and finance/setup).
       supabase
         .from("accounts")
         .select("id, balance, currency")
         .eq("user_id", userId)
-        .eq("archived", false),
+        .eq("archived", false)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true }),
       supabase
         .from("recurring_expenses")
         .select(

@@ -255,12 +255,17 @@ export const gatherMindspaceItems = cache(
           .order("created_at", { ascending: false })
           .order("id", { ascending: true })
           .limit(ROW_LIMIT),
+        // Flipped to descending with the rest: `chatSessions` re-sorts each
+        // conversation bucket chronologically itself, so nothing downstream
+        // depends on the SQL order — and ascending meant an overflowing cap
+        // dropped the NEWEST messages.
         supabase
           .from("ai_messages")
           .select("conversation_id, role, content, created_at")
           .eq("user_id", userId)
           .gte("created_at", cutoffIso)
-          .order("created_at", { ascending: true })
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true })
           .limit(ROW_LIMIT),
         supabase
           .from("ai_conversations")
