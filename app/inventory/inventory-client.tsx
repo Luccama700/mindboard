@@ -573,10 +573,12 @@ export function InventoryClient({
   // startTransition — or routing both through a discriminated-union helper —
   // makes the React Compiler give up on this whole component
   // (react-hooks/preserve-manual-memoization, an error here; both shapes were
-  // tried and reproduce it). The overload signatures are what keep the extra
-  // parameter from being a footgun: with a delta the patch may carry the
-  // optimistic quantity and nothing else, so no field can ride along and be
-  // silently dropped.
+  // tried and reproduce it). The overload signatures blunt the extra
+  // parameter: with a delta the patch may declare `{ quantity }` and nothing
+  // else, so a fresh literal carrying any other field is a compile error. That
+  // is excess-property checking, not a guarantee — a pre-built variable still
+  // slips through and its extra fields are dropped at runtime. Every call site
+  // here passes a literal; keep it that way.
   function onUpdateItem(id: string, patch: Partial<InventoryItem>): void;
   function onUpdateItem(
     id: string,
@@ -898,7 +900,6 @@ export function InventoryClient({
     // stopped tracking restores that row instead of creating a second rice.
     const archivedPool = archivedItems.map(toResolvable);
 
-    const running = new Map<string, number>();
     // Per item: the net relative change, or an absolute value once a recount in
     // the same line pins one. Relative changes are what get sent, so a stale
     // shelf can't overwrite a concurrent write.
@@ -916,14 +917,6 @@ export function InventoryClient({
       if (found.ok) {
         const it = found.value;
         if (it.archived) needsReceipt = true;
-        const before = running.get(it.id) ?? it.quantity;
-        const next =
-          seg.sign === "+"
-            ? before + seg.value
-            : seg.sign === "-"
-              ? Math.max(0, before - seg.value)
-              : seg.value;
-        running.set(it.id, Math.round(next * 1000) / 1000);
         const acc = pending.get(it.id) ?? { delta: 0, absolute: null };
         if (seg.sign === null) {
           // A recount inside the same line pins the value from here on.
@@ -964,12 +957,11 @@ export function InventoryClient({
 
     // Every ref resolved to an item already on the shelf: the user typed the
     // exact edit, apply it instantly (same trust level as tapping the
-    // steppers). "+2"/"-2" send their delta; only a recount overwrites.
+    // steppers). "+2"/"-2" send their delta; only a recount overwrites — and a
+    // recount is sent even when it matches the number on screen, because the
+    // user just asserted ground truth and this view may be stale.
     for (const [id, acc] of pending) {
-      const current = items.find((it) => it.id === id);
-      if (!current) continue;
       if (acc.absolute !== null) {
-        if (Number(current.quantity) === acc.absolute) continue;
         onUpdateItem(id, { quantity: acc.absolute });
       } else if (acc.delta !== 0) {
         onStepQuantity(id, acc.delta);
@@ -1948,9 +1940,13 @@ function QuantityField({
 }) {
   const [draft, setDraft] = useState(String(value));
   const [prevValue, setPrevValue] = useState(value);
+  // Whether the draft is the user's own typing rather than a mirror of `value`.
+  // It is what tells an assertion ("I counted 2") apart from a stray focus.
+  const [typed, setTyped] = useState(false);
   if (value !== prevValue) {
     setPrevValue(value);
     setDraft(String(value));
+    setTyped(false);
   }
 
   // An emptied field means "I'm retyping", never "set this to zero" — Number("")
@@ -1961,26 +1957,36 @@ function QuantityField({
     const n = trimmed === "" ? NaN : Number(trimmed);
     if (!Number.isFinite(n) || n < 0) {
       setDraft(String(value));
+      setTyped(false);
       return;
     }
     const rounded = Math.round(n * 1000) / 1000;
-    if (rounded !== value) onCommit(rounded);
+    // Deliberately NOT `if (rounded !== value)`. A recount is the user
+    // asserting ground truth about the shelf, and this view's number may be
+    // stale — typing 2 against a row an agent pushed to 5 has to land, and
+    // comparing against the stale 2 would skip the write and leave the
+    // divergence in place with no feedback. An untouched field asserts
+    // nothing, so blurring without typing writes nothing (that would be the
+    // stale overwrite in the other direction).
+    if (typed) onCommit(rounded);
     setDraft(String(rounded));
+    setTyped(false);
   }
 
   function step(delta: number) {
-    const trimmed = draft.trim();
-    const parsed = trimmed === "" ? NaN : Number(trimmed);
-    const base = Number.isFinite(parsed) ? parsed : value;
-    const next = Math.max(0, Math.round((base + delta) * 1000) / 1000);
     if (onStep) {
-      // Paint the local guess, but send the delta — the server decides the
-      // number from the row, not from `base`.
-      setDraft(String(next));
+      // The draft is deliberately left alone: the server decides the number
+      // from the row, and the parent's optimistic update flows back through
+      // `value`. Synthesizing a draft here strands it when the write doesn't
+      // move `value` (a − clamped at 0), and the next blur would commit that
+      // invented number as a recount nobody typed.
       onStep(delta);
       return;
     }
-    onCommit(next);
+    const trimmed = draft.trim();
+    const parsed = trimmed === "" ? NaN : Number(trimmed);
+    const base = Number.isFinite(parsed) ? parsed : value;
+    onCommit(Math.max(0, Math.round((base + delta) * 1000) / 1000));
   }
 
   return (
@@ -1999,7 +2005,10 @@ function QuantityField({
         step="any"
         min={0}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          setTyped(true);
+        }}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
