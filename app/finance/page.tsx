@@ -36,30 +36,21 @@ import {
   getShoppingSettings,
   getUserPreferences,
 } from "@/app/lib/data/settings";
-import { safeTimeZone } from "@/app/_components/date-utils";
+import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
+import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import { FinanceClient } from "./finance-client";
 
 type GoogleStatus = "connected" | "connect" | "error";
 
-function toDateKey(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function currentMonth() {
-  const today = new Date();
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  return `${today.getFullYear()}-${month}`;
-}
-
-function normalizeMonth(value: string | string[] | undefined) {
+function normalizeMonth(
+  value: string | string[] | undefined,
+  currentMonth: string,
+) {
   const month = Array.isArray(value) ? value[0] : value;
-  if (!month || !/^\d{4}-\d{2}$/.test(month)) return currentMonth();
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return currentMonth;
   const [year, monthNumber] = month.split("-").map(Number);
-  if (monthNumber < 1 || monthNumber > 12) return currentMonth();
-  if (year < 1970 || year > 2100) return currentMonth();
+  if (monthNumber < 1 || monthNumber > 12) return currentMonth;
+  if (year < 1970 || year > 2100) return currentMonth;
   return month;
 }
 
@@ -83,10 +74,13 @@ function eventRange(month: string) {
   return { timeMin: start.toISOString(), timeMax: gridEnd.toISOString() };
 }
 
-// Sum timed-event durations (in hours) per local day. All-day events have no
-// duration and are ignored.
+// Sum timed-event durations (in hours) per day IN THE USER'S ZONE. Bucketing on
+// the process clock (UTC on Vercel) filed a Vancouver 18:00–23:00 Friday shift
+// under Saturday, pushing it out of its pay period and under-projecting income.
+// All-day events have no duration and are ignored.
 function hoursByDay(
   events: { start: string; end: string; allDay: boolean }[],
+  timeZone: string | null,
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const event of events) {
@@ -95,7 +89,7 @@ function hoursByDay(
     const end = new Date(event.end);
     const hours = (end.getTime() - start.getTime()) / 3_600_000;
     if (!Number.isFinite(hours) || hours <= 0) continue;
-    const key = toDateKey(start);
+    const key = zonedDateKey(start.getTime(), timeZone);
     out[key] = (out[key] ?? 0) + hours;
   }
   return out;
@@ -107,7 +101,6 @@ export default async function FinancePage({
   searchParams: Promise<{ fm?: string | string[] | undefined }>;
 }) {
   const query = await searchParams;
-  const financeMonth = normalizeMonth(query.fm);
 
   const supabase = await createClient();
   const {
@@ -117,6 +110,9 @@ export default async function FinancePage({
   if (!user) redirect("/login");
 
   const timeZone = safeTimeZone((await getUserPreferences(user.id)).timezone);
+  // Every date fact on this page keys off the user's day, not the server's.
+  const today = todayISO(timeZone);
+  const financeMonth = normalizeMonth(query.fm, today.slice(0, 7));
 
   const [
     accountsResult,
@@ -182,7 +178,7 @@ export default async function FinancePage({
       amount: Number(e.amount),
       category_id: e.category_id,
     })),
-    today: toDateKey(new Date()),
+    today,
   });
 
   // Worked hours per income source for the visible window, read from each
@@ -212,7 +208,7 @@ export default async function FinancePage({
         })
           .then((events) => ({
             sourceId: source.id,
-            hours: hoursByDay(events),
+            hours: hoursByDay(events, timeZone),
             status: "connected" as GoogleStatus,
           }))
           .catch((error) => ({
@@ -259,7 +255,6 @@ export default async function FinancePage({
       if (bucket) bucket.push(rule);
       else rulesByItem.set(usage.inventory_item_id, [rule]);
     }
-    const today = toDateKey(new Date());
     groceryTrips = buildGroceriesByDate({
       entries: buildShoppingList({
         items: inventoryItems,
