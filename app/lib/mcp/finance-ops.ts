@@ -499,31 +499,39 @@ export function resolveFinanceOps(
 ): Result<ResolvedFinanceOp[]> {
   const { accounts, categories, recurring, existingChanges, today } = input;
 
-  const seenFingerprints = new Set(
-    existingChanges.map(
-      (row) =>
-        `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
-    ),
-  );
-  const fingerprintNotes = new Map(
-    existingChanges.map((row) => [
-      `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
-      row.note,
-    ]),
-  );
-  // Transfer dedup pool: fingerprints of pre-existing rows that are themselves
-  // transfers (so a coincidental spend+income pair on the same date/amount is
-  // never mistaken for the same transfer), and NOT targeted by a remove/adjust
-  // op earlier in this batch (so a correction batch that removes-then-re-adds a
-  // transfer isn't skipped against rows it's about to delete). Never mutated.
+  // Rows this batch removes or adjusts are excluded from every dedup pool: a
+  // correction batch is [remove/adjust the wrong row, re-add the right one], and
+  // the replacement usually shares the old row's fingerprint (only the note or
+  // category was wrong). Counting a row the same batch deletes would skip the
+  // replacement while the delete still lands — losing the transaction outright.
+  // `adjust` counts too: once applied, the stored fingerprint may no longer
+  // describe the row. Order-independent, so it holds whichever side of the
+  // remove the replacement is sent on.
   const mutatedIds = new Set(
     ops
       .filter((o) => o.op === "remove" || o.op === "adjust")
       .map((o) => (o as { changeId: string }).changeId),
   );
+  const dedupPool = existingChanges.filter((row) => !mutatedIds.has(row.id));
+
+  const seenFingerprints = new Set(
+    dedupPool.map(
+      (row) =>
+        `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
+    ),
+  );
+  const fingerprintNotes = new Map(
+    dedupPool.map((row) => [
+      `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
+      row.note,
+    ]),
+  );
+  // Transfer dedup pool: same exclusion, further narrowed to rows that are
+  // themselves transfers, so a coincidental spend+income pair on the same
+  // date/amount is never mistaken for the same transfer. Never mutated.
   const existingTransferFingerprints = new Set(
-    existingChanges
-      .filter((row) => row.is_transfer === true && !mutatedIds.has(row.id))
+    dedupPool
+      .filter((row) => row.is_transfer === true)
       .map(
         (row) =>
           `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,

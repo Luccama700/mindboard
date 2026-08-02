@@ -307,6 +307,89 @@ describe("resolveFinanceOps", () => {
     if (forced.ok) expect(forced.value[0].kind).toBe("spend");
   });
 
+  // A correction batch is [remove the wrong row, re-add the right one]. When the
+  // replacement shares the removed row's fingerprint (same account/date/amount,
+  // only the note or category was wrong) the dedup pool must not count the row
+  // this very batch deletes — otherwise the remove lands and the replacement is
+  // silently dropped, losing the transaction outright.
+  it("does not skip a spend against a row removed earlier in the same batch", () => {
+    const r = resolve([
+      { op: "remove", changeId: "ch-1" },
+      {
+        op: "spend",
+        account: "chase checking",
+        amount: 54.1,
+        date: "2026-06-30",
+        note: "costco, not walmart",
+      },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const kinds = r.value.map((o) => o.kind);
+      expect(kinds).toEqual(["remove", "spend"]);
+      expect(kinds).not.toContain("skip_duplicate");
+    }
+  });
+
+  // Order-independent: the guard is computed over the whole batch, so it holds
+  // whether the replacement is sent before or after the remove.
+  it("does not skip a spend sent before the remove that clears the row", () => {
+    const r = resolve([
+      {
+        op: "spend",
+        account: "chase checking",
+        amount: 54.1,
+        date: "2026-06-30",
+        note: "costco, not walmart",
+      },
+      { op: "remove", changeId: "ch-1" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.map((o) => o.kind)).toEqual(["spend", "remove"]);
+    }
+  });
+
+  // An adjusted row's stored fingerprint may no longer describe it once the
+  // batch applies, so it is excluded from the pool on the same rule as remove.
+  it("does not skip a spend against a row adjusted earlier in the same batch", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 61.4 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const kinds = r.value.map((o) => o.kind);
+      expect(kinds).toEqual(["adjust", "spend"]);
+      expect(kinds).not.toContain("skip_duplicate");
+    }
+  });
+
+  // The mutated-row exemption is per-row, not a blanket opt-out: an untouched
+  // row still guards against its own duplicate in the same batch.
+  it("still skips a duplicate of an untouched row when another row is removed", () => {
+    const twoRows: ExistingChange[] = [
+      ...existing,
+      {
+        id: "ch-2",
+        account_id: "acc-cash",
+        occurred_at: "2026-07-01",
+        direction: "out",
+        amount: 12,
+        note: "bus fare",
+      },
+    ];
+    const r = resolve(
+      [
+        { op: "remove", changeId: "ch-1" },
+        { op: "spend", account: "cash", amount: 12, date: "2026-07-01" },
+      ],
+      { existingChanges: twoRows },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["remove", "skip_duplicate"]);
+  });
+
   it("dedupes within the batch too", () => {
     const op: FinanceOp = {
       op: "spend",
