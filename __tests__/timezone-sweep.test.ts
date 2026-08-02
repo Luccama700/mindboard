@@ -9,6 +9,15 @@
 // keep behaving exactly as before). Both 2026 US/Canada DST boundaries are
 // covered: spring-forward 2026-03-08 (02:00 PST -> 03:00 PDT, i.e. 10:00Z) and
 // fall-back 2026-11-01 (02:00 PDT -> 01:00 PST, i.e. 09:00Z).
+//
+// CAVEAT ON "how many of these catch a regression": that count is HOST-TZ
+// DEPENDENT, so do not quote a number. Rows whose zone happens to match the
+// runner's own zone pass coincidentally against pre-fix code — on a Vancouver
+// dev box the Vancouver rows do, on a UTC CI runner the UTC rows do. At least
+// two of the three zones always bite, which is why three are here. The
+// host-independent assertions live in __tests__/timezone-call-sites.test.ts,
+// which pins Asia/Tokyo at an instant whose day differs from both UTC and
+// Vancouver.
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 
