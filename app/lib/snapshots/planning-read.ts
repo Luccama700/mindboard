@@ -112,7 +112,8 @@ export async function buildPlanningSnapshot(params: {
       .select("id, name, balance, currency")
       .eq("user_id", userId)
       .eq("archived", false)
-      .order("created_at", { ascending: true }),
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true }),
     supabase
       .from("recurring_expenses")
       .select(

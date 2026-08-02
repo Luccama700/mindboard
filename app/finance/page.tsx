@@ -135,7 +135,8 @@ export default async function FinancePage({
         "id, name, type, color, balance, currency, archived, created_at, updated_at",
       )
       .eq("archived", false)
-      .order("created_at", { ascending: true }),
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true }),
     supabase
       .from("spending_categories")
       .select("id, name, color, archived, created_at")

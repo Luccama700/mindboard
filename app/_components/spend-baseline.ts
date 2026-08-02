@@ -24,7 +24,9 @@
 // Bill payments are excluded by amount + category match against the active
 // recurring rules — deliberately with NO date-proximity requirement, because
 // real payments wander (rent posted May 19 / May 28 / Jun 29). Transfers are
-// excluded (not spending). Weeks with zero discretionary spend count as $0.
+// excluded (not spending). Weeks with zero discretionary spend count as $0 —
+// but a window whose median lands on $0 is reported as NOT confident, so it
+// falls through to the manual estimate instead of asserting no spending.
 //
 // Per-day overrides (spend_overrides table, set via the selected-day slider)
 // replace the estimate for that date, including an explicit $0.
@@ -144,10 +146,27 @@ export function computeSpendRate(input: {
 
   if (weekTotals.length === 0) return empty;
 
+  // A zero rate is an absence of evidence, never confident knowledge that the
+  // user spends nothing — so it must not out-rank their manual estimate. This
+  // is NOT the "zero weeks count" rule being walked back: an individual $0 week
+  // is still a $0 sample in the median above. What is refused is the *result*
+  // of that median being zero, which happens when the trailing window recorded
+  // no discretionary spend at all (a ledger of income, transfers and bills; a
+  // user who imports statements sporadically) — cases where the model has seen
+  // nothing to predict from, not a user observed to spend nothing.
+  //
+  // Falling through is safe in both directions, because `estimatedSpendOn`
+  // resolves manual → 0: a genuine zero-spender with no manual estimate still
+  // projects $0, while a user who typed one gets their own number instead of a
+  // vacuous floor. It also unlocks the manual-estimate editor in
+  // finance-calendar.tsx's EverydaySpendRow, which a confident rate hides —
+  // the forecast showed ~$0.00/day with no way to correct it.
+  const dailyRate = roundCents((median(weekTotals) * MIN_SPEND_FACTOR) / 7);
+
   return {
-    dailyRate: roundCents((median(weekTotals) * MIN_SPEND_FACTOR) / 7),
+    dailyRate,
     sampledWeeks: weekTotals.length,
-    confident: weekTotals.length >= MIN_CONFIDENT_WEEKS,
+    confident: weekTotals.length >= MIN_CONFIDENT_WEEKS && dailyRate > 0,
   };
 }
 

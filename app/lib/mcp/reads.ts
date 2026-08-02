@@ -100,7 +100,11 @@ export async function getFinanceSnapshot(userId: string): Promise<FinanceVitals>
       .from("accounts")
       .select(ACCOUNT_COLUMNS)
       .eq("user_id", ownerId)
-      .eq("archived", false),
+      .eq("archived", false)
+      // financeSnapshot reads the base currency off accounts[0]; unordered,
+      // this MCP read could label the user's money differently per request.
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true }),
     supabase
       .from("recurring_expenses")
       .select(RECURRING_COLUMNS)
@@ -193,11 +197,17 @@ export async function buildSpendLimitStatus(
         .select("amount, category_id")
         .eq("user_id", ownerId)
         .eq("archived", false),
+      // Ordered so the cap truncates the oldest days rather than an arbitrary
+      // slice — a spend limit computed from a random subset of the period reads
+      // as headroom the user does not have.
       supabase
         .from("balance_changes")
         .select("occurred_at, direction, amount, category_id, is_transfer")
         .eq("user_id", ownerId)
         .gte("occurred_at", windowStart)
+        .order("occurred_at", { ascending: false })
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(2000),
       supabase
         .from("spending_categories")
@@ -538,7 +548,8 @@ export async function listAccounts(userId: string) {
     .select("id, name, type, balance, currency, archived")
     .eq("user_id", ownerId)
     .eq("archived", false)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
   return data ?? [];
 }
 

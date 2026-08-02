@@ -33,7 +33,12 @@ export const getAccounts = cache(
       .select(ACCOUNT_COLUMNS)
       .eq("user_id", userId)
       .eq("archived", false)
-      .order("created_at", { ascending: true });
+      // Total, not just date-stable: consumers read the base currency off
+      // accounts[0] (finance-client.tsx, snapshots/finance.ts), so a created_at
+      // tie would label the user's money arbitrarily. Oldest account wins, and
+      // every accounts read in the app resolves the same one.
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true });
     return (data ?? []) as Account[];
   },
 );
@@ -102,6 +107,17 @@ export const getSpendOverrides = cache(
 
 // Trailing transaction history feeding the everyday-spend baseline (90 days
 // comfortably covers the 12-week window).
+//
+// The ORDER BY is load-bearing, not cosmetic: without it Postgres may return
+// rows in any order, so the cap would truncate an arbitrary subset at any
+// volume and the baseline would train on it while still reporting confident.
+// Descending, so an overflowing window costs historical depth (older weeks
+// drop out of the 12-week median) rather than erasing the present.
+//
+// The order ends in `id` to make it TOTAL. `occurred_at` is a `date`, and
+// `created_at` defaults to now() = TRANSACTION time, so every row of one
+// statement-import batch carries an identical timestamp; without the primary
+// key the cap boundary would still fall arbitrarily inside that tie group.
 export const getSpendHistory = cache(
   async (
     userId: string,
@@ -115,6 +131,9 @@ export const getSpendHistory = cache(
       .select("occurred_at, direction, amount, category_id, is_transfer")
       .eq("user_id", userId)
       .gte("occurred_at", startKey)
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
       .limit(2000);
     return ((data ?? []) as SpendHistoryRow[]).map((row) => ({
       ...row,

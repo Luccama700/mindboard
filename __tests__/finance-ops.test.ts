@@ -260,6 +260,44 @@ describe("resolveFinanceOps transfer dedup", () => {
       expect(kinds).not.toContain("skip_duplicate");
     }
   });
+
+  // The transfer pool matches on fingerprint AND transfer-ness, so an adjust
+  // that reclassifies a leg as regular spending invalidates its membership
+  // even though the fingerprint is untouched.
+  it("does not skip against a leg this batch reclassifies as regular spending", () => {
+    const r = resolve(
+      [{ op: "adjust", changeId: "t-out", markTransfer: false }, dupTransfer],
+      { existingChanges: transferLegs },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "transfer"]);
+  });
+
+  // But a note-only adjust leaves both legs intact and still transfers, so
+  // re-sending the same movement is a genuine duplicate.
+  it("still skips when the adjust on a leg only changes the note", () => {
+    const r = resolve(
+      [{ op: "adjust", changeId: "t-out", note: "visa payment" }, dupTransfer],
+      { existingChanges: transferLegs },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
+  });
+
+  // markTransfer folds like the fingerprint fields: a batch that unmarks a leg
+  // and then re-marks it leaves it a transfer, so the pool keeps guarding.
+  it("still skips when a later adjust re-marks an unmarked leg as a transfer", () => {
+    const r = resolve(
+      [
+        { op: "adjust", changeId: "t-out", markTransfer: false },
+        { op: "adjust", changeId: "t-out", markTransfer: true },
+        dupTransfer,
+      ],
+      { existingChanges: transferLegs },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[2].kind).toBe("skip_duplicate");
+  });
 });
 
 describe("resolveFinanceOps", () => {
@@ -305,6 +343,204 @@ describe("resolveFinanceOps", () => {
     const forced = resolve([{ ...dupe, force: true }]);
     expect(forced.ok).toBe(true);
     if (forced.ok) expect(forced.value[0].kind).toBe("spend");
+  });
+
+  // A correction batch is [remove the wrong row, re-add the right one]. When the
+  // replacement shares the removed row's fingerprint (same account/date/amount,
+  // only the note or category was wrong) the dedup pool must not count the row
+  // this very batch deletes — otherwise the remove lands and the replacement is
+  // silently dropped, losing the transaction outright.
+  it("does not skip a spend against a row removed earlier in the same batch", () => {
+    const r = resolve([
+      { op: "remove", changeId: "ch-1" },
+      {
+        op: "spend",
+        account: "chase checking",
+        amount: 54.1,
+        date: "2026-06-30",
+        note: "costco, not walmart",
+      },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const kinds = r.value.map((o) => o.kind);
+      expect(kinds).toEqual(["remove", "spend"]);
+      expect(kinds).not.toContain("skip_duplicate");
+    }
+  });
+
+  // Order-independent: the guard is computed over the whole batch, so it holds
+  // whether the replacement is sent before or after the remove.
+  it("does not skip a spend sent before the remove that clears the row", () => {
+    const r = resolve([
+      {
+        op: "spend",
+        account: "chase checking",
+        amount: 54.1,
+        date: "2026-06-30",
+        note: "costco, not walmart",
+      },
+      { op: "remove", changeId: "ch-1" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.map((o) => o.kind)).toEqual(["spend", "remove"]);
+    }
+  });
+
+  // An adjust that MOVES the fingerprint leaves nothing at the old one, so the
+  // row stops guarding it — otherwise the spend is skipped against an identity
+  // that will not exist once the batch applies.
+  it("does not skip a spend against a row whose amount this batch adjusts", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 61.4 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const kinds = r.value.map((o) => o.kind);
+      expect(kinds).toEqual(["adjust", "spend"]);
+      expect(kinds).not.toContain("skip_duplicate");
+    }
+  });
+
+  it("does not skip a spend against a row whose date this batch adjusts", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", date: "2026-07-02" },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.map((o) => o.kind)).toEqual(["adjust", "spend"]);
+    }
+  });
+
+  // The other half of the rule: an adjust that leaves the fingerprint intact
+  // leaves the row exactly as the dedup pool describes it, so it keeps
+  // guarding. A silently corrupted total is worse than a visibly skipped row.
+  it("still skips a duplicate when the adjust only changes the note", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", note: "costco" },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
+  });
+
+  it("still skips a duplicate when the adjust only recategorizes", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", category: "dining" },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
+  });
+
+  // A no-op adjust (same amount restated) does not move the fingerprint, so it
+  // must not open a dedup hole either.
+  it("still skips a duplicate when the adjust restates the same amount", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 54.1 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
+  });
+
+  // Adjusts on one row are folded to their NET effect before comparing. Judging
+  // each op against the original row and unioning would mark the row stale on
+  // the first adjust and never un-mark it, admitting a duplicate whose net
+  // state is "row unchanged, plus an identical new row".
+  //
+  // Which mutant each guard actually catches — measured, not assumed, because
+  // an earlier report of this work conflated the two and inflated the number:
+  //
+  //   union-of-per-op (compare every adjust against the ORIGINAL row, union
+  //   the results) → fails exactly THREE: this test, the date+amount net-zero
+  //   below, and the transfer-leg re-mark in the transfer describe block. The
+  //   single-adjust "still skips" cases cannot fail it — with one adjust,
+  //   union and fold are identical by construction.
+  //
+  //   blanket exemption (every adjusted row stale, i.e. main before the
+  //   narrowing) → fails SEVEN: those three plus the four single-adjust
+  //   narrowing guards.
+  //
+  //   no carry-forward (each op starts from the original row, last-op-wins)
+  //   → fails exactly ONE: "keeps the exemption when a later note-only adjust
+  //   follows an amount move".
+  it("still skips a duplicate when a later adjust moves the fingerprint back", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 99 },
+      { op: "adjust", changeId: "ch-1", amount: 54.1 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.map((o) => o.kind)).toEqual([
+        "adjust",
+        "adjust",
+        "skip_duplicate",
+      ]);
+    }
+  });
+
+  it("still skips when successive adjusts on date and amount both net to no change", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", date: "2026-07-02", amount: 99 },
+      { op: "adjust", changeId: "ch-1", date: "2026-06-30", amount: 54.1 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[2].kind).toBe("skip_duplicate");
+  });
+
+  // The fold must not swing the other way either: when the net effect DOES
+  // move the fingerprint, the row still stops guarding.
+  it("exempts the row when successive adjusts net to a moved fingerprint", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 99 },
+      { op: "adjust", changeId: "ch-1", amount: 61.4 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[2].kind).toBe("spend");
+  });
+
+  // A later adjust that only touches the note leaves an earlier amount move
+  // standing — folding must carry fields forward, not reset them.
+  it("keeps the exemption when a later note-only adjust follows an amount move", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 61.4 },
+      { op: "adjust", changeId: "ch-1", note: "costco" },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[2].kind).toBe("spend");
+  });
+
+  // The mutated-row exemption is per-row, not a blanket opt-out: an untouched
+  // row still guards against its own duplicate in the same batch.
+  it("still skips a duplicate of an untouched row when another row is removed", () => {
+    const twoRows: ExistingChange[] = [
+      ...existing,
+      {
+        id: "ch-2",
+        account_id: "acc-cash",
+        occurred_at: "2026-07-01",
+        direction: "out",
+        amount: 12,
+        note: "bus fare",
+      },
+    ];
+    const r = resolve(
+      [
+        { op: "remove", changeId: "ch-1" },
+        { op: "spend", account: "cash", amount: 12, date: "2026-07-01" },
+      ],
+      { existingChanges: twoRows },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["remove", "skip_duplicate"]);
   });
 
   it("dedupes within the batch too", () => {
