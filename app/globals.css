@@ -572,6 +572,7 @@ body::before {
   animation: scrim-fade var(--dur-panel) linear both;
 }
 
+
 /* Mindshare bar segments grow from the left on first mount, staggered by an
    inline animationDelay. backwards holds scaleX(0) through the delay. */
 @keyframes bar-grow {
@@ -615,5 +616,31 @@ body::before {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     transition-delay: 0ms !important;
+  }
+}
+
+/* iOS Safari auto-zooms any focused control under 16px, and in the installed
+   PWA that zoom sticks — cutting off the fixed dock and page chrome. Control
+   sizes come from Tailwind utilities, so this must stay unlayered: unlayered
+   CSS beats @layer utilities on cascade layer alone, and it wins without
+   !important. Move it inside a layer and it silently stops applying.
+
+   The :not() list is load-bearing. 1em in a font-size resolves against the
+   PARENT, not the element's own utility, so a control that out-sizes its
+   context — the finance balance field (text-lg), the inventory name field
+   (text-xl) — would be clamped DOWN to 16px rather than left alone. Excluding
+   every utility that already asks for ≥16px keeps max() a floor.
+   Desktop (fine pointer) is untouched and keeps its 15px density. */
+@media (pointer: coarse) {
+  :is(input, select, textarea):not(
+      .text-base,
+      .text-lg,
+      .text-xl,
+      .text-2xl,
+      .text-3xl,
+      .text-title,
+      .text-display
+    ) {
+    font-size: max(16px, 1em);
   }
 }
