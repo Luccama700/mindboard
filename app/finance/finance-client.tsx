@@ -4,7 +4,6 @@ import { useMemo, useOptimistic, useState, useTransition } from "react";
 import Link from "next/link";
 import { FinanceCalendar } from "@/app/_components/finance-calendar";
 import type { GroceryTrip } from "@/app/_components/grocery-forecast";
-import { todayISO } from "@/app/_components/date-utils";
 import {
   formatMoney,
   formatSignedChange,
@@ -72,6 +71,7 @@ export function FinanceClient({
   manualSpendEstimate,
   spendOverrides,
   groceryTrips,
+  today,
   initialSpendLimits,
 }: {
   initialAccounts: Account[];
@@ -86,6 +86,8 @@ export function FinanceClient({
   manualSpendEstimate: number | null;
   spendOverrides: Record<string, number>;
   groceryTrips: Record<string, GroceryTrip>;
+  // The user's day, resolved server-side — see FinanceCalendar's `today`.
+  today: string;
   initialSpendLimits: SpendLimit[];
 }) {
   const [accounts, dispatchAccounts] = useOptimistic<Account[], AccountAction>(
@@ -184,7 +186,6 @@ export function FinanceClient({
   const mixedCurrency = accounts.some((a) => a.currency !== baseCurrency);
   const netWorth = accounts.reduce((sum, a) => sum + Number(a.balance), 0);
 
-  const today = todayISO(null);
   const todayDeltaByAccount = useMemo(() => {
     const map = new Map<string, number>();
     for (const ch of changes) {
@@ -536,6 +537,7 @@ export function FinanceClient({
           manualSpendEstimate={manualSpendEstimate}
           spendOverrides={spendOverrides}
           groceryTrips={groceryTrips}
+          today={today}
         />
       </aside>
 

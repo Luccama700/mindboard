@@ -6,7 +6,6 @@ import {
   formatMonthDay,
   formatMonthYear,
   formatWeekdayMonthDay,
-  todayISO,
 } from "./date-utils";
 import { formatMoney } from "./money";
 import {
@@ -82,6 +81,7 @@ export function FinanceCalendar({
   manualSpendEstimate,
   spendOverrides,
   groceryTrips,
+  today,
 }: {
   month: string;
   currency: string;
@@ -97,8 +97,13 @@ export function FinanceCalendar({
   // Projected grocery trips (shopping-list prices snapped to the shopping
   // day), computed server-side; empty when no shopping day is set.
   groceryTrips: Record<string, GroceryTrip>;
+  // The USER'S current day (user_settings.timezone), resolved on the server and
+  // threaded in. Never recompute it from the device clock here: the spend
+  // baseline, the grocery forecast and this projection must agree on which day
+  // is "today", and for a user whose device zone differs from their stored zone
+  // that disagreement would be permanent, not a hydration flash.
+  today: string;
 }) {
-  const today = todayISO(null);
   const gridDays = useMemo(() => buildGrid(month), [month]);
 
   // Per-day overrides, edited optimistically by the selected-day slider and
