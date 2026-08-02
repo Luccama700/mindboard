@@ -1,10 +1,12 @@
-#!/usr/bin/env node
 // Mindspace session sync (docs/mindspace-plan.md M3): scans the local Claude
 // Code transcripts under ~/.claude/projects and sends per-session records to
 // the mindspace_ingest_sessions MCP tool. Privacy contract: only the USER'S
 // OWN prompts travel (filtered, truncated) — assistant output and tool results
 // never leave this machine. Runs at the end of each overnight run (run.mjs)
 // and standalone via `node overnight/mindspace-sync.mjs`.
+// No shebang: __tests__/mindspace-import.test.ts imports this module, and
+// vitest's cjs interop hoists its `const x = __vite__cjsImport...` lines to
+// line 1, which would land the `#!` mid-line and fail the parse.
 
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
