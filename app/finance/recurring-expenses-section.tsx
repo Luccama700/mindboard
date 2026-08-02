@@ -330,7 +330,7 @@ function ExpenseForm({
       </div>
 
       <RecurrencePicker
-            today={today}
+        today={today}
         frequency={frequency}
         dayOfMonth={dayOfMonth}
         weekday={weekday}

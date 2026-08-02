@@ -33,7 +33,9 @@ export function safeTimeZone(timeZone: string | null | undefined): string | null
   }
 }
 
-export function formatClock12(date: Date, timeZone?: string | null) {
+// timeZone is required for the same reason todayISO's is — a wall-clock label
+// rendered from a Server Component would otherwise silently read UTC.
+export function formatClock12(date: Date, timeZone: string | null) {
   return date
     .toLocaleTimeString("en-US", {
       hour: "numeric",
@@ -95,7 +97,7 @@ export function formatWeekdayMonthDay(date: Date) {
   });
 }
 
-export function formatLongWeekdayMonthDay(date: Date, timeZone?: string | null) {
+export function formatLongWeekdayMonthDay(date: Date, timeZone: string | null) {
   return date.toLocaleDateString("en-US", {
     weekday: "long",
     month: "short",
@@ -112,15 +114,6 @@ export function formatRelativeToNow(iso: string): string {
   if (minutes < 60) return `in ${minutes}m`;
   if (minutes < 24 * 60) return `in ${Math.round((minutes / 60) * 10) / 10}h`;
   return `in ${Math.round(minutes / (60 * 24))}d`;
-}
-
-// Negative = overdue, 0 = today, positive = future. `today` is the user's day,
-// passed in — see formatDue.
-export function daysFromToday(iso: string, todayKey: string): number {
-  const today = new Date(todayKey + "T00:00:00");
-  const date = new Date(iso + "T00:00:00");
-  const diffMs = date.getTime() - today.getTime();
-  return Math.round(diffMs / (1000 * 60 * 60 * 24));
 }
 
 const PRIORITY_RANK: Record<string, number> = { high: 0, med: 1, low: 2 };

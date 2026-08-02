@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
-  daysFromToday,
   formatClock12,
   formatClockTime,
   formatDue,
@@ -27,9 +26,6 @@ describe("date utilities", () => {
     expect(todayISO(null)).toBe("2026-05-23");
     expect(formatDue("2026-05-23", "2026-05-23")).toBe("today");
     expect(formatDue("2026-05-25", "2026-05-23")).toBe("May 25");
-    expect(daysFromToday("2026-05-22", "2026-05-23")).toBe(-1);
-    expect(daysFromToday("2026-05-23", "2026-05-23")).toBe(0);
-    expect(daysFromToday("2026-05-30", "2026-05-23")).toBe(7);
   });
 
   test("formats calendar labels consistently", () => {
@@ -41,7 +37,7 @@ describe("date utilities", () => {
     expect(formatMonthDay(date)).toBe("May 23");
     expect(formatMonthDay(date, false)).toBe("23");
     expect(formatWeekdayMonthDay(date)).toBe("Sat, May 23");
-    expect(formatLongWeekdayMonthDay(date)).toBe("Saturday, May 23");
+    expect(formatLongWeekdayMonthDay(date, null)).toBe("Saturday, May 23");
   });
 
   test("timezone-aware helpers use the given zone's wall clock, not the process clock", () => {
