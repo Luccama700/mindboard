@@ -163,9 +163,17 @@ describe("computeSpendRate", () => {
     expect(young.sampledWeeks).toBe(0);
     expect(young.confident).toBe(false);
 
-    // exactly 4 covered weeks → confident
+    // exactly 4 covered weeks → confident. Every block carries spend so the
+    // week count is the only variable under test: a fixture with spend in one
+    // block out of four medians to $0, which is separately not confident.
     const four = computeSpendRate({
-      history: [income("2026-06-09"), spend("2026-06-15", 70)],
+      history: [
+        income("2026-06-09"), // anchors coverage at block 3's start
+        spend("2026-07-01", 70), // block 0
+        spend("2026-06-25", 70), // block 1
+        spend("2026-06-17", 70), // block 2
+        spend("2026-06-15", 70), // block 3
+      ],
       rules: [],
       today: TODAY,
     });
@@ -197,6 +205,56 @@ describe("computeSpendRate", () => {
     const r = computeSpendRate({ history, rules: [], today: TODAY });
     expect(r.sampledWeeks).toBe(4);
     expect(r.dailyRate).toBe(1.79);
+  });
+
+  // Absence of evidence, not evidence of absence: plenty of covered weeks but
+  // no discretionary spend in any of them means the model has seen nothing to
+  // predict from, so it must not out-rank the user's manual estimate.
+  it("is not confident when a well-covered window recorded no discretionary spend", () => {
+    const history = [
+      income("2026-06-02"), // anchors 5 fully covered weeks
+      income("2026-06-20"),
+      spend("2026-06-19", 1400, { category_id: null }), // rent — a bill, excluded
+      spend("2026-06-09", 300, { is_transfer: true }), // transfer, excluded
+    ];
+    const r = computeSpendRate({ history, rules: [rentRule], today: TODAY });
+    expect(r.sampledWeeks).toBe(5); // the weeks are real and still reported
+    expect(r.dailyRate).toBe(0);
+    expect(r.confident).toBe(false);
+  });
+
+  // The mostly-zero window lands on the same arithmetic (median 0) and is the
+  // same non-answer, so it resolves the same way.
+  it("is not confident when the median week is zero despite some spending weeks", () => {
+    // weekly totals block0..block4: 0, 0, 0, 210, 140 → median 0
+    const history = [
+      income("2026-06-02"),
+      spend("2026-06-10", 210), // block 3
+      spend("2026-06-03", 140), // block 4
+    ];
+    const r = computeSpendRate({ history, rules: [], today: TODAY });
+    expect(r.sampledWeeks).toBe(5);
+    expect(r.dailyRate).toBe(0);
+    expect(r.confident).toBe(false);
+  });
+
+  // Guard on the rule the fix must NOT regress: an individual $0 week is still
+  // a $0 sample the median steps through.
+  it("still counts zero weeks as $0 samples in the median", () => {
+    // weekly totals block0..block4: 70, 0, 0, 140, 140 → sorted [0,0,70,140,140]
+    // → median 70 → × 0.5 ÷ 7 = $5/day. Dropping the two zero weeks would give
+    // a median of 140 and double the rate.
+    const history = [
+      income("2026-06-02"),
+      spend("2026-07-01", 70), // block 0
+      // blocks 1 and 2: nothing
+      spend("2026-06-10", 140), // block 3
+      spend("2026-06-03", 140), // block 4
+    ];
+    const r = computeSpendRate({ history, rules: [], today: TODAY });
+    expect(r.sampledWeeks).toBe(5);
+    expect(r.dailyRate).toBe(5);
+    expect(r.confident).toBe(true);
   });
 
   it("a custom weeks cap samples fewer blocks even when more history exists", () => {
@@ -237,6 +295,22 @@ describe("estimatedSpendOn", () => {
   it("treats a non-positive manual value as no manual estimate", () => {
     expect(estimatedSpendOn(thin, 0, {}, "2026-07-11")).toBe(0);
     expect(estimatedSpendOn(thin, -10, {}, "2026-07-11")).toBe(0);
+  });
+
+  // End to end: a well-covered but spend-free window must not blank out the
+  // forecast over the user's own estimate, and must still project $0 when
+  // there is no estimate to fall back to.
+  it("lets the manual estimate win over a spend-free history window", () => {
+    const rate = computeSpendRate({
+      history: [income("2026-06-02")],
+      rules: [],
+      today: TODAY,
+    });
+    expect(rate.sampledWeeks).toBeGreaterThanOrEqual(MIN_CONFIDENT_WEEKS);
+    expect(estimatedSpendOn(rate, 22, {}, "2026-07-11")).toBe(22);
+    expect(estimatedSpendOn(rate, null, {}, "2026-07-11")).toBe(0);
+    // an explicit pin still wins over both
+    expect(estimatedSpendOn(rate, 22, { "2026-07-11": 5 }, "2026-07-11")).toBe(5);
   });
 });
 

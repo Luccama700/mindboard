@@ -8,7 +8,7 @@ import {
   toggleTaskStatus,
   updateTask,
 } from "@/app/actions/tasks";
-import { updateInventoryItem } from "@/app/actions/inventory";
+import { adjustInventoryQuantity } from "@/app/actions/inventory";
 import {
   archiveRecurringTask,
   completeRecurringOccurrence,
@@ -849,7 +849,10 @@ export function StreamClient({
     if (next === current) return;
     setQtys((prev) => ({ ...prev, [card.id]: next }));
     startTransition(async () => {
-      const result = await updateInventoryItem({ id: itemId, quantity: next });
+      // The delta is what travels: the server applies it to the live row, so a
+      // stale card (phone left open, an agent wrote in between) can't overwrite
+      // someone else's count with an absolute number computed from this view.
+      const result = await adjustInventoryQuantity({ id: itemId, delta });
       // Drop the optimistic override once the write settles so the next tap
       // (and any reconciliation) reads the authoritative server quantity from
       // revalidation — a stale override must never seed the next adjustment,

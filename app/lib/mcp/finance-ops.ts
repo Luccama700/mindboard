@@ -499,37 +499,115 @@ export function resolveFinanceOps(
 ): Result<ResolvedFinanceOp[]> {
   const { accounts, categories, recurring, existingChanges, today } = input;
 
+  const changeById = new Map(existingChanges.map((row) => [row.id, row]));
+
+  // A row drops out of a dedup pool only when this batch invalidates the
+  // identity that pool matches on — a correction batch is [remove/adjust the
+  // wrong row, re-add the right one], and counting a row the batch is about to
+  // invalidate would skip the replacement while the removal still lands,
+  // losing the transaction outright.
+  //
+  // `remove` always invalidates. `adjust` invalidates only when it MOVES the
+  // fingerprint (`date|direction|cents`; `direction` is not adjustable, so:
+  // amount or date, and only if the new value actually differs). A note- or
+  // category-only adjust leaves the row exactly as the pool describes it, so
+  // it keeps guarding — a missed duplicate corrupts totals silently, while a
+  // wrongly skipped transaction is recoverable with one follow-up, and that
+  // asymmetry is why the exemption is kept narrow.
+  //
+  // Adjusts are FOLDED per row before comparing, not evaluated one at a time:
+  // the executor applies them in order, each setting only its own fields, so
+  // only the net effect matters. Comparing each op against the original row and
+  // unioning the results would mark a row stale on an adjust that a later
+  // adjust undoes — [amount→99, amount→54.10] nets to no change at all, and
+  // treating it as a move would open a dedup hole this tranche exists to close.
+  //
+  // Otherwise order-independent: computed over the whole batch, so it holds
+  // whichever side of the removal the replacement is sent on.
+  //
+  // NOT covered — all three pre-existing, none introduced here. Both pools only
+  // ever REMOVE rows a batch invalidates; nothing a batch newly creates is ever
+  // ADDED, so any op that moves a row ONTO a fingerprint is invisible to dedup.
+  // Worst first:
+  //   - markTransfer: TRUE on both legs of a mis-imported pair, plus a transfer
+  //     op at that fingerprint. The two rows become legs but never join
+  //     `existingTransferFingerprints` (built from the pre-batch snapshot), so
+  //     the transfer lands too and the movement applies TWICE — each account
+  //     shifts by another ±amount. This one CORRUPTS balances, not just totals.
+  //   - markTransfer: TRUE with a spend at that fingerprint: the row leaves
+  //     spending analytics entirely, so the spend is a real addition, yet it is
+  //     still skipped and spending totals under-report. Only markTransfer:false
+  //     is handled, and only for the transfer pool.
+  //   - adjust TO a fingerprint: the post-adjust fingerprint is never added to
+  //     the pool, so [adjust X date→D, spend on D] is not caught as a dupe.
+  const removedInBatch = new Set<string>();
+  // Net {date, amount, transfer-ness} per adjusted row. `isTransfer: null`
+  // means this batch does not touch it.
+  const effective = new Map<
+    string,
+    { occurredAt: string; amount: number; isTransfer: boolean | null }
+  >();
+  for (const op of ops) {
+    if (op.op === "remove") {
+      removedInBatch.add(op.changeId);
+      continue;
+    }
+    if (op.op !== "adjust") continue;
+    const row = changeById.get(op.changeId);
+    if (!row) continue;
+    const current = effective.get(op.changeId) ?? {
+      occurredAt: row.occurred_at,
+      amount: Number(row.amount),
+      isTransfer: null,
+    };
+    effective.set(op.changeId, {
+      occurredAt: op.date ?? current.occurredAt,
+      amount: op.amount ?? current.amount,
+      isTransfer: op.markTransfer ?? current.isTransfer,
+    });
+  }
+
+  const staleIds = new Set<string>(removedInBatch);
+  // The transfer pool matches on fingerprint AND transfer-ness, so it is also
+  // invalidated by an adjust that reclassifies the row as regular spending.
+  const staleTransferIds = new Set<string>(removedInBatch);
+  for (const [changeId, net] of effective) {
+    const row = changeById.get(changeId);
+    if (!row) continue;
+    const before = changeFingerprint(row.occurred_at, row.direction, Number(row.amount));
+    const after = changeFingerprint(net.occurredAt, row.direction, net.amount);
+    if (before !== after) {
+      staleIds.add(changeId);
+      staleTransferIds.add(changeId);
+    }
+    if (net.isTransfer === false) staleTransferIds.add(changeId);
+  }
+
+  const dedupPool = existingChanges.filter((row) => !staleIds.has(row.id));
+
   const seenFingerprints = new Set(
-    existingChanges.map(
+    dedupPool.map(
       (row) =>
         `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
     ),
   );
   const fingerprintNotes = new Map(
-    existingChanges.map((row) => [
+    dedupPool.map((row) => [
       `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
       row.note,
     ]),
   );
-  // Transfer dedup pool: fingerprints of pre-existing rows that are themselves
-  // transfers (so a coincidental spend+income pair on the same date/amount is
-  // never mistaken for the same transfer), and NOT targeted by a remove/adjust
-  // op earlier in this batch (so a correction batch that removes-then-re-adds a
-  // transfer isn't skipped against rows it's about to delete). Never mutated.
-  const mutatedIds = new Set(
-    ops
-      .filter((o) => o.op === "remove" || o.op === "adjust")
-      .map((o) => (o as { changeId: string }).changeId),
-  );
+  // Transfer dedup pool: rows that are themselves transfers, so a coincidental
+  // spend+income pair on the same date/amount is never mistaken for the same
+  // transfer. Never mutated.
   const existingTransferFingerprints = new Set(
     existingChanges
-      .filter((row) => row.is_transfer === true && !mutatedIds.has(row.id))
+      .filter((row) => row.is_transfer === true && !staleTransferIds.has(row.id))
       .map(
         (row) =>
           `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
       ),
   );
-  const changeById = new Map(existingChanges.map((row) => [row.id, row]));
   const createdCategories = new Set<string>();
   const removedIds = new Set<string>();
 

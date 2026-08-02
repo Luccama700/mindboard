@@ -64,9 +64,12 @@ export async function DockMount() {
     brainNoteCount(supabase, user.id),
     supabase
       .from("accounts")
+      // Total: dock.tsx:367 pins a quick-spend to accounts[0], so this picks
+      // the WRITE target, not just a label.
       .select("id, name, balance, currency")
       .eq("archived", false)
-      .order("created_at", { ascending: true }),
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true }),
     supabase
       .from("spending_categories")
       .select("id, name, color, archived, created_at")

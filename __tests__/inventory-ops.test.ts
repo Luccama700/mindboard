@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasRefCandidate,
   receiptLine,
   renderStockReceipt,
   resolveItemRef,
+  resolveItemRefIncludingArchived,
   resolveStockOps,
   validateResolvedOps,
   validateStockOps,
@@ -108,6 +110,74 @@ describe("resolveItemRef", () => {
   });
 });
 
+describe("resolveItemRefIncludingArchived", () => {
+  const active = ITEMS.filter((it) => !it.archived);
+  const archived = ITEMS.filter((it) => it.archived);
+
+  it("finds an archived item the active shelf does not have", () => {
+    const r = resolveItemRefIncludingArchived("sunscreen", active, archived);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value).toMatchObject({ id: "i-sun", archived: true });
+  });
+
+  it("an active item wins outright over an archived one with the same name", () => {
+    const shadowed: ResolvableItem[] = [
+      { id: "i-old-rice", name: "Rice", quantity: 9, unit: "kg", archived: true },
+    ];
+    const r = resolveItemRefIncludingArchived("rice", active, shadowed);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.id).toBe("i-rice");
+  });
+
+  it("the archive is a fallback, never a tiebreak for an ambiguous active ref", () => {
+    // "soap" hits both Dish soap and Hand soap; an exactly-named archived Soap
+    // must not quietly win that ambiguity.
+    const archivedSoap: ResolvableItem[] = [
+      { id: "i-soap-bar", name: "Soap", quantity: 0, unit: "", archived: true },
+    ];
+    const r = resolveItemRefIncludingArchived("soap", active, archivedSoap);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toContain("ambiguous");
+      expect(r.error).toContain("Dish soap");
+      expect(r.error).toContain("Hand soap");
+    }
+  });
+
+  // Deliberate split of responsibility: the resolver still reports the archive's
+  // candidates, which an agent can act on because it holds ids. The /inventory
+  // omnibox does NOT surface that — it checks hasRefCandidate against the active
+  // shelf and proposes a create instead, because naming two rows the collapsed
+  // "not tracking" section keeps hidden, remediable only by typing a uuid, is
+  // not a usable error for a person.
+  it("an ambiguous archive still reports its candidates to an id-holding caller", () => {
+    const archivedRices: ResolvableItem[] = [
+      { id: "i-brown", name: "Brown rice", quantity: 0, unit: "kg", archived: true },
+      { id: "i-white", name: "White rice", quantity: 0, unit: "kg", archived: true },
+    ];
+    const noRice = active.filter((it) => it.id !== "i-rice");
+    const r = resolveItemRefIncludingArchived("rice", noRice, archivedRices);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("ambiguous");
+    // The client's gate for that same input: nothing active matches, so it
+    // takes the create path rather than showing the list above.
+    expect(hasRefCandidate("rice", noRice)).toBe(false);
+  });
+
+  it("a ref matching nothing anywhere still reports a plain miss", () => {
+    const r = resolveItemRefIncludingArchived("unobtainium", active, archived);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe('no item matching "unobtainium"');
+  });
+
+  it("hasRefCandidate reports presence, not resolvability", () => {
+    expect(hasRefCandidate("soap", active)).toBe(true);
+    expect(hasRefCandidate("i-eggs", active)).toBe(true);
+    expect(hasRefCandidate("sunscreen", active)).toBe(false);
+    expect(hasRefCandidate("sunscreen", archived)).toBe(true);
+  });
+});
+
 describe("resolveStockOps", () => {
   it("resolves names case-insensitively and computes before/after", () => {
     const result = resolve([{ op: "add", item: "eggs", amount: 12 }]);
@@ -175,6 +245,48 @@ describe("resolveStockOps", () => {
     const result = resolve([{ op: "create", name: "eggs", quantity: 12 }]);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("add/set");
+  });
+
+  it("refuses to create a second row over an archived name", () => {
+    const result = resolve([{ op: "create", name: "Sunscreen", quantity: 1 }]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("not being tracked");
+      expect(result.error).toContain("set");
+    }
+  });
+
+  it("recounting an archived item restores it instead of duplicating it", () => {
+    const result = resolve([{ op: "set", item: "sunscreen", quantity: 3 }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toHaveLength(1);
+    expect(result.value[0]).toMatchObject({
+      kind: "recount",
+      itemId: "i-sun",
+      quantity: 3,
+      before: 0,
+      restored: true,
+    });
+  });
+
+  it("recounting an active item is not flagged as a restore", () => {
+    const result = resolve([{ op: "set", item: "rice", quantity: 3 }]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value[0]).toMatchObject({ itemId: "i-rice", restored: false });
+    }
+  });
+
+  it("add/remove still refuse an archived item rather than restoring it", () => {
+    for (const op of [
+      { op: "add" as const, item: "sunscreen", amount: 1 },
+      { op: "remove" as const, item: "sunscreen", amount: 1 },
+    ]) {
+      const result = resolve([op]);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("restore");
+    }
   });
 
   it("resolves create groups by name and fails unknown groups", () => {
@@ -266,6 +378,7 @@ describe("renderStockReceipt", () => {
     expect(receipt).toContain("Eggs  6 → 18  (+12)");
     expect(receipt).toContain("Milk  1 → 0 L  (ran out)");
     expect(receipt).toContain("Rice  2 → 0.5 kg  (recount)");
+    expect(receipt).not.toContain("restored");
     expect(receipt).toContain("paper towels  new · 3 rolls · Household");
     expect(receipt).toContain("Dish soap  stop tracking");
     expect(receipt).toContain("Sunscreen  tracking again");
@@ -298,6 +411,15 @@ describe("renderStockReceipt", () => {
     expect(receiptLine(bareCreate)).toBe("Flour  new · 1 kg");
   });
 
+  it("a restoring recount says so before it is confirmed", () => {
+    const resolved = resolve([{ op: "set", item: "sunscreen", quantity: 3 }]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(receiptLine(resolved.value[0])).toBe(
+      "Sunscreen  0 → 3  (recount · restored, tracking again)",
+    );
+  });
+
   it("low and med priority do not get the (!!!) suffix", () => {
     const low: ResolvedStockOp = { kind: "priority", itemId: "i-eggs", name: "Eggs", priority: "low" };
     const med: ResolvedStockOp = { ...low, priority: "med" };
@@ -320,6 +442,24 @@ describe("validateResolvedOps", () => {
     const back = validateResolvedOps(stored);
     expect(back.ok).toBe(true);
     if (back.ok) expect(back.value).toEqual(resolved.value);
+  });
+
+  it("carries the restore flag through the audit row, and defaults it off", () => {
+    const resolved = resolve([{ op: "set", item: "sunscreen", quantity: 3 }]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    const back = validateResolvedOps(
+      JSON.parse(JSON.stringify({ operations: resolved.value })),
+    );
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.value[0]).toMatchObject({ restored: true });
+
+    // Proposals stored before this field existed must not start un-archiving.
+    const legacy = validateResolvedOps({
+      operations: [{ kind: "recount", itemId: "i-rice", quantity: 2 }],
+    });
+    expect(legacy.ok).toBe(true);
+    if (legacy.ok) expect(legacy.value[0]).toMatchObject({ restored: false });
   });
 
   it("rejects malformed stored ops", () => {

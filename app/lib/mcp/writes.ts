@@ -36,6 +36,10 @@ import {
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { executeGenerateAudioOverview } from "@/app/lib/learn/episodes";
 import { changeFingerprint } from "@/app/lib/finance/derive";
+import {
+  adjustQuantity,
+  itemQuantityStore,
+} from "@/app/lib/inventory/quantity";
 import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 import { formatRecurrence } from "@/app/lib/recurrence";
 import {
@@ -260,6 +264,8 @@ async function baseCurrency(
     .select("currency")
     .eq("user_id", ownerId)
     .eq("archived", false)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
     .limit(1);
   return ((data ?? []) as { currency: string }[])[0]?.currency ?? "USD";
 }
@@ -291,6 +297,9 @@ export async function spendLimitWarningBlock(
         .select("occurred_at, direction, amount, category_id, is_transfer")
         .eq("user_id", ownerId)
         .gte("occurred_at", windowStart)
+        .order("occurred_at", { ascending: false })
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(2000),
       supabase
         .from("spending_categories")
@@ -301,6 +310,8 @@ export async function spendLimitWarningBlock(
         .select("currency")
         .eq("user_id", ownerId)
         .eq("archived", false)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
         .limit(1),
     ]);
 
@@ -525,6 +536,9 @@ export async function proposeUpdateFinanceFor(
         .select("id, name")
         .eq("user_id", userId)
         .eq("archived", false),
+      // Ordered so the cap truncates deterministically: an unordered cap would
+      // hide an arbitrary slice of the span from the dedup check, letting
+      // duplicates through at random.
       span
         ? supabase
             .from("balance_changes")
@@ -532,6 +546,9 @@ export async function proposeUpdateFinanceFor(
             .eq("user_id", userId)
             .gte("occurred_at", span.min)
             .lte("occurred_at", span.max)
+            .order("occurred_at", { ascending: false })
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: true })
             .limit(1000)
         : Promise.resolve({ data: [] as unknown[] }),
       changeIds.length > 0
@@ -1060,15 +1077,33 @@ async function executeUpdateStock(
     });
 
     switch (op.kind) {
-      case "adjust":
+      case "adjust": {
+        // Compare-and-swap, seeded with the quantity read above: the delta is
+        // applied to whatever is actually in the row, so a concurrent write
+        // from the app or another agent forces a re-read instead of being
+        // silently overwritten.
+        const outcome = await adjustQuantity(
+          itemQuantityStore(supabase, op.itemId, ownerId, now),
+          op.delta,
+          { expected: running.get(op.itemId) },
+        );
+        if (!outcome.ok) return fail(outcome.error);
+        running.set(op.itemId, outcome.after);
+        applied.push(`${op.name}: ${outcome.before} → ${outcome.after}`);
+        break;
+      }
       case "recount": {
+        // A recount is an absolute statement ("there are 5"), so it overwrites
+        // by design — and restores the item when it was archived, rather than
+        // leaving a second row behind.
         const before = running.get(op.itemId) ?? 0;
-        const next =
-          op.kind === "adjust"
-            ? Math.max(0, Math.round((before + op.delta) * 1000) / 1000)
-            : op.quantity;
+        const next = op.quantity;
         const updates: Record<string, unknown> = { quantity: next };
         if (next > before) updates.last_restocked_at = now;
+        if (op.restored) {
+          updates.archived = false;
+          updates.archived_at = null;
+        }
         const { error } = await supabase
           .from("inventory_items")
           .update(updates)
@@ -1076,7 +1111,11 @@ async function executeUpdateStock(
           .eq("user_id", ownerId);
         if (error) return fail(error.message);
         running.set(op.itemId, next);
-        applied.push(`${op.name}: ${before} → ${next}`);
+        applied.push(
+          op.restored
+            ? `${op.name}: restored, ${before} → ${next}`
+            : `${op.name}: ${before} → ${next}`,
+        );
         break;
       }
       case "create": {
