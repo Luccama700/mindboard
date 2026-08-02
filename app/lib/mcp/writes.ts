@@ -36,6 +36,10 @@ import {
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { executeGenerateAudioOverview } from "@/app/lib/learn/episodes";
 import { changeFingerprint } from "@/app/lib/finance/derive";
+import {
+  adjustQuantity,
+  itemQuantityStore,
+} from "@/app/lib/inventory/quantity";
 import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 import { formatRecurrence } from "@/app/lib/recurrence";
 import {
@@ -1060,13 +1064,26 @@ async function executeUpdateStock(
     });
 
     switch (op.kind) {
-      case "adjust":
+      case "adjust": {
+        // Compare-and-swap, seeded with the quantity read above: the delta is
+        // applied to whatever is actually in the row, so a concurrent write
+        // from the app or another agent forces a re-read instead of being
+        // silently overwritten.
+        const outcome = await adjustQuantity(
+          itemQuantityStore(supabase, op.itemId, ownerId, now),
+          op.delta,
+          { expected: running.get(op.itemId) },
+        );
+        if (!outcome.ok) return fail(outcome.error);
+        running.set(op.itemId, outcome.after);
+        applied.push(`${op.name}: ${outcome.before} → ${outcome.after}`);
+        break;
+      }
       case "recount": {
+        // A recount is an absolute statement ("there are 5"), so it overwrites
+        // by design.
         const before = running.get(op.itemId) ?? 0;
-        const next =
-          op.kind === "adjust"
-            ? Math.max(0, Math.round((before + op.delta) * 1000) / 1000)
-            : op.quantity;
+        const next = op.quantity;
         const updates: Record<string, unknown> = { quantity: next };
         if (next > before) updates.last_restocked_at = now;
         const { error } = await supabase
