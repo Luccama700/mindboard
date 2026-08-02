@@ -25,6 +25,20 @@
 // writes throwaway users into that deployment's database — the owner's call to
 // make, not the probe's.
 //
+// The audit asks for a preview run eventually. Wiring it up needs, in order:
+//   1. a preview deployment whose Supabase project is NOT production (the
+//      probe creates and deletes real auth users, and seeds ~20 tables);
+//   2. that project's URL + publishable key + service-role key in the
+//      environment the probe runs in (it reads .env.local today — a CI job
+//      would read the same names from secrets instead);
+//   3. MCP_OAUTH_SECRET set on the deployment, or the whole OAuth section
+//      fails at the first /authorize;
+//   4. Vercel deployment protection disabled for that preview, or a bypass
+//      token on every fetch — otherwise every request is a 401 HTML page;
+//   5. MCP_URL=https://<preview>/api/mcp/mcp.
+// Deliberately left unexecuted here: pointing it at a deployment is the
+// owner's decision, not the probe author's.
+//
 // Reads NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY and
 // SUPABASE_SERVICE_ROLE_KEY from .env.local (MCP_OAUTH_SECRET too, on the
 // server side, for the OAuth section). Never prints real user data — only ids
