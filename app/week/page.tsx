@@ -32,8 +32,11 @@ export default async function WeekPage({
 
   // The default month is the USER'S current month: on the process clock the
   // last evening of a month fetched next month's grid, so the week actually
-  // being viewed had no events or completions loaded at all. getUserPreferences
-  // is cache()-deduped, so resolving the zone here costs no extra round-trip.
+  // being viewed had no events or completions loaded at all. This serialises
+  // prefs before getDashboardData — nothing is deduped here, /week is the only
+  // caller in the request — and /week has no Suspense boundary, so the extra
+  // round-trip lands on TTFB. Accepted: fetching the wrong month is worse than
+  // one indexed read.
   const prefs = await getUserPreferences(user.id);
   const timeZone = safeTimeZone(prefs.timezone);
   const month = selectedDay

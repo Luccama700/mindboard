@@ -353,31 +353,39 @@ async function StreamSection({ userId }: { userId: string }) {
 // current month.
 async function WeekPaneSection({
   userId,
-  month,
+  queryMonth,
   selectedDay,
 }: {
   userId: string;
-  month: string;
+  // Raw ?m= — the default month needs the user's zone, and resolving it here
+  // (inside the Suspense boundary, where prefs is awaited anyway) keeps it off
+  // Home's critical path so both boundaries still flush immediately.
+  queryMonth: string | string[] | undefined;
   selectedDay: string | null;
 }) {
-  const [
-    {
-      calendarTasks,
-      events,
-      finance,
-      calendarStatus,
-      calendarLinks,
-      recurringTasks,
-      recurringCompletions,
-      recurringSlots,
-    },
-    prefs,
-  ] = await Promise.all([
-    getDashboardData(userId, month),
-    getUserPreferences(userId),
-  ]);
-
+  // prefs first: the default month is the user's current month, so the zone has
+  // to be known before the data window is chosen. Serialised on purpose, and
+  // affordable because this whole section sits behind its own Suspense
+  // boundary. getDashboardData is cache()-deduped, so when ?m= is absent this
+  // resolves to the same month the stream already requested and shares its
+  // in-flight promise.
+  const prefs = await getUserPreferences(userId);
   const timeZone = safeTimeZone(prefs.timezone);
+  const month = selectedDay
+    ? selectedDay.slice(0, 7)
+    : normalizeMonth(queryMonth, timeZone);
+
+  const {
+    calendarTasks,
+    events,
+    finance,
+    calendarStatus,
+    calendarLinks,
+    recurringTasks,
+    recurringCompletions,
+    recurringSlots,
+  } = await getDashboardData(userId, month);
+
   const today = todayISO(timeZone);
   const slotKeys = new Set(
     recurringSlots.map((s) => `${s.rule_id}:${s.occurred_on}`),
@@ -475,17 +483,6 @@ export default async function Home({
     return <Landing />;
   }
 
-  // The selected day owns the month it lives in, so its week's data loads.
-  // Resolved after auth because the default month is the USER'S current month:
-  // on the process clock the last evening of a month fetched the next one.
-  // getUserPreferences is cache()-deduped, so WeekPaneSection reuses this read.
-  const month = selectedDay
-    ? selectedDay.slice(0, 7)
-    : normalizeMonth(
-        query.m,
-        safeTimeZone((await getUserPreferences(user.id)).timezone),
-      );
-
   return (
     <main className="min-h-screen px-5 pt-6 pb-64 mx-auto max-w-2xl lg:max-w-none lg:px-10 2xl:max-w-[110rem]">
       <div className="lg:grid lg:grid-cols-2 lg:gap-12 lg:items-start">
@@ -498,7 +495,7 @@ export default async function Home({
           <Suspense fallback={<WeekPaneSkeleton />}>
             <WeekPaneSection
               userId={user.id}
-              month={month}
+              queryMonth={query.m}
               selectedDay={selectedDay}
             />
           </Suspense>

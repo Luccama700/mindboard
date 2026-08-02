@@ -19,10 +19,15 @@ import nextTs from "eslint-config-next/typescript";
 // adding a helper that returns a date key or a month key, give it a required
 // `timeZone: string | null` instead of relying on this rule.
 //
-// Scoped to the server trees only: in a client component the process clock is
-// the device's, and bare `new Date()` has many legitimate uses there and here
-// (durations, `updated_at` timestamps, `now` inputs) — all 58 current uses in
-// these trees are exactly that, so a broader rule would be pure noise.
+// Scoped to code that runs on the server: app/lib, app/actions, app/api, and
+// `page.tsx`/`layout.tsx` — the last two matter because route components are
+// exactly where these helpers get called server-side, and an earlier version of
+// this rule missed them entirely while claiming to cover "the server trees".
+// (app/login/page.tsx is the one "use client" page; it touches no dates.)
+// Client components stay out: there the process clock IS the device's. Bare
+// `new Date()` also has many legitimate uses on both sides — durations,
+// `updated_at` timestamps, `now` inputs — and every current use in these trees
+// is one of those, so a broader rule would be pure noise.
 const PROCESS_CLOCK_DATE_KEY = [
   {
     // Catches the idiom that had two live instances at audit time
@@ -51,7 +56,13 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   {
-    files: ["app/lib/**/*.{ts,tsx}", "app/actions/**/*.{ts,tsx}", "app/api/**/*.{ts,tsx}"],
+    files: [
+      "app/lib/**/*.{ts,tsx}",
+      "app/actions/**/*.{ts,tsx}",
+      "app/api/**/*.{ts,tsx}",
+      "app/**/page.tsx",
+      "app/**/layout.tsx",
+    ],
     rules: {
       "no-restricted-syntax": ["error", ...PROCESS_CLOCK_DATE_KEY],
     },
