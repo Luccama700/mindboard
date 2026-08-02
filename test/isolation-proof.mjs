@@ -66,7 +66,10 @@ import {
   unreadableTables,
 } from "./isolation/seed.mjs";
 import { reportCoverage, runToolMatrix } from "./isolation/mcp-probe.mjs";
-import { runForgedProposalProbe } from "./isolation/forged-proposal.mjs";
+import {
+  runForgedProposalProbe,
+  seedControlFixtures,
+} from "./isolation/forged-proposal.mjs";
 import { makeSessionClient, runOauthProbe } from "./isolation/oauth-probe.mjs";
 
 const env = loadEnv(new URL("../.env.local", import.meta.url));
@@ -327,7 +330,11 @@ try {
     );
 
     const exercised = await runToolMatrix({ mcpA, ctx, reporter });
-    await runForgedProposalProbe({ mcpA, ctx, reporter });
+
+    // Scratch rows for the forged-proposal controls, created after the snapshot
+    // so they belong to A alone and disturb nothing the sweep asserted on.
+    const scratch = await seedControlFixtures(admin, a.id, `zzp${RUN}a`);
+    await runForgedProposalProbe({ mcpA, ctx, reporter, scratch });
 
     reporter.section("post-sweep: nothing of B's changed");
     const after = await snapshotTenant(admin, b.id);

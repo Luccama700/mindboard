@@ -4,6 +4,9 @@ import { leakNeedles, scanForLeak, stringLeaves } from "../test/isolation/harnes
 import { diffSnapshots } from "../test/isolation/seed.mjs";
 import { reportCoverage } from "../test/isolation/mcp-probe.mjs";
 import { TOOL_MATRIX } from "../test/isolation/tool-matrix.mjs";
+import { FORGERIES } from "../test/isolation/forged-proposal.mjs";
+import { validateResolvedFinanceOps } from "@/app/lib/mcp/finance-ops";
+import { validateResolvedOps } from "@/app/lib/mcp/inventory-ops";
 
 // The two-tenant probe (test/isolation-proof.mjs) is only worth running if its
 // own detectors work. A leak scanner that never matches, a snapshot diff that
@@ -195,6 +198,103 @@ describe("attack table", () => {
       const args = JSON.stringify(entry.args(ctx));
       if (!args.includes("A-")) continue;
       expect(args.includes("B-"), `${entry.tool}: ${entry.attack}`).toBe(true);
+    }
+  });
+});
+
+describe("forged-proposal table", () => {
+  // The discipline the tools/list coverage check enforces, applied to the
+  // executors: an entry without a control is an entry whose refusal proves
+  // nothing, because a drifted op shape fails validation before the ownership
+  // guard and still reads as "refused".
+  it("gives every executor entry a control and both verifiers", () => {
+    expect(FORGERIES.length).toBeGreaterThan(0);
+    for (const entry of FORGERIES) {
+      expect(typeof entry.tool, JSON.stringify(entry)).toBe("string");
+      expect(typeof entry.what, entry.tool).toBe("string");
+      for (const field of ["victim", "control", "verifyVictim", "verifyControl"]) {
+        expect(typeof entry[field], `${entry.tool} is missing ${field}`).toBe("function");
+      }
+    }
+  });
+
+  it("aims every victim at B and every control at A's scratch fixtures", () => {
+    const ctx = {
+      a: Object.fromEntries(FIELDS.map((f) => [f, `A-${f}`])),
+      b: Object.fromEntries(FIELDS.map((f) => [f, `B-${f}`])),
+    };
+    const scratch = new Proxy(
+      { marker: "S-marker" },
+      { get: (t, k) => (k in t ? t[k as string] : `S-${String(k)}`) },
+    );
+    for (const entry of FORGERIES) {
+      const victim = JSON.stringify(entry.victim(ctx));
+      expect(victim.includes("B-"), `${entry.tool} victim must reference B`).toBe(true);
+      expect(victim.includes("A-"), `${entry.tool} victim must not reference A`).toBe(false);
+
+      const control = JSON.stringify(entry.control(ctx, scratch));
+      expect(control.includes("S-"), `${entry.tool} control must use a scratch row`).toBe(true);
+      expect(control.includes("B-"), `${entry.tool} control must not reference B`).toBe(false);
+    }
+  });
+
+  // The concrete drift this file's control exists to catch, pinned against the
+  // real validators so it cannot regress silently. The FIRST version of the
+  // forged update_finance op used {kind, changeId, summary}; the executor
+  // requires {kind, changeId, accountId, label}, so it was rejected as
+  // malformed BEFORE any ownership check and the "refused" check passed
+  // vacuously. These assert the validators still draw that line, and that the
+  // shapes now in FORGERIES land on the accepted side of it.
+  it("rejects the drifted update_finance shape that made the old forgery vacuous", () => {
+    const drifted = validateResolvedFinanceOps({
+      operations: [{ kind: "remove", changeId: "c1", summary: "forged remove" }],
+    });
+    expect(drifted.ok).toBe(false);
+
+    const corrected = validateResolvedFinanceOps({
+      operations: [
+        { kind: "remove", changeId: "c1", accountId: "a1", label: "forged remove" },
+      ],
+    });
+    expect(corrected.ok).toBe(true);
+  });
+
+  it("accepts the resolved-op shapes the forgeries actually send", () => {
+    const ctx = {
+      a: Object.fromEntries(FIELDS.map((f) => [f, `A-${f}`])),
+      b: Object.fromEntries(FIELDS.map((f) => [f, `B-${f}`])),
+    };
+    const finance = FORGERIES.find((f) => f.tool === "update_finance");
+    const stock = FORGERIES.find((f) => f.tool === "update_stock");
+    expect(validateResolvedFinanceOps(finance!.victim(ctx)).ok).toBe(true);
+    expect(validateResolvedOps(stock!.victim(ctx)).ok).toBe(true);
+  });
+
+  it("keeps victim and control structurally identical", () => {
+    // A control that does not mirror the victim's shape cannot vouch for it.
+    const ctx = {
+      a: Object.fromEntries(FIELDS.map((f) => [f, `A-${f}`])),
+      b: Object.fromEntries(FIELDS.map((f) => [f, `B-${f}`])),
+    };
+    const scratch = new Proxy(
+      { marker: "S-marker" },
+      { get: (t, k) => (k in t ? t[k as string] : `S-${String(k)}`) },
+    );
+    const shape = (v: unknown): unknown => {
+      if (Array.isArray(v)) return v.map(shape);
+      if (v && typeof v === "object") {
+        return Object.fromEntries(
+          Object.entries(v as Record<string, unknown>)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([k, val]) => [k, shape(val)]),
+        );
+      }
+      return typeof v;
+    };
+    for (const entry of FORGERIES) {
+      expect(shape(entry.control(ctx, scratch)), `${entry.tool} control/victim shape`).toEqual(
+        shape(entry.victim(ctx)),
+      );
     }
   });
 });
