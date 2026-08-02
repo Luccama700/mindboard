@@ -499,20 +499,50 @@ export function resolveFinanceOps(
 ): Result<ResolvedFinanceOp[]> {
   const { accounts, categories, recurring, existingChanges, today } = input;
 
-  // Rows this batch removes or adjusts are excluded from every dedup pool: a
-  // correction batch is [remove/adjust the wrong row, re-add the right one], and
-  // the replacement usually shares the old row's fingerprint (only the note or
-  // category was wrong). Counting a row the same batch deletes would skip the
-  // replacement while the delete still lands — losing the transaction outright.
-  // `adjust` counts too: once applied, the stored fingerprint may no longer
-  // describe the row. Order-independent, so it holds whichever side of the
-  // remove the replacement is sent on.
-  const mutatedIds = new Set(
-    ops
-      .filter((o) => o.op === "remove" || o.op === "adjust")
-      .map((o) => (o as { changeId: string }).changeId),
-  );
-  const dedupPool = existingChanges.filter((row) => !mutatedIds.has(row.id));
+  const changeById = new Map(existingChanges.map((row) => [row.id, row]));
+
+  // A row drops out of a dedup pool only when this batch invalidates the
+  // identity that pool matches on — a correction batch is [remove/adjust the
+  // wrong row, re-add the right one], and counting a row the batch is about to
+  // invalidate would skip the replacement while the removal still lands,
+  // losing the transaction outright.
+  //
+  // `remove` always invalidates. `adjust` invalidates only when it MOVES the
+  // fingerprint (`date|direction|cents`; `direction` is not adjustable, so:
+  // amount or date, and only if the new value actually differs). A note- or
+  // category-only adjust leaves the row exactly as the pool describes it, so
+  // it keeps guarding — a missed duplicate corrupts totals silently, while a
+  // wrongly skipped transaction is recoverable with one follow-up, and that
+  // asymmetry is why the exemption is kept as narrow as the hazard.
+  //
+  // Order-independent: computed over the whole batch, so it holds whichever
+  // side of the removal the replacement is sent on.
+  const staleIds = new Set<string>();
+  // The transfer pool matches on fingerprint AND transfer-ness, so it is also
+  // invalidated by an adjust that reclassifies the row as regular spending.
+  const staleTransferIds = new Set<string>();
+  for (const op of ops) {
+    if (op.op === "remove") {
+      staleIds.add(op.changeId);
+      staleTransferIds.add(op.changeId);
+      continue;
+    }
+    if (op.op !== "adjust") continue;
+    if (op.markTransfer === false) staleTransferIds.add(op.changeId);
+    const row = changeById.get(op.changeId);
+    if (!row) continue;
+    const before = changeFingerprint(row.occurred_at, row.direction, Number(row.amount));
+    const after = changeFingerprint(
+      op.date ?? row.occurred_at,
+      row.direction,
+      op.amount ?? Number(row.amount),
+    );
+    if (before === after) continue;
+    staleIds.add(op.changeId);
+    staleTransferIds.add(op.changeId);
+  }
+
+  const dedupPool = existingChanges.filter((row) => !staleIds.has(row.id));
 
   const seenFingerprints = new Set(
     dedupPool.map(
@@ -526,18 +556,17 @@ export function resolveFinanceOps(
       row.note,
     ]),
   );
-  // Transfer dedup pool: same exclusion, further narrowed to rows that are
-  // themselves transfers, so a coincidental spend+income pair on the same
-  // date/amount is never mistaken for the same transfer. Never mutated.
+  // Transfer dedup pool: rows that are themselves transfers, so a coincidental
+  // spend+income pair on the same date/amount is never mistaken for the same
+  // transfer. Never mutated.
   const existingTransferFingerprints = new Set(
-    dedupPool
-      .filter((row) => row.is_transfer === true)
+    existingChanges
+      .filter((row) => row.is_transfer === true && !staleTransferIds.has(row.id))
       .map(
         (row) =>
           `${row.account_id}|${changeFingerprint(row.occurred_at, row.direction, Number(row.amount))}`,
       ),
   );
-  const changeById = new Map(existingChanges.map((row) => [row.id, row]));
   const createdCategories = new Set<string>();
   const removedIds = new Set<string>();
 

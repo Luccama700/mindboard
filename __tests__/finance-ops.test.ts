@@ -260,6 +260,29 @@ describe("resolveFinanceOps transfer dedup", () => {
       expect(kinds).not.toContain("skip_duplicate");
     }
   });
+
+  // The transfer pool matches on fingerprint AND transfer-ness, so an adjust
+  // that reclassifies a leg as regular spending invalidates its membership
+  // even though the fingerprint is untouched.
+  it("does not skip against a leg this batch reclassifies as regular spending", () => {
+    const r = resolve(
+      [{ op: "adjust", changeId: "t-out", markTransfer: false }, dupTransfer],
+      { existingChanges: transferLegs },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "transfer"]);
+  });
+
+  // But a note-only adjust leaves both legs intact and still transfers, so
+  // re-sending the same movement is a genuine duplicate.
+  it("still skips when the adjust on a leg only changes the note", () => {
+    const r = resolve(
+      [{ op: "adjust", changeId: "t-out", note: "visa payment" }, dupTransfer],
+      { existingChanges: transferLegs },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
+  });
 });
 
 describe("resolveFinanceOps", () => {
@@ -350,9 +373,10 @@ describe("resolveFinanceOps", () => {
     }
   });
 
-  // An adjusted row's stored fingerprint may no longer describe it once the
-  // batch applies, so it is excluded from the pool on the same rule as remove.
-  it("does not skip a spend against a row adjusted earlier in the same batch", () => {
+  // An adjust that MOVES the fingerprint leaves nothing at the old one, so the
+  // row stops guarding it — otherwise the spend is skipped against an identity
+  // that will not exist once the batch applies.
+  it("does not skip a spend against a row whose amount this batch adjusts", () => {
     const r = resolve([
       { op: "adjust", changeId: "ch-1", amount: 61.4 },
       { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
@@ -363,6 +387,49 @@ describe("resolveFinanceOps", () => {
       expect(kinds).toEqual(["adjust", "spend"]);
       expect(kinds).not.toContain("skip_duplicate");
     }
+  });
+
+  it("does not skip a spend against a row whose date this batch adjusts", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", date: "2026-07-02" },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.map((o) => o.kind)).toEqual(["adjust", "spend"]);
+    }
+  });
+
+  // The other half of the rule: an adjust that leaves the fingerprint intact
+  // leaves the row exactly as the dedup pool describes it, so it keeps
+  // guarding. A silently corrupted total is worse than a visibly skipped row.
+  it("still skips a duplicate when the adjust only changes the note", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", note: "costco" },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
+  });
+
+  it("still skips a duplicate when the adjust only recategorizes", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", category: "dining" },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
+  });
+
+  // A no-op adjust (same amount restated) does not move the fingerprint, so it
+  // must not open a dedup hole either.
+  it("still skips a duplicate when the adjust restates the same amount", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 54.1 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
   });
 
   // The mutated-row exemption is per-row, not a blanket opt-out: an untouched
