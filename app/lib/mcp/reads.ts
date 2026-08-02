@@ -193,11 +193,16 @@ export async function buildSpendLimitStatus(
         .select("amount, category_id")
         .eq("user_id", ownerId)
         .eq("archived", false),
+      // Ordered so the cap truncates the oldest days rather than an arbitrary
+      // slice — a spend limit computed from a random subset of the period reads
+      // as headroom the user does not have.
       supabase
         .from("balance_changes")
         .select("occurred_at, direction, amount, category_id, is_transfer")
         .eq("user_id", ownerId)
         .gte("occurred_at", windowStart)
+        .order("occurred_at", { ascending: false })
+        .order("created_at", { ascending: false })
         .limit(2000),
       supabase
         .from("spending_categories")

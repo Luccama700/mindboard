@@ -119,11 +119,16 @@ export async function buildFinanceForecast(params: {
         )
         .eq("user_id", userId)
         .eq("archived", false),
+      // Same capped spend history as getSpendHistory (app/lib/data/finance.ts)
+      // and ordered identically, so the MCP forecast and the app's calendar
+      // train the baseline on the same rows when the cap bites.
       supabase
         .from("balance_changes")
         .select("occurred_at, direction, amount, category_id, is_transfer")
         .eq("user_id", userId)
         .gte("occurred_at", historyStart)
+        .order("occurred_at", { ascending: false })
+        .order("created_at", { ascending: false })
         .limit(2000),
       supabase
         .from("spend_overrides")

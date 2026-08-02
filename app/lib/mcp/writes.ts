@@ -260,6 +260,7 @@ async function baseCurrency(
     .select("currency")
     .eq("user_id", ownerId)
     .eq("archived", false)
+    .order("created_at", { ascending: true })
     .limit(1);
   return ((data ?? []) as { currency: string }[])[0]?.currency ?? "USD";
 }
@@ -291,6 +292,8 @@ export async function spendLimitWarningBlock(
         .select("occurred_at, direction, amount, category_id, is_transfer")
         .eq("user_id", ownerId)
         .gte("occurred_at", windowStart)
+        .order("occurred_at", { ascending: false })
+        .order("created_at", { ascending: false })
         .limit(2000),
       supabase
         .from("spending_categories")
@@ -301,6 +304,7 @@ export async function spendLimitWarningBlock(
         .select("currency")
         .eq("user_id", ownerId)
         .eq("archived", false)
+        .order("created_at", { ascending: true })
         .limit(1),
     ]);
 
@@ -525,6 +529,9 @@ export async function proposeUpdateFinanceFor(
         .select("id, name")
         .eq("user_id", userId)
         .eq("archived", false),
+      // Ordered so the cap truncates deterministically: an unordered cap would
+      // hide an arbitrary slice of the span from the dedup check, letting
+      // duplicates through at random.
       span
         ? supabase
             .from("balance_changes")
@@ -532,6 +539,8 @@ export async function proposeUpdateFinanceFor(
             .eq("user_id", userId)
             .gte("occurred_at", span.min)
             .lte("occurred_at", span.max)
+            .order("occurred_at", { ascending: false })
+            .order("created_at", { ascending: false })
             .limit(1000)
         : Promise.resolve({ data: [] as unknown[] }),
       changeIds.length > 0
