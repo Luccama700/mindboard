@@ -525,13 +525,21 @@ export function resolveFinanceOps(
   // Otherwise order-independent: computed over the whole batch, so it holds
   // whichever side of the removal the replacement is sent on.
   //
-  // NOT covered (both pre-existing, neither introduced here):
-  //   - adjust TO a fingerprint: the post-adjust fingerprint is never ADDED to
+  // NOT covered — all three pre-existing, none introduced here. Both pools only
+  // ever REMOVE rows a batch invalidates; nothing a batch newly creates is ever
+  // ADDED, so any op that moves a row ONTO a fingerprint is invisible to dedup.
+  // Worst first:
+  //   - markTransfer: TRUE on both legs of a mis-imported pair, plus a transfer
+  //     op at that fingerprint. The two rows become legs but never join
+  //     `existingTransferFingerprints` (built from the pre-batch snapshot), so
+  //     the transfer lands too and the movement applies TWICE — each account
+  //     shifts by another ±amount. This one CORRUPTS balances, not just totals.
+  //   - markTransfer: TRUE with a spend at that fingerprint: the row leaves
+  //     spending analytics entirely, so the spend is a real addition, yet it is
+  //     still skipped and spending totals under-report. Only markTransfer:false
+  //     is handled, and only for the transfer pool.
+  //   - adjust TO a fingerprint: the post-adjust fingerprint is never added to
   //     the pool, so [adjust X date→D, spend on D] is not caught as a dupe.
-  //   - markTransfer: TRUE: the row leaves spending analytics entirely, so a
-  //     spend at its fingerprint is a real addition, yet it is still skipped —
-  //     spending totals under-report. Only markTransfer: false is handled, and
-  //     only for the transfer pool.
   const removedInBatch = new Set<string>();
   // Net {date, amount, transfer-ness} per adjusted row. `isTransfer: null`
   // means this batch does not touch it.

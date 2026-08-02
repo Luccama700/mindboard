@@ -451,6 +451,23 @@ describe("resolveFinanceOps", () => {
   // each op against the original row and unioning would mark the row stale on
   // the first adjust and never un-mark it, admitting a duplicate whose net
   // state is "row unchanged, plus an identical new row".
+  //
+  // Which mutant each guard actually catches — measured, not assumed, because
+  // an earlier report of this work conflated the two and inflated the number:
+  //
+  //   union-of-per-op (compare every adjust against the ORIGINAL row, union
+  //   the results) → fails exactly THREE: this test, the date+amount net-zero
+  //   below, and the transfer-leg re-mark in the transfer describe block. The
+  //   single-adjust "still skips" cases cannot fail it — with one adjust,
+  //   union and fold are identical by construction.
+  //
+  //   blanket exemption (every adjusted row stale, i.e. main before the
+  //   narrowing) → fails SEVEN: those three plus the four single-adjust
+  //   narrowing guards.
+  //
+  //   no carry-forward (each op starts from the original row, last-op-wins)
+  //   → fails exactly ONE: "keeps the exemption when a later note-only adjust
+  //   follows an amount move".
   it("still skips a duplicate when a later adjust moves the fingerprint back", () => {
     const r = resolve([
       { op: "adjust", changeId: "ch-1", amount: 99 },
