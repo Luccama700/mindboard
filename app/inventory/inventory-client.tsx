@@ -1929,7 +1929,11 @@ function ItemTile({
 // back an absolute, which is the stale overwrite this path exists to prevent.
 // onStep is omitted only where there is no row yet (the add form), where the
 // local draft is the only truth there is.
-function QuantityField({
+//
+// Exported for __tests__/inventory-quantity-field.test.tsx — the recount/step
+// split is silent in both directions when it breaks, so it is pinned directly
+// rather than through the whole client.
+export function QuantityField({
   value,
   onCommit,
   onStep,
@@ -1942,6 +1946,11 @@ function QuantityField({
   const [prevValue, setPrevValue] = useState(value);
   // Whether the draft is the user's own typing rather than a mirror of `value`.
   // It is what tells an assertion ("I counted 2") apart from a stray focus.
+  //
+  // Set from keydown as well as change, because re-typing the number already in
+  // the box fires no change event — the DOM value never differs, so React
+  // dedupes it away. That is browser behaviour, not a test artifact, and
+  // select-all-then-retype is exactly how someone confirms a count.
   const [typed, setTyped] = useState(false);
   if (value !== prevValue) {
     setPrevValue(value);
@@ -2014,6 +2023,12 @@ function QuantityField({
           if (e.key === "Enter") {
             e.preventDefault();
             e.currentTarget.blur();
+            return;
+          }
+          // Only keys that can alter the text count, so tabbing or arrowing
+          // through the field is still not an assertion.
+          if (e.key === "Backspace" || e.key === "Delete" || e.key.length === 1) {
+            setTyped(true);
           }
         }}
         aria-label="quantity"
