@@ -411,6 +411,7 @@ async function WeekPaneSection({
     <DashboardCalendar
       key={`${month}:${selectedDay ?? ""}`}
       month={month}
+      today={today}
       tasks={calendarTasks}
       events={events}
       finance={finance}

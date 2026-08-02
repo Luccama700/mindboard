@@ -146,6 +146,7 @@ function buildGrid(month: string) {
 
 export function DashboardCalendar({
   month,
+  today,
   tasks,
   events,
   finance = [],
@@ -162,6 +163,11 @@ export function DashboardCalendar({
   recurringSlots = [],
 }: {
   month: string;
+  // The USER'S day (user_settings.timezone), resolved by the page. Required,
+  // not derived: this both highlights "today" in the grid and gates
+  // drag-reschedule / slot-approval writes, so deriving it from the device
+  // clock put a capture-bar task in one column while highlighting another.
+  today: string;
   tasks: TaskWithGroup[];
   events: CalendarEvent[];
   finance?: FinanceChange[];
@@ -178,7 +184,6 @@ export function DashboardCalendar({
   recurringSlots?: RecurringSlotRow[];
 }) {
   const router = useRouter();
-  const today = toDateKey(new Date());
   const grid = useMemo(() => buildGrid(month), [month]);
   const firstInMonth = `${month}-01`;
   // A ?d= param (week arrows) anchors the selection; otherwise land on today
