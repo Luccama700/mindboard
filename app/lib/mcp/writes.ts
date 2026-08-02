@@ -1081,11 +1081,16 @@ async function executeUpdateStock(
       }
       case "recount": {
         // A recount is an absolute statement ("there are 5"), so it overwrites
-        // by design.
+        // by design — and restores the item when it was archived, rather than
+        // leaving a second row behind.
         const before = running.get(op.itemId) ?? 0;
         const next = op.quantity;
         const updates: Record<string, unknown> = { quantity: next };
         if (next > before) updates.last_restocked_at = now;
+        if (op.restored) {
+          updates.archived = false;
+          updates.archived_at = null;
+        }
         const { error } = await supabase
           .from("inventory_items")
           .update(updates)
@@ -1093,7 +1098,11 @@ async function executeUpdateStock(
           .eq("user_id", ownerId);
         if (error) return fail(error.message);
         running.set(op.itemId, next);
-        applied.push(`${op.name}: ${before} → ${next}`);
+        applied.push(
+          op.restored
+            ? `${op.name}: restored, ${before} → ${next}`
+            : `${op.name}: ${before} → ${next}`,
+        );
         break;
       }
       case "create": {
