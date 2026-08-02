@@ -870,7 +870,7 @@ async function executeLogSpend(
     return { ok: false, error: insertError?.message ?? "insert failed" };
   }
 
-  const recomputed = await recomputeAccountBalance(supabase, ownerId, v.accountId);
+  const recomputed = await recomputeAccountBalance(supabase, ownerId, v.accountId, today);
   if (recomputed.error) return { ok: false, error: recomputed.error };
 
   return { ok: true, value: { change, newBalance: recomputed.balance } };
@@ -1585,8 +1585,9 @@ async function executeUpdateFinance(
   }
 
   const balances: Record<string, number> = {};
+  const today = await todayKey(supabase, ownerId);
   for (const accountId of touched) {
-    const recomputed = await recomputeAccountBalance(supabase, ownerId, accountId);
+    const recomputed = await recomputeAccountBalance(supabase, ownerId, accountId, today);
     if (recomputed.error) {
       return { ok: false, error: `balance recompute failed: ${recomputed.error}` };
     }

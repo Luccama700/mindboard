@@ -11,10 +11,16 @@ import {
 // 0022). Called after every transaction insert/edit/delete and after recording
 // a new anchor. Works on both the session client (RLS) and the service client
 // (explicit scoping) — userId is always filtered explicitly.
+//
+// `today` is the USER'S date key (YYYY-MM-DD) and is required: derived from the
+// UTC process clock instead, a UTC+ user's morning spend looked future-dated and
+// deriveBalance silently dropped it. Source it only from todayKey(supabase,
+// userId) or todayISO(safeTimeZone(tz)).
 export async function recomputeAccountBalance(
   supabase: SupabaseClient,
   userId: string,
   accountId: string,
+  today: string,
 ): Promise<{ error: string | null; balance?: number }> {
   const { data: anchorRow, error: anchorError } = await supabase
     .from("account_reconciliations")
@@ -47,9 +53,8 @@ export async function recomputeAccountBalance(
   const { data: rows, error: rowsError } = await query;
   if (rowsError) return { error: rowsError.message };
 
-  // Exclude future-dated rows from the current balance (UTC calendar day; the
-  // zone-aware clock is handled separately by the timezone workstream).
-  const today = new Date().toISOString().slice(0, 10);
+  // Exclude future-dated rows from the current balance, on the user's calendar
+  // day (see the `today` parameter).
   const balance = deriveBalance(anchor, (rows ?? []) as LedgerRow[], today);
 
   const { error: updateError } = await supabase
