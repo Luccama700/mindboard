@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { ColorPicker, PALETTE } from "@/app/_components/color-picker";
-import { formatDue, todayISO } from "@/app/_components/date-utils";
+import { formatDue } from "@/app/_components/date-utils";
 import {
   formatMoney,
   formatSignedChange,
@@ -64,6 +64,7 @@ function AccountTypePicker({
 // and never render by default.
 export function AccountRow({
   account,
+  today,
   todayDelta,
   categories,
   categoryById,
@@ -76,6 +77,8 @@ export function AccountRow({
   onCreateCategory,
 }: {
   account: Account;
+  // The user's day — forwarded to BalanceUpdatePanel, which writes it.
+  today: string;
   todayDelta: number;
   categories: SpendingCategory[];
   categoryById: Map<string, SpendingCategory>;
@@ -164,6 +167,7 @@ export function AccountRow({
         <div className="mb-3 glass-panel p-4">
           <BalanceUpdatePanel
             account={account}
+            today={today}
             categories={categories}
             onCreateCategory={onCreateCategory}
             onSubmit={(input) => {
@@ -186,6 +190,7 @@ export function AccountRow({
                   <HistoryRow
                     key={change.id}
                     change={change}
+                    today={today}
                     categories={categories}
                     categoryById={categoryById}
                     currency={account.currency}
@@ -289,12 +294,19 @@ function AccountEditPanel({
 
 export function BalanceUpdatePanel({
   account,
+  today,
   categories,
   onCreateCategory,
   onSubmit,
   onCancel,
 }: {
   account: Account;
+  // The user's day (user_settings.timezone), resolved server-side. This is the
+  // default the date input DISPLAYS and the occurred_at that recordBalanceChange
+  // stores verbatim (normalizeOccurredAt only falls back to the server's day
+  // when the field is absent, which this UI never sends), so a device-clock
+  // value silently files the entry on the wrong day.
+  today: string;
   categories: SpendingCategory[];
   onCreateCategory: (input: {
     name: string;
@@ -310,7 +322,7 @@ export function BalanceUpdatePanel({
 }) {
   const current = Number(account.balance);
   const [amountDraft, setAmountDraft] = useState(String(current));
-  const [occurredAt, setOccurredAt] = useState(todayISO(null));
+  const [occurredAt, setOccurredAt] = useState(today);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   // null = single-category mode; an array = split across multiple categories.
   const [splits, setSplits] = useState<
@@ -567,7 +579,7 @@ export function BalanceUpdatePanel({
           id={`date-${account.id}`}
           type="date"
           value={occurredAt}
-          onChange={(e) => setOccurredAt(e.target.value || todayISO(null))}
+          onChange={(e) => setOccurredAt(e.target.value || today)}
           className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
         />
       </div>
@@ -706,6 +718,7 @@ function CategoryField({
 
 function HistoryRow({
   change,
+  today,
   categories,
   categoryById,
   currency,
@@ -713,6 +726,8 @@ function HistoryRow({
   onDeleteChange,
 }: {
   change: BalanceChange;
+  // The user's day, for the "today" label on a ledger row's date.
+  today: string;
   categories: SpendingCategory[];
   categoryById: Map<string, SpendingCategory>;
   currency: string;
@@ -743,7 +758,7 @@ function HistoryRow({
         />
         <span className="flex-1 min-w-0 truncate text-sm text-fg">{label}</span>
         <span className="text-[10px] tracking-widest uppercase text-muted">
-          {formatDue(change.occurred_at)}
+          {formatDue(change.occurred_at, today)}
         </span>
         <span
           className="text-sm font-bold tabular-nums whitespace-nowrap"

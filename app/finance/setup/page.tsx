@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
+import { todayKey } from "@/app/lib/mcp/config";
 import {
   GoogleCalendarConnectionError,
   listCalendars,
@@ -21,7 +22,14 @@ export default async function FinanceSetupPage() {
 
   if (!user) redirect("/login");
 
-  const [currencyResult, categoriesResult, expensesResult, incomeResult, calendars] =
+  const [
+    currencyResult,
+    categoriesResult,
+    expensesResult,
+    incomeResult,
+    calendars,
+    today,
+  ] =
     await Promise.all([
       supabase
         .from("accounts")
@@ -54,6 +62,9 @@ export default async function FinanceSetupPage() {
         }
         return [];
       }),
+      // The recurrence start dates and pay-period anchors edited below are both
+      // DISPLAYED here and PERSISTED, so they key off the user's day.
+      todayKey(supabase, user.id),
     ]);
 
   return (
@@ -73,6 +84,7 @@ export default async function FinanceSetupPage() {
         initialExpenses={(expensesResult.data ?? []) as RecurringExpense[]}
         initialIncomeSources={(incomeResult.data ?? []) as IncomeSource[]}
         calendars={calendars}
+        today={today}
         currency={currencyResult.data?.[0]?.currency ?? "USD"}
       />
     </main>

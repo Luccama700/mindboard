@@ -25,11 +25,11 @@ describe("date utilities", () => {
     vi.setSystemTime(new Date(2026, 4, 23, 12));
 
     expect(todayISO(null)).toBe("2026-05-23");
-    expect(formatDue("2026-05-23")).toBe("today");
-    expect(formatDue("2026-05-25")).toBe("May 25");
-    expect(daysFromToday("2026-05-22")).toBe(-1);
-    expect(daysFromToday("2026-05-23")).toBe(0);
-    expect(daysFromToday("2026-05-30")).toBe(7);
+    expect(formatDue("2026-05-23", "2026-05-23")).toBe("today");
+    expect(formatDue("2026-05-25", "2026-05-23")).toBe("May 25");
+    expect(daysFromToday("2026-05-22", "2026-05-23")).toBe(-1);
+    expect(daysFromToday("2026-05-23", "2026-05-23")).toBe(0);
+    expect(daysFromToday("2026-05-30", "2026-05-23")).toBe(7);
   });
 
   test("formats calendar labels consistently", () => {
@@ -74,7 +74,7 @@ describe("date utilities", () => {
   test("formatDue formats a past (overdue) date like any other non-today date", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 23, 12));
-    expect(formatDue("2026-05-20")).toBe("May 20");
+    expect(formatDue("2026-05-20", "2026-05-23")).toBe("May 20");
   });
 
   describe("formatRelativeToNow", () => {

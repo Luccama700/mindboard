@@ -481,6 +481,7 @@ export function FinanceClient({
             <AccountRow
               key={account.id}
               account={account}
+              today={today}
               todayDelta={todayDeltaByAccount.get(account.id) ?? 0}
               categories={categories}
               categoryById={categoryById}

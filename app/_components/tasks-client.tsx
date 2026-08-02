@@ -9,7 +9,6 @@ import {
 } from "@/app/actions/tasks";
 import { autoSortInbox } from "@/app/actions/auto-sort";
 import { subscribeCapture } from "./capture-bus";
-import { todayISO } from "./date-utils";
 import { TaskRow, type GroupOption } from "./task-row";
 import type { Task } from "./types";
 
@@ -52,10 +51,15 @@ function matchesFilter(groupId: string | null, filter: TaskFilter): boolean {
 
 export function TasksClient({
   initial,
+  today,
   filter,
   groups,
 }: {
   initial: Task[];
+  // The user's day (user_settings.timezone), resolved by the page. Rows write
+  // tasks.due_date from their date chips, so this must be the day the server
+  // classifies against.
+  today: string;
   filter: TaskFilter;
   groups: GroupOption[];
 }) {
@@ -195,7 +199,7 @@ export function TasksClient({
     });
   }
 
-  const today = todayISO(null);
+  // `today` arrives as a prop — see the Dock's.
   const active = tasks.filter(
     (t) => t.status !== "done" && t.status !== "missed",
   );
@@ -235,6 +239,7 @@ export function TasksClient({
         >
           <TaskRow
             task={t}
+            today={today}
             groups={groups}
             onToggle={onToggle}
             onDelete={onDelete}
@@ -265,6 +270,7 @@ export function TasksClient({
             >
               <TaskRow
                 task={t}
+                today={today}
                 groups={groups}
                 onToggle={onToggle}
                 onDelete={onDelete}

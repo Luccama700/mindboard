@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { pushTaskToCalendar, setTaskAiState } from "@/app/actions/tasks";
-import { formatDue, todayISO } from "./date-utils";
+import { formatDue } from "./date-utils";
 import type { Task, TaskWithGroup } from "./types";
 
 // Overnight-agent badge copy per lifecycle state (docs/overnight-agent-plan.md).
@@ -46,6 +46,7 @@ type UpdatePatch = {
 
 export function TaskRow({
   task,
+  today,
   groups,
   onToggle,
   onDelete,
@@ -58,6 +59,10 @@ export function TaskRow({
   hideNotesInPanel = false,
 }: {
   task: Task | TaskWithGroup;
+  // The user's day. Drives the due-date chip's active state AND the value the
+  // chip WRITES through updateTask into tasks.due_date, so it must be the day
+  // the server classifies against — never the device clock.
+  today: string;
   groups: GroupOption[];
   onToggle: (t: Task) => void;
   onDelete: (id: string) => void;
@@ -170,7 +175,7 @@ export function TaskRow({
               )}
               {showDate && (
                 <span className={isOverdue ? "text-danger" : "text-muted"}>
-                  due {formatDue(task.due_date!)}
+                  due {formatDue(task.due_date!, today)}
                 </span>
               )}
               {(hasGroupInfo || showDate) && hasNotes && (
@@ -196,6 +201,7 @@ export function TaskRow({
       {open && (
         <EditPanel
           task={task}
+          today={today}
           groups={groups}
           onDelete={onDelete}
           onUpdate={onUpdate}
@@ -209,6 +215,7 @@ export function TaskRow({
 
 function EditPanel({
   task,
+  today,
   groups,
   onDelete,
   onUpdate,
@@ -216,6 +223,7 @@ function EditPanel({
   hideNotes = false,
 }: {
   task: Task | TaskWithGroup;
+  today: string;
   groups: GroupOption[];
   onDelete: (id: string) => void;
   onUpdate: (id: string, patch: UpdatePatch) => void;
@@ -257,7 +265,6 @@ function EditPanel({
     });
   }
 
-  const today = todayISO(null);
   const isToday = task.due_date === today;
   const isCustomDate = task.due_date !== null && !isToday;
 
@@ -336,7 +343,7 @@ function EditPanel({
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
           }`}
         >
-          {isCustomDate ? `✓ ${formatDue(task.due_date!)}` : "+ date"}
+          {isCustomDate ? `✓ ${formatDue(task.due_date!, today)}` : "+ date"}
         </button>
 
         <input

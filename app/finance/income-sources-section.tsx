@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { ColorPicker, PALETTE } from "@/app/_components/color-picker";
-import { formatDue, todayISO } from "@/app/_components/date-utils";
+import { formatDue } from "@/app/_components/date-utils";
 import { addDaysKey } from "@/app/_components/finance-projection";
 import { formatMoney } from "@/app/_components/money";
 import type {
@@ -58,21 +58,26 @@ type PaySchedule = {
 
 const PAY_FREQUENCIES: PayFrequency[] = ["weekly", "biweekly", "monthly"];
 
-function defaultSchedule(source?: IncomeSource): PaySchedule {
+// `today` is the user's day, threaded from the page: these defaults are shown
+// in date inputs AND persisted as anchor_payday / period_start / period_end, so
+// the device clock would silently anchor a pay cycle to the wrong day.
+function defaultSchedule(today: string, source?: IncomeSource): PaySchedule {
   return {
     payFrequency: source?.pay_frequency ?? null,
-    anchorPayday: source?.anchor_payday ?? todayISO(null),
-    periodStart: source?.period_start ?? addDaysKey(todayISO(null), -13),
-    periodEnd: source?.period_end ?? addDaysKey(todayISO(null), -1),
+    anchorPayday: source?.anchor_payday ?? today,
+    periodStart: source?.period_start ?? addDaysKey(today, -13),
+    periodEnd: source?.period_end ?? addDaysKey(today, -1),
   };
 }
 
 // Income pay schedules are validated server-side as a unit, so the picker emits
 // the whole schedule on every change rather than partial patches.
 function PaySchedulePicker({
+  today,
   value,
   onChange,
 }: {
+  today: string;
   value: PaySchedule;
   onChange: (next: PaySchedule) => void;
 }) {
@@ -121,7 +126,7 @@ function PaySchedulePicker({
               type="date"
               value={value.anchorPayday}
               onChange={(e) =>
-                onChange({ ...value, anchorPayday: e.target.value || todayISO(null) })
+                onChange({ ...value, anchorPayday: e.target.value || today })
               }
               className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
             />
@@ -180,6 +185,7 @@ function scheduleToPatch(next: PaySchedule): Partial<IncomeSource> {
 }
 
 export function IncomeManager({
+  today,
   incomeSources,
   calendars,
   currency,
@@ -187,6 +193,8 @@ export function IncomeManager({
   onUpdate,
   onArchive,
 }: {
+  // The user's day — see defaultSchedule.
+  today: string;
   incomeSources: IncomeSource[];
   calendars: CalendarListEntry[];
   currency: string;
@@ -220,6 +228,7 @@ export function IncomeManager({
       <ul className="space-y-2">
         {incomeSources.map((source) => (
           <IncomeRow
+            today={today}
             key={source.id}
             source={source}
             calendars={calendars}
@@ -239,6 +248,7 @@ export function IncomeManager({
         </button>
       ) : (
         <IncomeForm
+          today={today}
           calendars={calendars}
           onCreate={onCreate}
           onClose={() => setFormOpen(false)}
@@ -249,10 +259,12 @@ export function IncomeManager({
 }
 
 function IncomeForm({
+  today,
   calendars,
   onCreate,
   onClose,
 }: {
+  today: string;
   calendars: CalendarListEntry[];
   onCreate: (input: {
     name: string;
@@ -276,7 +288,7 @@ function IncomeForm({
   const [fixedDay, setFixedDay] = useState("1");
   const [calendarId, setCalendarId] = useState<string | null>(null);
   const [color, setColor] = useState<string>(PALETTE[1]);
-  const [schedule, setSchedule] = useState<PaySchedule>(defaultSchedule());
+  const [schedule, setSchedule] = useState<PaySchedule>(defaultSchedule(today));
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -422,7 +434,7 @@ function IncomeForm({
             onChange={setCalendarId}
           />
 
-          <PaySchedulePicker value={schedule} onChange={setSchedule} />
+          <PaySchedulePicker today={today} value={schedule} onChange={setSchedule} />
         </>
       )}
 
@@ -451,12 +463,14 @@ function IncomeForm({
 }
 
 function IncomeRow({
+  today,
   source,
   calendars,
   currency,
   onUpdate,
   onArchive,
 }: {
+  today: string;
   source: IncomeSource;
   calendars: CalendarListEntry[];
   currency: string;
@@ -577,7 +591,7 @@ function IncomeRow({
                       ? " · linked"
                       : " · no calendar"}
                   {source.pay_frequency && source.anchor_payday
-                    ? ` · ${source.pay_frequency} · pays ${formatDue(source.anchor_payday)}`
+                    ? ` · ${source.pay_frequency} · pays ${formatDue(source.anchor_payday, today)}`
                     : " · each shift"}
                 </>
               )}
@@ -683,7 +697,8 @@ function IncomeRow({
               />
 
               <PaySchedulePicker
-                value={defaultSchedule(source)}
+                today={today}
+                value={defaultSchedule(today, source)}
                 onChange={(next) => onUpdate(source.id, scheduleToPatch(next))}
               />
             </>

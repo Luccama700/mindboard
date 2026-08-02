@@ -45,11 +45,12 @@ export function formatClock12(date: Date, timeZone?: string | null) {
     .replace(" ", "");
 }
 
-// Display-only, and only ever rendered from client components, so the process
-// clock is the browser's — hence the deliberate `null`. Do not call from a
-// Server Component or action without giving it the user's zone first.
-export function formatDue(iso: string) {
-  if (iso === todayISO(null)) return "today";
+// `today` is required for the same reason todayISO's zone is: this label sits
+// beside — and on the task chips, ON — controls that WRITE due_date, so the day
+// it calls "today" has to be the day the server will classify against. Callers
+// take it as a prop from their page; none of them may re-derive it.
+export function formatDue(iso: string, today: string) {
+  if (iso === today) return "today";
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString("en-US", {
     month: "short",
@@ -113,10 +114,10 @@ export function formatRelativeToNow(iso: string): string {
   return `in ${Math.round(minutes / (60 * 24))}d`;
 }
 
-// Negative = overdue, 0 = today, positive = future. Browser-side helper: the
-// `null` picks the process clock deliberately (see formatDue).
-export function daysFromToday(iso: string): number {
-  const today = new Date(todayISO(null) + "T00:00:00");
+// Negative = overdue, 0 = today, positive = future. `today` is the user's day,
+// passed in — see formatDue.
+export function daysFromToday(iso: string, todayKey: string): number {
+  const today = new Date(todayKey + "T00:00:00");
   const date = new Date(iso + "T00:00:00");
   const diffMs = date.getTime() - today.getTime();
   return Math.round(diffMs / (1000 * 60 * 60 * 24));
