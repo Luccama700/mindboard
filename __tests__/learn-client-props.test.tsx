@@ -27,6 +27,7 @@ vi.mock("@/app/actions/learn", () => ({
 }));
 vi.mock("@/utils/supabase/client", () => ({ createClient: vi.fn() }));
 
+import { generateEpisode } from "@/app/actions/learn";
 import { LearnClient } from "@/app/learn/learn-client";
 
 const COURSE: Course = {
@@ -151,6 +152,21 @@ describe("LearnClient server-data sync", () => {
     expect(screen.getByText("phil 220a")).toBeTruthy();
     expect(screen.getByText(/in vault/)).toBeTruthy();
     expect(screen.queryByText(/converting…/)).toBeNull();
+  });
+
+  test("a rejected generate surfaces an error instead of silently re-enabling", async () => {
+    // The action rejects rather than returning when the runtime is killed at
+    // the /learn maxDuration ceiling. Without a catch the button just quietly
+    // re-enables and the user pays for a second render.
+    vi.mocked(generateEpisode).mockRejectedValueOnce(new Error("504"));
+    renderLearn({ episodes: [] });
+
+    fireEvent.click(screen.getByText("phil 220"));
+    fireEvent.click(screen.getByText("♫ generate"));
+
+    expect(
+      await screen.findByText(/check the episode below before generating again/),
+    ).toBeTruthy();
   });
 
   test("identical props do not reset the mirrors (no render loop)", () => {

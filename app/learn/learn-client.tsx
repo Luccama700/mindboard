@@ -621,6 +621,16 @@ function EpisodesSection({
         return;
       }
       onRefresh();
+    } catch {
+      // A rejected action means the request died rather than returned — most
+      // often the /learn maxDuration ceiling killing the render, in which case
+      // nothing server-side ran and the row is still 'rendering'. Without this
+      // the button just quietly re-enables and the user generates again, paying
+      // twice. Refresh so the stuck row is at least visible.
+      onError(
+        "the render didn't come back — check the episode below before generating again",
+      );
+      onRefresh();
     } finally {
       setGenerating(false);
     }
