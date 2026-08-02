@@ -11,34 +11,50 @@ function buildPrompt(raw: string): string {
   return `${raw.trim()} — a single centered icon, flat minimal style, simple solid background, no text or words.`;
 }
 
+// Reaching an image API and reading its body are both fallible — an offline
+// network, or a gateway answering with an HTML error page. Everything else in
+// this file reports through the typed { error } contract, so these must too:
+// a throw escapes the server action and the client's error branch never runs.
+async function readErrorBody(res: Response, provider: string): Promise<string> {
+  const detail = await res.text().catch(() => "");
+  return detail
+    ? `${provider} ${res.status}: ${detail.slice(0, 300)}`
+    : `${provider} ${res.status}`;
+}
+
 async function generateWithOpenAI(
   apiKey: string,
   model: string,
   prompt: string,
 ): Promise<{ b64: string } | { error: string }> {
-  const res = await fetch("https://api.openai.com/v1/images/generations", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      prompt,
-      size: "1024x1024",
-      quality: "low",
-      n: 1,
-    }),
-  });
-
-  if (!res.ok) {
-    const detail = await res.text();
-    return { error: `openai ${res.status}: ${detail.slice(0, 300)}` };
+  let res: Response;
+  try {
+    res = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        prompt,
+        size: "1024x1024",
+        quality: "low",
+        n: 1,
+      }),
+    });
+  } catch {
+    return { error: "could not reach the openai image api" };
   }
 
-  const json = (await res.json()) as {
-    data?: { b64_json?: string }[];
-  };
+  if (!res.ok) return { error: await readErrorBody(res, "openai") };
+
+  let json: { data?: { b64_json?: string }[] };
+  try {
+    json = (await res.json()) as { data?: { b64_json?: string }[] };
+  } catch {
+    return { error: "openai returned an unreadable response" };
+  }
   const b64 = json.data?.[0]?.b64_json;
   if (!b64) return { error: "openai returned no image" };
   return { b64 };
@@ -49,29 +65,31 @@ async function generateWithGoogle(
   model: string,
   prompt: string,
 ): Promise<{ b64: string } | { error: string }> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-      model,
-    )}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": apiKey,
-        "Content-Type": "application/json",
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        model,
+      )}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "x-goog-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+        }),
       },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    const detail = await res.text();
-    return { error: `google ${res.status}: ${detail.slice(0, 300)}` };
+    );
+  } catch {
+    return { error: "could not reach the google image api" };
   }
 
-  const json = (await res.json()) as {
+  if (!res.ok) return { error: await readErrorBody(res, "google") };
+
+  type GoogleImagePayload = {
     candidates?: {
       content?: {
         parts?: {
@@ -81,6 +99,12 @@ async function generateWithGoogle(
       };
     }[];
   };
+  let json: GoogleImagePayload;
+  try {
+    json = (await res.json()) as GoogleImagePayload;
+  } catch {
+    return { error: "google returned an unreadable response" };
+  }
 
   const parts = json.candidates?.[0]?.content?.parts ?? [];
   for (const part of parts) {
@@ -129,9 +153,16 @@ export async function generateItemIcon(input: {
   const bytes = Buffer.from(generated.b64, "base64");
   const path = `${user.id}/${input.id}/${crypto.randomUUID()}.png`;
 
-  const { error: uploadError } = await supabase.storage
-    .from(BUCKET)
-    .upload(path, bytes, { contentType: "image/png", upsert: false });
+  // supabase-js reports StorageErrors through `error`, but rethrows anything it
+  // does not recognise — a failed fetch included. Same contract, same guard.
+  let uploadError: { message: string } | null;
+  try {
+    ({ error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(path, bytes, { contentType: "image/png", upsert: false }));
+  } catch {
+    return { error: "could not upload the generated icon" };
+  }
 
   if (uploadError) return { error: uploadError.message };
 
