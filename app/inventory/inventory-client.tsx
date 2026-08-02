@@ -70,6 +70,7 @@ import {
   type ShoppingEntry,
 } from "@/app/_components/shopping-list";
 import {
+  hasRefCandidate,
   resolveItemRef,
   resolveItemRefIncludingArchived,
   type ResolvableItem,
@@ -290,6 +291,7 @@ export function InventoryClient({
   // optimistic value on screen until the transition settles and then snaps back
   // with no explanation, so the user acts on a number the DB never accepted.
   const [actionError, setActionError] = useState<string | null>(null);
+  const failureCount = useRef(0);
 
   const [selectMode, setSelectMode] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -479,9 +481,16 @@ export function InventoryClient({
     label: string,
     call: Promise<T>,
   ): Promise<T> {
+    // Transitions are not serialized — each tap starts its own — so a success
+    // already in flight must not clear a failure that landed while it waited.
+    const seenFailures = failureCount.current;
     const result = await call;
-    if (result?.error) setActionError(`${label} — ${result.error}`);
-    else setActionError(null);
+    if (result?.error) {
+      failureCount.current += 1;
+      setActionError(`${label} — ${result.error}`);
+    } else if (failureCount.current === seenFailures) {
+      setActionError(null);
+    }
     return result;
   }
 
@@ -537,22 +546,43 @@ export function InventoryClient({
     });
   }
 
-  // A step travels as a delta, never as an absolute quantity computed here: the
+  // Every +/− on the page — shelf rows, grid tiles, the detail panel's stepper,
+  // "+2 milk" in the omnibox — lands here. The delta is what travels; the
   // server applies it to the live row (compare-and-swap), so a stale tab or a
-  // concurrent agent write can't be silently overwritten by this view's
-  // arithmetic. The patch is only the optimistic paint.
-  function onAdjustQuantity(id: string, delta: number) {
+  // concurrent agent write can't be overwritten by this view's arithmetic. The
+  // quantity passed along is optimistic paint only, and recounts do NOT come
+  // through here.
+  function onStepQuantity(id: string, delta: number) {
     const current = items.find((it) => it.id === id);
     if (!current) return;
-    const before = Number(current.quantity);
-    const next = Math.max(0, Math.round((before + delta) * 1000) / 1000);
-    if (next === before) return;
+    // No "nothing changed, skip the write" guard: that call would be made from
+    // this view's possibly-stale number. A − on a shelf showing 0 still means
+    // "one less than whatever is really there".
+    const next = Math.max(
+      0,
+      Math.round((Number(current.quantity) + delta) * 1000) / 1000,
+    );
     onUpdateItem(id, { quantity: next }, delta);
   }
 
   // The one write path for an item row. `delta` marks a relative quantity
   // change (a stepper, "+2 milk") and is applied server-side; everything else,
   // including a recount, is an absolute patch.
+  //
+  // The step path shares this transition deliberately: pulling it into its own
+  // startTransition — or routing both through a discriminated-union helper —
+  // makes the React Compiler give up on this whole component
+  // (react-hooks/preserve-manual-memoization, an error here; both shapes were
+  // tried and reproduce it). The overload signatures are what keep the extra
+  // parameter from being a footgun: with a delta the patch may carry the
+  // optimistic quantity and nothing else, so no field can ride along and be
+  // silently dropped.
+  function onUpdateItem(id: string, patch: Partial<InventoryItem>): void;
+  function onUpdateItem(
+    id: string,
+    patch: { quantity: number },
+    delta: number,
+  ): void;
   function onUpdateItem(
     id: string,
     patch: Partial<InventoryItem>,
@@ -912,9 +942,13 @@ export function InventoryClient({
               ? { op: "remove", item: it.id, amount: seg.value }
               : { op: "set", item: it.id, quantity: seg.value },
         );
-      } else if (seg.sign === null && found.error.startsWith("no item matching")) {
-        // A bare recount of something we don't track yet = a new item, which
-        // deserves a receipt (typo guard) instead of a silent create.
+      } else if (seg.sign === null && !hasRefCandidate(seg.ref, activePool)) {
+        // Nothing on the shelf matches, so a bare recount is naming a new item
+        // — which deserves a receipt (typo guard) instead of a silent create.
+        // This also covers an archive that matched several ("rice" against a
+        // hidden "brown rice" + "white rice"): a candidate list of rows the
+        // collapsed "not tracking" section keeps invisible, remediable only by
+        // typing a uuid, is worse than proposing the create the user meant.
         needsReceipt = true;
         ops.push({ op: "create", name: seg.ref, quantity: seg.value });
       } else {
@@ -932,14 +966,13 @@ export function InventoryClient({
     // exact edit, apply it instantly (same trust level as tapping the
     // steppers). "+2"/"-2" send their delta; only a recount overwrites.
     for (const [id, acc] of pending) {
-      const next = running.get(id) ?? 0;
       const current = items.find((it) => it.id === id);
       if (!current) continue;
       if (acc.absolute !== null) {
         if (Number(current.quantity) === acc.absolute) continue;
         onUpdateItem(id, { quantity: acc.absolute });
       } else if (acc.delta !== 0) {
-        onUpdateItem(id, { quantity: next }, acc.delta);
+        onStepQuantity(id, acc.delta);
       }
     }
     setQuery("");
@@ -1114,7 +1147,7 @@ export function InventoryClient({
                 }
                 selected={it.id === selectedId}
                 onSelect={onSelect}
-                onAdjust={onAdjustQuantity}
+                onAdjust={onStepQuantity}
               />
             ))}
           </div>
@@ -1154,7 +1187,7 @@ export function InventoryClient({
                         checked={checkedIds.has(it.id)}
                         onToggleCheck={toggleChecked}
                         onSelect={onSelect}
-                        onAdjust={onAdjustQuantity}
+                        onAdjust={onStepQuantity}
                         onArchive={(id) => onSetArchived(id, true)}
                       />
                     );
@@ -1351,6 +1384,7 @@ export function InventoryClient({
               (u) => u.inventory_item_id === selectedItem.id,
             )}
             onUpdate={onUpdateItem}
+            onStep={onStepQuantity}
             onArchive={(id) => onSetArchived(id, true)}
             onDelete={onDeleteItem}
             onCreateUsage={onCreateUsage}
@@ -1896,12 +1930,21 @@ function ItemTile({
   );
 }
 
+// Two different writes wear one control. Typing a number is a RECOUNT and
+// commits absolutely (onCommit). The −/+ buttons are a STEP: when the field is
+// bound to a stored row, onStep sends the delta so the server applies it to the
+// live quantity — without it those buttons read the on-screen number and write
+// back an absolute, which is the stale overwrite this path exists to prevent.
+// onStep is omitted only where there is no row yet (the add form), where the
+// local draft is the only truth there is.
 function QuantityField({
   value,
   onCommit,
+  onStep,
 }: {
   value: number;
   onCommit: (n: number) => void;
+  onStep?: (delta: number) => void;
 }) {
   const [draft, setDraft] = useState(String(value));
   const [prevValue, setPrevValue] = useState(value);
@@ -1930,6 +1973,13 @@ function QuantityField({
     const parsed = trimmed === "" ? NaN : Number(trimmed);
     const base = Number.isFinite(parsed) ? parsed : value;
     const next = Math.max(0, Math.round((base + delta) * 1000) / 1000);
+    if (onStep) {
+      // Paint the local guess, but send the delta — the server decides the
+      // number from the row, not from `base`.
+      setDraft(String(next));
+      onStep(delta);
+      return;
+    }
     onCommit(next);
   }
 
@@ -2100,6 +2150,7 @@ function ItemDetail({
   recentUnits,
   usages,
   onUpdate,
+  onStep,
   onArchive,
   onDelete,
   onCreateUsage,
@@ -2112,6 +2163,7 @@ function ItemDetail({
   recentUnits: string[];
   usages: InventoryUsage[];
   onUpdate: (id: string, patch: Partial<InventoryItem>) => void;
+  onStep: (id: string, delta: number) => void;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
   onCreateUsage: (
@@ -2296,6 +2348,7 @@ function ItemDetail({
         <QuantityField
           value={Number(item.quantity)}
           onCommit={(n) => onUpdate(item.id, { quantity: n })}
+          onStep={(delta) => onStep(item.id, delta)}
         />
       </div>
 

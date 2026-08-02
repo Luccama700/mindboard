@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  QUANTITY_ARCHIVED_ERROR,
   QUANTITY_CONTENTION_ERROR,
   QUANTITY_MISSING_ERROR,
   adjustQuantity,
@@ -44,9 +45,12 @@ function fakeStore(
   };
 }
 
-// The pre-fix write path, kept here as the regression the CAS exists to
-// prevent: read, do the arithmetic on the client's snapshot, write the absolute
-// result unconditionally.
+// NOT the deleted code — a three-line model of its shape (read, do the
+// arithmetic on the caller's snapshot, write the absolute result blind), so the
+// contrast below is legible rather than asserted. The two sides also take their
+// interference at slightly different points: here it is inline, and on the CAS
+// side it fires inside the store's read. What the pair demonstrates is the
+// shape of the difference, not a controlled A/B.
 async function absoluteWrite(
   row: FakeRow,
   delta: number,
@@ -86,7 +90,7 @@ describe("adjustQuantity", () => {
     expect(row.quantity).toBe(6);
   });
 
-  it("does not lose a concurrent write the way an absolute write does", async () => {
+  it("keeps a concurrent write that a blind absolute write would erase", async () => {
     // Another surface consumes 3 in the read→write window.
     const consumeThree = (row: FakeRow) => () => {
       row.quantity = row.quantity - 3;
@@ -190,7 +194,11 @@ describe("adjustQuantity", () => {
 
 type StoredRow = {
   user_id: string;
-  quantity: number;
+  // The DB *text* form of a `numeric`, so the stub can model Postgres value
+  // equality ("5.000" = 5) instead of JS float identity — the assumption the
+  // CAS predicate actually rests on.
+  quantity: string;
+  archived: boolean;
   last_restocked_at: string | null;
 };
 
@@ -201,9 +209,25 @@ type RecordedCall = {
   updates?: Record<string, unknown>;
 };
 
+function normalizeNumeric(raw: string): string {
+  const negative = raw.startsWith("-");
+  const body = negative ? raw.slice(1) : raw;
+  const [intRaw = "0", fracRaw = ""] = body.split(".");
+  const int = intRaw.replace(/^0+(?=\d)/, "") || "0";
+  const frac = fracRaw.replace(/0+$/, "");
+  const value = frac ? `${int}.${frac}` : int;
+  return value === "0" ? "0" : `${negative ? "-" : ""}${value}`;
+}
+
+// PostgREST encodes the eq. operand from a JS number; Postgres then compares it
+// against the column by value.
+function numericEquals(stored: string, operand: unknown): boolean {
+  return normalizeNumeric(stored) === normalizeNumeric(String(operand));
+}
+
 // A postgrest-shaped stub: `.eq()` chains accumulate filters and the terminal
-// call applies them, so a CAS predicate that forgets `quantity` (or `user_id`)
-// shows up as a matched row it should not have matched.
+// call applies them, so a CAS predicate that forgets `quantity`, `user_id`, or
+// `archived` shows up as a matched row it should not have matched.
 function fakeClient(
   rows: Map<string, StoredRow>,
   calls: RecordedCall[],
@@ -214,7 +238,16 @@ function fakeClient(
     if (call.filters.user_id !== undefined && row.user_id !== call.filters.user_id) {
       return false;
     }
-    if (call.filters.quantity !== undefined && row.quantity !== call.filters.quantity) {
+    if (
+      call.filters.archived !== undefined &&
+      row.archived !== call.filters.archived
+    ) {
+      return false;
+    }
+    if (
+      call.filters.quantity !== undefined &&
+      !numericEquals(row.quantity, call.filters.quantity)
+    ) {
       return false;
     }
     return true;
@@ -234,7 +267,14 @@ function fakeClient(
               calls.push(call);
               const row = rows.get(String(call.filters.id));
               if (!matches(call, row)) return { data: null, error: null };
-              return { data: { quantity: row!.quantity }, error: null };
+              return {
+                // PostgREST hands `numeric` back as a JSON number.
+                data: {
+                  quantity: Number(row!.quantity),
+                  archived: row!.archived,
+                },
+                error: null,
+              };
             },
           };
           return builder;
@@ -254,7 +294,9 @@ function fakeClient(
               if (!matches(call, row)) {
                 return Promise.resolve({ data: [], error: null });
               }
-              Object.assign(row!, updates);
+              const { quantity, ...rest } = updates;
+              Object.assign(row!, rest);
+              if (quantity !== undefined) row!.quantity = String(quantity);
               return Promise.resolve({ data: [{ id }], error: null });
             },
           };
@@ -265,13 +307,21 @@ function fakeClient(
   } as unknown as SupabaseClient;
 }
 
+function row(quantity: string, over: Partial<StoredRow> = {}): StoredRow {
+  return {
+    user_id: "u-1",
+    quantity,
+    archived: false,
+    last_restocked_at: null,
+    ...over,
+  };
+}
+
 describe("itemQuantityStore", () => {
   const NOW = "2026-08-01T12:00:00.000Z";
 
-  it("swaps on id + user_id + the expected quantity, and stamps a restock", async () => {
-    const rows = new Map<string, StoredRow>([
-      ["i-rice", { user_id: "u-1", quantity: 2, last_restocked_at: null }],
-    ]);
+  it("swaps on id + user_id + archived + the expected quantity, and stamps a restock", async () => {
+    const rows = new Map([["i-rice", row("2")]]);
     const calls: RecordedCall[] = [];
     const store = itemQuantityStore(fakeClient(rows, calls), "i-rice", "u-1", NOW);
 
@@ -279,28 +329,30 @@ describe("itemQuantityStore", () => {
     expect(outcome).toMatchObject({ ok: true, before: 2, after: 3 });
     expect(rows.get("i-rice")).toEqual({
       user_id: "u-1",
-      quantity: 3,
+      quantity: "3",
+      archived: false,
       last_restocked_at: NOW,
     });
 
     const update = calls.find((c) => c.op === "update");
-    expect(update?.filters).toEqual({ id: "i-rice", user_id: "u-1", quantity: 2 });
+    expect(update?.filters).toEqual({
+      id: "i-rice",
+      user_id: "u-1",
+      archived: false,
+      quantity: 2,
+    });
     expect(calls.every((c) => c.filters.user_id === "u-1")).toBe(true);
   });
 
   it("a decrease does not stamp last_restocked_at", async () => {
-    const rows = new Map<string, StoredRow>([
-      ["i-rice", { user_id: "u-1", quantity: 2, last_restocked_at: null }],
-    ]);
+    const rows = new Map([["i-rice", row("2")]]);
     const store = itemQuantityStore(fakeClient(rows, []), "i-rice", "u-1", NOW);
     await adjustQuantity(store, -1);
     expect(rows.get("i-rice")?.last_restocked_at).toBeNull();
   });
 
   it("retries against the real row when another writer lands first", async () => {
-    const rows = new Map<string, StoredRow>([
-      ["i-milk", { user_id: "u-1", quantity: 6, last_restocked_at: null }],
-    ]);
+    const rows = new Map([["i-milk", row("6")]]);
     const calls: RecordedCall[] = [];
     let raced = false;
     const client = fakeClient(rows, calls, {
@@ -308,30 +360,65 @@ describe("itemQuantityStore", () => {
         if (raced) return;
         raced = true;
         // Another surface drinks 2 between our read and our update.
-        rows.get("i-milk")!.quantity = 4;
+        rows.get("i-milk")!.quantity = "4";
       },
     });
     const store = itemQuantityStore(client, "i-milk", "u-1", NOW);
 
     const outcome = await adjustQuantity(store, -1);
     expect(outcome).toMatchObject({ ok: true, before: 4, after: 3 });
-    expect(rows.get("i-milk")?.quantity).toBe(3);
+    expect(rows.get("i-milk")?.quantity).toBe("3");
     expect(calls.filter((c) => c.op === "update")).toHaveLength(2);
   });
 
+  // The predicate compares a JS number against a Postgres `numeric`. These are
+  // the encodings that actually occur.
+  it("matches a stored numeric regardless of its scale", async () => {
+    const rows = new Map([["i-flour", row("5.000")]]);
+    const calls: RecordedCall[] = [];
+    const store = itemQuantityStore(fakeClient(rows, calls), "i-flour", "u-1", NOW);
+
+    const outcome = await adjustQuantity(store, 1);
+    expect(outcome).toMatchObject({ ok: true, before: 5, after: 6, attempts: 1 });
+    expect(calls.find((c) => c.op === "update")?.filters.quantity).toBe(5);
+  });
+
+  it("fractional quantities survive the round trip without float drift", async () => {
+    const rows = new Map([["i-oil", row("1.100")]]);
+    const store = itemQuantityStore(fakeClient(rows, []), "i-oil", "u-1", NOW);
+
+    expect(await adjustQuantity(store, 0.2)).toMatchObject({
+      ok: true,
+      before: 1.1,
+      after: 1.3,
+      attempts: 1,
+    });
+    expect(rows.get("i-oil")?.quantity).toBe("1.3");
+  });
+
+  // Documents the one known way to wedge the CAS: a numeric written out of band
+  // with more precision than a double holds can never round-trip, so the
+  // predicate can never match. It fails loudly and changes nothing.
+  it("a quantity too precise for a double wedges into a bounded failure, not a bad write", async () => {
+    const exact = "1.00000000000000000001";
+    const rows = new Map([["i-odd", row(exact)]]);
+    const store = itemQuantityStore(fakeClient(rows, []), "i-odd", "u-1", NOW);
+
+    const outcome = await adjustQuantity(store, 1, { maxAttempts: 3 });
+    expect(outcome).toEqual({
+      ok: false,
+      error: QUANTITY_CONTENTION_ERROR,
+      attempts: 3,
+    });
+    expect(rows.get("i-odd")?.quantity).toBe(exact);
+  });
+
   it("another tenant's row is invisible, not writable", async () => {
-    const rows = new Map<string, StoredRow>([
-      ["i-theirs", { user_id: "u-2", quantity: 5, last_restocked_at: null }],
-    ]);
-    const store = itemQuantityStore(
-      fakeClient(rows, []),
-      "i-theirs",
-      "u-1",
-      NOW,
-    );
+    const rows = new Map([["i-theirs", row("5", { user_id: "u-2" })]]);
+    const store = itemQuantityStore(fakeClient(rows, []), "i-theirs", "u-1", NOW);
     const outcome = await adjustQuantity(store, 3);
     expect(outcome).toMatchObject({ ok: false, error: QUANTITY_MISSING_ERROR });
-    expect(rows.get("i-theirs")?.quantity).toBe(5);
+    expect(rows.get("i-theirs")?.quantity).toBe("5");
   });
 
   it("a deleted item fails rather than silently doing nothing", async () => {
@@ -345,5 +432,34 @@ describe("itemQuantityStore", () => {
       ok: false,
       error: QUANTITY_MISSING_ERROR,
     });
+  });
+
+  it("refuses an archived row, the same answer the agent path gives", async () => {
+    const rows = new Map([["i-sun", row("2", { archived: true })]]);
+    const store = itemQuantityStore(fakeClient(rows, []), "i-sun", "u-1", NOW);
+    expect(await adjustQuantity(store, 1)).toMatchObject({
+      ok: false,
+      error: QUANTITY_ARCHIVED_ERROR,
+    });
+    expect(rows.get("i-sun")?.quantity).toBe("2");
+  });
+
+  it("an archive landing between the read and the swap is caught on the retry", async () => {
+    const rows = new Map([["i-sun", row("2")]]);
+    let archived = false;
+    const client = fakeClient(rows, [], {
+      beforeUpdate: () => {
+        if (archived) return;
+        archived = true;
+        rows.get("i-sun")!.archived = true;
+      },
+    });
+    const store = itemQuantityStore(client, "i-sun", "u-1", NOW);
+    expect(await adjustQuantity(store, 1)).toMatchObject({
+      ok: false,
+      error: QUANTITY_ARCHIVED_ERROR,
+      attempts: 2,
+    });
+    expect(rows.get("i-sun")?.quantity).toBe("2");
   });
 });

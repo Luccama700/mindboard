@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-08-02-inventory-counts-hold",
+    date: "2026-08-02",
+    title: "your counts stop fighting each other",
+    items: [
+      "the + and − on the shelf now send the change, not the total. so if your phone adds 3 eggs while this tab still shows the old number, both land — no more one screen quietly undoing the other.",
+      "if a change doesn't save, the shelf says so instead of showing you a number that never made it. tap the message to dismiss it.",
+      "recounting something you stopped tracking (\"12 rice\") brings that item back with its history instead of starting a second one beside it. you'll see \"restored\" on the receipt before it applies.",
+      "the toolbar, the select bar, and the stop tracking / delete buttons are full-size targets now — harder to hit the wrong one with a thumb.",
+    ],
+  },
+  {
     id: "2026-07-31-routines-drag-promote",
     date: "2026-07-31",
     title: "routines you can actually move",

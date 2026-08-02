@@ -21,9 +21,21 @@ export const QUANTITY_CONTENTION_ERROR =
 
 export const QUANTITY_MISSING_ERROR = "item not found";
 
-// Quantities are stored to 3 decimals everywhere (the omnibox, the agent ops,
-// and this helper all round the same way), which is what keeps the CAS
-// predicate comparable against a Postgres `numeric`.
+export const QUANTITY_ARCHIVED_ERROR =
+  "that item is not being tracked — restore it first";
+
+// What makes the CAS predicate safe is not rounding (nothing enforces a scale;
+// `normalizeQuantity` in app/actions/inventory.ts does not round, and a server
+// action is directly callable). It is that `expected` always originates from a
+// read of this same column through this same JSON encoding, so it round-trips
+// by construction, and `numeric` equality is by value — `eq.5` matches a stored
+// `5.000`. Rounding here only keeps the *arithmetic* tidy.
+//
+// The one way to break that: a `numeric` written out of band (SQL editor,
+// migration) with more significant digits than a double can hold. It cannot
+// round-trip, so every CAS on that row fails with QUANTITY_CONTENTION_ERROR
+// forever. Recoverable by typing an absolute quantity, but undiagnosable from
+// the UI — worth knowing before writing quantities by hand.
 export function nextQuantity(current: number, delta: number): number {
   const sum = (Number(current) || 0) + (Number(delta) || 0);
   if (!Number.isFinite(sum)) return 0;
@@ -92,16 +104,18 @@ export function itemQuantityStore(
     async read() {
       const { data, error } = await supabase
         .from("inventory_items")
-        .select("quantity")
+        .select("quantity, archived")
         .eq("id", itemId)
         .eq("user_id", userId)
         .maybeSingle();
       if (error) return { ok: false, error: error.message };
       if (!data) return { ok: false, error: QUANTITY_MISSING_ERROR };
-      return {
-        ok: true,
-        quantity: Number((data as { quantity: number }).quantity) || 0,
-      };
+      const row = data as { quantity: number; archived: boolean };
+      // The MCP adjust op refuses an archived item at propose time; a stale tab
+      // whose shelf still shows a row someone else stopped tracking must get
+      // the same answer rather than quietly writing to it.
+      if (row.archived) return { ok: false, error: QUANTITY_ARCHIVED_ERROR };
+      return { ok: true, quantity: Number(row.quantity) || 0 };
     },
     async swap(expected, next) {
       const updates: Record<string, unknown> = { quantity: next };
@@ -111,9 +125,12 @@ export function itemQuantityStore(
         .update(updates)
         .eq("id", itemId)
         .eq("user_id", userId)
+        .eq("archived", false)
         .eq("quantity", expected)
         .select("id");
       if (error) return { ok: false, error: error.message };
+      // An archive landing between the read and the swap misses here, and the
+      // retry's read turns it into the archived error.
       return { ok: true, swapped: (data ?? []).length > 0 };
     },
   };

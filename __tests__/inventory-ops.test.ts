@@ -144,6 +144,26 @@ describe("resolveItemRefIncludingArchived", () => {
     }
   });
 
+  // Deliberate split of responsibility: the resolver still reports the archive's
+  // candidates, which an agent can act on because it holds ids. The /inventory
+  // omnibox does NOT surface that — it checks hasRefCandidate against the active
+  // shelf and proposes a create instead, because naming two rows the collapsed
+  // "not tracking" section keeps hidden, remediable only by typing a uuid, is
+  // not a usable error for a person.
+  it("an ambiguous archive still reports its candidates to an id-holding caller", () => {
+    const archivedRices: ResolvableItem[] = [
+      { id: "i-brown", name: "Brown rice", quantity: 0, unit: "kg", archived: true },
+      { id: "i-white", name: "White rice", quantity: 0, unit: "kg", archived: true },
+    ];
+    const noRice = active.filter((it) => it.id !== "i-rice");
+    const r = resolveItemRefIncludingArchived("rice", noRice, archivedRices);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("ambiguous");
+    // The client's gate for that same input: nothing active matches, so it
+    // takes the create path rather than showing the list above.
+    expect(hasRefCandidate("rice", noRice)).toBe(false);
+  });
+
   it("a ref matching nothing anywhere still reports a plain miss", () => {
     const r = resolveItemRefIncludingArchived("unobtainium", active, archived);
     expect(r.ok).toBe(false);
