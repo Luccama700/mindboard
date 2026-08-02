@@ -135,6 +135,12 @@ async function writeScript(
   return validateScript(toolUse.input);
 }
 
+type GeminiTtsPayload = {
+  candidates?: {
+    content?: { parts?: { inlineData?: { data?: string } }[] };
+  }[];
+};
+
 async function renderWithGemini(
   apiKey: string,
   lines: ScriptLine[],
@@ -184,19 +190,31 @@ async function renderWithGemini(
     return { ok: false, error: "could not reach the gemini tts api" };
   }
 
+  // Reading the body is itself fallible — a gateway can answer with an HTML
+  // error page (or die mid-stream) under any status. Neither read may throw:
+  // the caller has already marked the episode row non-terminal, so an escaping
+  // error would strand it there forever instead of failing it.
   if (!response.ok) {
-    const detail = await response.text();
+    const detail = await response.text().catch(() => "");
     return {
       ok: false,
-      error: `gemini tts ${response.status}: ${detail.slice(0, 300)}`,
+      error: detail
+        ? `gemini tts ${response.status}: ${detail.slice(0, 300)}`
+        : `gemini tts ${response.status}`,
     };
   }
 
-  const payload = (await response.json()) as {
-    candidates?: {
-      content?: { parts?: { inlineData?: { data?: string } }[] };
-    }[];
-  };
+  let payload: GeminiTtsPayload;
+  try {
+    payload = (await response.json()) as GeminiTtsPayload;
+  } catch {
+    const kind = response.headers.get("content-type") ?? "unknown content type";
+    return {
+      ok: false,
+      error: `gemini tts returned a non-json body (${kind}) — try again`,
+    };
+  }
+
   const base64 = payload.candidates?.[0]?.content?.parts?.find(
     (part) => part.inlineData?.data,
   )?.inlineData?.data;
@@ -216,6 +234,15 @@ export type EpisodeOutcome = {
   duration_sec?: number;
   message: string;
 };
+
+// Once the row exists it is in a non-terminal status ('scripting' → 'rendering'
+// / 'queued'), and only this function can move it out. An escaping throw would
+// leave it stuck there with no UI affordance to fail or retry — and the user
+// re-triggers a paid render — so every unexpected error becomes a real failure.
+function unexpectedFailure(error: unknown): string {
+  const detail = error instanceof Error ? error.message.slice(0, 200) : "";
+  return detail ? `episode generation failed — ${detail}` : "episode generation failed";
+}
 
 export async function generateEpisodeFor(
   supabase: SupabaseClient,
@@ -286,97 +313,101 @@ export async function generateEpisodeFor(
     return { ok: false, error: message };
   };
 
-  const script = await writeScript(anthropicKey, {
-    courseName: course.name,
-    sourceTitles: sources.value.map((s) => s.title),
-    flavor: input.flavor,
-    sourceMarkdown: markdown.value,
-  });
-  if (!script.ok) return fail(script.error);
+  try {
+    const script = await writeScript(anthropicKey, {
+      courseName: course.name,
+      sourceTitles: sources.value.map((s) => s.title),
+      flavor: input.flavor,
+      sourceMarkdown: markdown.value,
+    });
+    if (!script.ok) return fail(script.error);
 
-  // VibeVoice: the script is done on Vercel; the render is a queued job the
-  // home PC pulls through /api/worker. The worker only serves allowlisted
-  // users (owner-controlled env), so gate at enqueue too — a job outside the
-  // allowlist would sit queued forever.
-  if (input.engine === "vibevoice") {
-    if (!workerAllowedUserIds().includes(userId)) {
-      return fail(
-        "the home-pc renderer isn't enabled for your account — use the gemini engine instead",
-      );
+    // VibeVoice: the script is done on Vercel; the render is a queued job the
+    // home PC pulls through /api/worker. The worker only serves allowlisted
+    // users (owner-controlled env), so gate at enqueue too — a job outside the
+    // allowlist would sit queued forever.
+    if (input.engine === "vibevoice") {
+      if (!workerAllowedUserIds().includes(userId)) {
+        return fail(
+          "the home-pc renderer isn't enabled for your account — use the gemini engine instead",
+        );
+      }
+      await supabase
+        .from("audio_episodes")
+        .update({
+          title: script.value.title,
+          script: script.value,
+          status: "queued",
+        })
+        .eq("id", episodeId)
+        .eq("user_id", userId);
+
+      const { error: jobError } = await supabase.from("jobs").insert({
+        user_id: userId,
+        kind: "tts",
+        payload: { episode_id: episodeId },
+      });
+      if (jobError) return fail(jobError.message);
+
+      return {
+        ok: true,
+        value: {
+          episode_id: episodeId,
+          title: script.value.title,
+          status: "queued",
+          message: `"${script.value.title}" is queued for the home pc — it renders when the worker is online (~20–45 min).`,
+        },
+      };
     }
+
     await supabase
       .from("audio_episodes")
       .update({
         title: script.value.title,
         script: script.value,
-        status: "queued",
+        status: "rendering",
       })
       .eq("id", episodeId)
       .eq("user_id", userId);
 
-    const { error: jobError } = await supabase.from("jobs").insert({
-      user_id: userId,
-      kind: "tts",
-      payload: { episode_id: episodeId },
-    });
-    if (jobError) return fail(jobError.message);
+    const rendered = await renderWithGemini(googleKey as string, script.value.lines);
+    if (!rendered.ok) return fail(rendered.error);
 
+    const storagePath = `${userId}/${episodeId}.wav`;
+    const upload = await supabase.storage
+      .from("course-audio")
+      .upload(storagePath, Buffer.from(rendered.value.wav), {
+        contentType: "audio/wav",
+        upsert: true,
+      });
+    if (upload.error) return fail(`audio upload failed — ${upload.error.message}`);
+
+    const { error: doneError } = await supabase
+      .from("audio_episodes")
+      .update({
+        status: "done",
+        storage_path: storagePath,
+        duration_sec: rendered.value.durationSec,
+        error: null,
+      })
+      .eq("id", episodeId)
+      .eq("user_id", userId);
+    if (doneError) return fail(doneError.message);
+
+    const minutes = Math.round(rendered.value.durationSec / 60);
     return {
       ok: true,
       value: {
         episode_id: episodeId,
         title: script.value.title,
-        status: "queued",
-        message: `"${script.value.title}" is queued for the home pc — it renders when the worker is online (~20–45 min).`,
+        status: "done",
+        duration_sec: rendered.value.durationSec,
+        message: `"${script.value.title}" is ready (~${minutes} min) — play it in /learn.`,
       },
     };
+  } catch (error) {
+    return fail(unexpectedFailure(error));
   }
-
-  await supabase
-    .from("audio_episodes")
-    .update({
-      title: script.value.title,
-      script: script.value,
-      status: "rendering",
-    })
-    .eq("id", episodeId)
-    .eq("user_id", userId);
-
-  const rendered = await renderWithGemini(googleKey as string, script.value.lines);
-  if (!rendered.ok) return fail(rendered.error);
-
-  const storagePath = `${userId}/${episodeId}.wav`;
-  const upload = await supabase.storage
-    .from("course-audio")
-    .upload(storagePath, Buffer.from(rendered.value.wav), {
-      contentType: "audio/wav",
-      upsert: true,
-    });
-  if (upload.error) return fail(`audio upload failed — ${upload.error.message}`);
-
-  const { error: doneError } = await supabase
-    .from("audio_episodes")
-    .update({
-      status: "done",
-      storage_path: storagePath,
-      duration_sec: rendered.value.durationSec,
-      error: null,
-    })
-    .eq("id", episodeId)
-    .eq("user_id", userId);
-  if (doneError) return { ok: false, error: doneError.message };
-
-  const minutes = Math.round(rendered.value.durationSec / 60);
-  return {
-    ok: true,
-    value: {
-      episode_id: episodeId,
-      title: script.value.title,
-      status: "done",
-      duration_sec: rendered.value.durationSec,
-      message: `"${script.value.title}" is ready (~${minutes} min) — play it in /learn.`,
-    },
-  };
 }
 
 // ---- MCP surface: propose → confirm (it spends API money and writes rows) ----
