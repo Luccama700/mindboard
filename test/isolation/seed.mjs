@@ -9,12 +9,18 @@
 
 import { todayKey } from "./harness.mjs";
 
-// Every table a tenant owns rows in, snapshotted before and after the other
-// tenant's attack sweep. Add a table here whenever the MCP surface grows one.
+// Every user-scoped table, snapshotted before and after the other tenant's
+// attack sweep. This list is hand-maintained and is the snapshot's weak point:
+// a table missing here is a table the "nothing of B's changed" check cannot
+// see. Add one whenever a migration creates a user_id-scoped table — especially
+// if any MCP tool can reach it (course_source_parts and
+// recurring_task_completions are both written by tools the attack table calls).
 export const OWNED_TABLES = [
   "groups",
   "tasks",
   "recurring_tasks",
+  "recurring_task_completions",
+  "recurring_task_slots",
   "goals",
   "daily_logs",
   "inventory_groups",
@@ -30,7 +36,17 @@ export const OWNED_TABLES = [
   "spend_overrides",
   "courses",
   "course_sources",
+  "course_source_parts",
+  "course_cards",
+  "audio_episodes",
+  "mindspace_topics",
+  "mindspace_items",
+  "mindspace_labels",
+  "mindspace_observations",
   "mindspace_sessions",
+  "vault_settings",
+  "google_tokens",
+  "worker_status",
   "jobs",
   "ai_audit_log",
   "user_settings",
@@ -51,6 +67,9 @@ export async function seedTenant({
   userId,
   marker,
   timezone,
+  wakeStartHour,
+  wakeEndHour,
+  currency,
   patHash,
   patHint,
 }) {
@@ -65,6 +84,7 @@ export async function seedTenant({
   });
 
   ids.taskTitle = `${marker}-task`;
+  ids.taskNotes = `${marker}-task-notes`;
   ids.taskId = await insert(client, "tasks", {
     user_id: userId,
     group_id: ids.groupId,
@@ -72,7 +92,7 @@ export async function seedTenant({
     due_date: todayKey(),
     status: "todo",
     priority: "high",
-    notes: `${marker}-task-notes`,
+    notes: ids.taskNotes,
     estimated_minutes: 30,
   });
 
@@ -94,21 +114,23 @@ export async function seedTenant({
   });
 
   ids.goalTitle = `${marker}-goal`;
+  ids.goalWhy = `${marker}-goal-why`;
   ids.goalId = await insert(client, "goals", {
     user_id: userId,
     title: ids.goalTitle,
-    why: `${marker}-goal-why`,
+    why: ids.goalWhy,
     horizon: "month",
     status: "active",
   });
 
+  ids.dailyNote = `${marker}-daily-note`;
   ids.dailyLogId = await insert(client, "daily_logs", {
     user_id: userId,
     log_date: todayKey(),
     mood: 4,
     energy: 3,
     sleep_hours: 7,
-    note: `${marker}-daily-note`,
+    note: ids.dailyNote,
   });
 
   ids.inventoryGroupName = `${marker}-shelf`;
@@ -141,13 +163,20 @@ export async function seedTenant({
     period: "day",
   });
 
+  // Both tenants hold the same balance on purpose: a dropped user_id filter in
+  // the forecast's account query produces exactly 2× this number, which is the
+  // signature finance_forecast's value assertion looks for. The currency
+  // differs so a leaked account row is visible in a field that survives into
+  // the otherwise number-only forecast output.
+  ids.accountBalance = 4321;
+  ids.currency = currency;
   ids.accountName = `${marker}-account`;
   ids.accountId = await insert(client, "accounts", {
     user_id: userId,
     name: ids.accountName,
     type: "checking",
-    balance: 4321,
-    currency: "CAD",
+    balance: ids.accountBalance,
+    currency: ids.currency,
   });
 
   ids.categoryName = `${marker}-category`;
@@ -157,6 +186,7 @@ export async function seedTenant({
     color: "#abcdef",
   });
 
+  ids.ledgerNote = `${marker}-ledger-note`;
   ids.changeId = await insert(client, "balance_changes", {
     user_id: userId,
     account_id: ids.accountId,
@@ -164,7 +194,7 @@ export async function seedTenant({
     direction: "out",
     amount: 17.25,
     occurred_at: todayKey(-2),
-    note: `${marker}-ledger-note`,
+    note: ids.ledgerNote,
     source: "manual",
   });
 
@@ -209,10 +239,11 @@ export async function seedTenant({
   });
 
   ids.courseName = `${marker}-course`;
+  ids.courseCode = `${marker}-code`;
   ids.courseId = await insert(client, "courses", {
     user_id: userId,
     name: ids.courseName,
-    code: `${marker}-code`,
+    code: ids.courseCode,
     color: "#0f0f0f",
   });
 
@@ -226,29 +257,39 @@ export async function seedTenant({
   });
 
   ids.sessionRef = `${marker}-session`;
+  ids.sessionTitle = `${marker}-session-title`;
+  ids.sessionText = `${marker}-session-text`;
   ids.sessionId = await insert(client, "mindspace_sessions", {
     user_id: userId,
     provider: "claude_code",
     session_ref: ids.sessionRef,
-    title: `${marker}-session-title`,
+    title: ids.sessionTitle,
     started_at: new Date(Date.now() - 3600_000).toISOString(),
     ended_at: new Date().toISOString(),
     duration_min: 60,
-    user_text: `${marker}-session-text`,
+    user_text: ids.sessionText,
   });
 
   // Settings carry the MCP token hash (provisioned server-side in production),
   // a timezone distinct from the other tenant's so a leaked preference row (or
   // a "today" computed in the wrong tenant's zone) is visible, and a pending
   // agent-run request so claim_agent_run has something to steal.
+  //
+  // The wake window must differ between tenants: it is the only preference
+  // that survives into a tool's output as data (get_snapshot's per-day free
+  // gaps span it verbatim when no events exist), so identical windows would
+  // make a real preferences-scoping breach produce byte-identical output that
+  // nothing could assert on. Do not "tidy" these to match.
   ids.timezone = timezone;
+  ids.wakeStartHour = wakeStartHour;
+  ids.wakeEndHour = wakeEndHour;
   ids.shoppingStore = `${marker}-store`;
   const { error: settingsError } = await admin.from("user_settings").upsert(
     {
       user_id: userId,
       timezone: ids.timezone,
-      wake_start_hour: 5,
-      wake_end_hour: 23,
+      wake_start_hour: wakeStartHour,
+      wake_end_hour: wakeEndHour,
       daily_spend_estimate: 11,
       shopping_store: ids.shoppingStore,
       shopping_day: 2,
@@ -263,18 +304,30 @@ export async function seedTenant({
   return ids;
 }
 
-// A stable, order-independent fingerprint of everything a tenant owns.
+// A stable, order-independent fingerprint of everything a tenant owns. A table
+// that cannot be read records the error instead of throwing, so a stale entry
+// in OWNED_TABLES surfaces as a visible failure rather than aborting the run
+// (or, worse, silently narrowing what the diff can see).
 export async function snapshotTenant(admin, userId) {
   const out = {};
+  const unreadable = [];
   for (const table of OWNED_TABLES) {
     const { data, error } = await admin.from(table).select("*").eq("user_id", userId);
-    if (error) throw new Error(`snapshot ${table}: ${error.message}`);
-    const rows = (data ?? [])
+    if (error) {
+      unreadable.push(`${table}: ${error.message}`);
+      out[table] = [`UNREADABLE: ${error.message}`];
+      continue;
+    }
+    out[table] = (data ?? [])
       .map((row) => JSON.stringify(Object.fromEntries(Object.entries(row).sort())))
       .sort();
-    out[table] = rows;
   }
+  Object.defineProperty(out, "__unreadable", { value: unreadable, enumerable: false });
   return out;
+}
+
+export function unreadableTables(snapshot) {
+  return snapshot.__unreadable ?? [];
 }
 
 export function diffSnapshots(before, after) {

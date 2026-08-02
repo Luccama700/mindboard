@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { leakNeedles, scanForLeak } from "../test/isolation/harness.mjs";
+import { leakNeedles, scanForLeak, stringLeaves } from "../test/isolation/harness.mjs";
 import { diffSnapshots } from "../test/isolation/seed.mjs";
 import { reportCoverage } from "../test/isolation/mcp-probe.mjs";
 import { TOOL_MATRIX } from "../test/isolation/tool-matrix.mjs";
@@ -32,6 +32,7 @@ describe("leak scanner", () => {
     marker: "zzpaaab",
     taskId: "11111111-1111-1111-1111-111111111111",
     accountName: "zzpaaab-account",
+    dailyNote: "zzpaaab-daily-note",
   };
   const needles = leakNeedles(b);
 
@@ -39,39 +40,68 @@ describe("leak scanner", () => {
     expect(needles.map((n) => n.label).sort()).toEqual([
       "B marker",
       "B.accountName",
+      "B.dailyNote",
       "B.taskId",
     ]);
   });
 
   it("flags a response that contains the victim's data", () => {
-    const leaked = scanForLeak(
-      JSON.stringify([{ id: b.taskId, name: b.accountName }]),
-      needles,
-      "{}",
-    );
+    const leaked = scanForLeak(JSON.stringify([{ id: b.taskId, name: b.accountName }]), needles, []);
     expect(leaked).toContain("B.taskId");
     expect(leaked).toContain("B.accountName");
   });
 
   it("does not flag an id the attacker supplied in the request", () => {
-    const args = JSON.stringify({ taskId: b.taskId });
-    const leaked = scanForLeak(`Error: task ${b.taskId} not found`, needles, args);
+    const leaked = scanForLeak(`Error: task ${b.taskId} not found`, needles, [b.taskId]);
     expect(leaked).toEqual([]);
   });
 
   it("still flags data resolved FROM an id the attacker supplied", () => {
-    const args = JSON.stringify({ taskId: b.taskId });
     const leaked = scanForLeak(
       JSON.stringify({ taskId: b.taskId, account: b.accountName }),
       needles,
-      args,
+      [b.taskId],
     );
     expect(leaked).toContain("B.accountName");
     expect(leaked).not.toContain("B.taskId");
   });
 
+  // The regression this scanner nearly shipped with: the run marker prefixes
+  // every one of B's names, so a per-needle subtraction would let ONE request
+  // mentioning a marker-bearing string blind the scanner to every other B
+  // string. Occurrence-level subtraction has to keep the unrelated hits.
+  it("a sent superstring does not blind the scanner to other occurrences", () => {
+    const leaked = scanForLeak(
+      JSON.stringify({ echoed: b.accountName, leaked: b.dailyNote }),
+      needles,
+      [b.accountName],
+    );
+    expect(leaked).toContain("B.dailyNote");
+    // The marker occurs inside the leaked note too, so it must fire as well.
+    expect(leaked).toContain("B marker");
+  });
+
+  it("a sent substring does not mask a longer needle that contains it", () => {
+    const leaked = scanForLeak(JSON.stringify({ item: b.accountName }), needles, [b.marker]);
+    expect(leaked).toContain("B.accountName");
+  });
+
+  // Deliberate: an echo is an echo however many times it appears ("no item
+  // matches 'X'; candidates for 'X': none" is one error message, not a leak).
+  // Safety comes from every B string having its own needle, not from counting.
+  it("does not flag a string the request sent, however often it is echoed", () => {
+    const leaked = scanForLeak(`no match for ${b.marker}; tried ${b.marker}`, needles, [b.marker]);
+    expect(leaked).toEqual([]);
+  });
+
   it("passes a clean response", () => {
-    expect(scanForLeak(JSON.stringify([{ id: "other" }]), needles, "{}")).toEqual([]);
+    expect(scanForLeak(JSON.stringify([{ id: "other" }]), needles, [])).toEqual([]);
+  });
+
+  it("collects every string the request supplied, at any depth", () => {
+    expect(
+      stringLeaves({ operations: [{ item: "a", amount: 3 }, { item: "b" }], flag: true }).sort(),
+    ).toEqual(["a", "b"]);
   });
 });
 

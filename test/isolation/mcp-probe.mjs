@@ -1,8 +1,8 @@
 // Drives the attack table in ./tool-matrix.mjs against a running MCP server as
 // tenant A, then reports coverage against the server's live tools/list.
 
-import { leakNeedles, scanForLeak, toolJson, toolText } from "./harness.mjs";
-import { DECLARED_SKIPS, TOOL_MATRIX } from "./tool-matrix.mjs";
+import { leakNeedles, scanForLeak, stringLeaves, toolJson, toolText } from "./harness.mjs";
+import { BLIND_SPOTS, DECLARED_SKIPS, TOOL_MATRIX } from "./tool-matrix.mjs";
 
 async function callTool(client, name, args) {
   try {
@@ -29,7 +29,7 @@ export async function runToolMatrix({ mcpA, ctx, reporter }) {
     }
 
     const args = entry.args(ctx);
-    const argsText = JSON.stringify(args);
+    const sent = stringLeaves(args);
     const label = `${entry.tool}: ${entry.attack}`;
 
     let response;
@@ -42,7 +42,7 @@ export async function runToolMatrix({ mcpA, ctx, reporter }) {
 
     // Every response, always: did A get handed anything of B's that A did not
     // already supply in the request?
-    const leaked = scanForLeak(response.text, needles, argsText);
+    const leaked = scanForLeak(response.text, needles, sent);
     reporter.check(`${entry.tool}: response discloses nothing of B's`, leaked.length === 0, leaked.join(", "));
 
     // Propose tools that legitimately succeed for A leave a pending proposal.
@@ -55,7 +55,7 @@ export async function runToolMatrix({ mcpA, ctx, reporter }) {
         });
         response.confirmFailed = confirmed.isError === true;
         response.confirmText = confirmed.text;
-        const confirmLeak = scanForLeak(confirmed.text, needles, argsText);
+        const confirmLeak = scanForLeak(confirmed.text, needles, sent);
         reporter.check(
           `${entry.tool}: confirm discloses nothing of B's`,
           confirmLeak.length === 0,
@@ -106,9 +106,13 @@ export async function reportCoverage({ mcpA, exercised, reporter }) {
       continue;
     }
     const attacks = seen.attacks ?? [];
-    console.log(`  ok    ${name.padEnd(28)} ${attacks.length} call(s): ${attacks[0]}`);
+    const mark = BLIND_SPOTS[name] ? "weak" : "ok  ";
+    console.log(`  ${mark}  ${name.padEnd(28)} ${attacks.length} call(s): ${attacks[0]}`);
     for (const extra of attacks.slice(1)) {
       console.log(`        ${"".padEnd(28)} ${extra}`);
+    }
+    if (BLIND_SPOTS[name]) {
+      console.log(`        ${"".padEnd(28)} ^ BLIND SPOT: ${BLIND_SPOTS[name]}`);
     }
   }
 
@@ -125,5 +129,18 @@ export async function reportCoverage({ mcpA, exercised, reporter }) {
     stale.join(", "),
   );
 
-  return { live, uncovered, stale };
+  const weak = live.filter((name) => BLIND_SPOTS[name]);
+  reporter.info("");
+  reporter.info(
+    `${live.length - weak.length}/${live.length} tools are asserted on a real data path.`,
+  );
+  reporter.info(
+    `${weak.length} are marked 'weak' above: they pass because a precondition is missing`,
+  );
+  reporter.info(
+    "(no Google token / vault row / API key / worker allowlisting), so a scoping bug",
+  );
+  reporter.info("inside them would NOT turn this probe red. See BLIND_SPOTS in tool-matrix.mjs.");
+
+  return { live, uncovered, stale, weak };
 }
