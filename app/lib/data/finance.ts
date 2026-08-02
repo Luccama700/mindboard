@@ -33,7 +33,12 @@ export const getAccounts = cache(
       .select(ACCOUNT_COLUMNS)
       .eq("user_id", userId)
       .eq("archived", false)
-      .order("created_at", { ascending: true });
+      // Total, not just date-stable: consumers read the base currency off
+      // accounts[0] (finance-client.tsx, snapshots/finance.ts), so a created_at
+      // tie would label the user's money arbitrarily. Oldest account wins, and
+      // every accounts read in the app resolves the same one.
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true });
     return (data ?? []) as Account[];
   },
 );

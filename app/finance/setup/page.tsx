@@ -28,6 +28,7 @@ export default async function FinanceSetupPage() {
         .select("currency")
         .eq("archived", false)
         .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
         .limit(1),
       supabase
         .from("spending_categories")
