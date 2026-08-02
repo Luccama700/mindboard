@@ -53,6 +53,33 @@ export function LearnClient({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // These three are mirrors of server data, so a fresh RSC payload has to win:
+  // without this reset the episode a finished TTS render just wrote never
+  // reaches the list, and the user pays to generate it again. Server data is
+  // safely authoritative because every mutation below awaits its action (which
+  // commits, then revalidates /learn) before patching local state — so any
+  // payload that lands is at least as new as the patch. React's "adjust state
+  // during render" idiom; only the mirrors reset, not open/editing/draft state.
+  const [serverData, setServerData] = useState({
+    courses: initialCourses,
+    sources: initialSources,
+    episodes: initialEpisodes,
+  });
+  if (
+    serverData.courses !== initialCourses ||
+    serverData.sources !== initialSources ||
+    serverData.episodes !== initialEpisodes
+  ) {
+    setServerData({
+      courses: initialCourses,
+      sources: initialSources,
+      episodes: initialEpisodes,
+    });
+    setCourses(initialCourses);
+    setSources(initialSources);
+    setEpisodes(initialEpisodes);
+  }
+
   const active = courses.filter((c) => !c.archived);
   const archived = courses.filter((c) => c.archived);
 
@@ -106,7 +133,13 @@ export function LearnClient({
             onDone={(course) => {
               setCreating(false);
               if (course) {
-                setCourses((prev) => [course, ...prev]);
+                // The action revalidated /learn, so the row may already have
+                // arrived on new props — insert by id, never blindly.
+                setCourses((prev) =>
+                  prev.some((c) => c.id === course.id)
+                    ? prev
+                    : [course, ...prev],
+                );
                 setOpenCourseId(course.id);
               }
             }}
@@ -465,7 +498,9 @@ function SourceList({
         return;
       }
       const source = registered.source;
-      onSourcesChange((prev) => [source, ...prev]);
+      onSourcesChange((prev) =>
+        prev.some((s) => s.id === source.id) ? prev : [source, ...prev],
+      );
 
       // Direct-to-storage: the file never passes through a route handler
       // (Vercel's 4.5 MB body limit). RLS confines writes to the own folder.
