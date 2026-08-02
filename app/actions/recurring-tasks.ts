@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { createEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
-import { todayISO } from "@/app/_components/date-utils";
+import { todayKey } from "@/app/lib/mcp/config";
 import {
   RECURRING_TASK_COLUMNS,
 } from "@/app/lib/data/recurring-tasks";
@@ -38,14 +38,20 @@ export type RecurringTaskInput = {
 };
 
 // Validates + normalizes the recurrence half of the input. Returns the column
-// patch or an error, mirroring the recurring_expenses action helpers.
-function recurrenceColumns(input: {
-  frequency: string;
-  weekdays?: number[] | null;
-  dayOfMonth?: number | null;
-  intervalDays?: number | null;
-  startDate?: string | null;
-}): { error: string } | { error: null; columns: Record<string, unknown> } {
+// patch or an error, mirroring the recurring_expenses action helpers. `today` is
+// the caller's user-zone date key, used only as the custom-frequency start-date
+// fallback — it is passed in rather than read off the process clock, which is
+// UTC on Vercel.
+function recurrenceColumns(
+  input: {
+    frequency: string;
+    weekdays?: number[] | null;
+    dayOfMonth?: number | null;
+    intervalDays?: number | null;
+    startDate?: string | null;
+  },
+  today: string,
+): { error: string } | { error: null; columns: Record<string, unknown> } {
   if (!FREQUENCIES.has(input.frequency)) return { error: "invalid frequency" };
 
   const columns: Record<string, unknown> = {
@@ -78,7 +84,7 @@ function recurrenceColumns(input: {
     if (!Number.isFinite(interval) || interval < 1) {
       return { error: "custom needs an interval of 1+ days" };
     }
-    const start = input.startDate ?? todayISO();
+    const start = input.startDate ?? today;
     if (!DATE_RE.test(start)) return { error: "invalid start date" };
     columns.interval_days = interval;
     columns.start_date = start;
@@ -126,8 +132,6 @@ export async function createRecurringTask(input: RecurringTaskInput) {
     return { error: "invalid priority" };
   }
 
-  const recurrence = recurrenceColumns(input);
-  if (recurrence.error !== null) return { error: recurrence.error };
   const timing = timingColumns(input);
   if (timing.error !== null) return { error: timing.error };
 
@@ -136,6 +140,11 @@ export async function createRecurringTask(input: RecurringTaskInput) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
+
+  // Resolved after auth because the start-date fallback has to land on the
+  // user's local day, and that needs their id.
+  const recurrence = recurrenceColumns(input, await todayKey(supabase, user.id));
+  if (recurrence.error !== null) return { error: recurrence.error };
 
   const { data, error } = await supabase
     .from("recurring_tasks")
@@ -180,13 +189,16 @@ export async function updateRecurringTask(
     updates.priority = input.priority;
   }
   if (input.frequency !== undefined) {
-    const recurrence = recurrenceColumns({
-      frequency: input.frequency,
-      weekdays: input.weekdays,
-      dayOfMonth: input.dayOfMonth,
-      intervalDays: input.intervalDays,
-      startDate: input.startDate,
-    });
+    const recurrence = recurrenceColumns(
+      {
+        frequency: input.frequency,
+        weekdays: input.weekdays,
+        dayOfMonth: input.dayOfMonth,
+        intervalDays: input.intervalDays,
+        startDate: input.startDate,
+      },
+      await todayKey(supabase, user.id),
+    );
     if (recurrence.error !== null) return { error: recurrence.error };
     Object.assign(updates, recurrence.columns);
   }
@@ -231,15 +243,21 @@ export async function archiveRecurringTask(id: string) {
 
 // Idempotent: the unique (rule_id, occurred_on) makes a double-tap a no-op.
 // Only today is completable — occurrences skip silently, so there is no
-// yesterday to check off.
+// yesterday to check off. "Today" is the USER'S today: the stream sends a
+// zone-aware dateKey, so comparing against the UTC process clock rejected every
+// completion after 17:00 in Vancouver.
 export async function completeRecurringOccurrence(ruleId: string, dateKey: string) {
-  if (dateKey !== todayISO()) return { error: "only today can be completed" };
+  if (!DATE_RE.test(dateKey)) return { error: "invalid date" };
 
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
+
+  if (dateKey !== (await todayKey(supabase, user.id))) {
+    return { error: "only today can be completed" };
+  }
 
   const { error } = await supabase
     .from("recurring_task_completions")

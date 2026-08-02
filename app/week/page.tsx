@@ -10,7 +10,7 @@ import {
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { occurrenceBusyEvents, slotBusyEvents } from "@/app/lib/recurrence";
 import { scheduleSnapshot } from "@/app/lib/snapshots/schedule";
-import { todayISO } from "@/app/_components/date-utils";
+import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { addDaysKey } from "@/app/lib/snapshots/stream";
 
 export default async function WeekPage({
@@ -23,7 +23,6 @@ export default async function WeekPage({
 }) {
   const query = await searchParams;
   const selectedDay = normalizeDay(query.d);
-  const month = selectedDay ? selectedDay.slice(0, 7) : normalizeMonth(query.m);
 
   const supabase = await createClient();
   const {
@@ -31,24 +30,31 @@ export default async function WeekPage({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const [
-    {
-      calendarTasks,
-      events,
-      finance,
-      calendarStatus,
-      calendarLinks,
-      recurringTasks,
-      recurringCompletions,
-      recurringSlots,
-    },
-    prefs,
-  ] = await Promise.all([
-    getDashboardData(user.id, month),
-    getUserPreferences(user.id),
-  ]);
+  // The default month is the USER'S current month: on the process clock the
+  // last evening of a month fetched next month's grid, so the week actually
+  // being viewed had no events or completions loaded at all. This serialises
+  // prefs before getDashboardData — nothing is deduped here, /week is the only
+  // caller in the request — and /week has no Suspense boundary, so the extra
+  // round-trip lands on TTFB. Accepted: fetching the wrong month is worse than
+  // one indexed read.
+  const prefs = await getUserPreferences(user.id);
+  const timeZone = safeTimeZone(prefs.timezone);
+  const month = selectedDay
+    ? selectedDay.slice(0, 7)
+    : normalizeMonth(query.m, timeZone);
 
-  const today = todayISO();
+  const {
+    calendarTasks,
+    events,
+    finance,
+    calendarStatus,
+    calendarLinks,
+    recurringTasks,
+    recurringCompletions,
+    recurringSlots,
+  } = await getDashboardData(user.id, month);
+
+  const today = todayISO(timeZone);
   const slotKeys = new Set(
     recurringSlots.map((s) => `${s.rule_id}:${s.occurred_on}`),
   );
@@ -59,12 +65,14 @@ export default async function WeekPage({
         recurringTasks,
         [today, addDaysKey(today, 1)],
         slotKeys,
+        timeZone,
       ),
-      ...slotBusyEvents(recurringSlots, recurringTasks),
+      ...slotBusyEvents(recurringSlots, recurringTasks, timeZone),
     ],
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,
     wakeEndHour: prefs.wake_end_hour,
+    timeZone,
   });
 
   return (
@@ -76,6 +84,7 @@ export default async function WeekPage({
         <DashboardCalendar
           key={`${month}:${selectedDay ?? ""}`}
           month={month}
+          today={today}
           tasks={calendarTasks}
           events={events}
           finance={finance}

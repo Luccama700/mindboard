@@ -1,4 +1,11 @@
-export function todayISO(timeZone?: string | null) {
+// The timeZone argument is REQUIRED on purpose: the process clock is UTC on
+// Vercel, so an omitted zone silently produced the wrong day for every
+// server-side caller. Pass an explicit `null` to mean "process clock,
+// deliberately" — correct in client components, where the process clock IS the
+// browser. On the server, resolve the user's stored zone first: `safeTimeZone`
+// (below) or `todayKey(supabase, userId)` (app/lib/mcp/config.ts) are the only
+// blessed resolvers.
+export function todayISO(timeZone: string | null) {
   const d = new Date();
   if (timeZone) {
     return new Intl.DateTimeFormat("en-CA", {
@@ -26,7 +33,9 @@ export function safeTimeZone(timeZone: string | null | undefined): string | null
   }
 }
 
-export function formatClock12(date: Date, timeZone?: string | null) {
+// timeZone is required for the same reason todayISO's is — a wall-clock label
+// rendered from a Server Component would otherwise silently read UTC.
+export function formatClock12(date: Date, timeZone: string | null) {
   return date
     .toLocaleTimeString("en-US", {
       hour: "numeric",
@@ -38,8 +47,12 @@ export function formatClock12(date: Date, timeZone?: string | null) {
     .replace(" ", "");
 }
 
-export function formatDue(iso: string) {
-  if (iso === todayISO()) return "today";
+// `today` is required for the same reason todayISO's zone is: this label sits
+// beside — and on the task chips, ON — controls that WRITE due_date, so the day
+// it calls "today" has to be the day the server will classify against. Callers
+// take it as a prop from their page; none of them may re-derive it.
+export function formatDue(iso: string, today: string) {
+  if (iso === today) return "today";
   const d = new Date(iso + "T00:00:00");
   return d.toLocaleDateString("en-US", {
     month: "short",
@@ -84,7 +97,7 @@ export function formatWeekdayMonthDay(date: Date) {
   });
 }
 
-export function formatLongWeekdayMonthDay(date: Date, timeZone?: string | null) {
+export function formatLongWeekdayMonthDay(date: Date, timeZone: string | null) {
   return date.toLocaleDateString("en-US", {
     weekday: "long",
     month: "short",
@@ -101,14 +114,6 @@ export function formatRelativeToNow(iso: string): string {
   if (minutes < 60) return `in ${minutes}m`;
   if (minutes < 24 * 60) return `in ${Math.round((minutes / 60) * 10) / 10}h`;
   return `in ${Math.round(minutes / (60 * 24))}d`;
-}
-
-// Negative = overdue, 0 = today, positive = future.
-export function daysFromToday(iso: string): number {
-  const today = new Date(todayISO() + "T00:00:00");
-  const date = new Date(iso + "T00:00:00");
-  const diffMs = date.getTime() - today.getTime();
-  return Math.round(diffMs / (1000 * 60 * 60 * 24));
 }
 
 const PRIORITY_RANK: Record<string, number> = { high: 0, med: 1, low: 2 };

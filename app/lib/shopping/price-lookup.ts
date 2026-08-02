@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { readProviderKey } from "@/app/lib/connections/keys";
+import { todayKey } from "@/app/lib/mcp/config";
 import {
   resolveItemRef,
   type ResolvableItem,
@@ -276,7 +277,7 @@ export async function lookupPricesByRefs(params: {
       rules.push(row);
       rulesByItem.set(row.inventory_item_id, rules);
     }
-    const today = new Date().toISOString().slice(0, 10);
+    const today = await todayKey(supabase, userId);
     itemIds = buildShoppingList({ items: pool, rulesByItem, today })
       .filter((entry) =>
         force ? entry.priceSource !== "manual" : entry.estPrice === null,

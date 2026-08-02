@@ -27,7 +27,7 @@ import type { SpendingCategory } from "./finance-types";
 import { formatMoney } from "./money";
 import { ProposalCard } from "./proposal-card";
 import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
-import { formatDue, todayISO } from "./date-utils";
+import { formatDue } from "./date-utils";
 import type { Task } from "./types";
 
 // Two-hemisphere brain outline in currentColor, so it tints with the tab's
@@ -94,12 +94,18 @@ type SpendDraft = {
 };
 
 export function Dock({
+  today,
   groups,
   inboxCount,
   brainCount,
   accounts,
   categories,
 }: {
+  // The user's day (user_settings.timezone), resolved by DockMount. The capture
+  // bar's due-date chip means "today" as an intent, and whatever it holds is
+  // written straight to tasks.due_date by createTask — so it has to be the day
+  // the server will classify the task against, not the device's.
+  today: string;
   groups: Group[];
   inboxCount: number;
   brainCount: number;
@@ -113,7 +119,7 @@ export function Dock({
 
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
-  const [dueDate, setDueDate] = useState<string | null>(() => todayISO());
+  const [dueDate, setDueDate] = useState<string | null>(() => today);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [priority, setPriority] = useState<"low" | "med" | "high">("med");
   const [groupOpen, setGroupOpen] = useState(false);
@@ -150,7 +156,6 @@ export function Dock({
   const inputRef = useRef<HTMLInputElement>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
 
-  const today = todayISO();
   const isToday = dueDate === today;
   const isCustomDate = dueDate !== null && !isToday;
   const hasNotes = Boolean(notes.trim());
@@ -936,7 +941,7 @@ export function Dock({
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
             }`}
           >
-            {isCustomDate ? `✓ ${formatDue(dueDate!)}` : "+ date"}
+            {isCustomDate ? `✓ ${formatDue(dueDate!, today)}` : "+ date"}
           </button>
 
           <input

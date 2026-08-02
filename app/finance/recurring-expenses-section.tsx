@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { todayISO } from "@/app/_components/date-utils";
 import { formatMoney } from "@/app/_components/money";
 import type {
   RecurringExpense,
@@ -36,6 +35,7 @@ const FREQUENCY_LABELS: Record<RecurringFrequency, string> = {
 };
 
 function RecurrencePicker({
+  today,
   frequency,
   dayOfMonth,
   weekday,
@@ -47,6 +47,7 @@ function RecurrencePicker({
   onIntervalDays,
   onStartDate,
 }: {
+  today: string;
   frequency: RecurringFrequency;
   dayOfMonth: number;
   weekday: number;
@@ -161,7 +162,7 @@ function RecurrencePicker({
             <input
               type="date"
               value={startDate}
-              onChange={(e) => onStartDate(e.target.value || todayISO())}
+              onChange={(e) => onStartDate(e.target.value || today)}
               className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
             />
           </div>
@@ -172,6 +173,7 @@ function RecurrencePicker({
 }
 
 export function ExpensesManager({
+  today,
   expenses,
   categories,
   categoryById,
@@ -180,6 +182,9 @@ export function ExpensesManager({
   onUpdate,
   onArchive,
 }: {
+  // The user's day. `custom` recurrence anchors every projected occurrence on
+  // start_date, so a one-day drift here shifts the whole forecast.
+  today: string;
   expenses: RecurringExpense[];
   categories: SpendingCategory[];
   categoryById: Map<string, SpendingCategory>;
@@ -204,6 +209,7 @@ export function ExpensesManager({
       <ul className="space-y-2">
         {expenses.map((expense) => (
           <ExpenseRow
+            today={today}
             key={expense.id}
             expense={expense}
             categories={categories}
@@ -224,6 +230,7 @@ export function ExpensesManager({
         </button>
       ) : (
         <ExpenseForm
+          today={today}
           categories={categories}
           onCreate={onCreate}
           onClose={() => setFormOpen(false)}
@@ -234,10 +241,12 @@ export function ExpensesManager({
 }
 
 function ExpenseForm({
+  today,
   categories,
   onCreate,
   onClose,
 }: {
+  today: string;
   categories: SpendingCategory[];
   onCreate: (input: {
     name: string;
@@ -258,7 +267,7 @@ function ExpenseForm({
   const [dayOfMonth, setDayOfMonth] = useState(1);
   const [weekday, setWeekday] = useState(1);
   const [intervalDays, setIntervalDays] = useState(14);
-  const [startDate, setStartDate] = useState(todayISO());
+  const [startDate, setStartDate] = useState(today);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -321,6 +330,7 @@ function ExpenseForm({
       </div>
 
       <RecurrencePicker
+        today={today}
         frequency={frequency}
         dayOfMonth={dayOfMonth}
         weekday={weekday}
@@ -375,6 +385,7 @@ function ExpenseForm({
 }
 
 function ExpenseRow({
+  today,
   expense,
   categories,
   categoryById,
@@ -382,6 +393,7 @@ function ExpenseRow({
   onUpdate,
   onArchive,
 }: {
+  today: string;
   expense: RecurringExpense;
   categories: SpendingCategory[];
   categoryById: Map<string, SpendingCategory>;
@@ -481,11 +493,12 @@ function ExpenseRow({
           </div>
 
           <RecurrencePicker
+            today={today}
             frequency={expense.frequency}
             dayOfMonth={expense.day_of_month ?? 1}
             weekday={expense.weekday ?? 1}
             intervalDays={expense.interval_days ?? 14}
-            startDate={expense.start_date ?? todayISO()}
+            startDate={expense.start_date ?? today}
             onFrequency={(f) =>
               onUpdate(expense.id, {
                 frequency: f,
@@ -493,7 +506,7 @@ function ExpenseRow({
                 weekday: f === "weekly" ? (expense.weekday ?? 1) : null,
                 interval_days: f === "custom" ? (expense.interval_days ?? 14) : null,
                 start_date:
-                  f === "custom" ? (expense.start_date ?? todayISO()) : null,
+                  f === "custom" ? (expense.start_date ?? today) : null,
               })
             }
             onDayOfMonth={(d) => onUpdate(expense.id, { day_of_month: d })}

@@ -40,12 +40,15 @@ export function FinanceSetupClient({
   initialExpenses,
   initialIncomeSources,
   calendars,
+  today,
   currency,
 }: {
   initialCategories: SpendingCategory[];
   initialExpenses: RecurringExpense[];
   initialIncomeSources: IncomeSource[];
   calendars: CalendarListEntry[];
+  // The user's day — the managers below both display and persist dates from it.
+  today: string;
   currency: string;
 }) {
   const [categories, dispatchCategories] = useOptimistic(
@@ -215,6 +218,7 @@ export function FinanceSetupClient({
   return (
     <div className="space-y-8">
       <ExpensesManager
+        today={today}
         expenses={expenses}
         categories={categories}
         categoryById={categoryById}
@@ -225,6 +229,7 @@ export function FinanceSetupClient({
       />
 
       <IncomeManager
+        today={today}
         incomeSources={incomeSources}
         calendars={calendars}
         currency={currency}

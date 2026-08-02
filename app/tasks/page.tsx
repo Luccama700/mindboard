@@ -9,7 +9,7 @@ import {
 import { TasksClient, type TaskFilter } from "@/app/_components/tasks-client";
 import { TASK_COLUMNS, type Task } from "@/app/_components/types";
 import { getActiveRecurringTasks } from "@/app/lib/data/recurring-tasks";
-import { ownerUserId } from "@/app/lib/mcp/config";
+import { ownerUserId, todayKey } from "@/app/lib/mcp/config";
 import type { Group } from "./groups-types";
 import { AgentRunButton } from "./agent-run-button";
 import { GroupsClient } from "./groups-client";
@@ -60,7 +60,7 @@ export default async function TasksPage({
     tasksQuery = tasksQuery.eq("group_id", filter);
   }
 
-  const [{ data: tasks }, groupsResult, calendars, recurringRules] =
+  const [{ data: tasks }, groupsResult, calendars, recurringRules, today] =
     await Promise.all([
       tasksQuery,
       supabase
@@ -70,6 +70,9 @@ export default async function TasksPage({
         .order("created_at", { ascending: false }),
       calendarsPromise,
       getActiveRecurringTasks(user.id),
+      // The rows here write tasks.due_date via their date chips, so "today"
+      // must be the user's day. Rides the existing Promise.all.
+      todayKey(supabase, user.id),
     ]);
 
   const groups = (groupsResult.data ?? []) as Group[];
@@ -156,6 +159,7 @@ export default async function TasksPage({
       <TasksClient
         key={typeof filter === "string" ? filter : "inbox"}
         initial={(tasks ?? []) as Task[]}
+        today={today}
         filter={filter}
         groups={groupOptions}
       />

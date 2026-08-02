@@ -88,10 +88,14 @@ export const getBalanceChangesOn = cache(
 export const getSpendOverrides = cache(
   async (
     userId: string,
-    timeZone?: string | null,
+    // Required, and required for the same reason todayISO's argument is: an
+    // omitted zone silently windows off the UTC process clock, and because this
+    // read is cache()-keyed on its arguments the wrong window would also be
+    // memoised for the rest of the request.
+    timeZone: string | null,
   ): Promise<Record<string, number>> => {
     const supabase = await createClient();
-    const todayKey = todayISO(timeZone ?? null);
+    const todayKey = todayISO(timeZone);
     const { data } = await supabase
       .from("spend_overrides")
       .select("date, amount")
@@ -121,11 +125,12 @@ export const getSpendOverrides = cache(
 export const getSpendHistory = cache(
   async (
     userId: string,
-    days = 90,
-    timeZone?: string | null,
+    days: number,
+    // Required — see getSpendOverrides.
+    timeZone: string | null,
   ): Promise<SpendHistoryRow[]> => {
     const supabase = await createClient();
-    const startKey = addDaysKey(todayISO(timeZone ?? null), -days);
+    const startKey = addDaysKey(todayISO(timeZone), -days);
     const { data } = await supabase
       .from("balance_changes")
       .select("occurred_at, direction, amount, category_id, is_transfer")

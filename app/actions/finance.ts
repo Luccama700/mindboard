@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
-import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
+import { todayKey } from "@/app/lib/mcp/config";
 import { changeFingerprint } from "@/app/lib/finance/derive";
 import { recomputeAccountBalance } from "@/app/lib/finance/recompute";
 
@@ -29,20 +29,6 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 function toCents(value: number): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return Math.round(value * 100) / 100;
-}
-
-// The process clock is UTC on Vercel; dates the user records must land on the
-// user's local day, not UTC's, so we resolve their stored timezone per request.
-async function zonedToday(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
-): Promise<string> {
-  const { data } = await supabase
-    .from("user_settings")
-    .select("timezone")
-    .eq("user_id", userId)
-    .maybeSingle();
-  return todayISO(safeTimeZone((data as { timezone: string | null } | null)?.timezone));
 }
 
 function normalizeOccurredAt(
@@ -163,7 +149,7 @@ export async function createAccount(input: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const today = await zonedToday(supabase, user.id);
+  const today = await todayKey(supabase, user.id);
 
   const { data: account, error } = await supabase
     .from("accounts")
@@ -304,7 +290,7 @@ export async function recordBalanceChange(input: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const today = await zonedToday(supabase, user.id);
+  const today = await todayKey(supabase, user.id);
   const occurredAt = normalizeOccurredAt(input.occurredAt, today);
   if (occurredAt === null) return { error: "invalid date" };
 
@@ -499,6 +485,7 @@ export async function updateBalanceChange(input: {
       supabase,
       user.id,
       row.account_id,
+      await todayKey(supabase, user.id),
     );
     if (recomputed.error) return { error: recomputed.error };
   }
@@ -532,6 +519,7 @@ export async function deleteBalanceChange(id: string) {
     supabase,
     user.id,
     (existing as { account_id: string }).account_id,
+    await todayKey(supabase, user.id),
   );
   if (recomputed.error) return { error: recomputed.error };
 
@@ -556,7 +544,7 @@ export async function setSpendOverride(input: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const today = await zonedToday(supabase, user.id);
+  const today = await todayKey(supabase, user.id);
   if (input.date <= today) return { error: "only future days" };
 
   if (input.amount === null) {

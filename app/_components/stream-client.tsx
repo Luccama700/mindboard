@@ -23,7 +23,6 @@ import {
 } from "@/app/lib/snapshots/stream";
 import { daysLate } from "@/app/lib/snapshots/urgency";
 import { subscribeCapture } from "./capture-bus";
-import { todayISO } from "./date-utils";
 import { formatMoney } from "./money";
 import { SectionRuler } from "./ui";
 import {
@@ -67,6 +66,7 @@ export type StreamGroup = { id: string; name: string; color: string };
 
 function CardRow({
   card,
+  today,
   section,
   index,
   animate,
@@ -105,6 +105,12 @@ function CardRow({
   onRtaskUpdate: (card: StreamCard, patch: Partial<RecurringTaskInput>) => void;
   onRtaskArchive: (card: StreamCard) => void;
   boughtIds: Set<string>;
+  // The user's day, resolved server-side and threaded down. NOT todayISO(null):
+  // this drives whether a task reads as overdue, which gates the destructive
+  // `incomplete` action and the snooze date keys that get WRITTEN — and it has
+  // to agree with the NOW/NEXT/LATER sectioning the server already computed in
+  // the stored zone.
+  today: string;
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -112,7 +118,6 @@ function CardRow({
   const [editOpen, setEditOpen] = useState(false);
   const [dx, setDx] = useState(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const today = todayISO();
 
   const isTask = card.entity.kind === "task" || card.entity.kind === "rtask";
   const cardTask = card.entity.kind === "task" ? card.entity.task : null;
@@ -550,6 +555,7 @@ function CardRow({
 
 export function StreamClient({
   snapshot,
+  today,
   accounts,
   categories,
   gaps,
@@ -561,6 +567,12 @@ export function StreamClient({
   clockLabel,
 }: {
   snapshot: StreamSnapshot;
+  // The user's day (user_settings.timezone), resolved by getStreamData. The
+  // snapshot's NOW/NEXT/LATER sectioning and `gaps`' dateKeys are both computed
+  // against it server-side, and the due dates written from here (snooze, buy,
+  // capture) must land on the same day — so this must never be re-derived from
+  // the device clock.
+  today: string;
   accounts: SpendAccount[];
   categories: SpendCategory[];
   gaps: FreeGap[];
@@ -661,7 +673,7 @@ export function StreamClient({
     };
     return subscribeCapture({
       onOptimisticAdd: (task: Task) => {
-        if (task.due_date !== todayISO()) return;
+        if (task.due_date !== today) return;
         setExtraNext((cards) => [
           {
             id: `task:${task.id}`,
@@ -687,7 +699,10 @@ export function StreamClient({
           ),
         ),
     });
-  }, []);
+    // `today` decides whether an optimistically captured task belongs in this
+    // stream at all, so the subscription has to be rebuilt if the server hands
+    // down a new day (it only changes across local midnight).
+  }, [today]);
 
   // Resolution is scoped to the section a card left from, so the same entity
   // legitimately reappearing in another section (snooze -> LATER) still shows.
@@ -752,7 +767,7 @@ export function StreamClient({
     return (card: StreamCard, gap: FreeGap) => {
       if (card.entity.kind !== "task") return;
       const task = card.entity.task;
-      const day = gap.dateKey === todayISO() ? "today" : "tomorrow";
+      const day = gap.dateKey === today ? "today" : "tomorrow";
       setRetimed((prev) => ({
         ...prev,
         [card.id]: `${day} ${gap.start}`,
@@ -818,7 +833,7 @@ export function StreamClient({
       await createTask({
         title: `buy ${name}`,
         groupId: null,
-        dueDate: todayISO(),
+        dueDate: today,
         notes: null,
         priority: "med",
       });
@@ -909,6 +924,7 @@ export function StreamClient({
         <div className="mt-2 divide-y divide-hairline">
           {cards.map((card, index) => (
             <CardRow
+              today={today}
               key={card.id}
               card={card}
               section={key}

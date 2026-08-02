@@ -10,7 +10,7 @@ import {
   getBalanceChangesOn,
 } from "@/app/lib/data/finance";
 import { getInventoryItems, getInventoryUsages } from "@/app/lib/data/inventory";
-import { getDashboardData, getOpenTasks, currentMonth } from "@/app/lib/data/dashboard";
+import { getDashboardData, getOpenTasks } from "@/app/lib/data/dashboard";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { financeSnapshot } from "@/app/lib/snapshots/finance";
 import { inventorySnapshot } from "@/app/lib/snapshots/inventory";
@@ -733,7 +733,7 @@ export async function runAssistantTool(
         }
         const [dash, tasks, accounts, recurring, items, usages, todayChanges, prefs] =
           await Promise.all([
-            getDashboardData(userId, currentMonth()),
+            getDashboardData(userId, today.slice(0, 7)),
             getOpenTasks(userId),
             getAccounts(userId),
             getActiveRecurringExpenses(userId),

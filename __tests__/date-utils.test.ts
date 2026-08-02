@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
-  daysFromToday,
   formatClock12,
   formatClockTime,
   formatDue,
@@ -24,12 +23,9 @@ describe("date utilities", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 23, 12));
 
-    expect(todayISO()).toBe("2026-05-23");
-    expect(formatDue("2026-05-23")).toBe("today");
-    expect(formatDue("2026-05-25")).toBe("May 25");
-    expect(daysFromToday("2026-05-22")).toBe(-1);
-    expect(daysFromToday("2026-05-23")).toBe(0);
-    expect(daysFromToday("2026-05-30")).toBe(7);
+    expect(todayISO(null)).toBe("2026-05-23");
+    expect(formatDue("2026-05-23", "2026-05-23")).toBe("today");
+    expect(formatDue("2026-05-25", "2026-05-23")).toBe("May 25");
   });
 
   test("formats calendar labels consistently", () => {
@@ -41,7 +37,7 @@ describe("date utilities", () => {
     expect(formatMonthDay(date)).toBe("May 23");
     expect(formatMonthDay(date, false)).toBe("23");
     expect(formatWeekdayMonthDay(date)).toBe("Sat, May 23");
-    expect(formatLongWeekdayMonthDay(date)).toBe("Saturday, May 23");
+    expect(formatLongWeekdayMonthDay(date, null)).toBe("Saturday, May 23");
   });
 
   test("timezone-aware helpers use the given zone's wall clock, not the process clock", () => {
@@ -74,7 +70,7 @@ describe("date utilities", () => {
   test("formatDue formats a past (overdue) date like any other non-today date", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 23, 12));
-    expect(formatDue("2026-05-20")).toBe("May 20");
+    expect(formatDue("2026-05-20", "2026-05-23")).toBe("May 20");
   });
 
   describe("formatRelativeToNow", () => {

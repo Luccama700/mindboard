@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/utils/supabase/server";
+import { todayKey } from "@/app/lib/mcp/config";
 import type { SpendingCategory } from "@/app/_components/finance-types";
 import {
   listVaultNotePaths,
@@ -48,6 +49,7 @@ export async function DockMount() {
     brainCount,
     accountsResponse,
     categoriesResponse,
+    today,
   ] = await Promise.all([
     supabase
       .from("groups")
@@ -73,6 +75,11 @@ export async function DockMount() {
       .select("id, name, color, archived, created_at")
       .eq("archived", false)
       .order("name", { ascending: true }),
+    // The capture bar writes tasks.due_date directly, so its notion of "today"
+    // has to be the user's, not the device's. Resolved here (the Dock's only
+    // parent) and threaded down as a prop; it rides the existing Promise.all,
+    // so it costs no extra latency.
+    todayKey(supabase, user.id),
   ]);
 
   const groups = (groupsResponse.data ?? []) as Group[];
@@ -86,6 +93,7 @@ export async function DockMount() {
 
   return (
     <Dock
+      today={today}
       groups={groups}
       inboxCount={inboxResponse.count ?? 0}
       brainCount={brainCount}

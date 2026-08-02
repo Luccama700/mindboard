@@ -62,6 +62,10 @@ const getStreamData = cache(
   async (
     userId: string,
   ): Promise<{
+    // The USER'S day (user_settings.timezone). The stream is classified
+    // server-side against it, so the client must compare against the same key
+    // rather than re-deriving one from the device clock.
+    today: string;
     snapshot: StreamSnapshot;
     accounts: SpendAccount[];
     categories: SpendCategory[];
@@ -104,7 +108,7 @@ const getStreamData = cache(
       weekMissedResult,
       mindshare,
     ] = await Promise.all([
-      getDashboardData(userId, currentMonth()),
+      getDashboardData(userId, currentMonth(timeZone)),
       getOpenTasks(userId),
       getAccounts(userId),
       getActiveRecurringExpenses(userId),
@@ -161,8 +165,9 @@ const getStreamData = cache(
         recurringTasks,
         [today, addDaysKey(today, 1)],
         slotKeys,
+        timeZone,
       ),
-      ...slotBusyEvents(recurringSlots, recurringTasks),
+      ...slotBusyEvents(recurringSlots, recurringTasks, timeZone),
     ];
     const schedule = scheduleSnapshot({
       events: busyEvents,
@@ -290,6 +295,7 @@ const getStreamData = cache(
     });
 
     return {
+      today,
       snapshot,
       accounts: accounts.map((a) => ({
         id: a.id,
@@ -310,6 +316,7 @@ const getStreamData = cache(
 async function StreamSection({ userId }: { userId: string }) {
   const [
     {
+      today,
       snapshot,
       accounts,
       categories,
@@ -334,6 +341,7 @@ async function StreamSection({ userId }: { userId: string }) {
       weekDone={weekDone}
       weekMissed={weekMissed}
       mindshare={mindshare}
+      today={today}
       todayLabel={formatLongWeekdayMonthDay(now, timeZone).toLowerCase()}
       clockLabel={formatClock12(now, timeZone)}
     />
@@ -345,31 +353,39 @@ async function StreamSection({ userId }: { userId: string }) {
 // current month.
 async function WeekPaneSection({
   userId,
-  month,
+  queryMonth,
   selectedDay,
 }: {
   userId: string;
-  month: string;
+  // Raw ?m= — the default month needs the user's zone, and resolving it here
+  // (inside the Suspense boundary, where prefs is awaited anyway) keeps it off
+  // Home's critical path so both boundaries still flush immediately.
+  queryMonth: string | string[] | undefined;
   selectedDay: string | null;
 }) {
-  const [
-    {
-      calendarTasks,
-      events,
-      finance,
-      calendarStatus,
-      calendarLinks,
-      recurringTasks,
-      recurringCompletions,
-      recurringSlots,
-    },
-    prefs,
-  ] = await Promise.all([
-    getDashboardData(userId, month),
-    getUserPreferences(userId),
-  ]);
-
+  // prefs first: the default month is the user's current month, so the zone has
+  // to be known before the data window is chosen. Serialised on purpose, and
+  // affordable because this whole section sits behind its own Suspense
+  // boundary. getDashboardData is cache()-deduped, so when ?m= is absent this
+  // resolves to the same month the stream already requested and shares its
+  // in-flight promise.
+  const prefs = await getUserPreferences(userId);
   const timeZone = safeTimeZone(prefs.timezone);
+  const month = selectedDay
+    ? selectedDay.slice(0, 7)
+    : normalizeMonth(queryMonth, timeZone);
+
+  const {
+    calendarTasks,
+    events,
+    finance,
+    calendarStatus,
+    calendarLinks,
+    recurringTasks,
+    recurringCompletions,
+    recurringSlots,
+  } = await getDashboardData(userId, month);
+
   const today = todayISO(timeZone);
   const slotKeys = new Set(
     recurringSlots.map((s) => `${s.rule_id}:${s.occurred_on}`),
@@ -381,8 +397,9 @@ async function WeekPaneSection({
         recurringTasks,
         [today, addDaysKey(today, 1)],
         slotKeys,
+        timeZone,
       ),
-      ...slotBusyEvents(recurringSlots, recurringTasks),
+      ...slotBusyEvents(recurringSlots, recurringTasks, timeZone),
     ],
     now: new Date(),
     wakeStartHour: prefs.wake_start_hour,
@@ -394,6 +411,7 @@ async function WeekPaneSection({
     <DashboardCalendar
       key={`${month}:${selectedDay ?? ""}`}
       month={month}
+      today={today}
       tasks={calendarTasks}
       events={events}
       finance={finance}
@@ -456,8 +474,6 @@ export default async function Home({
 }) {
   const query = await searchParams;
   const selectedDay = normalizeDay(query.d);
-  // The selected day owns the month it lives in, so its week's data loads.
-  const month = selectedDay ? selectedDay.slice(0, 7) : normalizeMonth(query.m);
 
   const supabase = await createClient();
   const {
@@ -480,7 +496,7 @@ export default async function Home({
           <Suspense fallback={<WeekPaneSkeleton />}>
             <WeekPaneSection
               userId={user.id}
-              month={month}
+              queryMonth={query.m}
               selectedDay={selectedDay}
             />
           </Suspense>

@@ -83,7 +83,7 @@ export function InventoryCalendar({
   onDeleteUsage: (id: string) => void;
   onUpdateThreshold: (value: number | null) => void;
 }) {
-  const today = todayISO();
+  const today = todayISO(null);
   const [month, setMonth] = useState(() => today.slice(0, 7));
 
   const quantityToday = Number(item.quantity);

@@ -8,6 +8,7 @@ import {
   type RecurringRule,
 } from "@/app/_components/finance-projection";
 import type { ScheduleEvent } from "@/app/lib/snapshots/schedule";
+import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 
 export type TaskRecurrence = {
   frequency: "daily" | "weekly" | "monthly" | "custom";
@@ -111,10 +112,17 @@ export type RecurringSlot = {
 // rule's due_time for its day, so it must never be double-counted. Callers pass
 // a `skip` set of "${ruleId}:${dateKey}" keys that have a slot; those occurrences
 // emit nothing here and are supplied instead by slotBusyEvents.
+//
+// `timeZone` is required because a rule's due_time is a WALL CLOCK time in the
+// user's zone, and these events feed zone-aware free-time math. Resolving them
+// on the process clock (UTC on Vercel) put a Vancouver 09:00 block at 02:00
+// local, outside the wake window, so it subtracted nothing. Pass `null` only in
+// the browser, where the process clock already is the user's zone.
 export function occurrenceBusyEvents(
   rules: RecurringTaskRule[],
   dateKeys: string[],
-  skip?: Set<string>,
+  skip: Set<string> | undefined,
+  timeZone: string | null,
 ): ScheduleEvent[] {
   const events: ScheduleEvent[] = [];
   for (const key of dateKeys) {
@@ -124,11 +132,10 @@ export function occurrenceBusyEvents(
       if (skip?.has(`${rule.id}:${key}`)) continue;
       const [h, m] = rule.due_time.split(":").map(Number);
       if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
-      const start = new Date(date);
-      start.setHours(h, m, 0, 0);
+      const startMs = zonedWallTimeToUtcMs(key, h, m, timeZone);
+      const start = new Date(startMs);
       const end = new Date(
-        start.getTime() +
-          (rule.duration_min ?? DEFAULT_OCCURRENCE_MINUTES) * 60_000,
+        startMs + (rule.duration_min ?? DEFAULT_OCCURRENCE_MINUTES) * 60_000,
       );
       events.push({
         summary: rule.title,
@@ -143,10 +150,13 @@ export function occurrenceBusyEvents(
 
 // Approved slots as synthetic busy events, the commitment counterpart to
 // occurrenceBusyEvents. Duration precedence: slot > rule > default. A slot whose
-// rule id is unknown (archived/deleted) is skipped.
+// rule id is unknown (archived/deleted) is skipped. `timeZone` is required for
+// the same reason as occurrenceBusyEvents: start_time is a wall clock in the
+// user's zone.
 export function slotBusyEvents(
   slots: RecurringSlot[],
   rules: Pick<RecurringTaskRule, "id" | "title" | "duration_min">[],
+  timeZone: string | null,
 ): ScheduleEvent[] {
   const ruleById = new Map(rules.map((r) => [r.id, r]));
   const events: ScheduleEvent[] = [];
@@ -160,9 +170,9 @@ export function slotBusyEvents(
     if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
     const minutes =
       slot.duration_min ?? rule.duration_min ?? DEFAULT_OCCURRENCE_MINUTES;
-    const start = parseKey(slot.occurred_on);
-    start.setHours(h, m, 0, 0);
-    const end = new Date(start.getTime() + minutes * 60_000);
+    const startMs = zonedWallTimeToUtcMs(slot.occurred_on, h, m, timeZone);
+    const start = new Date(startMs);
+    const end = new Date(startMs + minutes * 60_000);
     events.push({
       summary: rule.title,
       start: start.toISOString(),

@@ -356,7 +356,7 @@ export function InventoryClient({
   // Quiet, opt-in attention: a hint only exists when the user set a usage rule
   // (projected run-out date) or a reorder threshold ("low") — plus "out" at 0.
   const hints = useMemo(() => {
-    const today = todayISO();
+    const today = todayISO(null);
     const map = new Map<string, { status: StockStatus; runOut: string | null }>();
     for (const item of activeItems) {
       const qty = Number(item.quantity);
@@ -373,7 +373,7 @@ export function InventoryClient({
       buildShoppingList({
         items: activeItems,
         rulesByItem,
-        today: todayISO(),
+        today: todayISO(null),
       }),
     [activeItems, rulesByItem],
   );
@@ -432,7 +432,7 @@ export function InventoryClient({
   // the question is "stop tracking?", never "go buy this".
   const suggestion = useMemo(() => {
     if (needle) return null;
-    const today = todayISO();
+    const today = todayISO(null);
     for (const item of ranOutAll) {
       if (dismissedSuggestions.has(item.id)) continue;
       const days = daysBetween(zeroSinceKey(item), today);

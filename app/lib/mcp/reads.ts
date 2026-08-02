@@ -15,7 +15,8 @@ import {
 } from "@/app/lib/snapshots/schedule";
 import { listEvents, type CalendarEvent } from "@/utils/google/calendar";
 import { addDaysKey } from "@/app/_components/finance-projection";
-import { safeTimeZone } from "@/app/_components/date-utils";
+import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
+import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import { buildFinanceForecast } from "@/app/lib/finance/forecast";
 import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
 import {
@@ -685,15 +686,18 @@ export async function getPreferences(userId: string) {
 export async function getScheduleSnapshot(userId: string) {
   const ownerId = userId;
   const prefs = await readPreferencesRow(userId);
+  const timeZone = safeTimeZone(prefs.timezone);
   const now = new Date();
-  const dayStart = new Date(now);
-  dayStart.setHours(0, 0, 0, 0);
-  const horizon = new Date(dayStart);
-  horizon.setDate(horizon.getDate() + 3);
+  // The fetch window and the wake window both have to be the USER'S day: the
+  // process clock is UTC on Vercel, so setHours(0,0,0,0) built a Vancouver
+  // "today" that started at 17:00 the previous local afternoon.
+  const todayIso = todayISO(timeZone);
+  const dayStartMs = zonedWallTimeToUtcMs(todayIso, 0, 0, timeZone);
+  const horizonMs = zonedWallTimeToUtcMs(addDaysKey(todayIso, 3), 0, 0, timeZone);
 
   const events = await listEvents(ownerId, {
-    timeMin: dayStart.toISOString(),
-    timeMax: horizon.toISOString(),
+    timeMin: new Date(dayStartMs).toISOString(),
+    timeMax: new Date(horizonMs).toISOString(),
   });
 
   return {
@@ -702,6 +706,7 @@ export async function getScheduleSnapshot(userId: string) {
       now,
       wakeStartHour: prefs.wakeStartHour,
       wakeEndHour: prefs.wakeEndHour,
+      timeZone,
     }),
     freeGaps: freeGaps({
       events,
@@ -710,6 +715,7 @@ export async function getScheduleSnapshot(userId: string) {
       wakeEndHour: prefs.wakeEndHour,
       days: 3,
       limit: 6,
+      timeZone,
     }),
   };
 }
