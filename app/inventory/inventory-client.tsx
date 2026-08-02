@@ -28,6 +28,7 @@ import {
   readImageGenSettings,
 } from "@/app/_components/image-gen-settings";
 import {
+  adjustInventoryQuantity,
   createInventoryGroup,
   createInventoryItem,
   createInventoryUsage,
@@ -70,6 +71,7 @@ import {
 } from "@/app/_components/shopping-list";
 import {
   resolveItemRef,
+  resolveItemRefIncludingArchived,
   type ResolvableItem,
   type StockOp,
 } from "@/app/lib/mcp/inventory-ops";
@@ -284,6 +286,11 @@ export function InventoryClient({
   const [proposalPending, setProposalPending] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
 
+  // Every server action here returns { error }. Dropping it leaves the
+  // optimistic value on screen until the transition settles and then snaps back
+  // with no explanation, so the user acts on a number the DB never accepted.
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const [selectMode, setSelectMode] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(
@@ -464,6 +471,20 @@ export function InventoryClient({
     scrollDetailIntoView();
   }
 
+  // Runs one server action and reports a rejected write. The optimistic patch
+  // itself needs no manual undo: useOptimistic drops it when the transition
+  // settles, and a failed action never revalidates, so the shelf falls back to
+  // the last server truth. What was missing was saying so.
+  async function runAction<T extends { error: string | null }>(
+    label: string,
+    call: Promise<T>,
+  ): Promise<T> {
+    const result = await call;
+    if (result?.error) setActionError(`${label} — ${result.error}`);
+    else setActionError(null);
+    return result;
+  }
+
   function onCreateItem(input: {
     name: string;
     quantity: number;
@@ -495,48 +516,70 @@ export function InventoryClient({
     setSelectedId(tempId);
     startTransition(async () => {
       dispatchItems({ kind: "add", item: optimistic });
-      const result = await createInventoryItem({
-        groupId: input.groupId,
-        name: input.name,
-        quantity: input.quantity,
-        unit: input.unit,
-      });
+      const result = await runAction(
+        `couldn't add ${input.name}`,
+        createInventoryItem({
+          groupId: input.groupId,
+          name: input.name,
+          quantity: input.quantity,
+          unit: input.unit,
+        }),
+      );
       if (!result.error && result.item) {
         const real = result.item as InventoryItem;
         dispatchItems({ kind: "replace", tempId, item: real });
         setSelectedId(real.id);
+      } else {
+        // The optimistic row is about to disappear; don't leave the detail
+        // panel pointed at an id that never existed.
+        setSelectedId((prev) => (prev === tempId ? null : prev));
       }
     });
   }
 
+  // A step travels as a delta, never as an absolute quantity computed here: the
+  // server applies it to the live row (compare-and-swap), so a stale tab or a
+  // concurrent agent write can't be silently overwritten by this view's
+  // arithmetic. The patch is only the optimistic paint.
   function onAdjustQuantity(id: string, delta: number) {
     const current = items.find((it) => it.id === id);
     if (!current) return;
-    const next = Math.max(
-      0,
-      Math.round((Number(current.quantity) + delta) * 1000) / 1000,
-    );
-    if (next === Number(current.quantity)) return;
-    onUpdateItem(id, { quantity: next });
+    const before = Number(current.quantity);
+    const next = Math.max(0, Math.round((before + delta) * 1000) / 1000);
+    if (next === before) return;
+    onUpdateItem(id, { quantity: next }, delta);
   }
 
-  function onUpdateItem(id: string, patch: Partial<InventoryItem>) {
+  // The one write path for an item row. `delta` marks a relative quantity
+  // change (a stepper, "+2 milk") and is applied server-side; everything else,
+  // including a recount, is an absolute patch.
+  function onUpdateItem(
+    id: string,
+    patch: Partial<InventoryItem>,
+    delta?: number,
+  ) {
+    const label = items.find((it) => it.id === id)?.name ?? "item";
     startTransition(async () => {
       dispatchItems({ kind: "update", id, patch });
-      await updateInventoryItem({
-        id,
-        name: patch.name,
-        quantity: patch.quantity,
-        unit: patch.unit,
-        notes: patch.notes,
-        groupId: patch.inventory_group_id,
-        imageUrl: patch.image_url,
-        reorderThreshold: patch.reorder_threshold,
-        priority: patch.priority,
-        shoppingPinned: patch.shopping_pinned,
-        buyAmount: patch.buy_amount,
-        estPrice: patch.est_price,
-      });
+      await runAction(
+        `couldn't update ${label}`,
+        delta === undefined
+          ? updateInventoryItem({
+              id,
+              name: patch.name,
+              quantity: patch.quantity,
+              unit: patch.unit,
+              notes: patch.notes,
+              groupId: patch.inventory_group_id,
+              imageUrl: patch.image_url,
+              reorderThreshold: patch.reorder_threshold,
+              priority: patch.priority,
+              shoppingPinned: patch.shopping_pinned,
+              buyAmount: patch.buy_amount,
+              estPrice: patch.est_price,
+            })
+          : adjustInventoryQuantity({ id, delta }),
+      );
       // Pinning can trigger a post-response AI price lookup server-side;
       // refresh so the filled price lands without a manual reload.
       if (patch.shopping_pinned === true) {
@@ -552,11 +595,15 @@ export function InventoryClient({
     if (input.store !== undefined) setShoppingStore(input.store);
     if (input.shoppingDay !== undefined) setShoppingDay(input.shoppingDay);
     startTransition(async () => {
-      await saveShoppingSettings(input);
+      await runAction(
+        "couldn't save shopping settings",
+        saveShoppingSettings(input),
+      );
     });
   }
 
   function onSetArchived(id: string, archived: boolean) {
+    const label = items.find((it) => it.id === id)?.name ?? "item";
     startTransition(async () => {
       if (archived && selectedId === id) setSelectedId(null);
       dispatchItems({
@@ -567,7 +614,10 @@ export function InventoryClient({
           archived_at: archived ? new Date().toISOString() : null,
         },
       });
-      await setInventoryItemArchived(id, archived);
+      await runAction(
+        `couldn't ${archived ? "stop tracking" : "restore"} ${label}`,
+        setInventoryItemArchived(id, archived),
+      );
     });
   }
 
@@ -587,12 +637,15 @@ export function InventoryClient({
     };
     startTransition(async () => {
       dispatchUsages({ kind: "add", usage: optimistic });
-      const result = await createInventoryUsage({
-        itemId,
-        amount: input.amount,
-        period: input.period,
-        intervalDays: input.intervalDays,
-      });
+      const result = await runAction(
+        "couldn't save the usage rule",
+        createInventoryUsage({
+          itemId,
+          amount: input.amount,
+          period: input.period,
+          intervalDays: input.intervalDays,
+        }),
+      );
       if (!result.error && result.usage) {
         dispatchUsages({
           kind: "replace",
@@ -617,38 +670,48 @@ export function InventoryClient({
           interval_days: input.intervalDays,
         },
       });
-      await updateInventoryUsage({
-        id,
-        amount: input.amount,
-        period: input.period,
-        intervalDays: input.intervalDays,
-      });
+      await runAction(
+        "couldn't save the usage rule",
+        updateInventoryUsage({
+          id,
+          amount: input.amount,
+          period: input.period,
+          intervalDays: input.intervalDays,
+        }),
+      );
     });
   }
 
   function onDeleteUsage(id: string) {
     startTransition(async () => {
       dispatchUsages({ kind: "remove", id });
-      await deleteInventoryUsage(id);
+      await runAction(
+        "couldn't clear the usage rule",
+        deleteInventoryUsage(id),
+      );
     });
   }
 
   function onDeleteItem(id: string) {
+    const label = items.find((it) => it.id === id)?.name ?? "item";
     startTransition(async () => {
       if (selectedId === id) setSelectedId(null);
       dispatchItems({ kind: "remove", id });
-      await deleteInventoryItem(id);
+      await runAction(`couldn't delete ${label}`, deleteInventoryItem(id));
     });
   }
 
   function onUpdateGroup(id: string, patch: Partial<InventoryGroup>) {
     startTransition(async () => {
       dispatchGroups({ kind: "update", id, patch });
-      await updateInventoryGroup({
-        id,
-        name: patch.name,
-        color: patch.color,
-      });
+      await runAction(
+        "couldn't update the group",
+        updateInventoryGroup({
+          id,
+          name: patch.name,
+          color: patch.color,
+        }),
+      );
     });
   }
 
@@ -664,7 +727,7 @@ export function InventoryClient({
           });
         }
       }
-      await deleteInventoryGroup(id);
+      await runAction("couldn't delete the group", deleteInventoryGroup(id));
     });
   }
 
@@ -701,7 +764,13 @@ export function InventoryClient({
           patch: { archived: true, archived_at: now },
         });
       }
-      for (const id of ids) await setInventoryItemArchived(id, true);
+      for (const id of ids) {
+        const result = await runAction(
+          "couldn't stop tracking every selected item",
+          setInventoryItemArchived(id, true),
+        );
+        if (result.error) return;
+      }
     });
   }
 
@@ -717,7 +786,11 @@ export function InventoryClient({
         });
       }
       for (const id of ids) {
-        await updateInventoryItem({ id, groupId });
+        const result = await runAction(
+          "couldn't move every selected item",
+          updateInventoryItem({ id, groupId }),
+        );
+        if (result.error) return;
       }
     });
   }
@@ -737,7 +810,13 @@ export function InventoryClient({
         if (selectedId === id) setSelectedId(null);
         dispatchItems({ kind: "remove", id });
       }
-      for (const id of ids) await deleteInventoryItem(id);
+      for (const id of ids) {
+        const result = await runAction(
+          "couldn't delete every selected item",
+          deleteInventoryItem(id),
+        );
+        if (result.error) return;
+      }
     });
   }
 
@@ -777,21 +856,36 @@ export function InventoryClient({
       return;
     }
 
-    const pool: ResolvableItem[] = activeItems.map((it) => ({
+    const toResolvable = (it: InventoryItem): ResolvableItem => ({
       id: it.id,
       name: it.name,
       quantity: Number(it.quantity),
       unit: it.unit,
-      archived: false,
-    }));
+      archived: it.archived,
+    });
+    const activePool = activeItems.map(toResolvable);
+    // Archived items are considered too, so "12 rice" against something you
+    // stopped tracking restores that row instead of creating a second rice.
+    const archivedPool = archivedItems.map(toResolvable);
 
     const running = new Map<string, number>();
+    // Per item: the net relative change, or an absolute value once a recount in
+    // the same line pins one. Relative changes are what get sent, so a stale
+    // shelf can't overwrite a concurrent write.
+    const pending = new Map<string, { delta: number; absolute: number | null }>();
     const ops: StockOp[] = [];
-    let hasCreate = false;
+    // Creates and archived matches both change more than a number, so they go
+    // through the receipt instead of applying silently.
+    let needsReceipt = false;
     for (const seg of segments) {
-      const found = resolveItemRef(seg.ref, pool);
+      const found = resolveItemRefIncludingArchived(
+        seg.ref,
+        activePool,
+        archivedPool,
+      );
       if (found.ok) {
         const it = found.value;
+        if (it.archived) needsReceipt = true;
         const before = running.get(it.id) ?? it.quantity;
         const next =
           seg.sign === "+"
@@ -800,6 +894,17 @@ export function InventoryClient({
               ? Math.max(0, before - seg.value)
               : seg.value;
         running.set(it.id, Math.round(next * 1000) / 1000);
+        const acc = pending.get(it.id) ?? { delta: 0, absolute: null };
+        if (seg.sign === null) {
+          // A recount inside the same line pins the value from here on.
+          acc.absolute = seg.value;
+          acc.delta = 0;
+        } else {
+          const signed = seg.sign === "+" ? seg.value : -seg.value;
+          if (acc.absolute === null) acc.delta += signed;
+          else acc.absolute = Math.max(0, acc.absolute + signed);
+        }
+        pending.set(it.id, acc);
         ops.push(
           seg.sign === "+"
             ? { op: "add", item: it.id, amount: seg.value }
@@ -810,7 +915,7 @@ export function InventoryClient({
       } else if (seg.sign === null && found.error.startsWith("no item matching")) {
         // A bare recount of something we don't track yet = a new item, which
         // deserves a receipt (typo guard) instead of a silent create.
-        hasCreate = true;
+        needsReceipt = true;
         ops.push({ op: "create", name: seg.ref, quantity: seg.value });
       } else {
         setCaptureError(found.error);
@@ -818,17 +923,24 @@ export function InventoryClient({
       }
     }
 
-    if (hasCreate) {
+    if (needsReceipt) {
       void runPropose(() => proposeStockOps({ operations: ops }));
       return;
     }
 
-    // Every ref resolved to an existing item: the user typed the exact edit,
-    // apply it instantly (same trust level as tapping the steppers).
-    for (const [id, next] of running) {
+    // Every ref resolved to an item already on the shelf: the user typed the
+    // exact edit, apply it instantly (same trust level as tapping the
+    // steppers). "+2"/"-2" send their delta; only a recount overwrites.
+    for (const [id, acc] of pending) {
+      const next = running.get(id) ?? 0;
       const current = items.find((it) => it.id === id);
-      if (!current || Number(current.quantity) === next) continue;
-      onUpdateItem(id, { quantity: next });
+      if (!current) continue;
+      if (acc.absolute !== null) {
+        if (Number(current.quantity) === acc.absolute) continue;
+        onUpdateItem(id, { quantity: acc.absolute });
+      } else if (acc.delta !== 0) {
+        onUpdateItem(id, { quantity: next }, acc.delta);
+      }
     }
     setQuery("");
   }
@@ -1145,52 +1257,65 @@ export function InventoryClient({
           </div>
         </details>
 
-        {selectMode && (
-          <div className="sticky bottom-64 z-50 lg:bottom-52 flex flex-wrap items-center gap-2 glass rounded-2xl px-3 py-2">
-            <span className="text-label uppercase text-muted tabular-nums">
-              {checkedIds.size} selected
-            </span>
-            <button
-              type="button"
-              onClick={bulkArchive}
-              disabled={checkedIds.size === 0}
-              className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
-            >
-              stop tracking
-            </button>
-            <select
-              value=""
-              onChange={(e) => {
-                if (e.target.value === "") return;
-                bulkMove(e.target.value === "__none" ? null : e.target.value);
-              }}
-              disabled={checkedIds.size === 0}
-              aria-label="move selected to group"
-              className="min-h-9 bg-glass-well rounded-field border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
-            >
-              <option value="">move to…</option>
-              <option value="__none">ungrouped</option>
-              {groups.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={bulkDelete}
-              disabled={checkedIds.size === 0}
-              className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors disabled:opacity-40"
-            >
-              delete
-            </button>
-            <button
-              type="button"
-              onClick={exitSelectMode}
-              className="ml-auto min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
-            >
-              done
-            </button>
+        {(actionError || selectMode) && (
+          <div className="sticky bottom-64 z-50 lg:bottom-52 space-y-2">
+            {actionError && (
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                className="block w-full min-h-11 text-left text-meta text-danger glass rounded-2xl px-3 py-2"
+              >
+                {actionError} · tap to dismiss
+              </button>
+            )}
+            {selectMode && (
+              <div className="flex flex-wrap items-center gap-2 glass rounded-2xl px-3 py-2">
+                <span className="text-label uppercase text-muted tabular-nums">
+                  {checkedIds.size} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={bulkArchive}
+                  disabled={checkedIds.size === 0}
+                  className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-40"
+                >
+                  stop tracking
+                </button>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value === "") return;
+                    bulkMove(e.target.value === "__none" ? null : e.target.value);
+                  }}
+                  disabled={checkedIds.size === 0}
+                  aria-label="move selected to group"
+                  className="min-h-9 bg-glass-well rounded-field border border-line-strong text-[10px] uppercase tracking-widest text-muted px-2 focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
+                >
+                  <option value="">move to…</option>
+                  <option value="__none">ungrouped</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={bulkDelete}
+                  disabled={checkedIds.size === 0}
+                  className="min-h-9 px-3 text-[10px] tracking-widest uppercase text-danger hover:text-danger-hover transition-colors disabled:opacity-40"
+                >
+                  delete
+                </button>
+                <button
+                  type="button"
+                  onClick={exitSelectMode}
+                  className="ml-auto min-h-9 px-3 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+                >
+                  done
+                </button>
+              </div>
+            )}
           </div>
         )}
       </section>
