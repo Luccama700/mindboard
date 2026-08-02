@@ -283,6 +283,21 @@ describe("resolveFinanceOps transfer dedup", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
   });
+
+  // markTransfer folds like the fingerprint fields: a batch that unmarks a leg
+  // and then re-marks it leaves it a transfer, so the pool keeps guarding.
+  it("still skips when a later adjust re-marks an unmarked leg as a transfer", () => {
+    const r = resolve(
+      [
+        { op: "adjust", changeId: "t-out", markTransfer: false },
+        { op: "adjust", changeId: "t-out", markTransfer: true },
+        dupTransfer,
+      ],
+      { existingChanges: transferLegs },
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[2].kind).toBe("skip_duplicate");
+  });
 });
 
 describe("resolveFinanceOps", () => {
@@ -430,6 +445,60 @@ describe("resolveFinanceOps", () => {
     ]);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.value.map((o) => o.kind)).toEqual(["adjust", "skip_duplicate"]);
+  });
+
+  // Adjusts on one row are folded to their NET effect before comparing. Judging
+  // each op against the original row and unioning would mark the row stale on
+  // the first adjust and never un-mark it, admitting a duplicate whose net
+  // state is "row unchanged, plus an identical new row".
+  it("still skips a duplicate when a later adjust moves the fingerprint back", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 99 },
+      { op: "adjust", changeId: "ch-1", amount: 54.1 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.map((o) => o.kind)).toEqual([
+        "adjust",
+        "adjust",
+        "skip_duplicate",
+      ]);
+    }
+  });
+
+  it("still skips when successive adjusts on date and amount both net to no change", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", date: "2026-07-02", amount: 99 },
+      { op: "adjust", changeId: "ch-1", date: "2026-06-30", amount: 54.1 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[2].kind).toBe("skip_duplicate");
+  });
+
+  // The fold must not swing the other way either: when the net effect DOES
+  // move the fingerprint, the row still stops guarding.
+  it("exempts the row when successive adjusts net to a moved fingerprint", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 99 },
+      { op: "adjust", changeId: "ch-1", amount: 61.4 },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[2].kind).toBe("spend");
+  });
+
+  // A later adjust that only touches the note leaves an earlier amount move
+  // standing — folding must carry fields forward, not reset them.
+  it("keeps the exemption when a later note-only adjust follows an amount move", () => {
+    const r = resolve([
+      { op: "adjust", changeId: "ch-1", amount: 61.4 },
+      { op: "adjust", changeId: "ch-1", note: "costco" },
+      { op: "spend", account: "chase checking", amount: 54.1, date: "2026-06-30" },
+    ]);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value[2].kind).toBe("spend");
   });
 
   // The mutated-row exemption is per-row, not a blanket opt-out: an untouched

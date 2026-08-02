@@ -513,33 +513,66 @@ export function resolveFinanceOps(
   // category-only adjust leaves the row exactly as the pool describes it, so
   // it keeps guarding — a missed duplicate corrupts totals silently, while a
   // wrongly skipped transaction is recoverable with one follow-up, and that
-  // asymmetry is why the exemption is kept as narrow as the hazard.
+  // asymmetry is why the exemption is kept narrow.
   //
-  // Order-independent: computed over the whole batch, so it holds whichever
-  // side of the removal the replacement is sent on.
-  const staleIds = new Set<string>();
-  // The transfer pool matches on fingerprint AND transfer-ness, so it is also
-  // invalidated by an adjust that reclassifies the row as regular spending.
-  const staleTransferIds = new Set<string>();
+  // Adjusts are FOLDED per row before comparing, not evaluated one at a time:
+  // the executor applies them in order, each setting only its own fields, so
+  // only the net effect matters. Comparing each op against the original row and
+  // unioning the results would mark a row stale on an adjust that a later
+  // adjust undoes — [amount→99, amount→54.10] nets to no change at all, and
+  // treating it as a move would open a dedup hole this tranche exists to close.
+  //
+  // Otherwise order-independent: computed over the whole batch, so it holds
+  // whichever side of the removal the replacement is sent on.
+  //
+  // NOT covered (both pre-existing, neither introduced here):
+  //   - adjust TO a fingerprint: the post-adjust fingerprint is never ADDED to
+  //     the pool, so [adjust X date→D, spend on D] is not caught as a dupe.
+  //   - markTransfer: TRUE: the row leaves spending analytics entirely, so a
+  //     spend at its fingerprint is a real addition, yet it is still skipped —
+  //     spending totals under-report. Only markTransfer: false is handled, and
+  //     only for the transfer pool.
+  const removedInBatch = new Set<string>();
+  // Net {date, amount, transfer-ness} per adjusted row. `isTransfer: null`
+  // means this batch does not touch it.
+  const effective = new Map<
+    string,
+    { occurredAt: string; amount: number; isTransfer: boolean | null }
+  >();
   for (const op of ops) {
     if (op.op === "remove") {
-      staleIds.add(op.changeId);
-      staleTransferIds.add(op.changeId);
+      removedInBatch.add(op.changeId);
       continue;
     }
     if (op.op !== "adjust") continue;
-    if (op.markTransfer === false) staleTransferIds.add(op.changeId);
     const row = changeById.get(op.changeId);
     if (!row) continue;
+    const current = effective.get(op.changeId) ?? {
+      occurredAt: row.occurred_at,
+      amount: Number(row.amount),
+      isTransfer: null,
+    };
+    effective.set(op.changeId, {
+      occurredAt: op.date ?? current.occurredAt,
+      amount: op.amount ?? current.amount,
+      isTransfer: op.markTransfer ?? current.isTransfer,
+    });
+  }
+
+  const staleIds = new Set<string>(removedInBatch);
+  // The transfer pool matches on fingerprint AND transfer-ness, so it is also
+  // invalidated by an adjust that reclassifies the row as regular spending.
+  const staleTransferIds = new Set<string>(removedInBatch);
+  for (const [changeId, net] of effective) {
+    const row = changeById.get(changeId);
+    if (!row) continue;
     const before = changeFingerprint(row.occurred_at, row.direction, Number(row.amount));
-    const after = changeFingerprint(
-      op.date ?? row.occurred_at,
-      row.direction,
-      op.amount ?? Number(row.amount),
-    );
-    if (before === after) continue;
-    staleIds.add(op.changeId);
-    staleTransferIds.add(op.changeId);
+    const after = changeFingerprint(net.occurredAt, row.direction, net.amount);
+    if (before !== after) {
+      staleIds.add(changeId);
+      staleTransferIds.add(changeId);
+    }
+    if (net.isTransfer === false) staleTransferIds.add(changeId);
   }
 
   const dedupPool = existingChanges.filter((row) => !staleIds.has(row.id));
