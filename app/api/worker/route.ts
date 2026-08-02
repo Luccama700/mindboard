@@ -71,12 +71,19 @@ async function markSeen(info: Record<string, unknown> = {}) {
   );
 }
 
+// Post-claim ops address a job by its id alone, so they must re-assert the same
+// allowlist `claim_next_job(allowed_users)` enforces on the way in — otherwise a
+// bearer holder could heartbeat, complete, or fail a non-allowlisted tenant's
+// job (whose completion writes that tenant's vault and Postgres rows) purely by
+// guessing its id. Scoping the load is the single choke point: complete, fail,
+// and the mid-finalize retry in the catch block all go through it.
 async function loadJob(jobId: string): Promise<JobRow | null> {
   const supabase = createServiceClient();
   const { data } = await supabase
     .from("jobs")
     .select("id, user_id, kind, payload, status, attempts")
     .eq("id", jobId)
+    .in("user_id", workerAllowedUserIds())
     .maybeSingle();
   return (data as JobRow | null) ?? null;
 }
@@ -87,7 +94,8 @@ async function failJob(job: JobRow, message: string) {
   await supabase
     .from("jobs")
     .update({ status: dead ? "failed" : "queued", error: message })
-    .eq("id", job.id);
+    .eq("id", job.id)
+    .eq("user_id", job.user_id);
 
   if (!dead) return;
   // Dead-lettered: surface the failure on the thing the job was for.
@@ -441,11 +449,13 @@ export async function POST(request: Request) {
     if (op === "heartbeat") {
       const jobId = String(body.job_id ?? "");
       if (!jobId) return bad("job_id required");
+      // Same allowlist as loadJob, inlined so the heartbeat stays one round trip.
       await supabase
         .from("jobs")
         .update({ heartbeat_at: new Date().toISOString() })
         .eq("id", jobId)
-        .eq("status", "processing");
+        .eq("status", "processing")
+        .in("user_id", workerAllowedUserIds());
       await markSeen();
       return NextResponse.json({ ok: true });
     }
@@ -466,7 +476,8 @@ export async function POST(request: Request) {
       await supabase
         .from("jobs")
         .update({ status: "done", result, error: null })
-        .eq("id", job.id);
+        .eq("id", job.id)
+        .eq("user_id", job.user_id);
       await markSeen();
       return NextResponse.json({ ok: true, ...result });
     }
