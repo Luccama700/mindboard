@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
 import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
-import { extractInstagramUrl } from "@/app/lib/reels/detect";
+import { reelRefFromCapture } from "@/app/lib/reels/detect";
 import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
 import { VAULT_NOT_CONFIGURED_MESSAGE } from "@/app/lib/mcp/capture";
 import {
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
   // download + transcribe (docs/reel-capture-plan.md). Best-effort: a failed
   // enqueue never fails the capture — the note (with the link) is already
   // saved. Only when the worker serves this owner.
-  const reel = extractInstagramUrl(parsed.value.text);
+  const reel = reelRefFromCapture(parsed.value);
   let reelQueued = false;
   if (reel && workerAllowedUserIds().includes(ownerUserId())) {
     const { error } = await createServiceClient()

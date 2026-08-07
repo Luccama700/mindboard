@@ -24,6 +24,20 @@ export function isInstagramUrl(text: string): boolean {
   return extractInstagramUrl(text) !== null;
 }
 
+// Link detection over a capture's full reach: the inline note text first,
+// then the shared file's decoded text (oversized shares keep their URL in
+// the attachment — the 2026-07-24 Instagram share format ships a page dump
+// past the inline cap, which is why text alone is not enough).
+export function reelRefFromCapture(input: {
+  text: string;
+  fileText?: string | null;
+}): ReelRef | null {
+  return (
+    extractInstagramUrl(input.text) ??
+    (input.fileText ? extractInstagramUrl(input.fileText) : null)
+  );
+}
+
 // The first ![[embed]] target in markdown (dropping any |alias or #heading).
 // Older link captures store the shared URL in an embedded attachment rather
 // than the note body, so the reel resolver follows this to the attachment.

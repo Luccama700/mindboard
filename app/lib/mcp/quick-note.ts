@@ -68,6 +68,10 @@ export type QuickNoteInput = {
   // base name when a file came along (inlined or attached).
   title: string;
   file: QuickFile | null;
+  // The attachment's decoded UTF-8 text when it couldn't inline (too big):
+  // link detection must scan here too, since share sheets can deliver a page
+  // dump whose URL never reaches `text`.
+  fileText?: string | null;
 };
 
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
@@ -207,6 +211,7 @@ export function validateQuickNote(raw: unknown): Result<QuickNoteInput> {
   // note body instead of becoming a .txt attachment embedded in an .md note.
   let title = "Quick note";
   let file: QuickFile | null = null;
+  let fileText: string | null = null;
   let noteText = text;
   if (parsedFile.value) {
     const shared = parsedFile.value;
@@ -219,10 +224,11 @@ export function validateQuickNote(raw: unknown): Result<QuickNoteInput> {
       noteText = inlined;
     } else {
       file = { name: shared.name, base64: shared.base64 };
+      fileText = shared.asText;
     }
   }
 
-  return { ok: true, value: { text: noteText, source, title, file } };
+  return { ok: true, value: { text: noteText, source, title, file, fileText } };
 }
 
 export function quickNotePath(

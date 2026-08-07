@@ -92,6 +92,7 @@ describe("validateQuickNote", () => {
         source: DEFAULT_QUICK_NOTE_SOURCE,
         title: "Quick note",
         file: null,
+        fileText: null,
       },
     });
   });
@@ -106,6 +107,7 @@ describe("validateQuickNote", () => {
         source: "Drafts app",
         title: "Quick note",
         file: null,
+        fileText: null,
       },
     });
   });
@@ -140,6 +142,7 @@ describe("validateQuickNote", () => {
         source: "iOS share",
         title: "report",
         file: { name: "report.pdf", base64: "aGVsbG8=" },
+        fileText: "hello",
       },
     });
   });
@@ -198,6 +201,7 @@ describe("validateQuickNote", () => {
         source: "iOS share",
         title: "Instagram",
         file: null,
+        fileText: null,
       },
     });
   });
@@ -224,6 +228,32 @@ describe("validateQuickNote", () => {
     });
     expect(result.ok && result.value.file?.name).toBe("huge.txt");
     expect(result.ok && result.value.text).toBe("");
+  });
+
+  test("an oversized textual share still surfaces its decoded text as fileText", () => {
+    // The reel link lives inside the attachment when the share is too big to
+    // inline — downstream link detection needs the decoded text.
+    const shared =
+      "x".repeat(QUICK_NOTE_TEXT_MAX) +
+      "\nhttps://www.instagram.com/reel/Dbn4HF2umd_/\n";
+    const result = validateQuickNote({
+      file_name: "Instagram",
+      file_base64: Buffer.from(shared).toString("base64"),
+      source: "iOS share",
+    });
+    expect(result.ok && result.value.file?.name).toBe("Instagram.txt");
+    expect(result.ok && result.value.fileText).toBe(shared);
+  });
+
+  test("a non-text attachment has no fileText", () => {
+    const result = validateQuickNote({
+      file_name: "img",
+      file_base64: Buffer.from([0x00, 0x01, 0x02, 0xfe, 0xff]).toString(
+        "base64",
+      ),
+    });
+    expect(result.ok && result.value.file?.name).toBe("img.bin");
+    expect(result.ok && result.value.fileText).toBeNull();
   });
 
   test("a name that already has an extension is left alone", () => {

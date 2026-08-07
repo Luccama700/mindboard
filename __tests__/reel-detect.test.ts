@@ -9,6 +9,7 @@ import {
   isInstagramUrl,
   reelFailureNotePath,
   reelNotePath,
+  reelRefFromCapture,
   reelThumbnailPath,
 } from "@/app/lib/reels/detect";
 
@@ -36,6 +37,41 @@ describe("extractInstagramUrl", () => {
   test("finds the link inside a longer captured note body", () => {
     const note = "Saved from Instagram\n\nhttps://www.instagram.com/reel/GfX_1/\n\n#cooking";
     expect(extractInstagramUrl(note)?.shortcode).toBe("GfX_1");
+  });
+});
+
+describe("reelRefFromCapture", () => {
+  test("finds the link in inline note text", () => {
+    const ref = reelRefFromCapture({
+      text: "https://www.instagram.com/reel/Abc1/",
+    });
+    expect(ref?.shortcode).toBe("Abc1");
+  });
+
+  test("falls back to the shared file's text when the share was too big to inline", () => {
+    // Instagram's share payload grew past the 20k inline cap on 2026-07-24:
+    // the URL only exists inside the attachment text, which broke auto-enqueue.
+    const dump =
+      "x".repeat(30_000) +
+      "\nhttps://www.instagram.com/reel/Dbn4HF2umd_/?igsh=track\n" +
+      "y".repeat(30_000);
+    const ref = reelRefFromCapture({ text: "", fileText: dump });
+    expect(ref?.shortcode).toBe("Dbn4HF2umd_");
+    expect(ref?.url).toBe("https://www.instagram.com/reel/Dbn4HF2umd_/");
+  });
+
+  test("inline text wins over the file text", () => {
+    const ref = reelRefFromCapture({
+      text: "https://www.instagram.com/reel/FromText/",
+      fileText: "https://www.instagram.com/reel/FromFile/",
+    });
+    expect(ref?.shortcode).toBe("FromText");
+  });
+
+  test("null when neither carries a link", () => {
+    expect(reelRefFromCapture({ text: "no links here" })).toBeNull();
+    expect(reelRefFromCapture({ text: "", fileText: null })).toBeNull();
+    expect(reelRefFromCapture({ text: "", fileText: "still no link" })).toBeNull();
   });
 });
 
