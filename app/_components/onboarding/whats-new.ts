@@ -14,6 +14,14 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-08-08-stream-title-expand",
+    date: "2026-08-08",
+    title: "long task names, readable again",
+    items: [
+      "a task name that gets cut off in the stream now expands when you tap it — the card grows to fit the whole title, and tapping again folds it back.",
+    ],
+  },
+  {
     id: "2026-08-02-inventory-counts-hold",
     date: "2026-08-02",
     title: "your counts stop fighting each other",

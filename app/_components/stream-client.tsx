@@ -116,6 +116,7 @@ function CardRow({
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [titleOpen, setTitleOpen] = useState(false);
   const [dx, setDx] = useState(0);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
 
@@ -426,7 +427,8 @@ function CardRow({
   }
   const factStruck = leaving === "done";
 
-  const restMax = isFocus || editOpen ? "max-h-[40rem]" : "max-h-40";
+  const restMax =
+    isFocus || editOpen || titleOpen ? "max-h-[40rem]" : "max-h-40";
   const leaveClass =
     leaving === "missed"
       ? "overflow-hidden max-h-0 opacity-0 translate-y-1 scale-[.98] duration-[400ms]"
@@ -482,13 +484,16 @@ function CardRow({
               <span className="text-muted shrink-0" aria-hidden>
                 {card.glyph}
               </span>
-              <span
-                className={
-                  factStruck ? "line-through text-muted truncate" : "truncate"
-                }
+              <button
+                type="button"
+                onClick={() => setTitleOpen((v) => !v)}
+                aria-expanded={titleOpen}
+                className={`min-w-0 text-left ${
+                  titleOpen ? "break-words" : "truncate"
+                } ${factStruck ? "line-through text-muted" : ""}`}
               >
                 {card.fact}
-              </span>
+              </button>
             </p>
             {(focusEstimate || focusLate) && (
               <p className="text-meta text-muted mt-1 flex items-center gap-1.5">
@@ -514,20 +519,27 @@ function CardRow({
                   type="button"
                   onClick={() => setEditOpen((v) => !v)}
                   aria-expanded={editOpen}
-                  className={`min-w-0 text-left truncate ${
-                    factStruck ? "line-through text-muted" : ""
-                  } ${editOpen ? "text-accent" : ""}`}
+                  className={`min-w-0 text-left ${
+                    editOpen ? "break-words" : "truncate"
+                  } ${factStruck ? "line-through text-muted" : ""} ${
+                    editOpen ? "text-accent" : ""
+                  }`}
                 >
                   {card.fact}
                 </button>
               ) : (
-                <span
-                  className={`${factStruck ? "line-through text-muted" : ""} ${
+                <button
+                  type="button"
+                  onClick={() => setTitleOpen((v) => !v)}
+                  aria-expanded={titleOpen}
+                  className={`min-w-0 text-left ${
+                    titleOpen ? "break-words" : "truncate"
+                  } ${factStruck ? "line-through text-muted" : ""} ${
                     taskTier === 2 ? "font-medium" : ""
-                  } truncate`}
+                  }`}
                 >
                   {card.fact}
-                </span>
+                </button>
               )}
               {card.meta && (
                 <span className="text-meta text-muted shrink-0">{card.meta}</span>

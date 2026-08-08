@@ -205,6 +205,17 @@ describe("StreamClient rendering", () => {
     expect(screen.queryByText("incomplete")).toBeNull();
   });
 
+  test("tapping a task title toggles truncation so long titles expand", () => {
+    renderStream(snapshot);
+    const title = screen.getByText("Prepare for L license test");
+    expect(title.className).toContain("truncate");
+    fireEvent.click(title);
+    expect(title.className).not.toContain("truncate");
+    expect(title.className).toContain("break-words");
+    fireEvent.click(title);
+    expect(title.className).toContain("truncate");
+  });
+
   test("an rtask card title toggle opens the edit panel with stop repeating", () => {
     renderStream({
       ...snapshot,
