@@ -20,8 +20,14 @@ die of data-entry burden instead.
 
 Mindboard is in the inverse position. The vault already holds who these people are — including a
 literal per-person list of open loops, since **17 of 20 person notes carry an `## Open questions`
-section that nothing in the app currently renders**. And `mindspace_sessions.user_text` already holds
-Lucca's own words about them, generated as a by-product of work he does anyway.
+section**. And `mindspace_sessions.user_text` already holds Lucca's own words about them, generated as
+a by-product of work he does anyway.
+
+> *Precision, because earlier drafts of this doc overstated it:* those sections **are** already
+> rendered today, as part of the note markdown at `/brain/note/People/<name>` — `NoteView` renders the
+> whole note. What does not exist is a per-person **extraction** of them: nothing can read those
+> bullets as data, so nothing can put them in a suggestion. The gap is machine-readability and reuse,
+> not visibility. It is still the cheapest high-value item in the design, but for the right reason.
 
 So the reframe:
 
@@ -177,7 +183,7 @@ Every departure, in one place, as the brief requires.
 |---|---|---|---|
 | 1 | "migration 0036" | **0047** | Directory ends at `0046_recurring_slot_events.sql`. Purely factual — but several live `ai/*` branches could claim 0047 first, so re-check `ls supabase/migrations \| tail -1` at build time rather than trusting this number. |
 | 2 | `lastTouch = max(interaction, vault updated)` | Split by consumer: interactions-only for cadence, both (labelled) for display | §2. Precision requirement + the documented trust failure. |
-| 3 | `people` columns as listed | **`+ aliases text[] not null default '{}'`** | Mention matching needs "Lucca" to match the note "Lucca Martins de Andrade". Rejected alternative: join `mindspace_topics.aliases` via `seed_ref->>'vaultPath'` — but person topics default *unchecked* at seeding unless the note has backlinks (`seed.ts:55`), so that join covers only a user-curated subset and would make matching silently incomplete. A column on a table already being created is cheaper than a fragile join. |
+| 3 | `people` columns as listed | **`+ aliases text[] not null default '{}'`** | Mention matching needs "Lucca" to match the note "Lucca Martins de Andrade". A *live join* to `mindspace_topics.aliases` via `seed_ref->>'vaultPath'` stays rejected: person topics default *unchecked* at seeding unless the note has backlinks (`seed.ts:55`), so the join covers only a user-curated subset and would make matching silently incomplete. But the column is **seeded** from that table where a row does exist (deviation 13) — one-time copy, not a join, which takes the curated aliases without inheriting the coverage hole. |
 | 4 | `person_interactions(person_id, summary, occurred_at)` | **`+ source text check in ('logged','confirmed')`** | Provenance is a design principle (§3.7), not decoration — the page must be able to say *how* it knows. One column, no new table. |
 | 5 | `vault_path` unique per user | Unique per user **and nullable** | A person can exist without a note. `Davi.md` names "His mom is **Denise**" in plain prose — she is the brief's own motivating example and has no note of her own. |
 | 6 | (unstated) | Overview is **flat alphabetical**, not attention-sorted | Have-first, per inventory. An attention-sorted list is a problem list. |
@@ -572,7 +578,8 @@ Every block maps to something that exists:
 
 | Block | Source | Cost |
 |---|---|---|
-| Name, intro line | `noteTitle` + first sentence of the note body | free |
+| Name | `noteTitle`, or `people.name` | free |
+| Intro line | **`extractIntro`** | **a second new parser — not free (below)** |
 | Recency band | `person_interactions` + `frontmatter.updated` | free |
 | **Open loops** | `## Open questions` section of the note | **needs a small section extractor** |
 | Recent | `person_interactions` | free |
@@ -586,8 +593,9 @@ which is why §3.1 needs no per-surface exception carved into it. The underlying
 inside the read; it simply never reaches the page.
 
 **The open-loops block is the highest-value, lowest-cost item in the entire design.** A per-person
-list of open loops already exists, hand-written, in 17 of 20 notes, and nothing renders it. It is
-also exactly the payload the suggestion engine needs. It requires one pure function:
+list of open loops already exists, hand-written, in 17 of 20 notes. It is rendered today only as
+undifferentiated note markdown (§1); nothing can read it *as data*, which is what the suggestion
+engine needs. It requires one pure function:
 
 ```ts
 // app/lib/brain/parse.ts — new export, unit-tested alongside the existing parse tests.
@@ -603,6 +611,26 @@ have **no** `## Open questions` section (Luciano, Luis, Vini), so the empty case
 render as nothing rather than an empty box; and headings beyond `## Open questions` are ad hoc
 (`Emma.md` has nine, most notes have zero or one), so the extractor must target the one known heading
 by name rather than assuming a schema.
+
+**The intro line needs a second parser, and it is not free either.** Earlier drafts costed it as
+"`noteTitle` + first sentence of the note body — free", but `parse.ts` provides no prose extraction at
+all: a note body is opaque markdown apart from frontmatter, wikilinks and callouts. The roster's
+entire secondary column and the dossier subtitle depend on it, so it gets specified and tested rather
+than left to a regex invented at build time.
+
+```ts
+// app/lib/brain/parse.ts — new export, tested with fixtures from the real notes.
+// Skip frontmatter, skip the H1, skip blanks, take the first prose paragraph;
+// reduce wikilinks and markdown links to their labels; collapse whitespace.
+// Returns null when the note has no prose paragraph.
+export function extractIntro(markdown: string): string | null
+```
+
+Fixture cases that exist in the real vault: `Emma.md` has **no blank line** between the closing `---`
+and its `# Emma`, so the parser must not assume one; intros routinely open with a wikilink
+(`Carla.md` → `[[Lucca Martins de Andrade|Lucca]]`), which must render as the alias text, not raw
+`[[…|…]]`; and a person created from the search field has no note at all, so `null` is a normal
+result the roster renders as a bare name.
 
 **What is deliberately not on this page:** a contact-frequency score, a relationship-strength meter,
 an editable field grid, and any "last contacted" number rendered as a headline. All three are the
@@ -638,13 +666,31 @@ export type PeopleVitals = {
   attention: PersonAttention[];      // sorted by overdueBy desc
 };
 
-export function peopleSnapshot(input: {
+// TWO functions, not one. A single peopleSnapshot({ ..., openLoops }) cannot be
+// assembled the way the two-step below requires: the assembler must know WHO
+// survived before it fetches loops for them, but it cannot know that without
+// having already called the function. Splitting resolves the circularity and is
+// what makes the "at most three" bound expressible at all.
+
+// Step 1 — Postgres rows only. Returns the COMPLETE ranked set, unbounded.
+export function computePeopleAttention(input: {
   people: PersonRow[];
   interactions: PersonInteractionRow[];
-  openLoops: Record<string, string[]>;   // personId -> bullets
+  candidates: MentionCandidateRow[];     // [] before M4; drives suppression (§2)
   today: string;
-}): PeopleVitals
+}): PeopleVitals;                        // attention[] entries have openLoops: []
+
+// Step 2 — attach vault prose to an ALREADY-BOUNDED slice.
+export function hydratePeopleAttention(
+  attention: PersonAttention[],          // caller passes attention.slice(0, N)
+  openLoops: Record<string, string[]>,   // personId -> bullets
+): PersonAttention[];
 ```
+
+**The bounds are stated numbers, not "the survivors".** `computePeopleAttention` returns everyone
+overdue — if thirty people are overdue, thirty survive, so "at most three" is a property of the
+*caller*, not of the function. `/people` hydrates `attention.slice(0, 1)`; `get_snapshot` hydrates
+`attention.slice(0, 3)`; nothing else consumes the unbounded array.
 
 Keying `openLoops` by **`personId`, not `vaultPath`**, matters: `vault_path` is nullable, and Denise —
 the brief's own motivating example — has no note, so a vaultPath-keyed map has no slot for her at all
@@ -670,10 +716,11 @@ Rules, all of them boring on purpose:
 (`planning.ts:204-207`), with the fetch added to the `Promise.all` in `buildPlanningSnapshot`
 (`planning-read.ts:95-184`) so MCP and the in-app assistant share one read.
 
-**Assemble it in two steps, and do not drag the corpus in.** `peopleSnapshot` takes `openLoops` as an
-input, so the naive assembler would call `getVaultCorpus` — which downloads *every* blob in the vault
-— on every `get_snapshot` wide call from every MCP client. That is unacceptable for a tool the
-assistant hits on routine planning turns. Instead:
+**Assemble it in two steps, and do not drag the corpus in.** A one-function design would force the
+assembler to produce `openLoops` up front, and the only way to do that for an unknown set of people is
+`getVaultCorpus` — which downloads *every* blob in the vault — on every `get_snapshot` wide call from
+every MCP client. That is unacceptable for a tool the assistant hits on routine planning turns.
+Instead:
 
 1. Compute `attention[]` from Postgres rows alone (`people` + `person_interactions`). This is the
    whole cadence calculation; it needs no vault data.
@@ -688,7 +735,14 @@ assistant hits on routine planning turns. Instead:
    `buildPlanningSnapshot` already holds — never `getVaultCorpus`, never a `userId`-only wrapper (§5).
 
 So the vault cost is bounded by one tree fetch plus at most three blobs, regardless of vault size or
-roster size. `peopleSnapshot` stays pure and unchanged; this is purely the assembler's job.
+roster size. Both functions stay pure; this is entirely the assembler's job.
+
+**Hydration is best-effort, per person.** A missing vault, revoked token, renamed-away note, GitHub
+outage or parse failure yields `openLoops: []` for that person and nothing more — it must never fail
+the snapshot. Cadence is entirely Postgres-backed, so an *optional context enhancement* taking down
+routine planning calls for the assistant and every connected MCP client would be a serious
+regression, and `/people` already catches these same failures (§5). Wrap the hydration step in its own
+try/catch and return the unhydrated attention set on any error.
 
 **Scope of what leaves the app.** `get_snapshot` carries open loops **only for the people in
 `attention[]`** — never for the whole roster — and carries no mindspace mention snippets at all. See
@@ -826,6 +880,27 @@ is the answer; no encryption scheme or consent system needs to be invented on to
 
 ## 10. Milestones
 
+### The write matrix
+
+Listed exhaustively because a milestone-driven build omits whatever the prose only implied — an
+earlier draft promised hard delete, alias editing and a stream row with no owning action between them.
+**Every row that touches a `people` record sets `updated_at` explicitly**; no trigger exists to do it.
+
+| Operation | Milestone | Path | Notes |
+|---|---|---|---|
+| vault sync (insert / adopt / null stale paths) | M1 | `after()` + service client | conflict-aware; never gates render |
+| first-run seeding checklist | M1 | server action | resolves self-note and pets (§5) |
+| create person | M1 | server action | from the search field; `vault_path` null |
+| log interaction | M1 | server action | one tap; `summary` null, `precision` `exact` |
+| edit / delete interaction | M1 | server action | needed the first time a tap is wrong |
+| archive / restore | M1 | server action | stamps `archived_at` |
+| hard delete person | M1 | server action | archived section only; cascades interactions |
+| edit name / aliases | M1 | server action | trim, dedupe, drop entries under 3 chars |
+| `log_interaction`, `create_person`, `set_checkin`, `archive`, `restore` | M2 | MCP + assistant, propose→confirm | one `EXECUTORS` entry |
+| set cadence (+ backfill) | M3 | `setPersonCadence`, **atomic** | see M3 |
+| snooze / unsnooze | M3 | server action | writes `attention_snoozed_until` |
+| confirm / dismiss candidate | M4 | server action | atomic with the interaction insert |
+
 ### M1 — the roster and the dossier
 
 No nudges, no cadence, no assistant writes. Two things make this milestone useful on its own rather
@@ -885,35 +960,108 @@ weakening the doctrine.
 - `writes.ts` — `proposePeopleUpdateFor(supabase, userId, raw, options)` + the thin service-client
   wrapper, `executePeopleUpdate`, registered in `EXECUTORS`. `confirm_action` / `cancel_action` and
   the in-app `confirmProposal` then work unchanged, because both dispatch through that same map.
-- `reads.ts` + MCP route — `list_people` (metadata only) and `get_person` (dossier). Both via
-  `scoped(userId)`, both filtering `.eq("user_id", ownerId)` explicitly, since the service client
-  bypasses RLS. **`get_person` returns no mention snippets until M4** — the mention read does not
-  exist yet, so the field is simply absent rather than empty, and M4 adds it.
+- `reads.ts` + MCP route — `list_people` (metadata only) and `get_person` (dossier, **one note read**
+  — one tree fetch plus one blob, never `getVaultCorpus`; §9). Both via `scoped(userId)`, both
+  filtering `.eq("user_id", ownerId)` explicitly, since the service client bypasses RLS.
+  **`get_person` returns no mention snippets until M4** — the mention read does not exist yet, so the
+  field is simply absent rather than empty, and M4 adds it.
 - `app/lib/assistant/tools.ts` — mirror both reads plus `propose_people_update`, calling the `*For`
   variant with the session client.
 - `occurred_at` on the MCP path resolves through `todayKey(supabase, userId)`
   (`app/lib/mcp/config.ts:56-67`) when the caller omits a date — one of the two blessed boundary
-  resolvers. The assistant must never be allowed to pass an unresolved "today".
+  resolvers. The assistant must never be allowed to pass an unresolved "today". A caller-supplied
+  vague date ("last month") must set `occurred_precision = 'approx'` rather than guessing a day.
+- A `whats-new.ts` entry for the assistant/MCP surface — same AGENTS.md obligation as M1.
 
 ### M3 — attention
 
-- `checkin_days` UI on the person sheet, with the **backfill prompt** on first set (§2).
+- **`setPersonCadence({ personId, checkinDays, backfill })` — one action, and it must be atomic.**
+  M1's action list has no `setCheckin`, and M2's version is an assistant proposal, so without this the
+  person page's most important control has no write path and a build session invents one. Atomicity is
+  the load-bearing part: if the cadence update lands and the backfill insert fails, the person has a
+  cadence and no interaction row — which §7's exclusion rule silently suppresses, producing a cadence
+  the user set that never fires, with nothing on screen to explain it. Do both in one
+  transaction-capable path and surface a failure rather than half-applying it. `backfill: "not_sure"`
+  writes no row and is a legitimate terminal state, not an error.
+- The **backfill prompt** on first set (§2). Each chip resolves to a day by arithmetic on that page's
+  `today` prop and sets `occurred_precision` accordingly — `today` → `exact`, everything else →
+  `approx`.
 - `app/lib/snapshots/people.ts` + `__tests__/people-snapshot.test.ts` (§7).
-- `people` section in `planning.ts` / `planning-read.ts` (§7).
-- The single "worth a message" card on `/people`, and at most one row on the dashboard stream.
-- `tours.ts` (`TOUR_KEYS`, `ROUTE_TOURS`, a `people` step list anchored to chrome via `data-tour`)
-  and a `whats-new.ts` entry.
+- `people` section in `planning.ts` / `planning-read.ts` (§7), with the two-step assembly and threaded
+  vault credentials — one tree fetch, at most three blobs.
+- The single "worth a message" card on `/people`, with `[ not now ]` writing `attention_snoozed_until`.
+- **The dashboard-stream row is its own work, not a free rider on the planning snapshot.** It needs a
+  `people` input on `streamSnapshot` (`app/lib/snapshots/stream.ts`) and a fetch in `getStreamData`
+  (`app/page.tsx`), reusing `getPeople`'s `cache()`. If that is more than M3 wants to carry, **cut the
+  stream row** rather than bolting a second uncached read onto the dashboard.
+- `tours.ts` copy update for the cadence step (the `people` tour itself shipped in M1) and a
+  `whats-new.ts` entry.
 
 ### M4 — candidates from mindspace
 
 The precision layer. Deferred deliberately: M1–M3 are correct without it, and it is the only part
 that touches the classifier.
 
-- A mention read over `mindspace_sessions.user_text` (+ vault bodies), reusing `termPattern`
-  (`classify.ts:35-43`) against `name + aliases`. Not bounded by the 30-day gather window or the
-  45-day `mindspace_items` purge — it queries the raw table, which is retained indefinitely.
-- Candidate review on the person sheet: a quiet "N unreviewed mentions" count, **pull not push**,
-  never a per-mention prompt. Confirming writes `person_interactions` with `source = 'confirmed'`.
+- **`supabase/migrations/0048_person_mention_candidates.sql` — M4 does not work without it.** There is
+  nowhere in 0047 to record *which* mention produced an interaction, which were reviewed, or which were
+  dismissed: `source` distinguishes only `logged` from `confirmed`. So a rescan rediscovers the same
+  mentions forever and "unreviewed" is not computable. The table is deferred to here rather than added
+  to 0047 so it earns its migration:
+
+  ```sql
+  create table public.person_mention_candidates (
+    id uuid primary key default gen_random_uuid(),
+    user_id uuid not null references auth.users (id) on delete cascade,
+    person_id uuid not null references public.people (id) on delete cascade,
+    source_kind text not null check (source_kind in ('session', 'calendar')),
+    source_ref text not null,        -- session_ref, or the calendar event id
+    occurred_at date not null,       -- the EVIDENCE's date (session end / event day)
+    excerpt text,                    -- matched passage, capped; null for calendar
+    matched_term text,               -- which alias hit, so a noisy alias is diagnosable
+    status text not null default 'new'
+      check (status in ('new', 'confirmed', 'dismissed')),
+    reviewed_at timestamptz,
+    created_at timestamptz not null default now()
+  );
+
+  -- Makes rescans idempotent: one piece of evidence never yields a second candidate.
+  create unique index person_mention_candidates_evidence_key
+    on public.person_mention_candidates (user_id, person_id, source_kind, source_ref);
+
+  create index person_mention_candidates_review_idx
+    on public.person_mention_candidates (user_id, person_id, status, occurred_at desc);
+  ```
+
+  Plus the four RLS policies in house style. `occurred_at` here is the evidence's own date and is
+  **not** the interaction's date — see the confirmation rule below.
+- **Scan incrementally on ingest; never search on read.** An `ILIKE`/regex pass per person over an
+  indefinitely-retained corpus gets permanently slower and would ship large volumes of raw session
+  text to a page render. Instead keep a per-user **watermark** (the last scanned
+  `mindspace_sessions.ended_at`); when new sessions arrive, scan each **once** against the whole roster
+  and write candidate rows. The person page then reads candidates **by index** and never scans.
+  Historical backfill is an explicit, paginated one-off, not read-path behaviour.
+- `termPattern` (`classify.ts:35-43`) **cannot be reused verbatim**: it is module-private, and it
+  returns `new RegExp(…, "iu")` with no `g` flag, so it answers *presence*, not *how many*. Export it
+  with an optional flags argument, or build a `g`-flagged regex alongside it and count with
+  `matchAll`. The scan is not bounded by the 30-day gather window or the 45-day `mindspace_items`
+  purge — it reads the raw table, which is retained indefinitely.
+- **Vault bodies are not mention events.** Earlier drafts scanned them alongside sessions. Sessions
+  carry `ended_at`, an unambiguous instant; note bodies carry no per-sentence date, their inline date
+  formats are inconsistent (two incompatible styles, most bullets undated), and no date parser exists.
+  A name appearing five times in one note is not five dated attention events. The `noted` signal
+  already covers the vault, so vault matches never enter the dated band or the candidate stream.
+- Candidate review on the person page: a quiet unreviewed-mentions affordance, **pull not push**,
+  never a per-mention prompt, and phrased as a band rather than a tally per §3.1. Confirming flips
+  `status` to `'confirmed'` **and** inserts the interaction in one transaction-capable path;
+  dismissing sets `'dismissed'`. Both are idempotent on re-tap —
+  `person_mention_candidates_evidence_key` plus `person_interactions_confirmed_key` make a double tap
+  a no-op rather than a duplicate row.
+- **Confirmation asks two questions, not one.** A tap can establish *that* a mention describes contact;
+  it frequently cannot establish *when* (§2.4). So the confirm control offers the same day chips as the
+  backfill, defaulting to the session's day, and writes `occurred_precision = 'approx'` unless the user
+  picks an exact day. Silently adopting the evidence date and calling the cadence correct would be the
+  fabricated precision this doctrine exists to refuse — and would reset a cadence on the strength of a
+  sentence that may have said "Davi told me this years ago".
 - Optional and last: an `interaction_type: 'with' | 'about' | null` axis on the classifier tool schema
   (`llm.ts:35-82`) plus a column, to pre-sort candidates. Only worth it if manual review proves
   tedious in practice.
@@ -927,9 +1075,19 @@ that touches the classifier.
 
 ## 11. Explicitly out of scope
 
-Contact-detail storage (phone, email, address), message sending or drafting into any channel, social
-imports (LinkedIn, Google Contacts), birthday/anniversary tracking, relationship-strength scoring,
-multi-user or shared notes, and any write path into `People/*.md`. That last one is worth stating
+Contact-detail storage (phone, email, address), **sending or scheduling a message on any channel**,
+social imports (LinkedIn, Google Contacts), birthday/anniversary tracking, relationship-strength
+scoring, multi-user or shared notes, and any write path into `People/*.md`.
+
+**Where "suggest, never send" stops, precisely.** Principle 5 says "Mindboard drafts; Lucca sends",
+while an earlier version of this list ruled out "drafting" outright — a flat contradiction a build
+session would have had to resolve by guessing. The line: `[ open ]` on a suggestion opens the
+**in-app assistant** with that person's bounded context (name, days, open loops), so the user can ask
+it to help word something. Mindboard composes **in the assistant, on request**. It never generates
+unprompted message text, never targets a channel, and never sends. Principle 5 and this section now
+agree, and the suggestion card itself carries no draft — only `[ open ]` and `[ not now ]`.
+
+That last scope item is worth stating
 plainly: **nothing in Mindboard can create or edit a person note today** — `capture_to_brain` writes
 `Inbox/` only, create-only, never overwriting (`capture.ts:124-131,160-244`). Person notes stay
 Claude-in-conversation territory, per the vault's own ritual. Adding a fenced `People/` writer is a
@@ -940,20 +1098,39 @@ separate decision that reopens the WHO/WHEN doctrine, not an implementation deta
 ## 12. Verification
 
 - **Unit (Vitest):** `extractSectionBullets` (incl. the missing-section and struck-through-bullet
-  cases seen in the real notes); `peopleSnapshot` (opt-in gating, never-logged suppression, overdue
-  ordering, DST/zone boundaries via the `__tests__/timezone-sweep.test.ts` table pattern);
-  `people-ops` validate/resolve/receipt, including ambiguous-name failure and the
-  resolved-ops-store-ids invariant.
+  cases seen in the real notes); `peopleSnapshot` (opt-in gating, never-logged **exclusion**, overdue
+  ordering, `openLoops` keyed by `personId` including a vault-less person, DST/zone boundaries via the
+  `__tests__/timezone-sweep.test.ts` table pattern); the backfill chip → day arithmetic, asserting
+  every chip derives from the injected `today` and that only `today` yields `'exact'`; `people-ops`
+  validate/resolve/receipt, including ambiguous-name failure and the resolved-ops-store-ids invariant.
 - **Gates:** `npm run lint && npm run test && npm run build` before each milestone lands. The ESLint
-  `no-restricted-syntax` backstop (`eslint.config.mjs:32-51`) automatically covers
-  `app/people/page.tsx`, `app/lib/mcp/people-ops.ts`, `app/lib/snapshots/people.ts` and
-  `app/actions/people.ts` — but it is a tripwire on two idioms, not coverage, so resolve
+  `no-restricted-syntax` backstop automatically covers `app/lib/mcp/people-ops.ts`,
+  `app/lib/snapshots/people.ts`, `app/lib/people/sync.ts`, `app/actions/people.ts` and — via the
+  `app/**/page.tsx` glob, which AGENTS.md's summary of this rule omits — both `app/people/page.tsx`
+  and `app/people/[id]/page.tsx`. It does **not** cover `app/people/people-client.tsx` or any other
+  client component, and it is a tripwire on two idioms rather than coverage in any case, so resolve
   `today`/`timeZone` explicitly rather than trusting it.
 - **M2 end-to-end:** drive `log_interaction` through the connected Mindboard MCP server —
   propose → receipt → `confirm_action` → row check — and the same batch through the in-app assistant,
   confirming both paths land through the one `EXECUTORS` entry.
 - **M1 in-browser:** a person with no `## Open questions` renders no empty box; the self-note and
   `type: pet` (Taiga) are absent from the roster; a person with no vault note (created via search)
-  renders without a note block instead of erroring.
+  renders without a note block instead of erroring; a person whose `vault_path` points at a
+  since-renamed note renders the same way rather than a broken note block.
+- **M1 boundary check, and it is not optional:** confirm no `VaultCorpus` is passed to any client
+  component. The symptom of getting this wrong is a serialization error on `corpus.resolve`, so it
+  fails loudly — but the "fix" a builder reaches for (stripping `resolve` and re-deriving it client-side)
+  ships the whole vault to the browser and fails silently. `/people/[id]` renders `<NoteView>` on the
+  server or it is wrong.
+- **M1 concurrency check:** load `/people` twice in quick succession on a vault with an unsynced
+  person and confirm one row, no unhandled unique violation in the logs, and no silently dead
+  `after()`.
 - **The standing check for every milestone:** does any surface ask the user to type a date? If yes,
   the design has drifted.
+
+---
+
+*This doc lives under `docs/superpowers/specs/` while it is a design record. **When M1 lands it
+graduates to `docs/people-plan.md`** — flat in `docs/`, alongside `finance-automation-plan.md`,
+`inventory-redesign-plan.md`, `education-plan.md` and `second-brain-plan.md` — and gains a pointer
+from AGENTS.md, which is the only place a future session will actually look for it.*
