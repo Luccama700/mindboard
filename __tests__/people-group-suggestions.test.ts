@@ -2,8 +2,9 @@ import { describe, expect, test } from "vitest";
 
 import {
   GROUP_PALETTE,
+  MAX_PROMPT_PEOPLE,
+  MAX_SUGGESTED_GROUPS,
   buildGroupSuggestionOps,
-  isRankingGroupName,
   type GroupSuggestion,
   type SuggesterGroup,
   type SuggesterPerson,
@@ -28,44 +29,9 @@ function build(
   return buildGroupSuggestionOps({ roster, existingGroups, suggestions });
 }
 
-describe("isRankingGroupName", () => {
-  test("rejects closeness tiers whatever they are called", () => {
-    for (const name of [
-      "close friends",
-      "Closest People",
-      "inner circle",
-      "outer circle",
-      "acquaintances",
-      "best friend",
-      "favourites",
-      "favorites",
-      "tier 1",
-      "VIP",
-      "a-list",
-      "casual friends",
-      "distant",
-      "strangers",
-      "core people",
-    ]) {
-      expect(isRankingGroupName(name)).toBe(true);
-    }
-  });
-
-  test("leaves real contexts alone", () => {
-    for (const name of [
-      "family",
-      "ubc",
-      "work",
-      "brazil",
-      "climbing gym",
-      "high school",
-      "band",
-      "closet organizers",
-    ]) {
-      expect(isRankingGroupName(name)).toBe(false);
-    }
-  });
-});
+// isRankingGroupName itself is tested in people-ops.test.ts, where it now
+// lives — validatePeopleOps is the enforcement point; this file only checks
+// that the mapper DROPS a ranking suggestion rather than failing the batch.
 
 describe("buildGroupSuggestionOps", () => {
   test("creates a group and files its members by id", () => {
@@ -167,6 +133,26 @@ describe("buildGroupSuggestionOps", () => {
       { op: "create_group", name: "family", color: GROUP_PALETTE[0] },
       { op: "set_group", person: "p-davi", group: "family" },
     ]);
+  });
+
+  // The point of sizing MAX_PROMPT_PEOPLE off MAX_PEOPLE_OPS: a full prompt
+  // split into the maximum number of groups must not lose anyone, or the
+  // suggester spends the API call to produce ops it then discards.
+  test("a maximal prompt fits in one batch with nobody dropped", () => {
+    const roster = Array.from({ length: MAX_PROMPT_PEOPLE }, (_, i) => ({
+      id: `p-${i}`,
+      name: `Person ${i}`,
+    }));
+    const per = Math.ceil(roster.length / MAX_SUGGESTED_GROUPS);
+    const suggestions = Array.from({ length: MAX_SUGGESTED_GROUPS }, (_, g) => ({
+      name: `context ${g}`,
+      members: roster.slice(g * per, (g + 1) * per).map((p) => p.name),
+    }));
+    const ops = build(suggestions, roster);
+    expect(ops.filter((op) => op.op === "set_group")).toHaveLength(
+      MAX_PROMPT_PEOPLE,
+    );
+    expect(ops.length).toBeLessThanOrEqual(MAX_PEOPLE_OPS);
   });
 
   test("caps the batch at MAX_PEOPLE_OPS rather than proposing an invalid one", () => {

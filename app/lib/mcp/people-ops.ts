@@ -26,6 +26,37 @@ const MAX_NAME_LENGTH = 120;
 // default (the first palette swatch).
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
+// The one rule this feature cannot bend: groups are CONTEXTS, never closeness
+// tiers (docs/people-plan.md §3.1 "no streaks, no counters", §3.6 "no
+// product-imposed cadences" — both are the same refusal to rank people).
+//
+// It lives HERE, in the shared validation layer, rather than in the group
+// suggester alone: every agent path — MCP update_people, the in-app assistant,
+// the suggester — funnels through validatePeopleOps, so this is the only place
+// that catches all three. A model that ignores the tool description would
+// otherwise land "acquaintances" in the roster with a confirm button under it.
+//
+// Patterns are word-anchored so real contexts survive ("closet organizers" is
+// a group; "closest people" is not).
+const RANKING_PATTERNS = [
+  /\b(inner|outer)\s+circle\b/i,
+  /\bclos(e|er|est)\s+(friends?|people|ones?)\b/i,
+  /\bbest\s+friends?\b/i,
+  /\bacquaintances?\b/i,
+  /\bfavou?rites?\b/i,
+  /\btier\s*\d*\b/i,
+  /\bvip\b/i,
+  /\ba-?list\b/i,
+  /\bcasual\s+(friends?|contacts?)\b/i,
+  /\bdistant\b/i,
+  /\bstrangers?\b/i,
+  /\b(top|core)\s+(people|friends?)\b/i,
+];
+
+export function isRankingGroupName(name: string): boolean {
+  return RANKING_PATTERNS.some((re) => re.test(name));
+}
+
 export type PersonOp =
   // date omitted = "today", resolved at EXECUTE time in the user's zone, so a
   // proposal confirmed after midnight still lands on the right day.
@@ -254,6 +285,12 @@ export function validatePeopleOps(raw: unknown): Result<PersonOp[]> {
           return {
             ok: false,
             error: `operation ${i + 1} (create_group): name too long`,
+          };
+        }
+        if (isRankingGroupName(name)) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (create_group ${name}): groups are CONTEXTS — where the user knows someone from (family, ubc, work, brazil) — never closeness tiers. "${name}" ranks people, and this app does not rank people.`,
           };
         }
         let color: string | undefined;

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   MAX_PEOPLE_OPS,
+  isRankingGroupName,
   receiptLine,
   renderPeopleReceipt,
   resolveGroupRef,
@@ -469,7 +470,64 @@ describe("validateResolvedPeopleOps", () => {
   });
 });
 
+describe("isRankingGroupName", () => {
+  test("catches closeness tiers whatever they are called", () => {
+    for (const name of [
+      "close friends",
+      "Closest People",
+      "inner circle",
+      "outer circle",
+      "acquaintances",
+      "best friend",
+      "favourites",
+      "favorites",
+      "tier 1",
+      "VIP",
+      "a-list",
+      "casual friends",
+      "distant",
+      "strangers",
+      "core people",
+    ]) {
+      expect(isRankingGroupName(name)).toBe(true);
+    }
+  });
+
+  test("leaves real contexts alone", () => {
+    for (const name of [
+      "family",
+      "ubc",
+      "work",
+      "brazil",
+      "climbing gym",
+      "high school",
+      "band",
+      "closet organizers",
+    ]) {
+      expect(isRankingGroupName(name)).toBe(false);
+    }
+  });
+});
+
 describe("groups: validation", () => {
+  test("create_group rejects a closeness tier, citing the contexts rule", () => {
+    const result = ops([{ op: "create_group", name: "close friends" }]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("groups are CONTEXTS");
+    expect(result.error).toContain("this app does not rank people");
+  });
+
+  test("the rejection survives casing and fails the whole batch", () => {
+    const result = ops([
+      { op: "log_interaction", person: "Davi" },
+      { op: "create_group", name: "Inner Circle" },
+    ]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("operation 2 (create_group Inner Circle)");
+  });
+
   test("create_group requires a name and accepts an optional hex color", () => {
     expect(ops([{ op: "create_group" }])).toEqual({
       ok: false,

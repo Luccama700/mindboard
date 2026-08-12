@@ -34,18 +34,23 @@ export function PeopleGroupsManager({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function run(fn: () => Promise<{ error?: string | null } | void>) {
-    if (busy) return;
+  // Resolves true only on success, so callers can keep a draft alive when
+  // the write failed instead of blanking the form under the error message.
+  async function run(
+    fn: () => Promise<{ error?: string | null } | void>,
+  ): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     setError(null);
     const result = await fn();
     setBusy(false);
     if (result && "error" in result && result.error) {
       setError(result.error);
-      return;
+      return false;
     }
     onMutated?.();
     router.refresh();
+    return true;
   }
 
   return (
@@ -56,8 +61,8 @@ export function PeopleGroupsManager({
           e.preventDefault();
           const trimmed = name.trim();
           if (!trimmed) return;
-          void run(() => createPeopleGroup(trimmed, color)).then(() => {
-            setName("");
+          void run(() => createPeopleGroup(trimmed, color)).then((ok) => {
+            if (ok) setName("");
           });
         }}
       >
@@ -95,7 +100,9 @@ export function PeopleGroupsManager({
                         name: draftName.trim() || group.name,
                         color: draftColor,
                       }),
-                    ).then(() => setEditing(null));
+                    ).then((ok) => {
+                      if (ok) setEditing(null);
+                    });
                   }}
                 >
                   <input
@@ -145,8 +152,10 @@ export function PeopleGroupsManager({
                       <button
                         type="button"
                         onClick={() =>
-                          void run(() => deletePeopleGroup(group.id)).then(() =>
-                            setConfirmingDelete(null),
+                          void run(() => deletePeopleGroup(group.id)).then(
+                            (ok) => {
+                              if (ok) setConfirmingDelete(null);
+                            },
                           )
                         }
                         className="text-label uppercase text-danger hover:opacity-80 transition-opacity min-h-11"

@@ -688,6 +688,12 @@ export async function confirmSeeding(
 // see the header of 0049_people_groups.sql. Nothing below can enforce that; the
 // UI copy and the suggester's prompt carry the rule.
 
+// DELIBERATELY UNGUARDED against ranking names, unlike the agent path
+// (isRankingGroupName in app/lib/mcp/people-ops.ts, enforced in create_group).
+// The anti-ranking rule exists to stop the PRODUCT from imposing a hierarchy on
+// the user's relationships (docs/people-plan.md §3.6); it is not a rule about
+// what the user is permitted to call their own groups. A model proposing
+// "acquaintances" is the product ranking people. A person typing it is not.
 export async function createPeopleGroup(name: string, color: string) {
   const trimmed = name?.trim();
   if (!trimmed) return { error: "name required" };
@@ -757,21 +763,18 @@ export async function updatePeopleGroup(
 }
 
 // people.group_id is ON DELETE SET NULL, so deleting a context never deletes
-// the people in it — they just become unassigned. The member count is returned
-// so the confirm can say "delete family? 6 people become ungrouped" instead of
-// generic copy (the getDeleteImpact pattern), and it is counted BEFORE the
-// delete because afterwards there is nothing left to count.
+// the people in it — they just become unassigned.
+//
+// `members` is ALWAYS 0 and must not be rendered. Deleting a group is not the
+// destructive act getDeleteImpact guards (no interaction history is lost), so
+// the confirm copy is static and nothing consumes a count; the field is kept
+// only because it is part of the caller's result shape. Do not "restore" a
+// pre-count query to fill it in without a caller that actually shows it.
 export async function deletePeopleGroup(groupId: string) {
   if (!groupId) return { error: "group required", members: 0 };
 
   const { supabase, user } = await requireUser();
   if (!user) return { error: "not authenticated", members: 0 };
-
-  const { count } = await supabase
-    .from("people")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id)
-    .eq("group_id", groupId);
 
   const { error } = await supabase
     .from("people_groups")
@@ -782,7 +785,7 @@ export async function deletePeopleGroup(groupId: string) {
   if (error) return { error: error.message, members: 0 };
 
   revalidatePath("/people");
-  return { error: null, members: count ?? 0 };
+  return { error: null, members: 0 };
 }
 
 export async function setPersonGroup(personId: string, groupId: string | null) {

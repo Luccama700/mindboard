@@ -127,7 +127,13 @@ const getStreamData = cache(
       getInventoryItems(userId),
       getInventoryUsages(userId),
       getBalanceChangesOn(userId, today),
-      getPeople(userId),
+      // getPeople now THROWS on a failed query rather than returning [], so
+      // that /people can tell "nobody yet" from "the roster read is broken".
+      // The dashboard is not that surface: there is no error.tsx in this app,
+      // so an uncaught throw here replaces the entire home route with Next's
+      // default error page over one strip. Degrade instead — /people is where
+      // the failure has to be visible, and it is.
+      getPeople(userId).catch(() => []),
       getLatestInteractions(userId),
       getCandidates(userId),
       supabase

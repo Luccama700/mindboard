@@ -1055,6 +1055,18 @@ export async function listPeopleFor(
       .limit(MAX_INTERACTION_SCAN),
   ]);
 
+  // An agent cannot tell "you have no people" from "the query failed" if both
+  // arrive as an empty array, and the second one deserves an error, not a
+  // confident report that the roster is empty. guard() in the MCP route turns
+  // this into a structured tool error. The interaction scan is exempt: it
+  // degrades to "nothing logged", which the shape already expresses.
+  if (peopleRes.error) {
+    throw new Error(`could not read people: ${peopleRes.error.message}`);
+  }
+  if (groupsRes.error) {
+    throw new Error(`could not read people groups: ${groupsRes.error.message}`);
+  }
+
   const rows = (peopleRes.data ?? []) as PersonRow[];
   const groups = new Map<string, { id: string; name: string }>();
   for (const group of (groupsRes.data ?? []) as { id: string; name: string }[]) {

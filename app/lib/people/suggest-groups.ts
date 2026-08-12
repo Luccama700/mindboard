@@ -5,7 +5,11 @@ import { createClient } from "@/utils/supabase/server";
 import { readProviderKey } from "@/app/lib/connections/keys";
 import { extractIntro } from "@/app/lib/brain/parse";
 import { findNote, getVaultCorpus } from "@/app/lib/brain/vault";
-import { MAX_PEOPLE_OPS, type PersonOp } from "@/app/lib/mcp/people-ops";
+import {
+  MAX_PEOPLE_OPS,
+  isRankingGroupName,
+  type PersonOp,
+} from "@/app/lib/mcp/people-ops";
 import { proposePeopleUpdateFor } from "@/app/lib/mcp/writes";
 import type { Result } from "@/app/lib/mcp/validate";
 
@@ -25,11 +29,21 @@ import type { Result } from "@/app/lib/mcp/validate";
 
 const SUGGEST_MODEL = "claude-haiku-4-5-20251001";
 // Enough context to recognise a school or a job, nowhere near the whole note:
-// this is a prompt, not an export.
+// this is a prompt, not an export. Applied to the intro too — extractIntro
+// returns however long the note's first paragraph happens to be.
 const BODY_CHARS = 400;
-const MAX_PROMPT_PEOPLE = 100;
-const MAX_SUGGESTED_GROUPS = 6;
+export const MAX_SUGGESTED_GROUPS = 6;
 const MIN_SUGGESTED_GROUPS = 3;
+// Sized so the resulting batch ALWAYS fits: worst case is one create_group per
+// suggested group plus one set_group per person. Prompting more people than
+// that would spend the API call to produce ops the mapper then has to throw
+// away, which reads to the user as the suggester quietly ignoring people.
+// Exported so the test can assert the relation rather than the number.
+export const MAX_PROMPT_PEOPLE = MAX_PEOPLE_OPS - MAX_SUGGESTED_GROUPS;
+// A backstop on the assembled prompt, independent of the per-person caps: a
+// roster of 44 maximal blurbs is ~20k characters, and nothing downstream
+// bounds the total.
+const MAX_ROSTER_CHARS = 24_000;
 
 // Copied, not imported: app/_components/color-picker.tsx is a "use client"
 // module and pulling a constant from one into server-only code is an RSC
@@ -48,31 +62,6 @@ export const GROUP_PALETTE = [
   "#A0A0A0",
   "#F5F0E8",
 ];
-
-// Belt and braces for the one rule this feature cannot bend: groups are
-// CONTEXTS, never closeness tiers (docs/people-plan.md §3.1, §3.6). The prompt
-// forbids them; this drops them anyway, because a model that ignores the
-// instruction once would otherwise ship "acquaintances" into the user's roster
-// with a confirm button under it. Patterns are word-anchored so ordinary
-// context names ("close-knit" is not a group; "Vancouver" is) survive.
-const RANKING_PATTERNS = [
-  /\b(inner|outer)\s+circle\b/i,
-  /\bclos(e|er|est)\s+(friends?|people|ones?)\b/i,
-  /\bbest\s+friends?\b/i,
-  /\bacquaintances?\b/i,
-  /\bfavou?rites?\b/i,
-  /\btier\s*\d*\b/i,
-  /\bvip\b/i,
-  /\ba-?list\b/i,
-  /\bcasual\s+(friends?|contacts?)\b/i,
-  /\bdistant\b/i,
-  /\bstrangers?\b/i,
-  /\b(top|core)\s+(people|friends?)\b/i,
-];
-
-export function isRankingGroupName(name: string): boolean {
-  return RANKING_PATTERNS.some((re) => re.test(name));
-}
 
 export type SuggesterPerson = { id: string; name: string };
 export type SuggesterGroup = { id: string; name: string };
@@ -141,6 +130,11 @@ export function buildGroupSuggestionOps(input: {
     if (planned.length >= MAX_SUGGESTED_GROUPS) break;
     const name = cleanName(suggestion.name);
     if (!name) continue;
+    // validatePeopleOps REJECTS a ranking name outright; this DROPS it, and the
+    // difference is deliberate. Failing here would let one bad suggestion kill
+    // an otherwise good proposal the user never got to see, so the mapper
+    // discards it and the batch survives. The validator is the backstop that
+    // makes sure no path can create one.
     if (isRankingGroupName(name)) continue;
     const key = name.toLowerCase();
     if (seenGroups.has(key)) continue;
@@ -285,12 +279,14 @@ export async function suggestPeopleGroups(
   }
   // Only ungrouped people are candidates: the suggester is additive, so
   // re-running it never proposes undoing the user's own filing.
-  const ungrouped = everyone
-    .filter((row) => row.group_id === null)
-    .slice(0, MAX_PROMPT_PEOPLE);
-  if (ungrouped.length === 0) {
+  const candidates = everyone.filter((row) => row.group_id === null);
+  if (candidates.length === 0) {
     return { ok: false, error: "everyone already has a group" };
   }
+  const ungrouped = candidates.slice(0, MAX_PROMPT_PEOPLE);
+  // People the model was never shown, as distinct from people it saw and
+  // deliberately left unassigned (which is a correct answer, not an overflow).
+  const overflow = candidates.length - ungrouped.length;
 
   const existingGroups = (groupsRes.data ?? []) as SuggesterGroup[];
 
@@ -306,7 +302,10 @@ export async function suggestPeopleGroups(
       // Both, and the overlap is deliberate: extractIntro returns clean prose
       // with the H1, headings and bullets stripped, and those are exactly
       // where the context words live ("## UBC", "- met at the climbing gym").
-      const intro = extractIntro(note.body);
+      // Both halves are capped: extractIntro returns however long the note's
+      // first paragraph happens to be, which for a long-form note is the whole
+      // essay.
+      const intro = extractIntro(note.body)?.slice(0, BODY_CHARS) ?? null;
       const body = note.body.replace(/\s+/g, " ").trim().slice(0, BODY_CHARS);
       const blurb = [intro, body ? `note: ${body}` : ""]
         .filter(Boolean)
@@ -326,12 +325,19 @@ export async function suggestPeopleGroups(
     };
   }
 
-  const roster = ungrouped
-    .map((row) => {
-      const blurb = notes.get(row.id);
-      return blurb ? `- ${row.name}: ${blurb}` : `- ${row.name}`;
-    })
-    .join("\n");
+  // Names are never dropped, only blurbs: a person the model cannot see cannot
+  // be filed, so once the budget runs out the remaining entries go in bare.
+  const lines: string[] = [];
+  let budget = MAX_ROSTER_CHARS;
+  for (const row of ungrouped) {
+    const blurb = notes.get(row.id);
+    const full = blurb ? `- ${row.name}: ${blurb}` : `- ${row.name}`;
+    const bare = `- ${row.name}`;
+    const line = full.length <= budget ? full : bare;
+    lines.push(line);
+    budget -= line.length;
+  }
+  const roster = lines.join("\n");
   const groupLine = existingGroups.length
     ? `\n\nGroups that already exist (reuse these names verbatim when they fit, rather than inventing a near-duplicate): ${existingGroups.map((g) => g.name).join(", ")}`
     : "";
@@ -380,10 +386,24 @@ export async function suggestPeopleGroups(
     return { ok: false, error: "no clear contexts found in your notes" };
   }
 
-  return proposePeopleUpdateFor(
+  const outcome = await proposePeopleUpdateFor(
     supabase,
     userId,
     { operations: ops },
     { source: "assistant" },
   );
+  if (!outcome.ok || overflow === 0) return outcome;
+
+  // Appended to the RETURNED preview only, not to the stored proposal summary:
+  // the summary is the record of what this batch applies, and these people are
+  // exactly the ones it does not touch. Saying so is the difference between a
+  // suggester that looks like it silently ignored half the roster and one that
+  // tells you to run it again.
+  return {
+    ok: true,
+    value: {
+      ...outcome.value,
+      preview: `${outcome.value.preview}\n\n…and ${overflow} more ${overflow === 1 ? "person" : "people"} didn't fit this round — run it again after applying`,
+    },
+  };
 }

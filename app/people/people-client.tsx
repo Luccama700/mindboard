@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -31,10 +31,22 @@ import type { PersonAttention } from "@/app/lib/snapshots/people";
 
 const SORT_KEY = "mb-people-sort";
 
-// The dock's readStoredModel pattern: guard for SSR, read once at init.
-function readStoredSort(): "az" | "group" {
-  if (typeof window === "undefined") return "az";
+// The sort preference switches the roster's element tree, so a localStorage
+// read in a useState initializer would be a STRUCTURAL hydration mismatch
+// (unlike the dock's single-attribute readStoredModel). useSyncExternalStore
+// is the sanctioned shape: hydrate from the server snapshot ("az"), flip to
+// the stored value in the post-hydration render.
+const sortListeners = new Set<() => void>();
+function subscribeSort(listener: () => void) {
+  sortListeners.add(listener);
+  return () => sortListeners.delete(listener);
+}
+function readSort(): "az" | "group" {
   return localStorage.getItem(SORT_KEY) === "group" ? "group" : "az";
+}
+function writeSort(mode: "az" | "group") {
+  localStorage.setItem(SORT_KEY, mode);
+  for (const listener of sortListeners) listener();
 }
 
 // The roster's interactive shell only (docs/people-plan.md §8). Rows are
@@ -66,7 +78,7 @@ export function PeopleClient({
   const [deleteImpact, setDeleteImpact] = useState<number | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [groupsOpen, setGroupsOpen] = useState(false);
-  const [sort, setSort] = useState<"az" | "group">(readStoredSort);
+  const sort = useSyncExternalStore(subscribeSort, readSort, () => "az");
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [suggestError, setSuggestError] = useState<string | null>(null);
   const [pendingProposal, setPendingProposal] = useState<{
@@ -160,10 +172,7 @@ export function PeopleClient({
                 key={mode}
                 type="button"
                 aria-pressed={sort === mode}
-                onClick={() => {
-                  setSort(mode);
-                  localStorage.setItem(SORT_KEY, mode);
-                }}
+                onClick={() => writeSort(mode)}
                 className={`min-h-11 px-3 text-[10px] tracking-widest uppercase border rounded-full transition-colors ${
                   sort === mode
                     ? "bg-accent text-accent-fg border-accent"
@@ -221,8 +230,20 @@ export function PeopleClient({
             );
           }}
           onSkip={() => {
-            void rejectPeopleProposal(pendingProposal.proposalId);
-            setPendingProposal(null);
+            setSuggestBusy(true);
+            void rejectPeopleProposal(pendingProposal.proposalId).then(
+              (result) => {
+                setSuggestBusy(false);
+                // Only forget the proposal once the audit row is resolved —
+                // a fire-and-forget skip would strand it as 'proposed' and
+                // permanently light the dashboard's pending badge.
+                if (result.error) {
+                  setSuggestError(result.error);
+                  return;
+                }
+                setPendingProposal(null);
+              },
+            );
           }}
         >
           <pre className="whitespace-pre-wrap font-mono text-body text-fg">
@@ -393,7 +414,10 @@ function GroupedSections({
 }) {
   const byGroup = new Map<string | null, RosterEntry[]>();
   for (const entry of entries) {
-    const key = entry.person?.group_id ?? null;
+    // A group_id not in `groups` (deleted between the page's two fetches)
+    // folds into ungrouped rather than silently dropping the person.
+    const raw = entry.person?.group_id ?? null;
+    const key = raw !== null && groupById.has(raw) ? raw : null;
     const bucket = byGroup.get(key);
     if (bucket) bucket.push(entry);
     else byGroup.set(key, [entry]);
