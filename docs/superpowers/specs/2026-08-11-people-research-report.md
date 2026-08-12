@@ -818,7 +818,9 @@ they mean different things, and collapsing them is the documented failure mode:
 - **Backlinks** are already computed by `getVaultCorpus`/`computeBacklinks`.
 - **`noteHref`** deep-links (`People/Davi.md` → `/brain/note/People/Davi`).
 - The **matcher** — `termPattern` (`classify.ts:35-43`) is a tested, accent-safe, boundary-anchored
-  regex builder that can be imported as-is.
+  regex builder — but **not importable as-is**: it is module-private and returns
+  `new RegExp(…, "iu")` with no `g` flag, so it answers *presence*, not *how many*. Export it with a
+  flags argument, or build a `g`-flagged regex alongside it. See the design doc, §10 M4.
 
 **Cheap — a new read over existing rows, no new infrastructure:**
 - `mindspace_sessions.user_text` is **verbatim user words** (6,000 chars/session), **retained
