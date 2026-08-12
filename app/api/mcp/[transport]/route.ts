@@ -28,6 +28,8 @@ import {
   listGroups,
   listIncomeSources,
   listInventory,
+  listPeople,
+  getPerson,
   listProposals,
   listRecentLedger,
   listRecurringExpenses,
@@ -61,11 +63,13 @@ import {
   proposeUpdateFinance,
   proposeUpdateRecurringTask,
   proposeUpdateSettings,
+  proposePeopleUpdate,
   proposeUpdateStock,
   proposeUpdateTask,
   proposeUpsertGoal,
 } from "@/app/lib/mcp/writes";
 import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
+import { MAX_PEOPLE_OPS } from "@/app/lib/mcp/people-ops";
 import { MAX_FINANCE_OPS } from "@/app/lib/mcp/finance-ops";
 import { MAX_ADMIN_OPS } from "@/app/lib/mcp/finance-admin-ops";
 import { captureToBrain } from "@/app/lib/mcp/brain";
@@ -249,6 +253,30 @@ const mcpHandler = createMcpHandler(
         inputSchema: { includeArchived: z.boolean().optional() },
       },
       (args, extra) => guard(async () => ok(await listInventory(uid(extra), args))),
+    );
+
+    server.registerTool(
+      "list_people",
+      {
+        title: "List people",
+        description:
+          "The people roster: id, name, vault note path, aliases, check-in cadence, archived flag, how many interactions are logged, and when you last TALKED to them (date + precision + daysSince, or null when nothing is logged). Metadata only — no note bodies, no interaction summaries. Use it to find person ids/names before update_people or get_person; pass includeArchived to also see untracked people (needed before a restore op). 'Last talked' counts logged conversations ONLY: editing someone's note is being informed, not being in touch, and never advances it.",
+        inputSchema: { includeArchived: z.boolean().optional() },
+      },
+      (args, extra) => guard(async () => ok(await listPeople(uid(extra), args))),
+    );
+
+    server.registerTool(
+      "get_person",
+      {
+        title: "Get person",
+        description:
+          "One person's dossier: their row, the intro line and OPEN LOOPS pulled from their vault note's `## Open questions` section, their recent logged interactions (newest first, capped), and when the note was last updated. `person` accepts an id or a name (case-insensitive; unique substrings work). Open loops are what make a suggestion concrete — 'you owe Denise an update on his writing practice' rather than 'follow up with Davi'. This does NOT return the full note body (use read_brain_note for that) and carries no mindspace mention snippets. A missing or unreachable vault yields empty loops rather than an error.",
+        inputSchema: {
+          person: z.string().describe("Person id or name."),
+        },
+      },
+      (args, extra) => guard(async () => ok(await getPerson(uid(extra), args))),
     );
 
     server.registerTool(
@@ -1096,6 +1124,71 @@ const mcpHandler = createMcpHandler(
       (args, extra) =>
         guard(async () => {
           const r = await proposeUpdateStock(uid(extra), args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "update_people",
+      {
+        title: "Propose: update people",
+        description:
+          "Propose a batch of people edits in one confirmable receipt: log_interaction (record that the user TALKED to someone), create_person (someone with no vault note yet), set_checkin (how often they want to be in touch, in days; null clears it — there are no default cadences), archive (stop tracking), restore (track again). A create_person earlier in the batch can be logged against or given a cadence by name in the SAME batch. `person` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates; get ids from list_people). Returns a receipt preview + proposalId; call confirm_action to apply.\n\nlog_interaction records that CONTACT HAPPENED — only ever when the user says so. Talking ABOUT someone is not talking TO them, and a wrong 'you talked to X on Y' is the one error this feature cannot afford, so never infer contact from a mention, a calendar entry, or a note edit. `summary` records what the USER did or said (\"coffee, he's writing again\"), never an inference about the other person's state or wellbeing — write it as though they might read it. Omit `date` for today (resolved in the user's timezone when the user confirms). If the user was vague (\"last month\", \"a few weeks back\"), give your best-guess date AND set approx:true so the app says \"about a month ago\" instead of inventing a specific day.",
+        inputSchema: {
+          operations: z
+            .array(
+              z.object({
+                op: z.enum([
+                  "log_interaction",
+                  "create_person",
+                  "set_checkin",
+                  "archive",
+                  "restore",
+                ]),
+                person: z
+                  .string()
+                  .optional()
+                  .describe("Person id or name (every op except create_person)."),
+                name: z
+                  .string()
+                  .optional()
+                  .describe("New person's name (create_person)."),
+                summary: z
+                  .string()
+                  .optional()
+                  .describe(
+                    "What the user did or said, one line (log_interaction; optional — one-tap logging stores none). Never a characterisation of the other person.",
+                  ),
+                date: z
+                  .string()
+                  .regex(/^\d{4}-\d{2}-\d{2}$/)
+                  .optional()
+                  .describe(
+                    "Day the conversation happened, YYYY-MM-DD (log_interaction). Omit for today — it resolves in the user's timezone at confirm time.",
+                  ),
+                approx: z
+                  .boolean()
+                  .optional()
+                  .describe(
+                    "Set with a best-guess `date` when the user was vague about when. Requires an explicit date.",
+                  ),
+                days: z
+                  .number()
+                  .int()
+                  .positive()
+                  .nullish()
+                  .describe(
+                    "Check-in cadence in days (set_checkin; null clears it).",
+                  ),
+              }),
+            )
+            .min(1)
+            .max(MAX_PEOPLE_OPS),
+        },
+      },
+      (args, extra) =>
+        guard(async () => {
+          const r = await proposePeopleUpdate(uid(extra), args);
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );

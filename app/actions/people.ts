@@ -76,6 +76,9 @@ export async function createPerson(name: string) {
       // A hand-created person has no note — the whole point of the nullable
       // column. The sync adopts this row if a note by that name later appears.
       vault_path: null,
+      // Same seed as the vault sync and the MCP create op, so all three
+      // creation paths leave identical rows and M4's matcher sees no drift.
+      aliases: seedAliases(trimmed),
       updated_at: nowStamp(),
     })
     .select(PEOPLE_COLUMNS)
