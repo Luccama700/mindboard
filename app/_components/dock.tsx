@@ -51,16 +51,16 @@ const RAIL_TABS: {
   href: string;
   glyph: ReactNode;
   label: string;
-  // Mobile fits ~5 chars per tab at 7 tabs; "inventory" only fits on lg, so
-  // a tab may show a short alias on small screens via shortLabel.
+  // A tab may show a short alias on small screens via shortLabel when the
+  // label doesn't fit the mobile rail.
   shortLabel?: string;
   badge?: "inbox" | "brain";
 }[] = [
+  // Trimmed to the lived-in surfaces (2026-08-11). Inbox is the dashed chip
+  // on /tasks; learn and plans stay reachable by URL but off the panels.
   { href: "/", glyph: "◆", label: "now" },
-  { href: "/tasks?group=inbox", glyph: "▽", label: "inbox", badge: "inbox" },
   { href: "/finance", glyph: "$", label: "money" },
   { href: "/inventory", glyph: "▤", label: "inventory" },
-  { href: "/learn", glyph: "◫", label: "learn" },
   { href: "/brain", glyph: BRAIN_ICON, label: "brain", badge: "brain" },
 ];
 
@@ -486,15 +486,6 @@ export function Dock({
           >
             <span>tasks</span>
           </Link>
-          {/* "plans" opens /plan without a message, so past conversations are
-              browsable without sending anything first. */}
-          <Link
-            href="/plan"
-            onClick={() => setMoreOpen(false)}
-            className="flex min-h-11 w-full items-center justify-between rounded-lg px-3 text-action lowercase text-fg hover:bg-card transition-colors"
-          >
-            <span>plans</span>
-          </Link>
           <button
             type="button"
             onClick={openGroupsSheet}
@@ -505,7 +496,6 @@ export function Dock({
           </button>
           {[
             { href: "/mindspace", label: "mindspace" },
-            { href: "/week", label: "week" },
             { href: "/settings", label: "settings" },
           ].map((item) => (
             <Link

@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-08-11-nav-trim",
+    date: "2026-08-11",
+    title: "a quieter rail",
+    items: [
+      "the bottom rail is down to what you actually live in — now, money, inventory, brain.",
+      "inbox moved in with tasks: same dashed chip, first thing on the tasks screen.",
+      "week is the ▦ button up top on your phone; on desktop it's already beside the stream.",
+      "learn and plans are resting, not gone — their pages still open by link, and nothing you made was touched.",
+    ],
+  },
+  {
     id: "2026-08-08-stream-title-expand",
     date: "2026-08-08",
     title: "long task names, readable again",

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { completeTour } from "@/app/actions/onboarding";
 import { IntroCarousel } from "./intro-carousel";
@@ -188,6 +189,20 @@ export function OnboardingController({
             </div>
           )}
           <div className="flex items-center">
+            {/* Mobile-only: desktop already shows the week pane beside the
+                stream, so the shortcut would be a dead-end there. */}
+            <Link
+              href="/week"
+              aria-label="week calendar"
+              className="flex h-11 w-11 items-center justify-center text-muted hover:text-fg transition-colors lg:hidden"
+            >
+              <span
+                aria-hidden
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-line-strong text-meta"
+              >
+                ▦
+              </span>
+            </Link>
             <button
               type="button"
               aria-label="what's new"
