@@ -495,6 +495,7 @@ export function Dock({
             <span className="text-meta text-muted">{groups.length}</span>
           </button>
           {[
+            { href: "/people", label: "people" },
             { href: "/mindspace", label: "mindspace" },
             { href: "/settings", label: "settings" },
           ].map((item) => (

@@ -174,6 +174,104 @@ export function computeBacklinks(
   return result;
 }
 
+// Line-level twin of walkEligible's fence state machine. walkEligible rewrites
+// inline *slices*, so it cannot answer "is this whole line inside a fence" —
+// which is the only question section and prose extraction ask. Same FENCE_RE,
+// same toggle, at line granularity: fenced lines are dropped, and a heading or
+// bullet inside a code block is therefore invisible to both extractors below.
+function* eligibleLines(markdown: string): Generator<string> {
+  let inFence = false;
+  for (const line of markdown.split("\n")) {
+    if (FENCE_RE.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence) yield line;
+  }
+}
+
+const MARKDOWN_LINK_RE = /!?\[([^\]]*)\]\([^)]*\)/g;
+const HEADING_RE = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+const BULLET_RE = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
+
+// Reduce a markdown fragment to the text a person reads: [[a|b]] and [[a]] to
+// their label, [x](y) to x, whitespace collapsed.
+function plainText(input: string): string {
+  return input
+    .replace(WIKILINK_RE, (_full, target: string, _heading, alias?: string) =>
+      (alias ?? "").trim() || target.trim(),
+    )
+    .replace(MARKDOWN_LINK_RE, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Extracts the bullets under a named heading, stopping at the next heading of
+// the same or a shallower level (a `###` subsection stays part of the section).
+// Skips fenced code and strikethrough bullets, which the vault ritual uses to
+// mark resolved questions:
+//   ~~…~~ Overtaken by events: … (resolved 2026-07-20)
+// A missing section is normal — three of twenty person notes have none — and
+// yields [] rather than throwing, so the caller renders nothing at all.
+export function extractSectionBullets(
+  markdown: string,
+  heading: string,
+): string[] {
+  const target = heading.trim().replace(/^#+\s*/, "").toLowerCase();
+  if (!target) return [];
+  const bullets: string[] = [];
+  let sectionLevel = 0;
+  for (const line of eligibleLines(markdown)) {
+    const headingMatch = line.match(HEADING_RE);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      if (sectionLevel > 0) {
+        if (level <= sectionLevel) break;
+        continue;
+      }
+      if (headingMatch[2].trim().toLowerCase() === target) sectionLevel = level;
+      continue;
+    }
+    if (sectionLevel === 0) continue;
+    const bulletMatch = line.match(BULLET_RE);
+    if (!bulletMatch) continue;
+    const content = bulletMatch[1].trim();
+    if (content.startsWith("~~")) continue;
+    const text = plainText(content);
+    if (text) bullets.push(text);
+  }
+  return bullets;
+}
+
+// The note's opening prose paragraph, for the roster's secondary line and the
+// dossier subtitle. Skips frontmatter (parseFrontmatter already handles the
+// notes that have no blank line after the closing `---`), the H1, headings,
+// bullets, callouts/quotes, tables, thematic breaks and fenced code; takes the
+// first run of plain lines; reduces links to their labels. Returns null when
+// the note has no prose paragraph — including the person created from the
+// search field, who has no note at all.
+export function extractIntro(markdown: string): string | null {
+  const { body } = parseFrontmatter(markdown);
+  const paragraph: string[] = [];
+  for (const line of eligibleLines(body)) {
+    const trimmed = line.trim();
+    const skip =
+      !trimmed ||
+      HEADING_RE.test(line) ||
+      BULLET_RE.test(line) ||
+      trimmed.startsWith(">") ||
+      trimmed.startsWith("|") ||
+      /^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed);
+    if (skip) {
+      if (paragraph.length > 0) break;
+      continue;
+    }
+    paragraph.push(trimmed);
+  }
+  if (paragraph.length === 0) return null;
+  return plainText(paragraph.join(" ")) || null;
+}
+
 export type CalloutMarker = { kind: string; title: string };
 
 export function parseCalloutMarker(text: string): CalloutMarker | null {
