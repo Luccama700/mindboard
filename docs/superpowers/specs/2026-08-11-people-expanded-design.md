@@ -81,11 +81,20 @@ resolution is to split it by consumer rather than discard it:
 - **Overview display and sort: both, labelled.** Informational, so a hybrid is honest as long as each
   line says which signal it is.
 
-This creates a cold-start problem — on day one `person_interactions` is empty, so anyone with a
-cadence set would fire immediately. Solved at the point of opt-in: **setting a check-in cadence
-prompts one backfill question** ("when did you last talk?" → `today · this week · this month · longer
-ago · not sure`). One tap, one row, and every nudge after it is correct. "Not sure" sets no row and
-suppresses nudges until there is one.
+On day one `person_interactions` is empty. That is **not** a false-positive risk — §7's snapshot rule
+already excludes anyone with a cadence but no logged interaction, so nothing fires. The real problem
+is the opposite: silence. A cadence the user just set produces nothing at all until some conversation
+happens to get logged, which can be weeks. So the backfill exists to **convert that silence into a
+correct baseline**, not to prevent a burst: **setting a check-in cadence prompts one backfill
+question** ("when did you last talk?" → `today · this week · this month · longer ago · not sure`).
+One tap, one row, and the cadence is live immediately. "Not sure" sets no row, and the exclusion rule
+keeps that person quiet until there is one.
+
+Each option resolves to a concrete day by arithmetic on the page's resolved `today` prop — never a
+device clock, never a bare `new Date()` — because the answer lands in a `date` column and therefore
+persists instead of healing on hydration: `today` → `today`, `this week` → `addDaysKey(today, -3)`,
+`this month` → `addDaysKey(today, -14)`, `longer ago` → `addDaysKey(today, -60)`. The server's day in
+the user's stored zone is the anchor in every case.
 
 ---
 
@@ -96,7 +105,9 @@ Derived from the research; each traceable to a finding in the report.
 1. **No streaks, no counters, no persistent "days since" number on the overview.** Quantifying an
    activity reliably increases output and *decreases* enjoyment (Etkin 2016, six experiments) — it
    makes the activity feel like work. Recency is shown as a qualitative band. The specific number
-   appears only inside a suggestion, where it is a *reason*, not a score.
+   appears only inside a suggestion, where it is a *reason*, not a score. This holds on the per-person
+   page too — the "on your mind" line is a band ("often lately"), not a tally — so the principle needs
+   no per-surface carve-out and the word "overview" in this rule is not a loophole.
 2. **Attention is opt-in.** A person surfaces only if the user set a `checkin_days` for them. Default
    is silence. Exactly the inventory rule (`reorder_threshold`), for exactly the same reason.
 3. **Every suggestion is a specific person plus a specific hook.** Concrete if-then plans are acted on
@@ -126,25 +137,56 @@ Every departure, in one place, as the brief requires.
 
 | # | v1 baseline | Change | Why |
 |---|---|---|---|
-| 1 | "migration 0036" | **0047** | Directory ends at `0046_recurring_slot_events.sql`. Purely factual. |
+| 1 | "migration 0036" | **0047** | Directory ends at `0046_recurring_slot_events.sql`. Purely factual — but several live `ai/*` branches could claim 0047 first, so re-check `ls supabase/migrations \| tail -1` at build time rather than trusting this number. |
 | 2 | `lastTouch = max(interaction, vault updated)` | Split by consumer: interactions-only for cadence, both (labelled) for display | §2. Precision requirement + the documented trust failure. |
 | 3 | `people` columns as listed | **`+ aliases text[] not null default '{}'`** | Mention matching needs "Lucca" to match the note "Lucca Martins de Andrade". Rejected alternative: join `mindspace_topics.aliases` via `seed_ref->>'vaultPath'` — but person topics default *unchecked* at seeding unless the note has backlinks (`seed.ts:55`), so that join covers only a user-curated subset and would make matching silently incomplete. A column on a table already being created is cheaper than a fragile join. |
 | 4 | `person_interactions(person_id, summary, occurred_at)` | **`+ source text check in ('logged','confirmed')`** | Provenance is a design principle (§3.7), not decoration — the page must be able to say *how* it knows. One column, no new table. |
 | 5 | `vault_path` unique per user | Unique per user **and nullable** | A person can exist without a note. `Davi.md` names "His mom is **Denise**" in plain prose — she is the brief's own motivating example and has no note of her own. |
 | 6 | (unstated) | Overview is **flat alphabetical**, not attention-sorted | Have-first, per inventory. An attention-sorted list is a problem list. |
-| 7 | Nudges from `checkin_days` alone | Cadence opt-in **also triggers a one-tap backfill** | Kills the cold-start false-positive burst (§2). |
+| 7 | Nudges from `checkin_days` alone | Cadence opt-in **also triggers a one-tap backfill** | Turns cold-start silence into a live cadence (§2). Note the rationale is *not* "kills a false-positive burst" — §7's exclusion rule already does that. |
+| 8 | `person_interactions.summary` implicitly required | **`summary` nullable** | M1's one-tap log produces no prose; a `not null` column would force a text field and hand back the typing burden this design exists to refuse. §5. |
+| 9 | `unique (user_id, lower(name))` | **Partial: `where not archived`** | Otherwise an archived person blocks their name forever, for both hand-created rows and the sync's adoption step. `0031_spend_limits.sql:31-38` is the house precedent for exactly this. |
+| 10 | (unstated) | **`+ archived_at timestamptz`** | The "not tracking" section mirrors inventory (`0019_inventory_archive.sql`), which needs the stamp to order by. |
+| 11 | Dossier as a sheet on `/people` | **Its own server route `/people/[id]`** | `<NoteView>` takes a `VaultCorpus` whose `resolve` is a *function* — it cannot cross the RSC boundary into a client component. §6. |
+| 12 | (unstated) | **Dedup unique on confirmed interactions** | A double-tapped mention confirm would otherwise insert twice. §5. |
+| 13 | Aliases seeded from name tokens | **Seeded from `mindspace_topics.aliases` when `seed_ref->>'vaultPath'` matches; name tokens as fallback** | Two alias registries for the same people otherwise diverge from birth. §5. |
 
-Everything else in the baseline holds: own `/people` route reachable from the dock "more" menu
-(the rail is confirmed frozen at four items — `RAIL_TABS`, `dock.tsx:50-65`, commented "Trimmed to the
-lived-in surfaces (2026-08-11)"); the WHO/WHEN doctrine split; derived values computed at read time
-and never stored; opt-in nudges; `list_people` read plus propose→confirm `log_interaction`; people
-folded into `get_snapshot` wide mode. Vault rename → new row remains an accepted v1 limitation.
+Everything else in the baseline holds: own `/people` route reachable from the dock "more" menu; the
+WHO/WHEN doctrine split; derived values computed at read time and never stored; opt-in nudges;
+`list_people` read plus propose→confirm `log_interaction`; people folded into `get_snapshot` wide
+mode. Vault rename → new row remains an accepted v1 limitation.
+
+**Navigation dependency, stated plainly, because an earlier draft of this doc got it wrong.** The
+"rail is frozen at four items" premise is true only on the unmerged **`nav-trim`** branch, where
+`RAIL_TABS` is four entries (now / money / inventory / brain) and carries the comment "Trimmed to the
+lived-in surfaces (2026-08-11)" at `dock.tsx:59`, with the "more" array at `dock.tsx:498`. On `main`
+the rail still has **six** entries (now / inbox / money / inventory / learn / brain), that comment
+does not exist anywhere under `app/`, and the "more" array sits at `dock.tsx:507-509`. **This design
+assumes the `nav-trim` branch (PR #7) merges before M1.** If it does not, `/people` lands in a "more"
+menu behind a six-tab rail and the "four lived-in surfaces" argument has to be re-made rather than
+cited. Either way, **re-derive every `dock.tsx` line reference at build time** — they differ by
+branch, and so will every other line receipt in this doc.
 
 ---
 
 ## 5. The data model
 
-Two tables. Every column below is used by a shipped surface in M1–M3; nothing is speculative.
+Two tables, one migration. Most columns are used by a shipped surface in M1–M3, and the two
+exceptions are stated rather than buried: **`aliases` and the `'confirmed'` value of `source` do not
+activate until M4** (mention matching and candidate promotion respectively). They ship in 0047 anyway,
+because splitting a two-column addition into a second migration is more churn than the tidiness is
+worth — but nobody should read them as M1 features, and nothing in M1–M3 may quietly start depending
+on them.
+
+**Scope authorization.** Lucca approved the People scope expansion 2026-08-11 (conversation); the
+0047 migration itself still requires his explicit go-ahead before applying — never auto-apply.
+AGENTS.md's scope note lists notes/wikilinks, goals, pgvector embeddings and AI audit logs as the
+pre-authorized second-brain tables, and relationships are not among them, so this line *is* the
+authorization record a future session should look for.
+
+**Migration number.** `0047` assumes the directory still ends at `0046_recurring_slot_events.sql`.
+Several live `ai/*` branches could claim it first, so **re-check `ls supabase/migrations | tail -1`
+at build time.**
 
 **Rejected outright, on YAGNI and the field-bloat evidence** (Salesforce ships 47 default contact
 fields, HubSpot 94, and fewer than 20% of implementations hide the unused ones): relationship-type
@@ -157,8 +199,11 @@ relationship graph (wikilinks already are one, computed free by `computeBacklink
 ### `supabase/migrations/0047_people.sql`
 
 House style verified against `0031_spend_limits.sql` and `0004_inventory.sql`: no `updated_at`
-triggers exist anywhere in the codebase (application code sets the column), and there are no explicit
-`GRANT`s — RLS plus four policies is the entire access-control story.
+triggers exist anywhere in the codebase (application code sets the column, and this design's writers
+must actually do so — see M1), there are no explicit `GRANT`s — RLS plus four policies is the entire
+access-control story — and **soft-archivable rows get *partial* unique indexes predicated on
+`archived = false`** (`0031_spend_limits.sql:31-38`), which is the rule an earlier draft of this
+migration broke.
 
 ```sql
 -- People: the relationship layer.
@@ -176,13 +221,19 @@ create table public.people (
   -- the vault is idempotent.
   vault_path text,
   -- Name variants for mention matching ("Lucca" for "Lucca Martins de Andrade").
-  -- Seeded from the note basename's tokens; user-editable.
+  -- Seeded from the matching mindspace_topics row's aliases, else from the note
+  -- basename's tokens; user-editable. DORMANT until M4.
   aliases text[] not null default '{}',
   -- Opt-in cadence. NULL means this person never generates attention.
-  -- No defaults are ever shipped by relationship type.
-  checkin_days int check (checkin_days is null or checkin_days > 0),
+  -- No defaults are ever shipped by relationship type. (A CHECK already passes on
+  -- NULL, so no `is null or` branch is needed.)
+  checkin_days int check (checkin_days > 0),
   archived boolean not null default false,
+  -- Stamped on archive so the collapsed "not tracking" section can order by it,
+  -- per inventory_items.archived_at (0019).
+  archived_at timestamptz,
   created_at timestamptz not null default now(),
+  -- No triggers exist in this codebase; every writer sets this explicitly.
   updated_at timestamptz not null default now()
 );
 
@@ -190,12 +241,17 @@ create unique index people_user_vault_path_key
   on public.people (user_id, vault_path)
   where vault_path is not null;
 
+-- Partial on `not archived`, per 0031_spend_limits.sql:31-38. A non-partial unique
+-- would let an archived person block their name forever — breaking both the search
+-- field's `add "davi"` and the vault sync's adoption step, with a raw unique
+-- violation and no UI branch to catch it.
 create unique index people_user_name_key
-  on public.people (user_id, lower(name));
-
-create index people_user_active_idx
-  on public.people (user_id)
+  on public.people (user_id, lower(name))
   where not archived;
+
+-- No separate (user_id) index: people_user_name_key already leads with user_id and
+-- serves the roster read, so a second one would be write cost for no read benefit
+-- at 20-100 rows. 0031 ships a single plain index for the same reason.
 
 alter table public.people enable row level security;
 
@@ -219,16 +275,24 @@ create policy "people_delete_own"
 create table public.person_interactions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
+  -- No composite FK tying person_id back to this row's user_id. That is the house
+  -- pattern (spend_limits.category_id -> spending_categories has the same gap in
+  -- 0031), and RLS still hides cross-tenant rows on read, so the exposure is orphan
+  -- integrity rather than disclosure. Accepted explicitly, not by omission.
   person_id uuid not null references public.people (id) on delete cascade,
   -- What happened, in the user's terms. Records what the USER did or said,
   -- never an inference about the other person's state. See the privacy section.
-  summary text not null,
+  -- NULLABLE on purpose: the one-tap "talked" control (M1) writes no prose
+  -- (summary null, source 'logged') and renders as a plain "talked". A not-null
+  -- column would force a text field, and one tap that opens a textarea is not
+  -- one tap.
+  summary text,
   -- Date only: this is a day-grain fact, and storing an instant would invite
   -- UTC-slicing bugs downstream. Always written from a resolved user-zone day.
   occurred_at date not null,
   -- Provenance. 'logged' = stated outright by the user (or the assistant on their
-  -- behalf); 'confirmed' = promoted from a mindspace mention by an explicit tap.
-  -- The page shows this; it is not decoration.
+  -- behalf); 'confirmed' = promoted from a mindspace mention by an explicit tap
+  -- (M4 only). The page shows this; it is not decoration.
   source text not null default 'logged'
     check (source in ('logged', 'confirmed')),
   created_at timestamptz not null default now()
@@ -236,6 +300,13 @@ create table public.person_interactions (
 
 create index person_interactions_user_person_idx
   on public.person_interactions (user_id, person_id, occurred_at desc);
+
+-- A double-tapped mention confirm, or a retried action, must not insert twice.
+-- Promoted mentions are one-per-person-per-day by construction. 'logged' rows are
+-- deliberately NOT deduped: two real conversations on one day are a real thing.
+create unique index person_interactions_confirmed_key
+  on public.person_interactions (user_id, person_id, occurred_at)
+  where source = 'confirmed';
 
 alter table public.person_interactions enable row level security;
 
@@ -257,7 +328,22 @@ create policy "person_interactions_delete_own"
   using (auth.uid() = user_id);
 ```
 
+**On hard delete.** `person_id … on delete cascade` means deleting a person destroys their `talked`
+log — the one signal the doctrine treats as precision-critical, and the very thing the backfill exists
+to seed. Archive stays the default and the only path offered outside the collapsed section, and the
+delete confirm names what goes with it rather than using inventory's generic copy:
+*"delete davi and 14 logged conversations?"*.
+
 ### The lazy upsert
+
+**Where it lives — not in `app/actions/people.ts`.** Every export from a `"use server"` file is a
+publicly invocable POST endpoint, so a `syncPeopleFromVault(userId)` sitting in an actions file and
+running the service client would be a cross-tenant write endpoint: any authenticated session could
+call it with someone else's uuid, and the service client has already bypassed RLS. The house
+precedent is exact — `runMindspacePass` lives in `app/lib/mindspace/pipeline.ts`, not in actions, and
+the page calls it. So the sync lives in **`app/lib/people/sync.ts`**, is invoked from
+`app/people/page.tsx` inside `after()`, and takes its `userId` from that page's `auth.getUser()` —
+never from an argument that crossed a network boundary.
 
 **Mechanism — do not mutate during render.** The sync runs in `after()`, exactly as the mindspace
 classification pass does (`app/mindspace/page.tsx:113`), and inside it **must use
@@ -268,33 +354,81 @@ classification pass does (`app/mindspace/page.tsx:113`), and inside it **must us
 > `cookies()` throws. Every query below is explicitly userId-scoped, per the multi-tenant invariant."
 
 So every query in the sync filters `.eq("user_id", userId)` explicitly, since the service client
-bypasses RLS. The first render of `/people` shows whatever rows already exist; a brand-new vault
-person appears on the next visit. That is the same "sharpens visit over visit" contract mindspace
-already ships, and it is why M1 must not depend on the sync having run.
+bypasses RLS, and the whole body sits in one try/catch the way `runMindspacePass` does — an `after()`
+throw is silent, so an uncaught one means the sync simply stops happening with nothing in the UI to
+show for it. The first render of `/people` shows whatever rows already exist; a brand-new vault person
+appears on the next visit. That is the same "sharpens visit over visit" contract mindspace already
+ships, and it is why M1 must not depend on the sync having run.
+
+**Credentials must be threaded, not resolved — this is the trap.** `getVaultCorpus(userId)` and the
+`userId`-only convenience paths reach GitHub credentials through `getVaultCredentials(userId)`, which
+is `readVaultCredentials(await createClient(), userId)` — **the cookie client**
+(`app/lib/brain/vault.ts:122-126`). Calling either from inside `after()` throws for precisely the
+reason the quote above gives, so "use the service client for the queries" is not sufficient advice:
+the vault reads have to be given credentials explicitly.
+
+```ts
+const supabase = createServiceClient();
+const credentials = await readVaultCredentials(supabase, userId);
+if (!credentials) return;                        // no vault is normal, not an error
+const entries = await listVaultNotePaths(credentials, vaultTag(userId));
+```
+
+Never the `userId`-only wrappers, here or in §7's assembler.
 
 **Matching, and the collision that will otherwise bite.** For each `People/*.md` note, resolve an
 existing row in this order:
 
 1. by `vault_path` — already linked, nothing to do;
-2. else by `lower(name)` — **adopt**: set `vault_path` on that existing row.
+2. else by `lower(name)` **among rows whose `vault_path is null`** — **adopt**: set `vault_path` on
+   that row.
 
 Step 2 is not optional. Without it, a person created by hand from the search field (§8, the Denise
 case) whose note later appears in the vault would hit `people_user_name_key` and the insert would
-throw. Adoption is also what makes the sync idempotent across renames-back-and-forth.
+throw. The `vault_path is null` restriction is the subtler half and is equally non-optional: without
+it, a note renamed `People/Davi.md` → `People/Davi Silva.md`, followed by a *different* Davi getting a
+fresh `People/Davi.md`, would name-match the old row — whose `vault_path` still points at the
+renamed-away note — and either silently retarget one person's identity onto a stranger's note or
+violate `people_user_vault_path_key`. A row already holding some other `vault_path` is never adopted;
+the sync inserts a new row instead.
 
-**Accepted limitations of this scheme**, both consequences of keying on the name and both fine at
-one user's scale:
+**Concurrency.** Two tabs, or a load plus a prefetch, can enter the sync at once, both miss the same
+note, and both insert — one gets a unique violation inside `after()`, where nothing catches it. So
+inserts go through `.upsert(rows, { onConflict: "user_id,vault_path", ignoreDuplicates: true })`, and
+the name-keyed path catches the unique violation and re-reads rather than throwing.
 
-- A vault **rename produces a new row**; the old row keeps its interaction history and has to be
-  archived by hand. (Carried over from the v1 baseline.)
+**Stale paths.** A rename leaves the old row pointing at a note that no longer exists. On a
+*successful* tree fetch (never on a failed one), any `vault_path` absent from the tree is nulled, and
+the page then treats that person exactly like a person who never had a note. A corpus miss and
+`vault_path is null` are **one** case, not two — otherwise the per-person page has an unspecified
+third state and renders a note block for a note nobody can fetch.
+
+**Accepted limitations of this scheme**, all consequences of keying on the name and all fine at one
+user's scale:
+
+- A vault **rename produces a new row**; the old row keeps its interaction history, loses its
+  `vault_path` to the stale-path rule above, and has to be archived by hand. (Carried over from the
+  v1 baseline.)
 - **Two distinct people who share a first name get conflated** by the `lower(name)` unique index and
   the adoption step. Same class of limitation as the rename case. The escape hatch already exists —
   rename one of them to something distinguishing, exactly as the vault itself would have to.
+- **Accents are not folded.** `lower(name)` is case-insensitive but not accent-insensitive, so a
+  hand-created "Davi" will not adopt a note titled "Daví", and `Luis` / `Luís` are two rows with a
+  split history. Folding correctly would mean the `unaccent` extension — a new dependency — so this
+  is stated, not fixed.
 
-Name comes from `noteTitle(path)`. Aliases seed as the distinct tokens of the name with length ≥ 3
+Name comes from `noteTitle(path)`. **Aliases seed from `mindspace_topics`**: if an active topic's
+`seed_ref->>'vaultPath'` equals this note's path, copy that topic's `aliases`, since the user has
+already curated them there. Otherwise fall back to the distinct tokens of the name with length ≥ 3
 (so "Lucca Martins de Andrade" seeds `{lucca, martins, andrade}`) — the same `MIN_TERM_LENGTH = 3`
-floor the mindspace matcher uses, for the same reason. Never delete rows for notes that disappeared;
-a rename produces a new row, the accepted v1 limitation.
+floor the mindspace matcher uses (`classify.ts:21`), for the same reason.
+
+**Two alias registries now exist and they will drift** — `people.aliases`, edited on `/people`, and
+`mindspace_topics.aliases`, used by the classifier — so the per-person page's "on your mind" band can
+disagree with `/mindspace`. That is an accepted limitation rather than a bug to design around, and the
+reconcile rule is one line: **seeding is one-way and one-time, at row creation; after that each
+registry owns its own edits.** If the divergence is ever actually felt, a later pass can reconcile
+them; inventing a sync now would be speculative.
 
 **Filters.** Skip anything whose `frontmatter.type` is not `person` (this drops `type: pet` — Taiga)
 and skip the user's own self-note. Both are one-line filters, and getting either wrong makes the very
@@ -306,11 +440,12 @@ and the page shows a quiet "connect a vault to pull in your people notes" line r
 `VaultNotConfiguredError` banner. `getVaultCorpus` throwing must never take the page down —
 `app/brain/page.tsx` already models catching `VaultConnectionError` for a friendly banner.
 
-**Cost note.** The roster's secondary lines and the open-loops block both need note *bodies*, so
-`/people` pays for `getVaultCorpus` (every blob, batched 25 at a time). It is `cache()`-deduped per
-request and `/brain` already pays it, so this is acceptable — but it means `/people` is a
-corpus-weight page, not a Postgres-only one, and the roster should render from `people` rows first
-with vault-derived text filled in around it.
+**Cost note.** The roster's secondary lines need note *bodies*, so `/people` pays for `getVaultCorpus`
+(every blob, batched 25 at a time). It is `cache()`-deduped per request and `/brain` already pays it,
+so this is acceptable — but it means `/people` is a corpus-weight page, not a Postgres-only one, and
+the roster renders from `people` rows first with vault-derived text filled in around it. `/people/[id]`
+pays it too, for exactly the reason `/brain/note/[...path]` does: `<NoteView>` needs the corpus's
+wikilink resolver. The MCP path does **not** — see §7 and §9, which bound it to single-note reads.
 
 ---
 
@@ -319,6 +454,16 @@ with vault-derived text filled in around it.
 The dossier. Composed **entirely from data that already exists**. Ordering is deliberate: the research
 is unanimous that context beats fields, so context is on top and the field-like material is at the
 bottom.
+
+**It is its own server-rendered route, `/people/[id]` — not a sheet.** This is forced, not stylistic.
+`<NoteView>` takes `{ note: VaultNote; corpus: VaultCorpus }` (`note-view.tsx:152`) and
+`VaultCorpus.resolve` is a *function*, built by `buildResolver`, so the corpus cannot cross the RSC
+boundary into a client component: passing it to a client `Sheet` throws on serialization, and the
+version that "works" would ship every note body in the vault to the browser. Both existing call sites
+(`app/brain/page.tsx:161`, `app/brain/note/[...path]/page.tsx:68`) are server components, and
+`/brain/note/[...path]` is the working precedent to copy — roster row is a `<Link>`, the person page
+is a server component, and only the interactive pieces inside it (the log control, the cadence input)
+are client children receiving plain serializable props.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -329,7 +474,7 @@ bottom.
 │  TALKED         aug 3 · "coffee, he's        │  ← provenance-tagged, three lines,
 │                 writing again"  (you logged) │     the anti-Clay panel
 │  NOTED          aug 9 · note updated         │
-│  ON YOUR MIND   4 times in the last 30 days ›│  ← tappable
+│  ON YOUR MIND   often lately               ›│  ← band, not a tally; tappable
 ├──────────────────────────────────────────────┤
 │  OPEN LOOPS                                  │  ← from the note's ## Open questions
 │  · does he still want the writing feedback?  │
