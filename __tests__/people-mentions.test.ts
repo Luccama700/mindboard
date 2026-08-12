@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildExcerpt,
   buildPersonMatchers,
+  evidenceRef,
   scanSessionsForMentions,
   type ScannablePerson,
   type ScannableSession,
@@ -20,7 +21,11 @@ function person(
 function session(
   over: Partial<ScannableSession> & { session_ref: string; user_text: string },
 ): ScannableSession {
-  return { ended_at: "2026-08-10T18:00:00.000Z", ...over };
+  return {
+    provider: "claude_code",
+    ended_at: "2026-08-10T18:00:00.000Z",
+    ...over,
+  };
 }
 
 function scan(
@@ -63,6 +68,28 @@ describe("buildPersonMatchers", () => {
   test("a person with no term over the floor is unmatchable, not a wildcard", () => {
     expect(buildPersonMatchers([person({ id: "p1", name: "Bo" })])).toEqual([]);
   });
+
+  test("terms are capped at ten per person", () => {
+    // The chokepoint where an alias becomes a regex run against every session:
+    // aliases also arrive unbounded from seedAliases and curated topics, so the
+    // defence lives here rather than only on the edit path.
+    const [matcher] = buildPersonMatchers([
+      person({
+        id: "p1",
+        name: "Davi",
+        aliases: Array.from({ length: 40 }, (_, i) => `alias${i}`),
+      }),
+    ]);
+    expect(matcher.terms).toHaveLength(10);
+    expect(matcher.terms[0].term).toBe("Davi");
+  });
+
+  test("an absurdly long term is dropped, not compiled", () => {
+    const [matcher] = buildPersonMatchers([
+      person({ id: "p1", name: "Davi", aliases: ["x".repeat(400)] }),
+    ]);
+    expect(matcher.terms.map((t) => t.term)).toEqual(["Davi"]);
+  });
 });
 
 describe("scanSessionsForMentions — matching", () => {
@@ -78,9 +105,31 @@ describe("scanSessionsForMentions — matching", () => {
     expect(candidates[0]).toMatchObject({
       personId: "p-davi",
       sourceKind: "session",
-      sourceRef: "s1",
+      sourceRef: "claude_code:s1",
       matchedTerm: "Davi",
     });
+  });
+
+  test("the evidence ref is provider-qualified so providers cannot collide", () => {
+    // mindspace_sessions is unique on (user_id, provider, session_ref), so a
+    // bare ref shared by a claude_ai and a claude_code session would collide on
+    // person_mention_candidates_evidence_key and swallow the second candidate.
+    const { candidates } = scan(
+      [
+        session({ provider: "claude_ai", session_ref: "abc", user_text: "Davi called" }),
+        session({ provider: "claude_code", session_ref: "abc", user_text: "Davi again" }),
+      ],
+      [davi],
+    );
+    expect(candidates.map((c) => c.sourceRef)).toEqual([
+      "claude_ai:abc",
+      "claude_code:abc",
+    ]);
+    expect(new Set(candidates.map((c) => c.sourceRef)).size).toBe(2);
+  });
+
+  test("evidenceRef is the single definition of that qualification", () => {
+    expect(evidenceRef("claude_ai", "abc")).toBe("claude_ai:abc");
   });
 
   test("matching is case-insensitive but boundary-respecting", () => {
@@ -147,7 +196,9 @@ describe("scanSessionsForMentions — matching", () => {
       "p-davi",
       "p-emma",
     ]);
-    expect(new Set(candidates.map((c) => c.sourceRef))).toEqual(new Set(["s1"]));
+    expect(new Set(candidates.map((c) => c.sourceRef))).toEqual(
+      new Set(["claude_code:s1"]),
+    );
   });
 
   test("a roster miss is a clean no-op", () => {
@@ -241,6 +292,38 @@ describe("scanSessionsForMentions — watermark", () => {
 
   test("an empty batch leaves the watermark null", () => {
     expect(scan([], [davi]).watermark).toBeNull();
+  });
+
+  test("re-scanning the boundary session is idempotent by evidence ref", () => {
+    // The incremental read uses `gte` on the watermark, so the newest session is
+    // deliberately re-scanned rather than skipped (a `gt` permanently loses any
+    // session sharing that exact instant). Safe only because a repeat yields an
+    // IDENTICAL draft, which person_mention_candidates_evidence_key no-ops.
+    const boundary = session({
+      session_ref: "s1",
+      ended_at: "2026-08-09T10:00:00.000Z",
+      user_text: "talked to Davi",
+    });
+    const first = scan([boundary], [davi]);
+    const second = scan([boundary], [davi]);
+    expect(second.candidates).toEqual(first.candidates);
+    expect(second.watermark).toBe(first.watermark);
+  });
+
+  test("two sessions sharing an instant both survive the boundary re-scan", () => {
+    const at = "2026-08-09T10:00:00.000Z";
+    const { candidates, watermark } = scan(
+      [
+        session({ session_ref: "s1", ended_at: at, user_text: "Davi called" }),
+        session({ session_ref: "s2", ended_at: at, user_text: "Davi again" }),
+      ],
+      [davi],
+    );
+    expect(candidates.map((c) => c.sourceRef)).toEqual([
+      "claude_code:s1",
+      "claude_code:s2",
+    ]);
+    expect(watermark).toBe(at);
   });
 });
 

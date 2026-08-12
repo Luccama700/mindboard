@@ -11,6 +11,7 @@ import {
   getPersonInteractions,
 } from "@/app/lib/data/people";
 import {
+  findNote,
   getVaultCorpus,
   VaultConnectionError,
   VaultNotConfiguredError,
@@ -28,6 +29,7 @@ import {
   recencyBand,
 } from "@/app/_components/people-recency";
 import { CadenceControl } from "./cadence-control";
+import { IdentityControl } from "./identity-control";
 import { LogControl } from "./log-control";
 import { MentionReview } from "./mention-review";
 
@@ -67,9 +69,11 @@ export default async function PersonPage(props: {
       throw error;
     }
   }
+  // findNote is case-insensitive — a case-only vault rename must not hide
+  // the note here while MCP still resolves it (review finding 10).
   const note: VaultNote | null =
-    person.vault_path !== null
-      ? (corpus?.notes.get(person.vault_path) ?? null)
+    person.vault_path !== null && corpus
+      ? findNote(corpus, person.vault_path)
       : null;
 
   const intro = note ? extractIntro(note.body) : null;
@@ -174,11 +178,18 @@ export default async function PersonPage(props: {
         />
       </section>
 
-      <section className="mb-8">
+      <section className="mb-8 space-y-4">
         <CadenceControl
           personId={person.id}
           checkinDays={person.checkin_days}
           hasInteractions={interactions.length > 0}
+          today={today}
+        />
+        <IdentityControl
+          personId={person.id}
+          name={person.name}
+          aliases={person.aliases}
+          snoozedUntil={person.attention_snoozed_until}
           today={today}
         />
       </section>

@@ -39,6 +39,12 @@ export type PeopleVitals = {
   total: number;
   tracked: number;
   attention: PersonAttention[];
+  // A suppressed nudge SAYS SO rather than vanishing (§2): these people are
+  // eligible and overdue, and were held back solely by unreviewed evidence.
+  // Names only — never the excerpt that did the quieting, so the surface can
+  // explain itself ("quiet for now — a mention of Davi hasn't been reviewed")
+  // without shipping raw session text anywhere (§9).
+  quieted: { personId: string; name: string }[];
 };
 
 export type PeopleAttentionInput = {
@@ -90,6 +96,7 @@ export function computePeopleAttention(
   }
 
   const attention: PersonAttention[] = [];
+  const quieted: { personId: string; name: string }[] = [];
   let tracked = 0;
 
   for (const person of active) {
@@ -131,7 +138,10 @@ export function computePeopleAttention(
     // naming one, and a made-up number would be exactly the unexplained
     // black-box behaviour §3.7 bans.
     const evidence = newestCandidate.get(person.id);
-    if (evidence !== undefined && evidence > last.occurred_at) continue;
+    if (evidence !== undefined && evidence > last.occurred_at) {
+      quieted.push({ personId: person.id, name: person.name });
+      continue;
+    }
 
     attention.push({
       personId: person.id,
@@ -158,7 +168,11 @@ export function computePeopleAttention(
       a.personId.localeCompare(b.personId),
   );
 
-  return { total: active.length, tracked, attention };
+  quieted.sort(
+    (a, b) => a.name.localeCompare(b.name) || a.personId.localeCompare(b.personId),
+  );
+
+  return { total: active.length, tracked, attention, quieted };
 }
 
 // Attach vault prose to an ALREADY-BOUNDED slice: the caller passes

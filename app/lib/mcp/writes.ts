@@ -58,6 +58,7 @@ import {
   type ResolvableItem,
 } from "./inventory-ops";
 import {
+  dateLabel,
   renderPeopleReceipt,
   resolvePeopleOps,
   validatePeopleOps,
@@ -2907,11 +2908,24 @@ async function executePeopleUpdate(
       case "log": {
         const target = personIdFor(op);
         if (!target.ok) return target;
-        if (!op.date && today === null) {
-          today = await todayKey(supabase, ownerId);
-        }
+        // Resolved for EVERY log op, not just undated ones: a caller-supplied
+        // date has to be checked against something. Execute-time is the only
+        // correct anchor — a proposal can be confirmed days after it was made,
+        // so a date that was future at propose time may legitimately be past
+        // now, and vice versa.
+        if (today === null) today = await todayKey(supabase, ownerId);
         const occurredAt = op.date ?? today;
         if (!occurredAt) return { ok: false, error: "could not resolve today" };
+        // A future row is not a harmless typo: daysSinceTalked goes NEGATIVE,
+        // which is never greater than any cadence, so the person is silenced
+        // until that day arrives. Same guard the server actions apply — this is
+        // the third write path into the same column.
+        if (occurredAt > today) {
+          return {
+            ok: false,
+            error: `that day hasn't happened yet (${op.name}: ${occurredAt}) (applied: ${applied.length})`,
+          };
+        }
         const { error } = await supabase.from("person_interactions").insert({
           user_id: ownerId,
           person_id: target.value,
@@ -2923,7 +2937,7 @@ async function executePeopleUpdate(
           source: "logged",
         });
         if (error) return { ok: false, error: error.message };
-        applied.push(`logged ${op.name} on ${occurredAt}`);
+        applied.push(`logged ${op.name} on ${dateLabel(occurredAt, op.precision)}`);
         break;
       }
       case "checkin": {

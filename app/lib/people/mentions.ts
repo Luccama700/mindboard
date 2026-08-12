@@ -25,6 +25,14 @@ import { termPattern } from "@/app/lib/mindspace/classify";
 // The mindspace matcher's only false-positive defence (classify.ts:21), applied
 // here for the same reason: two-letter names hit far too much prose.
 const MIN_TERM_LENGTH = 3;
+// THE defensive chokepoint for scan cost. normalizeAliases (app/actions/people.ts)
+// caps the EDIT path at the same numbers, but aliases also arrive from
+// seedAliases and from curated mindspace_topics rows, neither of which is
+// bounded — and this is the one place any of them becomes a regex run against
+// every new session inside after(). Capping here defends regardless of how the
+// row got its aliases, including writers that do not exist yet.
+const MAX_TERMS_PER_PERSON = 10;
+const MAX_TERM_LENGTH = 40;
 const EXCERPT_CHARS = 200;
 // Sessions per incremental pass. A backlog drains over successive visits rather
 // than making one page load pay for it; scanAllSessions is the explicit one-off.
@@ -38,10 +46,20 @@ export type ScannablePerson = {
 };
 
 export type ScannableSession = {
+  provider: string;
   session_ref: string;
   ended_at: string; // timestamptz ISO
   user_text: string;
 };
+
+// mindspace_sessions is unique on (user_id, provider, session_ref) — session_ref
+// ALONE is not unique, so storing it bare would let a claude_ai session and a
+// claude_code session sharing a ref collide on
+// person_mention_candidates_evidence_key, and the second one's candidate would
+// be silently swallowed as a duplicate. Qualify it.
+export function evidenceRef(provider: string, sessionRef: string): string {
+  return `${provider}:${sessionRef}`;
+}
 
 export type CandidateDraft = {
   personId: string;
@@ -78,10 +96,12 @@ export function buildPersonMatchers(
     for (const raw of [person.name, ...(person.aliases ?? [])]) {
       const term = (raw ?? "").trim();
       if (term.length < MIN_TERM_LENGTH) continue;
+      if (term.length > MAX_TERM_LENGTH) continue;
       const key = term.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
       terms.push({ term, re: termPattern(term) });
+      if (terms.length >= MAX_TERMS_PER_PERSON) break;
     }
     // A person whose every term is under the floor is unmatchable, not a
     // match-everything wildcard.
@@ -145,7 +165,7 @@ export function scanSessionsForMentions(input: {
         candidates.push({
           personId: matcher.id,
           sourceKind: "session",
-          sourceRef: session.session_ref,
+          sourceRef: evidenceRef(session.provider, session.session_ref),
           occurredAt,
           excerpt: buildExcerpt(text, hit.index, hit[0].length),
           matchedTerm: term,
@@ -268,9 +288,14 @@ export async function scanMentionsForUser(
 
   const { data: sessionData, error } = await supabase
     .from("mindspace_sessions")
-    .select("session_ref, ended_at, user_text")
+    .select("provider, session_ref, ended_at, user_text")
     .eq("user_id", userId)
-    .gt("ended_at", watermark)
+    // gte, not gt: the watermark IS the newest session already scanned, so `gt`
+    // permanently skips any session sharing that exact instant — two sessions
+    // ending in the same millisecond, or the boundary session itself after an
+    // initialize. Re-covering it is free, because the evidence key makes a
+    // repeat candidate a no-op.
+    .gte("ended_at", watermark)
     .order("ended_at", { ascending: true })
     .limit(SCAN_BATCH);
   if (error) throw error;
@@ -314,10 +339,13 @@ export async function scanAllSessions(
 
   let query = supabase
     .from("mindspace_sessions")
-    .select("session_ref, ended_at, user_text")
+    .select("provider, session_ref, ended_at, user_text")
     .eq("user_id", userId)
     .order("ended_at", { ascending: true })
     .limit(limit);
+  // gt here, not gte: this cursor pages FORWARD through a finite corpus, so
+  // re-including the previous page's last row would stall the walk. The
+  // incremental watermark has the opposite requirement (see scanMentionsForUser).
   if (options?.after) query = query.gt("ended_at", options.after);
   const { data, error } = await query;
   if (error) throw error;

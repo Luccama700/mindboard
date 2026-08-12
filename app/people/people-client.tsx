@@ -8,6 +8,7 @@ import {
   createPerson,
   restorePerson,
   deletePerson,
+  getDeleteImpact,
   snoozePerson,
 } from "@/app/actions/people";
 import { SectionRuler, INPUT_CLASS } from "@/app/_components/ui";
@@ -28,12 +29,14 @@ export function PeopleClient({
   vaultConnected,
   today,
   suggestion,
+  quieted,
 }: {
   entries: RosterEntry[];
   archived: Person[];
   vaultConnected: boolean;
   today: string;
   suggestion: PersonAttention | null;
+  quieted: { personId: string; name: string }[];
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -41,6 +44,8 @@ export function PeopleClient({
   const [error, setError] = useState<string | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deleteImpact, setDeleteImpact] = useState<number | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
 
   const q = query.trim().toLowerCase();
   const filtered = useMemo(
@@ -101,6 +106,20 @@ export function PeopleClient({
         <SuggestionCard suggestion={suggestion} onDismissed={() => router.refresh()} />
       )}
 
+      {/* Suppression says so out loud (§2, §3.7): a nudge quieted by an
+          unreviewed mention must never just vanish. */}
+      {quieted.length > 0 && (
+        <p>
+          <Link
+            href={`/people/${quieted[0].personId}`}
+            className="text-meta text-muted hover:text-fg transition-colors min-h-11 inline-flex items-center"
+          >
+            quiet for now — a mention of {quieted[0].name.toLowerCase()} hasn&apos;t
+            been reviewed ›
+          </Link>
+        </p>
+      )}
+
       <section className="space-y-1">
         <SectionRuler label="people" count={entries.length} />
         {filtered.length === 0 ? (
@@ -131,6 +150,9 @@ export function PeopleClient({
             <span>not tracking · {archived.length}</span>
             <span aria-hidden>{archiveOpen ? "▾" : "›"}</span>
           </button>
+          {archiveError && (
+            <p className="mt-1 text-meta text-danger">{archiveError}</p>
+          )}
           {archiveOpen && (
             <ul className="mt-1">
               {archived.map((person) => (
@@ -145,7 +167,11 @@ export function PeopleClient({
                     <button
                       type="button"
                       onClick={() => {
-                        void restorePerson(person.id).then(() => router.refresh());
+                        setArchiveError(null);
+                        void restorePerson(person.id).then((result) => {
+                          if (result?.error) setArchiveError(result.error);
+                          else router.refresh();
+                        });
                       }}
                       className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11"
                     >
@@ -155,19 +181,40 @@ export function PeopleClient({
                       <button
                         type="button"
                         onClick={() => {
-                          void deletePerson(person.id).then(() => {
+                          setArchiveError(null);
+                          void deletePerson(person.id).then((result) => {
+                            if (result?.error) {
+                              setArchiveError(result.error);
+                              return;
+                            }
                             setConfirmingDelete(null);
+                            setDeleteImpact(null);
                             router.refresh();
                           });
                         }}
                         className="text-label uppercase text-danger hover:opacity-80 transition-opacity min-h-11"
                       >
-                        confirm — history goes too
+                        {/* Names what the cascade destroys (§8, review finding 4). */}
+                        {deleteImpact === null
+                          ? "confirm — history goes too"
+                          : deleteImpact === 0
+                            ? "confirm — nothing logged yet"
+                            : `confirm — ${deleteImpact} logged ${
+                                deleteImpact === 1 ? "conversation goes" : "conversations go"
+                              } too`}
                       </button>
                     ) : (
                       <button
                         type="button"
-                        onClick={() => setConfirmingDelete(person.id)}
+                        onClick={() => {
+                          setConfirmingDelete(person.id);
+                          setDeleteImpact(null);
+                          void getDeleteImpact(person.id).then((impact) => {
+                            if (typeof impact?.interactions === "number") {
+                              setDeleteImpact(impact.interactions);
+                            }
+                          });
+                        }}
                         className="text-label uppercase text-muted hover:text-danger transition-colors min-h-11"
                       >
                         delete forever
@@ -194,6 +241,7 @@ function SuggestionCard({
   onDismissed: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const loop = suggestion.openLoops[0] ?? null;
 
   return (
@@ -218,13 +266,22 @@ function SuggestionCard({
           disabled={busy}
           onClick={() => {
             setBusy(true);
-            void snoozePerson(suggestion.personId).then(() => onDismissed());
+            setError(null);
+            void snoozePerson(suggestion.personId).then((result) => {
+              if (result?.error) {
+                setError(result.error);
+                setBusy(false);
+                return;
+              }
+              onDismissed();
+            });
           }}
           className="inline-flex items-center min-h-11 px-4 text-action lowercase text-muted hover:text-fg transition-colors disabled:opacity-40"
         >
           not now
         </button>
       </div>
+      {error && <p className="text-meta text-danger">{error}</p>}
     </section>
   );
 }

@@ -226,6 +226,50 @@ describe("computePeopleAttention — mention-candidate suppression", () => {
     // Suppressed or not, the person stays counted as tracked: quieting is not
     // un-opting-in.
     expect(vitals.tracked).toBe(1);
+    // A suppressed nudge SAYS SO rather than vanishing: exactly the people held
+    // back by the candidate rule appear in quieted[].
+    expect(vitals.quieted.length).toBe(expected ? 0 : 1);
+  });
+
+  test("quieted names the person, so the surface can explain the silence", () => {
+    const vitals = compute(people, logged, [candidate("p1", "2026-08-09")]);
+    expect(vitals.quieted).toEqual([{ personId: "p1", name: "Davi" }]);
+    // Names ONLY — never the excerpt that did the quieting (§9).
+    expect(JSON.stringify(vitals.quieted)).not.toContain("occurred_at");
+  });
+
+  test("quieted holds ONLY candidate-suppressed people, not every silent one", () => {
+    const roster = [
+      // Overdue and quieted by evidence.
+      person({ id: "p1", name: "Davi", checkin_days: 7 }),
+      // Overdue but snoozed — a different rule, and not what quieted explains.
+      person({
+        id: "p2",
+        name: "Emma",
+        checkin_days: 7,
+        attention_snoozed_until: "2026-12-01",
+      }),
+      // No cadence at all.
+      person({ id: "p3", name: "Carla" }),
+      // Overdue and genuinely surfacing.
+      person({ id: "p4", name: "Avalon", checkin_days: 7 }),
+    ];
+    const vitals = compute(
+      roster,
+      [
+        interaction("p1", "2026-07-01"),
+        interaction("p2", "2026-07-01"),
+        interaction("p3", "2026-07-01"),
+        interaction("p4", "2026-07-01"),
+      ],
+      [candidate("p1", "2026-08-09")],
+    );
+    expect(vitals.quieted).toEqual([{ personId: "p1", name: "Davi" }]);
+    expect(vitals.attention.map((a) => a.personId)).toEqual(["p4"]);
+  });
+
+  test("quieted is empty when nothing was suppressed", () => {
+    expect(compute(people, logged).quieted).toEqual([]);
   });
 
   test("suppression never fabricates contact — lastTalked is untouched", () => {

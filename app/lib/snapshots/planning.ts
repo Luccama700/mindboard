@@ -211,8 +211,9 @@ export type PlanningSnapshot = {
     goals: { id: string; title: string; horizon: string | null; status: string; targetDate: string | null }[];
   };
   // Open loops travel ONLY for the people in attention[] — never the whole
-  // roster — and no mindspace mention snippets travel at all (§9). Both bounds
-  // are the ones the two-step assembly already imposes for performance.
+  // roster — and no mindspace mention snippets travel at all (§9). `quieted`
+  // carries names only, so the assistant can explain a suppressed nudge instead
+  // of black-boxing it, without any excerpt leaving the app.
   people: PeopleVitals;
 };
 
@@ -565,6 +566,11 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
         targetDate: g.target_date,
       })),
     },
-    people: input.people ?? { total: 0, tracked: 0, attention: [] },
+    people: input.people ?? {
+      total: 0,
+      tracked: 0,
+      attention: [],
+      quieted: [],
+    },
   };
 }

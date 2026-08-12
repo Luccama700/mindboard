@@ -237,6 +237,9 @@ describe("planningSnapshot", () => {
     input.people = {
       total: 20,
       tracked: 3,
+      // Names only — a suppressed nudge explains itself without shipping the
+      // excerpt that quieted it.
+      quieted: [{ personId: "p2", name: "Emma" }],
       attention: [
         {
           personId: "p1",
@@ -260,6 +263,7 @@ describe("planningSnapshot", () => {
       total: 0,
       tracked: 0,
       attention: [],
+      quieted: [],
     });
   });
 });

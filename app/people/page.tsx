@@ -5,13 +5,18 @@ import { after } from "next/server";
 import { createClient } from "@/utils/supabase/server";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
-import { getPeople, getLatestInteractions } from "@/app/lib/data/people";
+import {
+  getCandidates,
+  getLatestInteractions,
+  getPeople,
+} from "@/app/lib/data/people";
 import {
   listEligibleNotes,
   seedingDone,
   syncPeopleFromVault,
 } from "@/app/lib/people/sync";
 import {
+  findNote,
   getVaultCorpus,
   VaultConnectionError,
   VaultNotConfiguredError,
@@ -80,15 +85,15 @@ export default async function PeoplePage() {
     }
   }
 
-  if (seeded) {
-    // Visibility is immediate, persistence is eventual (§5): the sync
-    // backfills new notes after the response, never gating this render.
-    after(() => syncPeopleFromVault(user.id));
-  }
+  // Unconditional: the checklist gate lives INSIDE the sync's vault phase,
+  // and the mention scan must run even for a vault-less, hand-created
+  // roster — the Denise case (§5, review finding 2).
+  after(() => syncPeopleFromVault(user.id));
 
-  const [people, latest] = await Promise.all([
+  const [people, latest, newCandidates] = await Promise.all([
     getPeople(user.id),
     getLatestInteractions(user.id),
+    getCandidates(user.id),
   ]);
 
   const active = people.filter((p) => !p.archived);
@@ -99,9 +104,11 @@ export default async function PeoplePage() {
   );
 
   const entries: RosterEntry[] = active.map((person) => {
+    // findNote, not notes.get: a case-only vault rename must not hide the
+    // note from the UI while MCP still sees it (review finding 10).
     const note =
-      person.vault_path !== null
-        ? (corpus?.notes.get(person.vault_path) ?? null)
+      person.vault_path !== null && corpus
+        ? findNote(corpus, person.vault_path)
         : null;
     return {
       person,
@@ -119,7 +126,9 @@ export default async function PeoplePage() {
     const peopleNotes = corpus.folders.get("People") ?? [];
     for (const note of peopleNotes) {
       if (linkedPaths.has(note.path)) continue;
-      if ((note.frontmatter.type ?? "person") !== "person") continue;
+      // Same predicate as the sync's isPersonNote — a laxer filter here
+      // renders ghost rows the sync will never persist (review finding 5).
+      if (note.frontmatter.type !== "person") continue;
       entries.push({
         person: null,
         vaultPath: note.path,
@@ -138,7 +147,7 @@ export default async function PeoplePage() {
   const vitals = computePeopleAttention({
     people,
     interactions: [...latest.values()],
-    candidates: [],
+    candidates: newCandidates,
     today,
   });
   let suggestion: PersonAttention | null = null;
@@ -147,7 +156,7 @@ export default async function PeoplePage() {
     const loops: Record<string, string[]> = {};
     for (const entry of top) {
       const path = people.find((p) => p.id === entry.personId)?.vault_path;
-      const note = path ? (corpus?.notes.get(path) ?? null) : null;
+      const note = path && corpus ? findNote(corpus, path) : null;
       loops[entry.personId] = note
         ? extractSectionBullets(note.body, "Open questions")
         : [];
@@ -163,6 +172,7 @@ export default async function PeoplePage() {
         vaultConnected={vaultConnected}
         today={today}
         suggestion={suggestion}
+        quieted={vitals.quieted}
       />
     </Shell>
   );

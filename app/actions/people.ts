@@ -37,16 +37,28 @@ function nameTaken(name: string): string {
   return `you already have a ${name} — add a distinguishing name`;
 }
 
+// Bounded on purpose, not just tidied: every alias compiles to a regex that the
+// mention scan runs against every new session inside after(). An unbounded list
+// is a self-inflicted denial of service on the user's own page load, and a
+// 400-character "alias" cannot be a name anyway.
+const MAX_ALIASES = 10;
+const MAX_ALIAS_LENGTH = 40;
+// Same ceiling the agent path enforces (MAX_NAME_LENGTH in
+// app/lib/mcp/people-ops.ts): three write surfaces, one column, one limit.
+const MAX_NAME_LENGTH = 120;
+
 function normalizeAliases(input: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of input) {
     const alias = (raw ?? "").trim();
     if (alias.length < MIN_ALIAS_LENGTH) continue;
+    if (alias.length > MAX_ALIAS_LENGTH) continue;
     const key = alias.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(alias);
+    if (out.length >= MAX_ALIASES) break;
   }
   return out;
 }
@@ -67,6 +79,7 @@ async function requireUser() {
 export async function createPerson(name: string) {
   const trimmed = name?.trim();
   if (!trimmed) return { error: "name required" };
+  if (trimmed.length > MAX_NAME_LENGTH) return { error: "name too long" };
 
   const { supabase, user } = await requireUser();
   if (!user) return { error: "not authenticated" };
@@ -126,6 +139,15 @@ export async function logInteraction(input: {
     .maybeSingle();
   if (!person) return { error: "person not found" };
 
+  // A conversation cannot have happened tomorrow, and a future row is not a
+  // harmless typo: daysSinceTalked goes NEGATIVE, which is never greater than
+  // any cadence, so the person is silenced until that day passes. Same guard as
+  // setPersonCadence and confirmCandidate, against the owner's zone day.
+  const today = await todayKey(supabase, user.id);
+  if (input.occurredAt > today) {
+    return { error: "that day hasn't happened yet" };
+  }
+
   const summary = input.summary?.trim() || null;
   const { data, error } = await supabase
     .from("person_interactions")
@@ -161,6 +183,12 @@ export async function updateInteraction(input: {
   }
   if (input.occurredAt !== undefined) {
     if (!DATE_KEY_RE.test(input.occurredAt)) return { error: "invalid date" };
+    // Editing a row into the future silences the person exactly as inserting
+    // one there does — same guard, same reason.
+    const today = await todayKey(supabase, user.id);
+    if (input.occurredAt > today) {
+      return { error: "that day hasn't happened yet" };
+    }
     updates.occurred_at = input.occurredAt;
   }
   if (input.precision !== undefined) {
@@ -304,6 +332,7 @@ export async function deletePerson(id: string) {
 export async function updatePersonName(id: string, name: string) {
   const trimmed = name?.trim();
   if (!trimmed) return { error: "name required" };
+  if (trimmed.length > MAX_NAME_LENGTH) return { error: "name too long" };
 
   const { supabase, user } = await requireUser();
   if (!user) return { error: "not authenticated" };
@@ -630,12 +659,16 @@ export async function confirmSeeding(
     });
   }
 
+  let seeded = 0;
   try {
-    await upsertPeopleRows(supabase, rows);
+    // The WRITTEN count, not rows.length: name collisions are skipped by design
+    // and an already-linked path is a no-op, so reporting the input size would
+    // claim people the roster does not have.
+    seeded = await upsertPeopleRows(supabase, rows);
   } catch (error) {
     return { error: error instanceof Error ? error.message : "seeding failed" };
   }
 
   revalidatePath("/people");
-  return { error: null, seeded: rows.length };
+  return { error: null, seeded };
 }

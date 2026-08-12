@@ -18,6 +18,8 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 // Interaction summaries are one line about a conversation, not a transcript.
 const MAX_SUMMARY = 500;
 const MAX_CHECKIN_DAYS = 3650;
+// Matches inventory-ops.ts:208's cap on created item names.
+const MAX_NAME_LENGTH = 120;
 
 export type PersonOp =
   // date omitted = "today", resolved at EXECUTE time in the user's zone, so a
@@ -158,6 +160,12 @@ export function validatePeopleOps(raw: unknown): Result<PersonOp[]> {
           return {
             ok: false,
             error: `operation ${i + 1} (create_person): name is required`,
+          };
+        }
+        if (name.length > MAX_NAME_LENGTH) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (create_person): name too long`,
           };
         }
         ops.push({ op, name });
@@ -379,7 +387,14 @@ export function resolvePeopleOps(
 // being rendered as a firm day (docs/people-plan.md §2.4). A null date renders
 // as the literal word "today": the day is resolved at execute time, so naming a
 // concrete one here could be wrong by the time the user confirms.
-function dateLabel(date: string | null, precision: "exact" | "approx"): string {
+// Exported so the EXECUTOR's applied-receipt lines render a date exactly as the
+// proposal did. The assistant reads that receipt back as fact, so a bare date
+// there would assert precision the row does not carry — the same fabricated
+// precision §2.4 refuses, arriving one step later in the flow.
+export function dateLabel(
+  date: string | null,
+  precision: "exact" | "approx",
+): string {
   if (!date) return "today";
   return precision === "approx" ? `~${date} (approx)` : date;
 }

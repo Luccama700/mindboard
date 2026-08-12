@@ -128,25 +128,36 @@ export async function readCuratedAliases(
 // is retried row by row and the losers are skipped: the note stays unlinked,
 // the roster's vault union still shows it read-only, and the adoption step
 // picks it up once the colliding row's vault_path is free.
+// Returns how many rows were ACTUALLY written, which is not always rows.length:
+// name collisions are skipped by design, and ignoreDuplicates means an existing
+// vault_path is a silent no-op. Callers that report a count to the user must use
+// this number — telling someone "20 people added" when four were skipped is a
+// small lie that makes the roster look broken.
 export async function upsertPeopleRows(
   supabase: SupabaseClient,
   rows: PeopleInsert[],
-): Promise<void> {
-  if (rows.length === 0) return;
-  const { error } = await supabase
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  const { data, error } = await supabase
     .from("people")
-    .upsert(rows, { onConflict: "user_id,vault_path", ignoreDuplicates: true });
-  if (!error) return;
+    .upsert(rows, { onConflict: "user_id,vault_path", ignoreDuplicates: true })
+    .select("id");
+  if (!error) return (data ?? []).length;
   if (!isUniqueViolation(error)) throw error;
+
+  let written = 0;
   for (const row of rows) {
-    const { error: rowError } = await supabase
+    const { data: rowData, error: rowError } = await supabase
       .from("people")
       .upsert([row], {
         onConflict: "user_id,vault_path",
         ignoreDuplicates: true,
-      });
+      })
+      .select("id");
     if (rowError && !isUniqueViolation(rowError)) throw rowError;
+    if (!rowError) written += (rowData ?? []).length;
   }
+  return written;
 }
 
 async function countSeededRows(
