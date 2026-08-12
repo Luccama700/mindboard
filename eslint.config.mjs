@@ -74,6 +74,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Git worktrees for parallel agent sessions carry a full second copy of
+    // the app; linting them doubles every finding and misreads their files
+    // without their own tsconfig context.
+    ".claude/worktrees/**",
   ]),
 ]);
 

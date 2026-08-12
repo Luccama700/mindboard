@@ -77,7 +77,7 @@ export const INTRO_CARDS: IntroCard[] = [
   {
     glyph: "▦",
     title: "week",
-    body: "seven days at a glance. drag things around until the week looks survivable.",
+    body: "seven days at a glance. drag things around until the week looks survivable. on your phone it's the ▦ button up top; on desktop it lives beside the stream.",
   },
   {
     glyph: "◇",
@@ -97,7 +97,7 @@ export const INTRO_CARDS: IntroCard[] = [
   {
     glyph: "≡",
     title: "more",
-    body: "brain — a notes vault that links like thoughts do — and learn, a study corner that turns lecture pdfs into podcasts, live right on the rail. ≡ more tucks away your week, plans, groups and settings.",
+    body: "brain — a notes vault that links like thoughts do — lives right on the rail. ≡ more tucks away your tasks, groups, mindspace and settings.",
   },
   {
     glyph: "▁",
@@ -149,7 +149,7 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       anchor: "dock-rail",
       title: "the rail",
-      body: "and this is the whole map, from anywhere — money, the shelf, learn, brain. ≡ more holds your week, plans, groups and settings. the little ? up top replays any of this.",
+      body: "and this is the whole map, from anywhere — money, the shelf, brain. ≡ more holds your tasks, groups and settings. the little ? up top replays any of this.",
       placement: "top",
     },
   ],

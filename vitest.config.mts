@@ -1,6 +1,6 @@
 import path from "node:path";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // Pin the host zone so date behaviour is identical on a dev box and in CI.
 // UTC on purpose: it is the process clock the Vercel deployment actually runs
@@ -24,5 +24,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: false,
+    // Same rationale as eslint.config.mjs: agent worktrees under
+    // .claude/worktrees duplicate the whole suite.
+    exclude: [...configDefaults.exclude, ".claude/worktrees/**"],
   },
 });
