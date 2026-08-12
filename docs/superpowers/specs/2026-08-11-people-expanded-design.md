@@ -69,7 +69,7 @@ attention:
 |---|---|---|---|
 | **talked** | you were actually in contact | `person_interactions` rows only — assistant-logged or user-confirmed | **Yes, exclusively** |
 | **noted** | you revised what you know about them | vault frontmatter `updated` (present on 20/20 notes) | No |
-| **on your mind** | they occupied your attention | name/alias matches in `mindspace_sessions.user_text` + vault bodies | No |
+| **on your mind** | they occupied your attention | name/alias matches in `mindspace_sessions.user_text` (sessions only — vault bodies carry no per-sentence date, §10 M4) | No |
 
 **The confirm tap is the boundary.** A mention is evidence that a person was on your mind. It becomes
 evidence of contact only when a human says so. That single interaction — one tap, pulled not pushed —
@@ -1125,8 +1125,60 @@ separate decision that reopens the WHO/WHEN doctrine, not an implementation deta
 - **M1 concurrency check:** load `/people` twice in quick succession on a vault with an unsynced
   person and confirm one row, no unhandled unique violation in the logs, and no silently dead
   `after()`.
-- **The standing check for every milestone:** does any surface ask the user to type a date? If yes,
-  the design has drifted.
+- **M4 idempotency check:** confirm the same candidate twice and get exactly one interaction row;
+  rescan after a confirm and get no resurrected candidate.
+- **Schema check:** verify `attention_snoozed_until` actually suppresses across a reload and on a
+  second device, since that is the whole point of storing it rather than holding it in component state.
+- **The standing check for every milestone:** does any surface ask the user to type a date, or assert
+  contact the user never confirmed? Either means the design has drifted.
+
+---
+
+## 13. What the adversarial review changed
+
+Recorded so a future session knows this pass happened, and does not re-litigate settled ground.
+
+**Accepted and fixed above:** M4's candidate state had nowhere to live (§10, migration 0048);
+confirmation could not establish a date (§2.4, `occurred_precision`); the first render was empty
+despite a full vault (§5, the union rule); the snapshot API contradicted its own bounded-fetch
+algorithm (§7, split into `computePeopleAttention` + `hydratePeopleAttention` with stated numeric
+bounds); "not now" had no persistence (§5 schema + §8); backfill chips fabricated exact dates (§2.4);
+`setPersonCadence` was unspecified and non-atomic (§10 M3); vault bodies cannot yield dated mention
+events (§10 M4); the sync was not concurrency-safe and mismatched `readVaultNoteRaw`'s
+case-insensitivity (§5); alias seeding amplified the matcher's known false-positive problem (§5);
+the self-note filter had no implementable predicate (§5, the seeding checklist); `extractIntro` was
+costed as free (§6); snapshot hydration could fail an entire planning call (§7, best-effort);
+"one-tap" logging required typing (nullable `summary`); drafting was simultaneously required and
+out of scope (§11); the M4 search was unbounded (§10, watermark + scan-on-ingest); and several
+promised writes had no owning action (§10, the write matrix).
+
+**Corrected:** the claim that "nothing in the app renders `## Open questions`" was wrong — `NoteView`
+renders the whole note. The real gap is per-person *extraction*, not visibility (§1).
+
+**Partially rejected — the doctrine.** The reviewer's verdict was that "three signals, never merged"
+is over-engineering that makes the feature inert. The *diagnosis* was right and §2.3 adopts it; the
+*framing* is not. Keeping the signals separate in storage and display costs nothing and is what makes
+the provenance honest. What had to go was the absolutist rule that only manually-certified rows could
+have any effect. The result is an asymmetry rule — evidence may quiet the system, only the user may
+speak for it — rather than an evidence ladder feeding a blended score, which would reintroduce exactly
+the black-box recency number §3.7 bans.
+
+**Rejected — the composite owner FK.** The reviewer flagged that `person_interactions.user_id` and
+`people.user_id` are independently constrained, so nothing at the database level forces them to match,
+and proposed a composite `(user_id, person_id)` foreign key. The finding is technically correct, but
+it was verified that **no child table in this repo uses one** — `spend_limits.category_id`,
+`inventory_items.inventory_group_id`, `balance_changes.account_id` and the rest all have the identical
+gap. RLS still hides cross-tenant rows on read, so the exposure is orphan integrity rather than
+disclosure. Adopting it here alone would deviate from house style for one table while fifteen others
+keep the pattern; retrofitting all of them is a separate decision. Recorded as an accepted, known gap
+rather than silently omitted — see the comment in the 0047 DDL.
+
+**Rejected — dropping the `lower(name)` unique index.** The reviewer argued names are not identifiers
+and the index conflates two people who share one. True, and recorded as an accepted limitation in §5.
+It is kept because it is what makes the sync's adoption step safe, the collision surfaces as a
+catchable unique violation the UI can turn into "you already have a Davi — add a distinguishing name"
+rather than silent corruption, and the index is partial on `not archived` so an archived person never
+blocks a name permanently.
 
 ---
 
