@@ -259,17 +259,49 @@ create policy "person_interactions_delete_own"
 
 ### The lazy upsert
 
-On `/people` load: read the vault corpus (already `cache()`-deduped), take
-`corpus.folders.get("People")`, and insert a `people` row for any `vault_path` without one. Name comes
-from `noteTitle(path)`. Aliases seed as the distinct tokens of the name with length ≥ 3 (so
-"Lucca Martins de Andrade" seeds `{lucca, martins, andrade}`) — the same `MIN_TERM_LENGTH = 3` floor
-the mindspace matcher uses, for the same reason. Never delete rows for notes that disappeared; a
-rename produces a new row, which is the accepted v1 limitation.
+**Mechanism — do not mutate during render.** The sync runs in `after()`, exactly as the mindspace
+classification pass does (`app/mindspace/page.tsx:113`), and inside it **must use
+`createServiceClient()`, not the cookie client** — the reason is spelled out at
+`app/lib/mindspace/pipeline.ts:232-234`:
 
-The self-note ("Lucca Martins de Andrade.md") and `type: pet` notes (Taiga) should be excluded from
-the roster by default — read `frontmatter.type` and skip anything that is not `person`, plus skip the
-note whose path matches the user's own. Both are one-line filters; getting them wrong makes the very
+> "Service client, not the cookie client: `after()` runs outside the request context, where
+> `cookies()` throws. Every query below is explicitly userId-scoped, per the multi-tenant invariant."
+
+So every query in the sync filters `.eq("user_id", userId)` explicitly, since the service client
+bypasses RLS. The first render of `/people` shows whatever rows already exist; a brand-new vault
+person appears on the next visit. That is the same "sharpens visit over visit" contract mindspace
+already ships, and it is why M1 must not depend on the sync having run.
+
+**Matching, and the collision that will otherwise bite.** For each `People/*.md` note, resolve an
+existing row in this order:
+
+1. by `vault_path` — already linked, nothing to do;
+2. else by `lower(name)` — **adopt**: set `vault_path` on that existing row.
+
+Step 2 is not optional. Without it, a person created by hand from the search field (§8, the Denise
+case) whose note later appears in the vault would hit `people_user_name_key` and the insert would
+throw. Adoption is also what makes the sync idempotent across renames-back-and-forth.
+
+Name comes from `noteTitle(path)`. Aliases seed as the distinct tokens of the name with length ≥ 3
+(so "Lucca Martins de Andrade" seeds `{lucca, martins, andrade}`) — the same `MIN_TERM_LENGTH = 3`
+floor the mindspace matcher uses, for the same reason. Never delete rows for notes that disappeared;
+a rename produces a new row, the accepted v1 limitation.
+
+**Filters.** Skip anything whose `frontmatter.type` is not `person` (this drops `type: pet` — Taiga)
+and skip the user's own self-note. Both are one-line filters, and getting either wrong makes the very
 first screen look broken.
+
+**The no-vault case is normal, not an error.** `/people` must work when `vault_settings` has no row
+at all: the roster then shows only hand-created people, every person renders without a note block,
+and the page shows a quiet "connect a vault to pull in your people notes" line rather than the
+`VaultNotConfiguredError` banner. `getVaultCorpus` throwing must never take the page down —
+`app/brain/page.tsx` already models catching `VaultConnectionError` for a friendly banner.
+
+**Cost note.** The roster's secondary lines and the open-loops block both need note *bodies*, so
+`/people` pays for `getVaultCorpus` (every blob, batched 25 at a time). It is `cache()`-deduped per
+request and `/brain` already pays it, so this is acceptable — but it means `/people` is a
+corpus-weight page, not a Postgres-only one, and the roster should render from `people` rows first
+with vault-derived text filled in around it.
 
 ---
 
@@ -508,8 +540,13 @@ is the answer; no encryption scheme or consent system needs to be invented on to
 
 ### M1 — the roster and the dossier
 
-Read-only truth. No nudges, no cadence, no assistant writes. This milestone alone is already useful:
-it is the first time the vault's per-person open loops are visible anywhere.
+No nudges, no cadence, no assistant writes. Two things make this milestone useful on its own rather
+than inert: it is the first time the vault's per-person open loops are visible anywhere, and it ships
+**one-tap interaction logging from the person sheet** so the `talked` signal starts accumulating from
+day one instead of waiting on M2's assistant path. That direct write is not a proposal — the user
+typing their own row is the same exemption the inventory omnibox's structured fast path already has.
+Without it M1 would show an empty `TALKED` line for every person, which is the fair criticism of the
+three-signal doctrine and is answered by sequencing, not by weakening the doctrine.
 
 - `supabase/migrations/0047_people.sql` (§5). **Flag to Lucca; never auto-apply.**
 - `app/lib/data/people.ts` — `getPeople(userId)`, `getPersonInteractions(userId, personId)`, React
@@ -521,7 +558,11 @@ it is the first time the vault's per-person open loops are visible anywhere.
 - `app/people/people-client.tsx` — the roster (§8) and the person sheet (§6), using `Sheet` from
   `app/_components/stream-sheets.tsx`, `SectionRuler`/`Button`/`INPUT_CLASS` from
   `app/_components/ui.tsx`, and `<NoteView>` from `app/brain/_components/note-view.tsx`.
-- `app/actions/people.ts` — lazy upsert from the vault, create person, archive/restore, edit aliases.
+- `app/actions/people.ts` — lazy upsert from the vault (§5, via `after()` + service client), create
+  person, archive/restore, edit aliases, and `logInteraction(personId, summary, occurredAt)`.
+  `occurredAt` defaults to the page's resolved `today` prop — never a bare `new Date()`, and never
+  `todayISO(null)`, since this value reaches a `date` column and so persists instead of healing on
+  hydration (AGENTS.md, "a day that reaches a date column is never display-only").
 - Dock: add `{ href: "/people", label: "people" }` to the "more" array (`dock.tsx:497-500`). The rail
   stays four items.
 
@@ -537,11 +578,13 @@ it is the first time the vault's per-person open loops are visible anywhere.
   the in-app `confirmProposal` then work unchanged, because both dispatch through that same map.
 - `reads.ts` + MCP route — `list_people` (metadata only) and `get_person` (dossier). Both via
   `scoped(userId)`, both filtering `.eq("user_id", ownerId)` explicitly, since the service client
-  bypasses RLS.
+  bypasses RLS. **`get_person` returns no mention snippets until M4** — the mention read does not
+  exist yet, so the field is simply absent rather than empty, and M4 adds it.
 - `app/lib/assistant/tools.ts` — mirror both reads plus `propose_people_update`, calling the `*For`
   variant with the session client.
-- One-tap interaction logging on the person sheet (the `⊕` in §6) writing directly — the user typing
-  their own row is not a proposal, same exemption as the inventory omnibox's structured fast path.
+- `occurred_at` on the MCP path resolves through `todayKey(supabase, userId)`
+  (`app/lib/mcp/config.ts:56-67`) when the caller omits a date — one of the two blessed boundary
+  resolvers. The assistant must never be allowed to pass an unresolved "today".
 
 ### M3 — attention
 
