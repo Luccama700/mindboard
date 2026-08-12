@@ -5,7 +5,7 @@
 This doc is written so a build session can implement from it without re-deriving context — the
 conventions it needs are quoted inline, not cited.*
 
-**Status: design only. Nothing implemented. No migration applied.**
+**Status: implemented M1–M4 on the `people` branch (PR #8, 2026-08-12), adversarially reviewed. Migrations 0047/0048 exist as files and are NOT applied — they must land in Supabase before the PR merges.**
 
 ---
 
