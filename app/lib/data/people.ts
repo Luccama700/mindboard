@@ -2,6 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { createClient } from "@/utils/supabase/server";
 import type {
+  MentionCandidate,
   Person,
   PersonInteraction,
 } from "@/app/_components/people-types";
@@ -16,6 +17,10 @@ const PEOPLE_COLUMNS =
   "id, name, vault_path, aliases, checkin_days, attention_snoozed_until, archived, archived_at, created_at, updated_at";
 const INTERACTION_COLUMNS =
   "id, person_id, summary, occurred_at, occurred_precision, source, created_at";
+const CANDIDATE_COLUMNS =
+  "id, person_id, source_kind, source_ref, occurred_at, excerpt, matched_term, status, reviewed_at, created_at";
+// Review is PULL, not push: the affordance is quiet and the list is short.
+const MAX_CANDIDATES = 50;
 
 // Archived rows are RETURNED, not filtered. The roster needs them for two
 // separate reasons: the collapsed "not tracking" section renders them, and the
@@ -61,6 +66,46 @@ export const getPersonInteractions = cache(
       .order("created_at", { ascending: false })
       .order("id", { ascending: true });
     return (data ?? []) as PersonInteraction[];
+  },
+);
+
+// Unreviewed mention candidates, newest evidence first — read BY INDEX
+// (person_mention_candidates_review_idx), never by scanning session text. Only
+// 'new' rows: confirmed and dismissed ones are settled and must not resurface.
+export const getCandidates = cache(
+  async (userId: string, personId?: string): Promise<MentionCandidate[]> => {
+    const supabase = await createClient();
+    let query = supabase
+      .from("person_mention_candidates")
+      .select(CANDIDATE_COLUMNS)
+      .eq("user_id", userId)
+      .eq("status", "new");
+    if (personId) query = query.eq("person_id", personId);
+    const { data } = await query
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
+      .limit(MAX_CANDIDATES);
+    return (data ?? []) as MentionCandidate[];
+  },
+);
+
+// personId → unreviewed count, for the roster's quiet "worth a look" affordance.
+// Rendered as a band rather than a tally per §3.1 — the count exists inside the
+// read, it just should not reach the page as a number.
+export const getCandidateCounts = cache(
+  async (userId: string): Promise<Map<string, number>> => {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("person_mention_candidates")
+      .select("person_id")
+      .eq("user_id", userId)
+      .eq("status", "new");
+    const counts = new Map<string, number>();
+    for (const row of (data ?? []) as { person_id: string }[]) {
+      counts.set(row.person_id, (counts.get(row.person_id) ?? 0) + 1);
+    }
+    return counts;
   },
 );
 

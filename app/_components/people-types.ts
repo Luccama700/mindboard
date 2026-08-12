@@ -27,6 +27,21 @@ export type PersonInteraction = {
   created_at: string;
 };
 
+export type MentionCandidate = {
+  id: string;
+  person_id: string;
+  source_kind: "session" | "calendar";
+  source_ref: string;
+  // The EVIDENCE's date (session end day), not the interaction's —
+  // confirmation asks "when" separately (docs/people-plan.md §10 M4).
+  occurred_at: string;
+  excerpt: string | null;
+  matched_term: string | null;
+  status: "new" | "confirmed" | "dismissed";
+  reviewed_at: string | null;
+  created_at: string;
+};
+
 // A roster entry: a persisted row, or an eligible vault note the after()
 // sync hasn't backfilled yet. Unpersisted entries render read-only —
 // no cadence control, no interaction log, both need an id (§5).

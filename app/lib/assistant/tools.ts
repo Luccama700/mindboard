@@ -266,7 +266,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_person",
     description:
-      "One person's dossier: their row, the intro line and OPEN LOOPS pulled from their vault note's `## Open questions` section, their recent logged interactions (newest first, capped), and when the note was last updated. `person` accepts an id or a name (case-insensitive; unique substrings work). Open loops are what make a suggestion concrete — 'you owe Denise an update on his writing practice' rather than 'follow up with Davi'. Does NOT return the full note body (use read_brain_note) and carries no mindspace mention snippets. A missing or unreachable vault yields empty loops rather than an error.",
+      "One person's dossier: their row, the intro line and OPEN LOOPS pulled from their vault note's `## Open questions` section, their recent logged interactions (newest first, capped), when the note was last updated, and any unreviewed MENTION candidates (excerpt + matched term + evidence date). `person` accepts an id or a name (case-insensitive; unique substrings work). Open loops are what make a suggestion concrete — 'you owe Denise an update on his writing practice' rather than 'follow up with Davi'. Mentions are evidence the person was ON YOUR MIND, never that contact happened — only the user's explicit confirm turns one into an interaction, so never report a mention as 'you talked to them'. Does NOT return the full note body (use read_brain_note). A missing or unreachable vault yields empty loops rather than an error.",
     input_schema: {
       type: "object",
       properties: { person: { type: "string" } },

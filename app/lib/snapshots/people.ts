@@ -8,7 +8,11 @@
 // already called the function. Splitting resolves the circularity and is what
 // makes the "at most three" bound expressible at all.
 
-import type { Person, PersonInteraction } from "@/app/_components/people-types";
+import type {
+  MentionCandidate,
+  Person,
+  PersonInteraction,
+} from "@/app/_components/people-types";
 import { daysBetweenKeys } from "@/app/_components/people-recency";
 import { addDaysKey } from "@/app/_components/finance-projection";
 
@@ -42,12 +46,17 @@ export type PeopleAttentionInput = {
   // Only the newest row per person is read, but passing the full log is
   // harmless — the reducer keeps the most recent occurred_at per person.
   interactions: PersonInteraction[];
-  // M4's person_mention_candidates. Empty until then; typed loosely on purpose
-  // so the migration that introduces the row type does not have to land first.
-  // Drives suppression (§2's asymmetry rule) when it arrives.
-  candidates: unknown[];
+  // Unreviewed mention evidence. Only the three fields the asymmetry rule
+  // reads: enough to answer "is there unreviewed evidence newer than the last
+  // logged contact", nothing more.
+  candidates: MentionCandidateRef[];
   today: string;
 };
+
+export type MentionCandidateRef = Pick<
+  MentionCandidate,
+  "person_id" | "status" | "occurred_at"
+>;
 
 // Returns the COMPLETE ranked set, unbounded: if thirty people are overdue,
 // thirty survive. "At most one" (/people) and "at most three" (get_snapshot)
@@ -55,9 +64,20 @@ export type PeopleAttentionInput = {
 export function computePeopleAttention(
   input: PeopleAttentionInput,
 ): PeopleVitals {
-  const { people, interactions, today } = input;
+  const { people, interactions, candidates, today } = input;
 
   const active = people.filter((person) => !person.archived);
+
+  // Newest UNREVIEWED evidence per person. Confirmed and dismissed candidates
+  // are settled — the user has spoken — so they never suppress anything.
+  const newestCandidate = new Map<string, string>();
+  for (const row of candidates) {
+    if (row.status !== "new") continue;
+    const held = newestCandidate.get(row.person_id);
+    if (!held || row.occurred_at > held) {
+      newestCandidate.set(row.person_id, row.occurred_at);
+    }
+  }
 
   // Newest logged interaction per person. 'talked' only — vault `updated` never
   // enters this math, because editing a note about someone is being informed,
@@ -95,6 +115,23 @@ export function computePeopleAttention(
 
     const daysSinceTalked = daysBetweenKeys(last.occurred_at, today);
     if (daysSinceTalked <= checkinDays) continue;
+
+    // THE ASYMMETRY RULE (§2). Evidence may QUIET the system; only the user may
+    // speak for it. Unreviewed evidence newer than the last logged contact
+    // suppresses the nudge — it never sets or advances "last talked", never
+    // enters the interaction log, and is never counted as contact anywhere.
+    //
+    // The two directions of error are wildly asymmetric: wrongly CLAIMING
+    // contact is the trust-destroying failure the whole category dies on, while
+    // wrongly staying quiet costs one un-sent nudge that nobody notices.
+    //
+    // The bound is BEHAVIOURAL, not temporal: reviewing the candidate (confirm
+    // or dismiss) or logging a newer interaction lifts the suppression. No
+    // day-decay threshold is invented here — §2 says "a bounded window" without
+    // naming one, and a made-up number would be exactly the unexplained
+    // black-box behaviour §3.7 bans.
+    const evidence = newestCandidate.get(person.id);
+    if (evidence !== undefined && evidence > last.occurred_at) continue;
 
     attention.push({
       personId: person.id,

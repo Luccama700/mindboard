@@ -15,6 +15,7 @@ import {
 import {
   computePeopleAttention,
   hydratePeopleAttention,
+  type MentionCandidateRef,
   type PeopleVitals,
 } from "@/app/lib/snapshots/people";
 import {
@@ -174,6 +175,7 @@ export async function buildPlanningSnapshot(params: {
     logsRes,
     peopleRes,
     interactionsRes,
+    candidatesRes,
     events,
     forecast,
   ] = await Promise.all([
@@ -256,6 +258,19 @@ export async function buildPlanningSnapshot(params: {
       .order("occurred_at", { ascending: false })
       .order("created_at", { ascending: false })
       .order("id", { ascending: true })
+      .limit(INTERACTION_SCAN),
+    // Suppression inputs only (§2's asymmetry rule). Three columns, and
+    // NO excerpt: raw session text never leaves via get_snapshot (§9).
+    supabase
+      .from("person_mention_candidates")
+      .select("person_id, status, occurred_at")
+      .eq("user_id", userId)
+      .eq("status", "new")
+      // Ordered because it is capped: an unordered cap truncates an arbitrary
+      // subset, which here could drop a person's NEWEST candidate and silently
+      // fail to suppress. Descending, so overflow costs the oldest evidence —
+      // which the suppression rule never reads anyway.
+      .order("occurred_at", { ascending: false })
       .limit(INTERACTION_SCAN),
     eventsPromise,
     buildFinanceForecast({
@@ -385,7 +400,7 @@ export async function buildPlanningSnapshot(params: {
     computePeopleAttention({
       people: (peopleRes.data ?? []) as Person[],
       interactions: (interactionsRes.data ?? []) as PersonInteraction[],
-      candidates: [],
+      candidates: (candidatesRes.data ?? []) as MentionCandidateRef[],
       today,
     }),
   );

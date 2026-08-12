@@ -482,6 +482,99 @@ export async function unsnoozePerson(personId: string) {
   return { error: null };
 }
 
+// Promote a mention candidate to a real interaction (§10 M4).
+//
+// CONFIRMATION ASKS TWO QUESTIONS, NOT ONE. A tap establishes THAT a mention
+// describes contact; it frequently cannot establish WHEN — a session dated
+// Aug 11 may say "I talked to Davi last month". So the caller passes the day it
+// asked the user for, and silently adopting the evidence date would be the
+// fabricated precision this doctrine exists to refuse.
+//
+// INSERT FIRST, FLIP SECOND — deliberately not setPersonCadence's revert
+// pattern, because this ordering needs no compensation: if the flip fails after
+// the insert, the candidate stays 'new' and a re-tap converges (the interaction
+// insert hits person_interactions_confirmed_key and is treated as success, then
+// the flip retries). The reverse order could mark a candidate reviewed with no
+// interaction behind it, which is unrecoverable from the UI.
+export async function confirmCandidate(input: {
+  candidateId: string;
+  occurredAt: string;
+  precision: "exact" | "approx";
+}) {
+  if (!input.candidateId) return { error: "candidate required" };
+  if (!DATE_KEY_RE.test(input.occurredAt ?? "")) return { error: "invalid date" };
+  if (!PRECISIONS.has(input.precision)) return { error: "invalid precision" };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  // User-scoped, so the person's ownership is inherited — a candidate row and
+  // its person always share a user_id by construction of the scan.
+  const { data: candidate } = await supabase
+    .from("person_mention_candidates")
+    .select("id, person_id, status")
+    .eq("user_id", user.id)
+    .eq("id", input.candidateId)
+    .maybeSingle();
+  if (!candidate) return { error: "candidate not found" };
+  const row = candidate as { person_id: string; status: string };
+
+  const today = await todayKey(supabase, user.id);
+  if (input.occurredAt > today) return { error: "that day hasn't happened yet" };
+
+  const { error: insertError } = await supabase
+    .from("person_interactions")
+    .insert({
+      user_id: user.id,
+      person_id: row.person_id,
+      summary: null,
+      occurred_at: input.occurredAt,
+      occurred_precision: input.precision,
+      // 'confirmed' = promoted from a mention by an explicit tap. The page shows
+      // this; it is how "you confirmed it from a mention" stays distinguishable
+      // from "you logged it".
+      source: "confirmed",
+    });
+  // person_interactions_confirmed_key makes a double tap a no-op rather than a
+  // duplicate row, so a unique violation here IS the success case.
+  if (insertError && insertError.code !== UNIQUE_VIOLATION) {
+    return { error: insertError.message };
+  }
+
+  const { error: flipError } = await supabase
+    .from("person_mention_candidates")
+    .update({ status: "confirmed", reviewed_at: nowStamp() })
+    .eq("user_id", user.id)
+    .eq("id", input.candidateId);
+  if (flipError) return { error: flipError.message };
+
+  revalidatePerson(row.person_id);
+  return { error: null };
+}
+
+// Dismissing settles a candidate without asserting anything. One idempotent
+// update: re-tapping a dismissed row is a no-op.
+export async function dismissCandidate(candidateId: string) {
+  if (!candidateId) return { error: "candidate required" };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { data, error } = await supabase
+    .from("person_mention_candidates")
+    .update({ status: "dismissed", reviewed_at: nowStamp() })
+    .eq("user_id", user.id)
+    .eq("id", candidateId)
+    .select("person_id")
+    .maybeSingle();
+
+  if (error) return { error: error.message };
+  if (!data) return { error: "candidate not found" };
+
+  revalidatePerson((data as { person_id: string }).person_id);
+  return { error: null };
+}
+
 // The first-run seeding checklist (§5). The vault exposes no marker for the
 // user's own note and no predicate separates it from the other person notes, so
 // the answer is asked for rather than guessed.

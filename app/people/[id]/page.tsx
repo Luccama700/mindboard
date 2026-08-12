@@ -4,7 +4,12 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/utils/supabase/server";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
-import { getPeople, getPerson, getPersonInteractions } from "@/app/lib/data/people";
+import {
+  getCandidates,
+  getPeople,
+  getPerson,
+  getPersonInteractions,
+} from "@/app/lib/data/people";
 import {
   getVaultCorpus,
   VaultConnectionError,
@@ -19,10 +24,12 @@ import {
   daysBetweenKeys,
   formatOccurred,
   looseBand,
+  mentionBand,
   recencyBand,
 } from "@/app/_components/people-recency";
 import { CadenceControl } from "./cadence-control";
 import { LogControl } from "./log-control";
+import { MentionReview } from "./mention-review";
 
 // The dossier (docs/people-plan.md §6): a server-rendered route, not a sheet
 // — <NoteView> needs the corpus, whose resolver cannot cross the RSC
@@ -45,6 +52,7 @@ export default async function PersonPage(props: {
   const today = todayISO(timeZone);
 
   const interactions = await getPersonInteractions(user.id, id);
+  const candidates = await getCandidates(user.id, id);
 
   // A corpus miss and vault_path-is-null are ONE case (§5): the person
   // renders without a note block either way.
@@ -134,6 +142,15 @@ export default async function PersonPage(props: {
           label="noted"
           value={noteUpdated ? `note updated ${noteUpdated}` : "no vault note"}
         />
+        {(() => {
+          // Band, never a tally (§3.1): count feeds the phrasing, not the page.
+          const recent = candidates.filter(
+            (c) => daysBetweenKeys(c.occurred_at, today) <= 30,
+          ).length;
+          const band = mentionBand(recent);
+          return band ? <SignalLine label="on your mind" value={band} /> : null;
+        })()}
+        <MentionReview candidates={candidates} today={today} />
       </section>
 
       {openLoops.length > 0 && (

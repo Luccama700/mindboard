@@ -32,13 +32,19 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function termPattern(term: string): RegExp {
+// Exported for the People mention scan (app/lib/people/mentions.ts), which
+// needs the identical boundary semantics — two matchers disagreeing about what
+// counts as a name hit would make /mindspace and the candidate stream tell
+// different stories about the same sentence. `flags` exists because the default
+// has no `g`, so it answers PRESENCE, not how many; a counting caller passes
+// "giu". Callers must not mutate the returned regex's lastIndex expectations.
+export function termPattern(term: string, flags = "iu"): RegExp {
   // Word-boundary match that tolerates non-word characters inside the term
   // ("span 202", "best buy"). \b misbehaves around accents, so boundaries are
   // "not a letter/digit" lookarounds.
   return new RegExp(
     `(?<![\\p{L}\\p{N}])${escapeRegExp(term)}(?![\\p{L}\\p{N}])`,
-    "iu",
+    flags,
   );
 }
 
@@ -56,7 +62,9 @@ export function buildMatchers(topics: MindspaceTopic[]): TopicMatcher[] {
       return {
         topic,
         terms,
-        termPatterns: terms.map(termPattern),
+        // Wrapped, not point-free: termPattern's second parameter is `flags`,
+        // and map would pass the array index into it.
+        termPatterns: terms.map((term) => termPattern(term)),
         seedVaultPath: topic.seedVaultPath?.toLowerCase() ?? null,
         seedGroupId: topic.seedGroupId,
       };

@@ -5,6 +5,7 @@ import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
 import { createServiceClient } from "@/utils/supabase/service";
 import { noteTitle, parseFrontmatter } from "@/app/lib/brain/parse";
+import { scanMentionsForUser } from "@/app/lib/people/mentions";
 import {
   getVaultCorpus,
   listVaultNotePaths,
@@ -215,19 +216,26 @@ export async function listEligibleNotes(
   }
 }
 
-// The post-response pass. Never throws: an after() throw is silent, so an
-// uncaught one means the sync just stops happening with nothing in the UI to
-// show for it (runMindspacePass, pipeline.ts:273-275).
-export async function syncPeopleFromVault(userId: string): Promise<void> {
-  try {
-    // Service client, not the cookie client: after() runs outside the request
-    // context, where cookies() throws. Every query below is explicitly
-    // userId-scoped, per the multi-tenant invariant.
-    const supabase = createServiceClient();
-
+// Phase 1: reconcile the roster against the vault's People/ notes.
+//
+// Its early exits are PHASE-LOCAL on purpose (M4 restructure): they used to
+// return from the whole pass, which would have put the mention scan behind the
+// no-vault check — but the scan is Postgres-only, and a user whose people are
+// all hand-created (the Denise case, no vault at all) must still get candidates.
+async function syncVaultNotes(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<void> {
+  {
     // The checklist decides the initial roster, not the sync. Before it is
-    // answered this pass must not create anything — otherwise the self-note and
+    // answered this phase must not create anything — otherwise the self-note and
     // the pets are rows before the user is ever asked about them.
+    //
+    // Scoped to THIS phase, not the whole pass: countSeededRows counts rows with
+    // a vault_path, so a user whose people are all hand-created has zero forever.
+    // Gating the pass on it would have permanently starved exactly the Denise
+    // case the phase split exists to serve — and the mention scan creates no
+    // people rows, so it has no business behind a checklist gate.
     if ((await countSeededRows(supabase, userId)) === 0) return;
 
     // Credentials are THREADED, never resolved: getVaultCorpus and the
@@ -333,7 +341,28 @@ export async function syncPeopleFromVault(userId: string): Promise<void> {
         );
       if (error) throw error;
     }
+  }
+}
+
+// The post-response pass. Never throws: an after() throw is silent, so an
+// uncaught one means the sync just stops happening with nothing in the UI to
+// show for it (runMindspacePass, pipeline.ts:273-275).
+export async function syncPeopleFromVault(userId: string): Promise<void> {
+  try {
+    // Service client, not the cookie client: after() runs outside the request
+    // context, where cookies() throws. Every query below is explicitly
+    // userId-scoped, per the multi-tenant invariant.
+    const supabase = createServiceClient();
+
+    await syncVaultNotes(supabase, userId);
+
+    // Phase 2 (M4): mine new mindspace sessions for mentions of the roster.
+    // Runs whether or not a vault is connected, and whether or not the seeding
+    // checklist has been answered — sessions live in Postgres, and the scan
+    // self-gates on an empty roster. Deliberately AFTER the upsert, so a person
+    // created by this very pass can pick up candidates on the same run.
+    await scanMentionsForUser(supabase, userId);
   } catch (error) {
-    console.error("people vault sync failed", error);
+    console.error("people sync failed", error);
   }
 }

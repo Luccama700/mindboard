@@ -995,6 +995,9 @@ const OPEN_LOOPS_HEADING = "Open questions";
 const MAX_PERSON_INTERACTIONS = 50;
 // Roster-wide interaction scan, for counts and last-talked across everyone.
 const MAX_INTERACTION_SCAN = 5000;
+// Raw session excerpts are the most sensitive thing this tool carries (§9), so
+// only a handful travel — enough to review, never a bulk export.
+const MAX_PERSON_MENTIONS = 5;
 
 type PersonRow = {
   id: string;
@@ -1105,11 +1108,12 @@ export async function listPeople(
 // tree fetch + one blob) — never getVaultCorpus, which downloads every blob in
 // the vault (§7, §9).
 //
-// Deliberately absent: the full note body (read_brain_note already serves that),
-// mention snippets from mindspace_sessions (M4 adds them; the read does not
-// exist yet, so the field is absent rather than empty), and `connected`
-// (backlinks need the corpus's cross-note link graph, so it stays an M-later
-// gap rather than a corpus-weight read on every call).
+// Mention candidates ARE carried here (M4) — an explicit per-person call is the
+// privacy bound §9 sets for raw session excerpts, and get_snapshot still
+// carries none of them. Deliberately absent: the full note body (read_brain_note
+// already serves that) and `connected` (backlinks need the corpus's cross-note
+// link graph, so it stays an M-later gap rather than a corpus-weight read on
+// every call).
 export async function getPersonFor(
   supabase: SupabaseClient,
   userId: string,
@@ -1155,6 +1159,33 @@ export async function getPersonFor(
     occurred_precision: string;
     source: string;
     created_at: string;
+  }[];
+
+  const [countRes, candidateRes] = await Promise.all([
+    supabase
+      .from("person_mention_candidates")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("person_id", row.id)
+      .eq("status", "new"),
+    supabase
+      .from("person_mention_candidates")
+      .select("id, occurred_at, excerpt, matched_term, source_kind")
+      .eq("user_id", userId)
+      .eq("person_id", row.id)
+      .eq("status", "new")
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
+      .limit(MAX_PERSON_MENTIONS),
+  ]);
+  const candidateCount = countRes.count ?? 0;
+  const candidates = (candidateRes.data ?? []) as {
+    id: string;
+    occurred_at: string;
+    excerpt: string | null;
+    matched_term: string | null;
+    source_kind: string;
   }[];
 
   // Best-effort, always: a missing vault, revoked token, renamed-away note or
@@ -1215,6 +1246,19 @@ export async function getPersonFor(
       source: row_.source,
     })),
     interactionsTruncated: interactions.length === MAX_PERSON_INTERACTIONS,
+    // Unreviewed evidence that this person was ON YOUR MIND — never contact.
+    // Only the user's explicit confirm turns one into an interaction, so these
+    // are strictly reviewable material, not a recency signal.
+    mentions: {
+      unreviewed: candidateCount,
+      recent: candidates.map((c) => ({
+        id: c.id,
+        occurredAt: c.occurred_at,
+        excerpt: c.excerpt,
+        matchedTerm: c.matched_term,
+        sourceKind: c.source_kind,
+      })),
+    },
   };
 }
 

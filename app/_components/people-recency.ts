@@ -34,6 +34,14 @@ export function looseBand(daysSince: number): string {
   return "not lately";
 }
 
+// "On your mind" renders as a band, never a tally (§3.1, §6).
+export function mentionBand(recentCount: number): string | null {
+  if (recentCount <= 0) return null;
+  if (recentCount <= 2) return "now and then";
+  if (recentCount <= 5) return "often lately";
+  return "a lot lately";
+}
+
 // Rough span for suggestion copy — "davi · 3 weeks". The number appears
 // here because inside a suggestion it is a reason, not a score (§3.1).
 export function roughSpan(days: number): string {

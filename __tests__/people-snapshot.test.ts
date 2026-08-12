@@ -5,6 +5,7 @@ import {
   computePeopleAttention,
   hydratePeopleAttention,
   type BackfillChoice,
+  type MentionCandidateRef,
   type PersonAttention,
 } from "@/app/lib/snapshots/people";
 import type { Person, PersonInteraction } from "@/app/_components/people-types";
@@ -42,13 +43,25 @@ function interaction(
   };
 }
 
-function compute(people: Person[], interactions: PersonInteraction[]) {
+function compute(
+  people: Person[],
+  interactions: PersonInteraction[],
+  candidates: MentionCandidateRef[] = [],
+) {
   return computePeopleAttention({
     people,
     interactions,
-    candidates: [],
+    candidates,
     today: TODAY,
   });
+}
+
+function candidate(
+  personId: string,
+  occurredAt: string,
+  status: "new" | "confirmed" | "dismissed" = "new",
+): MentionCandidateRef {
+  return { person_id: personId, occurred_at: occurredAt, status };
 }
 
 describe("computePeopleAttention — eligibility", () => {
@@ -157,6 +170,80 @@ describe("computePeopleAttention — snooze windows", () => {
     expect(vitals.attention.length > 0).toBe(expected);
     // Snoozed or not, the person stays counted as tracked.
     expect(vitals.tracked).toBe(1);
+  });
+});
+
+// §2's asymmetry rule: evidence may QUIET the system; only the user may speak
+// for it. Wrongly claiming contact is the trust-destroying error; wrongly
+// staying quiet costs one un-sent nudge nobody notices.
+describe("computePeopleAttention — mention-candidate suppression", () => {
+  const people = [person({ id: "p1", name: "Davi", checkin_days: 7 })];
+  // Last logged contact was 2026-07-01; cadence blown by a mile.
+  const logged = [interaction("p1", "2026-07-01")];
+
+  const cases: [string, MentionCandidateRef[], boolean][] = [
+    ["no candidates → surfaces", [], true],
+    [
+      "an unreviewed mention NEWER than the last contact quiets it",
+      [candidate("p1", "2026-08-09")],
+      false,
+    ],
+    [
+      "an unreviewed mention OLDER than the last contact does not",
+      [candidate("p1", "2026-06-01")],
+      true,
+    ],
+    [
+      "same day as the last contact is not newer, so no suppression",
+      [candidate("p1", "2026-07-01")],
+      true,
+    ],
+    [
+      "a CONFIRMED candidate never suppresses — the user already spoke",
+      [candidate("p1", "2026-08-09", "confirmed")],
+      true,
+    ],
+    [
+      "a DISMISSED candidate never suppresses — reviewing lifts the quiet",
+      [candidate("p1", "2026-08-09", "dismissed")],
+      true,
+    ],
+    [
+      "another person's candidate is irrelevant",
+      [candidate("p2", "2026-08-09")],
+      true,
+    ],
+    [
+      "the NEWEST unreviewed candidate decides, not the first in the array",
+      [candidate("p1", "2026-06-01"), candidate("p1", "2026-08-09")],
+      false,
+    ],
+  ];
+
+  test.each(cases)("%s", (_label, candidates, expected) => {
+    const vitals = compute(people, logged, candidates);
+    expect(vitals.attention.length > 0).toBe(expected);
+    // Suppressed or not, the person stays counted as tracked: quieting is not
+    // un-opting-in.
+    expect(vitals.tracked).toBe(1);
+  });
+
+  test("suppression never fabricates contact — lastTalked is untouched", () => {
+    // The candidate quiets the nudge but must not advance 'last talked'; the
+    // moment it is dismissed, the original overdue fact is unchanged.
+    const quiet = compute(people, logged, [candidate("p1", "2026-08-09")]);
+    expect(quiet.attention).toEqual([]);
+    const reviewed = compute(people, logged, [
+      candidate("p1", "2026-08-09", "dismissed"),
+    ]);
+    expect(reviewed.attention[0].lastInteraction?.occurredAt).toBe("2026-07-01");
+    expect(reviewed.attention[0].daysSinceTalked).toBe(42);
+  });
+
+  test("a candidate cannot resurrect someone who was never logged", () => {
+    // Evidence may quiet; it may never speak. Never-logged stays excluded.
+    const vitals = compute(people, [], [candidate("p1", "2026-08-09")]);
+    expect(vitals.attention).toEqual([]);
   });
 });
 
