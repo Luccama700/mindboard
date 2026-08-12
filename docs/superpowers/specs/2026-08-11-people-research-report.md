@@ -322,13 +322,356 @@ regression-tested, not just documented.
 
 ## 3. Codebase conventions to build within
 
-<!-- PENDING: seams agent -->
+Full working detail is distilled into the design doc's implementation sections so a build session
+never needs this file. Recorded here are the facts and their receipts.
+
+### 3.1 Migrations
+
+46 files, `0001_init.sql` … `0046_recurring_slot_events.sql`. **Next free number: `0047`.**
+
+House style is identical across `0031_spend_limits.sql`, `0012_goals.sql`, `0045_mindspace_sessions.sql`,
+`0004_inventory.sql`: header comment; `id uuid primary key default gen_random_uuid()`;
+`user_id uuid not null references auth.users (id) on delete cascade`; a `(user_id)` or compound
+`(user_id, sort desc)` index; `enable row level security`; then **exactly four policies** named
+`<table>_{select,insert,update,delete}_own`.
+
+Two facts worth knowing before writing DDL:
+
+- **No `updated_at` triggers exist anywhere.** Grepping `CREATE (OR REPLACE )?FUNCTION|CREATE TRIGGER`
+  across all 46 migrations hits only `claim_next_job`. `updated_at` columns are set by application
+  code on write.
+- **No explicit `GRANT` statements anywhere.** RLS plus the four policies is the entire access-control
+  story.
+
+`0004_inventory.sql` is the parent/child template (`inventory_groups` + `inventory_items`), which is
+structurally what `people` + `person_interactions` needs.
+
+### 3.2 Cached reads (`app/lib/data/*.ts`)
+
+React `cache()`, not `unstable_cache`/`cacheTag` — those are vault-only. `createClient()` (SSR cookie
+session); RLS scopes the query but `userId` is still passed **because it is the cache key**. Column
+lists are module-level `const X_COLUMNS` strings mirrored byte-for-byte across the data read, the
+page's own select, and `reads.ts` (`app/lib/data/inventory.ts:14`, `app/inventory/page.tsx:30`,
+`app/lib/mcp/reads.ts:74` are the same string). Always `(data ?? []) as T[]`.
+
+Reads that need "today" take a **required** `timeZone: string | null` — `app/lib/data/finance.ts:88-96`
+explains why in a comment: an omitted zone silently windows off the UTC process clock, *and* because
+the read is `cache()`-keyed on its arguments, the wrong window is memoised for the rest of the request.
+
+### 3.3 Pure snapshots (`app/lib/snapshots/*.ts`)
+
+No fetching, no React, no server imports. `today: string` is injected, never read from a live clock
+(`app/lib/snapshots/tasks.ts:14-32`). Tested with factory helpers in `__tests__/vitals-snapshots.test.ts`.
+
+`planning.ts` — the wide `get_snapshot` — is a flat object with one top-level key per domain
+(`finance`, `tasks`, `schedule`, `inventory`, `signals`, `:173-208`). A `people` key slots in
+identically: add input types near `PlanningGoal` (`:72-78`), add raw rows to `PlanningInput`
+(`:80-114`), add the output key beside `signals` (`:204-207`), and do the rollup inside
+`planningSnapshot()`'s return (`:519-559`, mirroring the inventory block at `:483-517`). The fetch
+goes in `buildPlanningSnapshot` (`planning-read.ts:33-322`) — one more promise in the `Promise.all`
+at `:95-184`. That assembler is shared by MCP and the in-app assistant, so one fetch serves both.
+
+### 3.4 Propose → confirm
+
+Proposals live in **`ai_audit_log`**; all plumbing is `app/lib/mcp/audit.ts` — `recordProposal`,
+`loadProposal` (scoped `id + user_id`, `status='proposed'`), `claimProposal` (atomic
+`proposed → executing`, guards double-confirm), `finalizeClaimedProposal`, `resolveProposal`.
+
+`confirmAction` (`writes.ts:2794-2846`) loads the proposal → looks up `EXECUTORS[tool_name]` →
+claims → runs → finalizes → `revalidateWeb()`. `cancelAction` (`:2848-2860`) is just
+`resolveProposal(..., "rejected")`. **The in-app assistant reuses the identical executor**:
+`app/actions/assistant.ts:51-109` imports `EXECUTORS` and runs the same claim → execute → finalize
+against the session client. That is the load-bearing proof that one executor serves both surfaces.
+
+Batched writes use a three-layer shape (`proposeUpdateStockFor`, `writes.ts:438-479`): validate shape
+→ fetch live rows → resolve refs to ids → render receipt → `recordProposal`. A thin
+`propose*(userId, raw)` wrapper supplies `createServiceClient()` for MCP; the assistant calls the
+`*For` variant with its session client and `{ source: "assistant", conversationId }`.
+
+`app/lib/mcp/inventory-ops.ts` (1093 lines) is the reference pure-ops module — and its key invariant
+(`:5-9`) is that the **resolved** op union stores ids, not names, "so renames between propose and
+confirm can't retarget a write."
+
+### 3.5 MCP registration
+
+`uid(extra)` (`route.ts:123-129`) throws unless `extra.authInfo?.extra?.userId` is a non-empty
+string. `guard(run)` converts thrown errors into `{ isError: true }`; `ok`/`fail` build the response.
+Reads go through `scoped(userId)` (`reads.ts:82-84`) which returns the **service client** plus
+ownerId — so **every query must filter `.eq("user_id", ownerId)` explicitly**, since RLS is bypassed.
+
+Write-tool descriptions follow a convention: what it does, that it is propose-only ("Returns a
+preview + proposalId; call confirm_action to apply"), and which read tool supplies the ids.
+
+**`app/lib/agent/registry.ts` is a static catalog only.** It is referenced by one comment
+(`route.ts:97`) and by a test block that asserts only internal consistency — unique names, every
+write has `confirm: true` — and **does not assert parity with the real tool surface**. Many live
+tools (`update_stock`, `complete_task`) have no entry. Adding `people.*` there is documentation, not
+something a build or test enforces.
+
+### 3.6 UI
+
+- **Dock** (`app/_components/dock.tsx`): `RAIL_TABS` (`:50-65`) is a deliberately frozen four-item
+  array — `now · money · inventory · brain`, commented "Trimmed to the lived-in surfaces
+  (2026-08-11)". This confirms the brief's assumption; the parallel trim session has landed. A new
+  route goes in the **"more" menu array at `:497-500`**, currently `/mindspace` and `/settings`.
+- **Primitives** (`app/_components/ui.tsx`, 59 lines): `buttonClass(variant)`, `Button`,
+  `INPUT_CLASS`, `SectionRuler({label, count})`. Token idioms in use: `bg-page`, `text-fg`,
+  `bg-card`/`hover:bg-card-hover`, `border-line`/`border-line-strong`/`border-hairline`,
+  `bg-accent`/`text-accent-fg`, `text-muted`, `text-danger`, `bg-glass-well`/`bg-glass-panel`,
+  `rounded-field`/`rounded-pop`/`rounded-dock`, and the custom type scale
+  `text-label`/`text-action`/`text-body`/`text-title` (not raw Tailwind sizes).
+- **`Sheet`** (`app/_components/stream-sheets.tsx`) is the shared modal-panel primitive with focus
+  trap, Escape/Tab handling, dialog role and focus restore — import it rather than hand-rolling.
+- **`ProposalCard`** (`app/_components/proposal-card.tsx`, 51 lines) takes
+  `{ title, children, confirmLabel, onConfirm, onSkip, pending, error }`; the caller supplies preview
+  content as children.
+- **Server → client composition**: `app/finance/page.tsx:95-104,273-288` is the correct reference —
+  resolve `timeZone`, derive `today`, pass **only `today`** across the boundary.
+  **`app/inventory/page.tsx` must not be copied for this**: it is one of the four known
+  `todayISO(null)` debts recorded in the project CLAUDE.md.
+- **Onboarding checklist**: `tours.ts` — add the key to `TOUR_KEYS` (`:12-22`), the
+  `["/people","people"]` pair to `ROUTE_TOURS` (`:48-56`), a `people: TourStep[]` entry to `TOURS`
+  (shape per `stock:` at `:237-263`), and stamp `data-tour` anchors on chrome, never on data rows.
+  `whats-new.ts` — prepend a `NewsEntry {id, date, title, items[]}`.
+
+### 3.7 Timezone law
+
+```ts
+export function todayISO(timeZone: string | null)            // REQUIRED arg, no default
+export function safeTimeZone(tz: string | null | undefined): string | null
+export async function todayKey(supabase, userId): Promise<string>   // app/lib/mcp/config.ts:56-67
+```
+
+Two blessed resolvers only. ESLint backstop at `eslint.config.mjs:32-51` (two `no-restricted-syntax`
+selectors) scoped by the globs at `:58-65` — which automatically cover a `/people` `page.tsx`,
+`app/lib/mcp/people-ops.ts`, `app/lib/snapshots/people.ts` and `app/actions/people.ts`. It is a
+tripwire on two idioms, not coverage: it cannot follow dataflow through a variable.
 
 ---
 
 ## 4. Outside prior art — personal CRMs
 
-<!-- PENDING: prior-art agent -->
+**Evidence caveat up front.** Public discourse on this category is thinner than the product
+landscape suggests, and much of the "review" content is written by competing vendors (Dex's blog
+reviewing Monica and Covve is the worst offender). The genuinely useful user voices are in five
+Hacker News threads on Monica (2017–2023) plus a handful of founder posts. Vendor-authored sources
+are flagged inline below.
+
+### 4.1 What separates "informative" from "naggy or creepy"
+
+The objection and the rebuttal are both worth reading, because the split is diagnostic: **objectors
+imagine being the *subject* of someone else's CRM; defenders are people with real memory limits
+using it on their own behalf.**
+
+From the [2023 Monica thread](https://news.ycombinator.com/item?id=33591970):
+
+> "I'd honestly rather someone forget my name than appear to remember it because they looked it up
+> in some 'relationship manager'... I don't want the fake memory." — *circular_lights*
+
+> "If you actually cared for someone, wouldn't you take the effort to remember everything about
+> them, rather than saving it in a social relationship database?" — *vonseel*
+
+Against, same thread:
+
+> "Not everyone has a good memory. Having a terrible memory isn't a choice someone makes." — *sneak*
+
+> "My sister is autistic and was excited when I sent this to her. She struggles with these types of
+> things." — *smt88*
+
+The vocabulary alone triggers the reaction before any feature is discussed — from the
+[2017 Show HN](https://news.ycombinator.com/item?id=14497295):
+
+> "My first reaction to the 'CRM to manage friends...' was, what? Why do I need a business tool for
+> my personal life." — *pedalpete*
+
+And it demonstrably *can* land as pure positive ([2018](https://news.ycombinator.com/item?id=18318547)):
+
+> "Been running it for 2+ years now... no problems whatsoever. I update when the mood strikes...
+> this little piece of software made all the difference re keeping up with people." — *tomgs*
+
+**The mechanic that separates helpful from gross is not the reminder — it is whether the reminder
+carries context.** The failure mode has a name in
+[one practitioner writeup](https://www.bemorerelatable.com/blog/personal-crm-follow-up-reminders-that-work):
+the **"guilt aquarium"** — accumulated snoozed contact tasks that generate shame rather than action.
+
+> "*Follow up with Jamie.* No context. No reason. No clue what Jamie cares about."
+> … "'Follow up with Dana' creates work. 'Ask how the portfolio process is going' creates momentum."
+
+[Danielle Morrill](https://ellemorrill.substack.com/p/prototyping-a-personal-crm-lessons-learned-so-far),
+who built and then killed her own prototype, arrives at the same place — the tool must *be* the
+memory, not remind you to go find one.
+
+### 4.2 Why people abandon them
+
+**No public decay-curve data exists for this category.** What exists is company-level evidence
+telling the same story: the standalone personal-CRM business does not retain, and survivors flee
+toward domains where "pipeline" framing is acceptable. Per Dex's own graveyard post
+([vendor-authored, facts checkable](https://getdex.com/blog/personal-crm-in-2020-20-startups-apps-and-failed-attempts/)):
+**Garden** abandoned (last update mid-2020); **FollowUp** pivoted to email reminders; **Nouri**
+pivoted to event ticketing; **UpHabit** repositioned in 2022 to "Relationship Selling" and
+"Salesforce Hygiene" — i.e. became a sales tool; **Clay** rebranded to **Mesh** in 2024.
+
+At the individual level the cause is stated directly and repeatedly — data-entry burden:
+
+> "the time-to-value is too much overhead having to capture all the data" — *vishyav665*, [HN](https://news.ycombinator.com/item?id=33591970)
+
+> "it seems incredibly arduous to keep it updated. Everytime I do something, call someone, have a
+> conversation, learn something new, have lunch, etc — it all has to be tracked." — *mase*, [HN](https://news.ycombinator.com/item?id=14497295)
+
+> "I just couldn't get all of the data into the app... I just couldn't get regular value out"
+> — *louisswiss*, [Launch HN: Dex](https://news.ycombinator.com/item?id=20699923)
+
+Morrill on her own tool: "the data entry of my own prototype started to kick my ass," and on
+sabbatical she "stopped using it for 2.5 weeks." **Note where abandoners land: not nowhere — a
+spreadsheet.** Morrill fell back to Excel; HN's *dsalzman* describes the identical move to "a custom
+excel sheet I update each weekend." The Notion/Airtable personal-CRM template genre exists for this
+reason.
+
+Two further triggers that killed adoption before value: import failure ("Monica had issues importing
+my contacts. Too many it says... It always stopped me from exploring it further." — *photoGrant*)
+and onboarding friction ("A 13 question survey AND a 15 minute call to review the app before I can
+sign up?" — *mead5432*, [HN](https://news.ycombinator.com/item?id=25270001)).
+
+### 4.3 Auto-capture quality — and the gap nobody has closed
+
+**No product found makes a clean distinction between "informed about" someone and "actually in
+touch with" them.** This is a real gap, verified by digging into the one company that comes closest.
+
+The false-signal problem is exactly as the brief predicted. A detailed
+[Clay review](https://muncly.com/clay-earth-review-is-this-an-end-game-personal-crm/):
+
+> "Clay monitors your calendar and automatically creates contact entries for people you have
+> meetings with"
+
+— with no visible discrimination between a real 1:1, a group meeting where the contact is
+incidental, or a declined invite. The same complaint at Dex's launch:
+
+> "My biggest problem is that it doesn't have an awareness of when I contact people"
+> — *philip1209*, [Launch HN](https://news.ycombinator.com/item?id=20699923)
+
+On provenance, **Clay ships the one named recency concept in the category — "Network Strength"
+(high/medium/low) — and its own help documentation never explains the methodology.**
+[Clay/Mesh's help article](https://library.me.sh/hc/en-us/articles/21789388483099-Network-Strength-for-Teams-and-Individuals)
+says only that it "leverages all of your moments from all of your accounts to understand whether
+you're losing touch with someone" and is "entirely personalized to you" — which signals are counted,
+how weighted, why a score landed where it did: unstated. A black box shipped as a headline feature.
+
+The instructive detail: Clay's per-contact **Feed** *is* source-tagged (email, WhatsApp, calendar,
+call) — so the raw data is legible, and the provenance disappears **only at the moment it is
+compressed into one score**. That precise layering — legible raw feed, illegible summary — is the
+avoidable mistake.
+
+Covve's "news" feature is the purest *informed-about* signal in the category (articles written about
+your contacts), and notably it is never presented as contact — but that is an easy call, since news
+clippings obviously aren't conversations. Nobody has done the hard version.
+
+### 4.4 The cadence model
+
+Every product that survived long enough to document itself sets cadence **per contact**, not globally:
+
+- **Garden** (defunct): "weekly, monthly, quarterly, or every six months, etc." per contact
+  ([Product Hunt](https://www.producthunt.com/products/garden)).
+- **Yujo**, per [a user's account](https://rebooting.substack.com/p/people-let-me-tell-you-bout-my-best):
+  daily through every-two-months, per connection — and critically framed as **"memories" rather than
+  tasks**: *"it's a reminder that this is more than just doing something actionable."* That user's own
+  resolution of the guilt problem: *"Maybe you shouldn't need an app just to remember to say hello,
+  but [the guilt] gets whisked away pretty quickly when you have your monthly FaceTime session."*
+- Networking-oriented advice converges on **three or four tiers** instead of per-contact sliders —
+  inner circle (~15–30, monthly), core sphere (60–90 days), loose ties (twice a year) — justified as:
+  *"A system that admits the difference between relationships is kinder than a system that pretends
+  you can deeply maintain 1,200 people."*
+
+**No hard evidence exists on which model survives contact with reality** — nobody publishes retention
+cut this way. Circumstantial reasoning favours tiers-or-silence with per-person override: setting a
+frequency for every contact at onboarding is itself the data-entry trap of §4.2. Flag as inference.
+
+**The single best-supported design claim in this whole research set** is the same source's distinction
+between calendar-driven ("every 30 days, regardless") and moment-driven (job change, anniversary, a
+referral sent) reminders:
+
+> "Moment-based reminders feel less like outreach and more like noticing."
+
+### 4.5 Privacy — the anxiety is about custody, not note-taking
+
+The one "ethics" piece found ([Evernote](https://evernote.com/learn/the-ethics-of-keeping-notes-about-people))
+is generic marketing content, not a design convention — its "would this be acceptable if disclosed"
+heuristic is reasonable but nobody demonstrably built to it.
+
+What *is* real, and appears unprompted and repeatedly in the HN threads, is anxiety about blast
+radius — precisely because Monica's early pitch was **hosted and cloud-synced**:
+
+> "Offering this as a hosted instance is tantamount to conspiracy to enable identity theft, and
+> worse." — *angry_octet*
+
+> "Stalker exes, online scammers, insurance companies... data brokers working for PIs etc."
+> — *Throwaway1771*
+
+> "if the data ever gets leaked / hacked that I've just 1000% fucked everyone I've spoken to"
+> — *simonebrunozzi*, [HN](https://news.ycombinator.com/item?id=25270001)
+
+> "I'd be much more excited about this product if it used zero-knowledge encryption for my data"
+> — *caust1c*, [Launch HN: Dex](https://news.ycombinator.com/item?id=20699923)
+
+**Nobody in this material objects to *having* notes about people.** The objection is to
+centralized, hosted, third-party-stored notes about people — a meaningfully different risk, and one
+Mindboard's architecture (own Supabase project, RLS per user, no relationship-data broker, vault in
+the user's own GitHub repo) is structurally better positioned on than any product reviewed.
+
+### 4.6 The dossier view
+
+Weakest-evidenced section — no source was found discussing which profile sections users value versus
+ignore. What exists is card anatomy:
+
+- **Clay/Mesh**: Notes (primary), hashtag Tags, "Connections" (mutuals), "Sources" (channels),
+  a chronological source-tagged Feed, and the black-box Network Strength in the top-right.
+- **Yujo**: photo, name, phone, birthday, relationship-type label, first-meeting date, free-text
+  context ("work has been frustrating them lately," "just got a new puppy").
+- **Monica**: a much longer manual field set — addresses, important dates, family relationships,
+  work history, food preferences, pet names, plus a journal linkable to contacts.
+
+Transferable by analogy only: **field bloat is a documented failure mode in enterprise CRM** —
+Salesforce ships 47 default Contact fields, HubSpot 94, and
+[fewer than 20% of implementations hide the unused ones](https://www.everpeakpartners.com/blog-post/getting-your-crm-fields-right---and-why).
+No personal-CRM-specific version of that statistic exists, but it is consistent with §4.2.
+
+### 4.7 Three ideas worth stealing
+
+1. **Moment-based, context-carrying nudges — never interval-based blank tasks.** Every product here
+   fails at this *because they have no source of what actually happened* — only calendar and email
+   metadata, so the best they can do is "you haven't emailed Bob in 30 days." Mindboard's AI
+   conversations and vault are the actual moment plus the actual context. **"You haven't talked to
+   Davi in 3 weeks — you owe his mom an update on his writing practice" is not UX polish; it is the
+   exact thing this category has spent a decade trying to fake.**
+2. **Reminders framed as resurfaced memory, with per-person cadence as an opt-in override on a
+   default of silence.** Yujo's "memory, not task" framing addresses the guilt aquarium directly, and
+   it maps onto a philosophy this codebase already ships: inventory's `reorder_threshold` is opt-in
+   per item, never a default nag. The abandonment evidence argues hard against asking the user to set
+   a cadence for 20–100 people at onboarding.
+3. **Provenance-tagged recency — show "how I know," and never collapse it into an unexplained score.**
+   Clay proves the anti-pattern. Because Mindboard's data comes from AI conversations and vault notes
+   rather than scraped metadata, "last talked" can be genuinely auditable — "you logged this Aug 3"
+   vs. "mentioned in a Claude session Aug 7" vs. "note edited Aug 9". This is also the direct fix for
+   the informed/in-touch conflation nobody else has solved.
+
+### 4.8 Four traps to avoid
+
+1. **Any required manual step is where users bail.** Morrill killed her own prototype over her own
+   data entry; *mase*, *vishyav665* and *photoGrant* all cite entry/import friction. The moment this
+   section asks the user to type "last talked to X on Y," it has become Monica.
+2. **Context-free interval reminders → the guilt aquarium.** A reminder without the *why now* and
+   *what happened last* is worse than no reminder; it accumulates as unactioned shame until the user
+   ignores the surface entirely.
+3. **Black-box relationship scores erode trust fast.** Clay's unexplained Network Strength draws
+   direct suspicion from its own reviewers. If anything like a decay score is computed, show the
+   inputs. This is the finance module's estimate stance (`~` prefix, muted rendering) applied to
+   people instead of money.
+4. **Counting calendar co-occurrence, group emails, or mentions as "contact" corrupts the one number
+   this feature exists to be honest about.** Clay auto-creates contacts from any calendar meeting;
+   *philip1209* flagged the same gap in Dex; Cloze reportedly auto-merges contacts and drops data.
+   If "last talked to Davi" can be silently satisfied by a group thread he was cc'd on, the whole
+   mechanic becomes untrustworthy the first time it is visibly wrong — and unlike a wrong finance
+   estimate, **a wrong "you're overdue to talk to your friend" is resented immediately, because it is
+   about a person.**
 
 ---
 
@@ -446,4 +789,81 @@ Different population; treat as illustration of the Etkin mechanism, not proof.
 
 ## 6. Consolidated findings
 
-<!-- PENDING -->
+### 6.1 The convergence: two independent research tracks landed on the same distinction
+
+The codebase track found that **nothing in Mindboard can distinguish "talked to" from "talked
+about"** (§1.5) — the classifier asks only for topical aboutness and emotional charge, and no column
+exists to hold such a verdict.
+
+The prior-art track found that **no product in the category has solved this either** (§4.3), that
+the products which fake it with calendar metadata get visibly wrong answers, and that this is the
+single fastest way to destroy trust in the feature (§4.8 trap 4).
+
+That agreement is the design's centre of gravity. Three distinct signals exist in Mindboard's data,
+they mean different things, and collapsing them is the documented failure mode:
+
+| Signal | Meaning | Source | Precision |
+|---|---|---|---|
+| **talked** | you were actually in contact | explicit interaction rows only | exact, human-attested |
+| **noted** | you revised what you know about them | vault `updated` frontmatter (`type`/`created`/`updated`, 20/20 notes) | exact but means *informed*, not contact |
+| **on my mind** | they occupied your attention | mindspace mentions + topic share | fuzzy, false-positive-prone (§1.4) |
+
+### 6.2 What is free, what is cheap, and what is genuinely new work
+
+**Free — already shipped, just needs reading:**
+- A **person registry**: `mindspace_topics` with `kind='person'`, `aliases[]`, and
+  `seed_ref->>'vaultPath'` joining to `People/*.md` (`0043:9-27`, `seed.ts:31-36`).
+- **`NoteView`** renders a person note with wikilinks, callouts, frontmatter chips and a backlinks
+  footer, with react-markdown as the sanitizer boundary.
+- **Backlinks** are already computed by `getVaultCorpus`/`computeBacklinks`.
+- **`noteHref`** deep-links (`People/Davi.md` → `/brain/note/People/Davi`).
+- The **matcher** — `termPattern` (`classify.ts:35-43`) is a tested, accent-safe, boundary-anchored
+  regex builder that can be imported as-is.
+
+**Cheap — a new read over existing rows, no new infrastructure:**
+- `mindspace_sessions.user_text` is **verbatim user words** (6,000 chars/session), **retained
+  indefinitely**, timestamped by true session **end** (`read.ts:448`), and content-queryable. It is
+  not subject to the 30-day gather window or the 45-day items purge. A person-mentions read hits
+  this table directly and is bounded only by how much has been ingested.
+
+**Genuinely new work, in ascending cost:**
+1. A `people` + `person_interactions` pair with RLS (**migration 0047**, not 0036 — see §6.3).
+2. Google Calendar **attendees** — `CalendarEvent` (`utils/google/calendar.ts:8-21`) does not carry
+   them and the mapper drops them; the existing `calendar.readonly` scope already returns them, so
+   this is a type + mapper change, no OAuth change. This is the only *deterministic* co-presence
+   signal available.
+3. A "talked to vs. talked about" **inference axis** — a new field on the Haiku tool schema
+   (`llm.ts:35-82`) plus a column. Real but modest incremental work on the M2 pipeline; the design
+   should treat it as optional/later, not foundational.
+4. A **fenced write path into `People/`** — does not exist. `capture_to_brain` writes `Inbox/` only,
+   create-only, never overwriting (`capture.ts:124-131,160-244`). Editing a person note from
+   Mindboard is new surface, not reuse.
+
+### 6.3 Contradictions and corrections found
+
+Three claims that a build session would otherwise inherit as true:
+
+1. **`docs/mindspace-plan.md` overstates privacy processing.** It claims Claude Code sessions become
+   "a ≤300-token local summary" (`:202-203`) and that long transcripts are "summarized to ≤500
+   tokens" (`:163`). **Neither shipped.** What shipped is a 6,000-character truncation of
+   concatenated user turns (`sessions.ts:63`). Good for the feature (real text), but it means no
+   summarization pass ever scrubbed that content — relevant to §4.5's custody framing.
+2. **The brief's "migration 0036" is stale.** The migrations directory ends at
+   `0046_recurring_slot_events.sql`. The People migration is **0047**.
+3. **The brief's `lastTouch = max(explicit interaction, vault 'updated')` should not drive nudges.**
+   It is a reasonable *display* rule but a precision bug as a *cadence* rule: editing a note about
+   Davi is being informed, not being in touch, and §4.8 trap 4 is precisely about what happens when
+   a non-contact event silently satisfies "last talked." The design doc resolves this by splitting
+   the rule by consumer rather than discarding it.
+
+### 6.4 The unfair advantage, stated plainly
+
+The category's universal killer is data-entry burden (§4.2), and its universal quality ceiling is
+that products only have metadata, so they can only produce content-free nudges (§4.7 idea 1).
+Mindboard has the inverse position: the vault holds real context (17 of 20 person notes carry an
+`## Open questions` section — literally a list of open loops per person), and `mindspace_sessions`
+holds the user's own words about those people, generated as a by-product of work he already does.
+
+The corollary is a constraint, not just an asset: **the moment this feature asks the user to type
+"last talked to X on Y," the advantage is gone.** Every design decision downstream should be tested
+against that sentence.
