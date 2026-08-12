@@ -16,6 +16,7 @@ function person(over: Partial<Person> & { id: string; name: string }): Person {
   return {
     vault_path: null,
     aliases: [],
+    group_id: null,
     checkin_days: null,
     attention_snoozed_until: null,
     archived: false,

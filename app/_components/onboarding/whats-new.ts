@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-08-12-people-groups",
+    date: "2026-08-12",
+    title: "your people, in their contexts",
+    items: [
+      "people can live in groups now — family, school, work, whatever shapes your life. each person's row wears their group's color along the left edge, like task cards do.",
+      "sort the people page a–z or by group; manage groups right there under the list, or from the ≡ groups sheet's new people tab.",
+      "tap ✦ suggest groups and i read your people notes and propose contexts i actually see — places, activities, family ties. never closeness rankings, and nothing applies until you confirm the receipt.",
+      "the copilot and your other ais can file people into groups too (create a group and assign in one go) — always propose-then-confirm.",
+    ],
+  },
+  {
     id: "2026-08-12-people",
     date: "2026-08-12",
     title: "the people in your life",

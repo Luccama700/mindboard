@@ -9,6 +9,7 @@ import {
   getCandidates,
   getLatestInteractions,
   getPeople,
+  getPeopleGroups,
 } from "@/app/lib/data/people";
 import {
   listEligibleNotes,
@@ -90,10 +91,11 @@ export default async function PeoplePage() {
   // roster — the Denise case (§5, review finding 2).
   after(() => syncPeopleFromVault(user.id));
 
-  const [people, latest, newCandidates] = await Promise.all([
+  const [people, latest, newCandidates, peopleGroups] = await Promise.all([
     getPeople(user.id),
     getLatestInteractions(user.id),
     getCandidates(user.id),
+    getPeopleGroups(user.id),
   ]);
 
   const active = people.filter((p) => !p.archived);
@@ -173,6 +175,7 @@ export default async function PeoplePage() {
         today={today}
         suggestion={suggestion}
         quieted={vitals.quieted}
+        groups={peopleGroups}
       />
     </Shell>
   );

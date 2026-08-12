@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import type {
   MentionCandidate,
   Person,
+  PersonGroup,
   PersonInteraction,
 } from "@/app/_components/people-types";
 
@@ -14,7 +15,8 @@ import type {
 // the cache key.
 
 const PEOPLE_COLUMNS =
-  "id, name, vault_path, aliases, checkin_days, attention_snoozed_until, archived, archived_at, created_at, updated_at";
+  "id, name, vault_path, aliases, group_id, checkin_days, attention_snoozed_until, archived, archived_at, created_at, updated_at";
+const GROUP_COLUMNS = "id, name, color, created_at";
 const INTERACTION_COLUMNS =
   "id, person_id, summary, occurred_at, occurred_precision, source, created_at";
 const CANDIDATE_COLUMNS =
@@ -37,6 +39,23 @@ export const getPeople = cache(async (userId: string): Promise<Person[]> => {
     .order("id", { ascending: true });
   return (data ?? []) as Person[];
 });
+
+// The roster's optional CONTEXTS (family / ubc / work — never closeness
+// tiers, see 0049_people_groups.sql). Ordered by name so the page renders a
+// stable, alphabetical set of sections; the order ends in id to stay total if
+// two groups ever collide case-insensitively across a rename race.
+export const getPeopleGroups = cache(
+  async (userId: string): Promise<PersonGroup[]> => {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from("people_groups")
+      .select(GROUP_COLUMNS)
+      .eq("user_id", userId)
+      .order("name", { ascending: true })
+      .order("id", { ascending: true });
+    return (data ?? []) as PersonGroup[];
+  },
+);
 
 export const getPerson = cache(
   async (userId: string, personId: string): Promise<Person | null> => {

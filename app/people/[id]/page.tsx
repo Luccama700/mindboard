@@ -7,6 +7,7 @@ import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import {
   getCandidates,
   getPeople,
+  getPeopleGroups,
   getPerson,
   getPersonInteractions,
 } from "@/app/lib/data/people";
@@ -191,6 +192,8 @@ export default async function PersonPage(props: {
           aliases={person.aliases}
           snoozedUntil={person.attention_snoozed_until}
           today={today}
+          groups={await getPeopleGroups(user.id)}
+          groupId={person.group_id}
         />
       </section>
 

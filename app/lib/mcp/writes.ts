@@ -63,6 +63,7 @@ import {
   resolvePeopleOps,
   validatePeopleOps,
   validateResolvedPeopleOps,
+  type ResolvableGroup as ResolvablePeopleGroup,
   type ResolvablePerson,
 } from "./people-ops";
 import { seedAliases } from "@/app/lib/people/sync";
@@ -503,15 +504,17 @@ export async function proposePeopleUpdateFor(
   const parsed = validatePeopleOps(raw);
   if (!parsed.ok) return parsed;
 
-  const { data, error } = await supabase
-    .from("people")
-    .select("id, name, archived")
-    .eq("user_id", userId);
-  if (error) return { ok: false, error: error.message };
+  const [peopleRes, groupsRes] = await Promise.all([
+    supabase.from("people").select("id, name, archived").eq("user_id", userId),
+    supabase.from("people_groups").select("id, name").eq("user_id", userId),
+  ]);
+  if (peopleRes.error) return { ok: false, error: peopleRes.error.message };
+  if (groupsRes.error) return { ok: false, error: groupsRes.error.message };
 
   const resolved = resolvePeopleOps(
     parsed.value,
-    (data ?? []) as ResolvablePerson[],
+    (peopleRes.data ?? []) as ResolvablePerson[],
+    (groupsRes.data ?? []) as ResolvablePeopleGroup[],
   );
   if (!resolved.ok) return resolved;
 
@@ -2831,7 +2834,7 @@ async function executePeopleUpdate(
   const personIds = [
     ...new Set(
       ops.flatMap((op) => {
-        if (op.kind === "create") return [];
+        if (op.kind === "create" || op.kind === "create_group") return [];
         // Ops targeting a person created earlier in this batch have no id yet.
         return op.personId ? [op.personId] : [];
       }),
@@ -2854,11 +2857,35 @@ async function executePeopleUpdate(
     }
   }
 
+  // Same pre-check for groups: deleting a group between propose and confirm
+  // would otherwise surface as a raw foreign-key error rather than a sentence.
+  const groupIds = [
+    ...new Set(
+      ops.flatMap((op) =>
+        op.kind === "set_group" && op.groupId ? [op.groupId] : [],
+      ),
+    ),
+  ];
+  if (groupIds.length > 0) {
+    const { data, error } = await supabase
+      .from("people_groups")
+      .select("id")
+      .eq("user_id", ownerId)
+      .in("id", groupIds);
+    if (error) return { ok: false, error: error.message };
+    const live = new Set(((data ?? []) as { id: string }[]).map((r) => r.id));
+    if (groupIds.some((id) => !live.has(id))) {
+      return { ok: false, error: "a group in this proposal no longer exists" };
+    }
+  }
+
   const applied: string[] = [];
   const now = new Date().toISOString();
-  // People created earlier in this batch, so later log/checkin ops can target
-  // them (resolved as pendingPerson at propose time).
+  // People created earlier in this batch, so later log/checkin/set_group ops
+  // can target them (resolved as pendingPerson at propose time).
   const createdPeople = new Map<string, string>(); // lowercased name → id
+  // Same, for groups created earlier in this batch (pendingGroup).
+  const createdGroups = new Map<string, string>(); // lowercased name → id
   // Resolved once, lazily, and only if some log op needs it: the user's own
   // day, never the UTC process clock.
   let today: string | null = null;
@@ -2984,6 +3011,58 @@ async function executePeopleUpdate(
           return { ok: false, error: error.message };
         }
         applied.push(`tracking ${op.name} again`);
+        break;
+      }
+      case "create_group": {
+        const { data, error } = await supabase
+          .from("people_groups")
+          .insert({
+            user_id: ownerId,
+            name: op.name,
+            // Omitted colour falls through to the column default (the first
+            // palette swatch), rather than this file inventing a hex.
+            ...(op.color ? { color: op.color } : {}),
+          })
+          .select("id")
+          .single();
+        if (error) {
+          if (error.code === "23505") {
+            return {
+              ok: false,
+              error: `you already have a ${op.name} group (applied: ${applied.length})`,
+            };
+          }
+          return { ok: false, error: error.message };
+        }
+        createdGroups.set(op.name.toLowerCase(), (data as { id: string }).id);
+        applied.push(`created the ${op.name} group`);
+        break;
+      }
+      case "set_group": {
+        const target = personIdFor(op);
+        if (!target.ok) return target;
+        let groupId = op.groupId;
+        if (!groupId && op.pendingGroup) {
+          const created = createdGroups.get(op.pendingGroup.toLowerCase());
+          if (!created) {
+            return {
+              ok: false,
+              error: `a group this batch depends on was not created (applied: ${applied.length})`,
+            };
+          }
+          groupId = created;
+        }
+        const { error } = await supabase
+          .from("people")
+          .update({ group_id: groupId, updated_at: now })
+          .eq("user_id", ownerId)
+          .eq("id", target.value);
+        if (error) return { ok: false, error: error.message };
+        applied.push(
+          groupId
+            ? `moved ${op.name} to ${op.groupName ?? "a group"}`
+            : `removed ${op.name} from their group`,
+        );
         break;
       }
     }
