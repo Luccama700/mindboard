@@ -4,6 +4,7 @@ import { createClient } from "@/utils/supabase/server";
 import type {
   MentionCandidate,
   Person,
+  PersonGroup,
   PersonInteraction,
 } from "@/app/_components/people-types";
 
@@ -14,13 +15,29 @@ import type {
 // the cache key.
 
 const PEOPLE_COLUMNS =
-  "id, name, vault_path, aliases, checkin_days, attention_snoozed_until, archived, archived_at, created_at, updated_at";
+  "id, name, vault_path, aliases, group_id, checkin_days, attention_snoozed_until, archived, archived_at, created_at, updated_at";
+const GROUP_COLUMNS = "id, name, color, created_at";
 const INTERACTION_COLUMNS =
   "id, person_id, summary, occurred_at, occurred_precision, source, created_at";
 const CANDIDATE_COLUMNS =
   "id, person_id, source_kind, source_ref, occurred_at, excerpt, matched_term, status, reviewed_at, created_at";
 // Review is PULL, not push: the affordance is quiet and the list is short.
 const MAX_CANDIDATES = 50;
+
+// A FAILED QUERY IS NOT AN EMPTY ROSTER. `data ?? []` collapses the two, so a
+// missing column or table — the state between a code deploy and its migration
+// being applied — renders a calm "nobody yet" over a live roster of twenty
+// people, and the user's reasonable next move is to start re-adding them.
+// Throwing instead lets the page's error boundary say something is broken,
+// which is the truth. Applied to every read that touches 0049's new column or
+// table; the interaction and candidate reads are unchanged.
+function orThrow<T>(
+  what: string,
+  result: { data: unknown; error: { message: string } | null },
+): T[] {
+  if (result.error) throw new Error(`${what}: ${result.error.message}`);
+  return (result.data ?? []) as T[];
+}
 
 // Archived rows are RETURNED, not filtered. The roster needs them for two
 // separate reasons: the collapsed "not tracking" section renders them, and the
@@ -29,24 +46,44 @@ const MAX_CANDIDATES = 50;
 // an unpersisted entry on every visit. Split on `.archived` in the client.
 export const getPeople = cache(async (userId: string): Promise<Person[]> => {
   const supabase = await createClient();
-  const { data } = await supabase
+  const result = await supabase
     .from("people")
     .select(PEOPLE_COLUMNS)
     .eq("user_id", userId)
     .order("name", { ascending: true })
     .order("id", { ascending: true });
-  return (data ?? []) as Person[];
+  return orThrow<Person>("could not load people", result);
 });
 
+// The roster's optional CONTEXTS (family / ubc / work — never closeness
+// tiers, see 0049_people_groups.sql). Ordered by name so the page renders a
+// stable, alphabetical set of sections; the order ends in id to stay total if
+// two groups ever collide case-insensitively across a rename race.
+export const getPeopleGroups = cache(
+  async (userId: string): Promise<PersonGroup[]> => {
+    const supabase = await createClient();
+    const result = await supabase
+      .from("people_groups")
+      .select(GROUP_COLUMNS)
+      .eq("user_id", userId)
+      .order("name", { ascending: true })
+      .order("id", { ascending: true });
+    return orThrow<PersonGroup>("could not load groups", result);
+  },
+);
+
+// null means "no such person", which the dossier renders as a 404. A broken
+// query must not arrive as that same null — see orThrow above.
 export const getPerson = cache(
   async (userId: string, personId: string): Promise<Person | null> => {
     const supabase = await createClient();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("people")
       .select(PEOPLE_COLUMNS)
       .eq("user_id", userId)
       .eq("id", personId)
       .maybeSingle();
+    if (error) throw new Error(`could not load person: ${error.message}`);
     return (data as Person | null) ?? null;
   },
 );

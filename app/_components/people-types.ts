@@ -7,12 +7,22 @@ export type Person = {
   name: string;
   vault_path: string | null;
   aliases: string[];
+  // Optional context, never a closeness tier (family / school / brazil —
+  // the docs/people-plan.md §3 anti-ranking rule applies to groups too).
+  group_id: string | null;
   checkin_days: number | null;
   attention_snoozed_until: string | null;
   archived: boolean;
   archived_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type PersonGroup = {
+  id: string;
+  name: string;
+  color: string;
+  created_at: string;
 };
 
 export type PersonInteraction = {

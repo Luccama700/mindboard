@@ -4,11 +4,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
+  setPersonGroup,
   unsnoozePerson,
   updatePersonAliases,
   updatePersonName,
 } from "@/app/actions/people";
 import { Button, INPUT_CLASS } from "@/app/_components/ui";
+import type { PersonGroup } from "@/app/_components/people-types";
 
 // Name + aliases editing (the §10 M1 write matrix's "edit name / aliases")
 // and the snooze release. Aliases feed the mention matcher, so the hint
@@ -19,12 +21,16 @@ export function IdentityControl({
   aliases,
   snoozedUntil,
   today,
+  groups,
+  groupId,
 }: {
   personId: string;
   name: string;
   aliases: string[];
   snoozedUntil: string | null;
   today: string;
+  groups: PersonGroup[];
+  groupId: string | null;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -68,6 +74,32 @@ export function IdentityControl({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
+        {groups.length > 0 && (
+          <select
+            value={groupId ?? ""}
+            disabled={busy}
+            onChange={(e) => {
+              setBusy(true);
+              setError(null);
+              void setPersonGroup(personId, e.target.value || null).then(
+                (result) => {
+                  setBusy(false);
+                  if (result?.error) setError(result.error);
+                  else router.refresh();
+                },
+              );
+            }}
+            aria-label="group"
+            className="min-h-11 bg-glass-well rounded-field border border-line-strong text-muted text-[10px] tracking-widest uppercase px-2 focus:border-accent focus:outline-none transition-colors"
+          >
+            <option value="">no group</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name.toLowerCase()}
+              </option>
+            ))}
+          </select>
+        )}
         <Button variant="quiet" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
           {open ? "× close" : "edit name & aliases"}
         </Button>

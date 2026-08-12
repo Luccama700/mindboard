@@ -260,7 +260,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "List people",
         description:
-          "The people roster: id, name, vault note path, aliases, check-in cadence, archived flag, how many interactions are logged, and when you last TALKED to them (date + precision + daysSince, or null when nothing is logged). Metadata only — no note bodies, no interaction summaries. Use it to find person ids/names before update_people or get_person; pass includeArchived to also see untracked people (needed before a restore op). 'Last talked' counts logged conversations ONLY: editing someone's note is being informed, not being in touch, and never advances it.",
+          "The people roster: id, name, vault note path, aliases, their context group ({id,name} or null — groups are contexts like family/ubc/work, never closeness tiers), check-in cadence, archived flag, how many interactions are logged, and when you last TALKED to them (date + precision + daysSince, or null when nothing is logged). Metadata only — no note bodies, no interaction summaries. Use it to find person ids/names before update_people or get_person; pass includeArchived to also see untracked people (needed before a restore op). 'Last talked' counts logged conversations ONLY: editing someone's note is being informed, not being in touch, and never advances it.",
         inputSchema: { includeArchived: z.boolean().optional() },
       },
       (args, extra) => guard(async () => ok(await listPeople(uid(extra), args))),
@@ -1133,7 +1133,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: update people",
         description:
-          "Propose a batch of people edits in one confirmable receipt: log_interaction (record that the user TALKED to someone), create_person (someone with no vault note yet), set_checkin (how often they want to be in touch, in days; null clears it — there are no default cadences), archive (stop tracking), restore (track again). A create_person earlier in the batch can be logged against or given a cadence by name in the SAME batch. `person` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates; get ids from list_people). Returns a receipt preview + proposalId; call confirm_action to apply.\n\nlog_interaction records that CONTACT HAPPENED — only ever when the user says so. Talking ABOUT someone is not talking TO them, and a wrong 'you talked to X on Y' is the one error this feature cannot afford, so never infer contact from a mention, a calendar entry, or a note edit. `summary` records what the USER did or said (\"coffee, he's writing again\"), never an inference about the other person's state or wellbeing — write it as though they might read it. Omit `date` for today (resolved in the user's timezone when the user confirms). If the user was vague (\"last month\", \"a few weeks back\"), give your best-guess date AND set approx:true so the app says \"about a month ago\" instead of inventing a specific day.",
+          "Propose a batch of people edits in one confirmable receipt: log_interaction (record that the user TALKED to someone), create_person (someone with no vault note yet), set_checkin (how often they want to be in touch, in days; null clears it — there are no default cadences), archive (stop tracking), restore (track again), create_group (a new context group) and set_group (put someone in one; null removes them from theirs). A create_person or create_group earlier in the batch can be referenced by name in the SAME batch. `person` and `group` accept an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates; get ids from list_people). Returns a receipt preview + proposalId; call confirm_action to apply.\n\nGROUPS ARE CONTEXTS, NEVER CLOSENESS TIERS. A group names where the user knows someone from — family, ubc, work, brazil, climbing. Never propose or create a group that ranks people by closeness or importance ('close friends', 'inner circle', 'acquaintances', 'favorites', 'tier 1'): this app does not rank people, and a group that does is worse than no group. Membership is optional and single-valued — someone who fits no context stays ungrouped.\n\nlog_interaction records that CONTACT HAPPENED — only ever when the user says so. Talking ABOUT someone is not talking TO them, and a wrong 'you talked to X on Y' is the one error this feature cannot afford, so never infer contact from a mention, a calendar entry, or a note edit. `summary` records what the USER did or said (\"coffee, he's writing again\"), never an inference about the other person's state or wellbeing — write it as though they might read it. Omit `date` for today (resolved in the user's timezone when the user confirms). If the user was vague (\"last month\", \"a few weeks back\"), give your best-guess date AND set approx:true so the app says \"about a month ago\" instead of inventing a specific day.",
         inputSchema: {
           operations: z
             .array(
@@ -1144,15 +1144,32 @@ const mcpHandler = createMcpHandler(
                   "set_checkin",
                   "archive",
                   "restore",
+                  "create_group",
+                  "set_group",
                 ]),
                 person: z
                   .string()
                   .optional()
-                  .describe("Person id or name (every op except create_person)."),
+                  .describe(
+                    "Person id or name (every op except create_person and create_group).",
+                  ),
                 name: z
                   .string()
                   .optional()
-                  .describe("New person's name (create_person)."),
+                  .describe("New person's or group's name (create_person, create_group)."),
+                group: z
+                  .string()
+                  .nullish()
+                  .describe(
+                    "Group id or name (set_group; null removes the person from their group). Required on set_group.",
+                  ),
+                color: z
+                  .string()
+                  .regex(/^#[0-9a-fA-F]{6}$/)
+                  .optional()
+                  .describe(
+                    "Hex color for a new group (create_group; optional — the app picks one).",
+                  ),
                 summary: z
                   .string()
                   .optional()

@@ -1004,6 +1004,7 @@ type PersonRow = {
   name: string;
   vault_path: string | null;
   aliases: string[] | null;
+  group_id: string | null;
   checkin_days: number | null;
   attention_snoozed_until: string | null;
   archived: boolean;
@@ -1011,7 +1012,7 @@ type PersonRow = {
 };
 
 const PERSON_COLUMNS =
-  "id, name, vault_path, aliases, checkin_days, attention_snoozed_until, archived, created_at";
+  "id, name, vault_path, aliases, group_id, checkin_days, attention_snoozed_until, archived, created_at";
 
 // METADATA ONLY, per docs/people-plan.md §9: names, cadence, recency inputs and
 // counts. No note bodies, no interaction summaries, no mention snippets — those
@@ -1036,8 +1037,11 @@ export async function listPeopleFor(
     .order("name", { ascending: true });
   if (!includeArchived) peopleQuery = peopleQuery.eq("archived", false);
 
-  const [peopleRes, interactionsRes] = await Promise.all([
+  const [peopleRes, groupsRes, interactionsRes] = await Promise.all([
     peopleQuery,
+    // No colour: a group travels to an agent as identity (id + name), which is
+    // all a set_group op needs. Colour is a rendering concern.
+    supabase.from("people_groups").select("id, name").eq("user_id", userId),
     supabase
       .from("person_interactions")
       .select("person_id, occurred_at, occurred_precision")
@@ -1051,7 +1055,23 @@ export async function listPeopleFor(
       .limit(MAX_INTERACTION_SCAN),
   ]);
 
+  // An agent cannot tell "you have no people" from "the query failed" if both
+  // arrive as an empty array, and the second one deserves an error, not a
+  // confident report that the roster is empty. guard() in the MCP route turns
+  // this into a structured tool error. The interaction scan is exempt: it
+  // degrades to "nothing logged", which the shape already expresses.
+  if (peopleRes.error) {
+    throw new Error(`could not read people: ${peopleRes.error.message}`);
+  }
+  if (groupsRes.error) {
+    throw new Error(`could not read people groups: ${groupsRes.error.message}`);
+  }
+
   const rows = (peopleRes.data ?? []) as PersonRow[];
+  const groups = new Map<string, { id: string; name: string }>();
+  for (const group of (groupsRes.data ?? []) as { id: string; name: string }[]) {
+    groups.set(group.id, group);
+  }
   const counts = new Map<string, number>();
   const latest = new Map<string, { date: string; precision: string }>();
   for (const row of (interactionsRes.data ?? []) as {
@@ -1077,6 +1097,9 @@ export async function listPeopleFor(
         name: row.name,
         vaultPath: row.vault_path,
         aliases: row.aliases ?? [],
+        // The person's optional CONTEXT (family / ubc / work), never a
+        // closeness tier. null = ungrouped, which is a normal resting state.
+        group: (row.group_id && groups.get(row.group_id)) || null,
         checkinDays: row.checkin_days,
         attentionSnoozedUntil: row.attention_snoozed_until,
         archived: row.archived,

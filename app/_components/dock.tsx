@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { recordBalanceChange } from "@/app/actions/finance";
 import { loadCalendarOptions } from "@/app/actions/groups";
+import { loadPeopleGroups } from "@/app/actions/people-groups";
 import { createRecurringTask } from "@/app/actions/recurring-tasks";
 import { createTask } from "@/app/actions/tasks";
 import { GroupsClient } from "@/app/tasks/groups-client";
@@ -24,6 +25,8 @@ import {
 } from "./assistant-model";
 import { CategoriesSheet } from "./categories-sheet";
 import type { SpendingCategory } from "./finance-types";
+import { PeopleGroupsManager } from "./people-groups-manager";
+import type { PersonGroup } from "./people-types";
 import { formatMoney } from "./money";
 import { ProposalCard } from "./proposal-card";
 import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
@@ -126,12 +129,13 @@ export function Dock({
   const [notesOpen, setNotesOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
-  const [groupsTab, setGroupsTab] = useState<"groups" | "categories">(
+  const [groupsTab, setGroupsTab] = useState<"groups" | "categories" | "people">(
     "groups",
   );
   const [calendarOptions, setCalendarOptions] = useState<
     CalendarListEntry[] | null
   >(null);
+  const [peopleGroups, setPeopleGroups] = useState<PersonGroup[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [typing, setTyping] = useState(false);
   const [keyboardUp, setKeyboardUp] = useState(false);
@@ -273,10 +277,13 @@ export function Dock({
   function openGroupsSheet() {
     setMoreOpen(false);
     setGroupsOpen(true);
-    // One lazy fetch per mount — the sheet works without it (link picker
-    // just explains calendars aren't available yet).
+    // One lazy fetch each per mount — the sheet works without them (link
+    // picker just explains calendars aren't available yet).
     if (calendarOptions === null) {
       void loadCalendarOptions().then(setCalendarOptions);
+    }
+    if (peopleGroups === null) {
+      void loadPeopleGroups().then(setPeopleGroups);
     }
   }
 
@@ -518,7 +525,7 @@ export function Dock({
         >
           <div className="flex items-center justify-between border-b border-line px-3 py-1">
             <div className="flex items-center gap-4">
-              {(["groups", "categories"] as const).map((tab) => (
+              {(["groups", "categories", "people"] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -552,10 +559,18 @@ export function Dock({
                 variant="sheet"
                 onNavigate={() => setGroupsOpen(false)}
               />
-            ) : (
+            ) : groupsTab === "categories" ? (
               <CategoriesSheet
                 key={categories.map((c) => c.id).join(",")}
                 initial={categories}
+              />
+            ) : peopleGroups === null ? (
+              <p className="text-meta text-muted py-2">loading…</p>
+            ) : (
+              <PeopleGroupsManager
+                key={peopleGroups.map((g) => g.id).join(",")}
+                initial={peopleGroups}
+                onMutated={() => void loadPeopleGroups().then(setPeopleGroups)}
               />
             )}
           </div>

@@ -18,8 +18,44 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 // Interaction summaries are one line about a conversation, not a transcript.
 const MAX_SUMMARY = 500;
 const MAX_CHECKIN_DAYS = 3650;
-// Matches inventory-ops.ts:208's cap on created item names.
+// Matches inventory-ops.ts:208's cap on created item names. One constant for
+// person and group names alike — same column shape, same write surfaces.
 const MAX_NAME_LENGTH = 120;
+// The colour lands in a `text` column that the UI feeds straight to an inline
+// style, so it is validated rather than trusted; omitted means the database
+// default (the first palette swatch).
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+// The one rule this feature cannot bend: groups are CONTEXTS, never closeness
+// tiers (docs/people-plan.md §3.1 "no streaks, no counters", §3.6 "no
+// product-imposed cadences" — both are the same refusal to rank people).
+//
+// It lives HERE, in the shared validation layer, rather than in the group
+// suggester alone: every agent path — MCP update_people, the in-app assistant,
+// the suggester — funnels through validatePeopleOps, so this is the only place
+// that catches all three. A model that ignores the tool description would
+// otherwise land "acquaintances" in the roster with a confirm button under it.
+//
+// Patterns are word-anchored so real contexts survive ("closet organizers" is
+// a group; "closest people" is not).
+const RANKING_PATTERNS = [
+  /\b(inner|outer)\s+circle\b/i,
+  /\bclos(e|er|est)\s+(friends?|people|ones?)\b/i,
+  /\bbest\s+friends?\b/i,
+  /\bacquaintances?\b/i,
+  /\bfavou?rites?\b/i,
+  /\btier\s*\d*\b/i,
+  /\bvip\b/i,
+  /\ba-?list\b/i,
+  /\bcasual\s+(friends?|contacts?)\b/i,
+  /\bdistant\b/i,
+  /\bstrangers?\b/i,
+  /\b(top|core)\s+(people|friends?)\b/i,
+];
+
+export function isRankingGroupName(name: string): boolean {
+  return RANKING_PATTERNS.some((re) => re.test(name));
+}
 
 export type PersonOp =
   // date omitted = "today", resolved at EXECUTE time in the user's zone, so a
@@ -35,7 +71,14 @@ export type PersonOp =
   // null clears the cadence (this person stops generating attention).
   | { op: "set_checkin"; person: string; days: number | null }
   | { op: "archive"; person: string }
-  | { op: "restore"; person: string };
+  | { op: "restore"; person: string }
+  // A group is a CONTEXT (family / ubc / work), never a closeness tier —
+  // docs/people-plan.md §3.1/§3.6 forbid ranking people, and grouping them is
+  // still ranking them if the axis is intimacy. Nothing here can enforce that;
+  // the tool descriptions and the suggester prompt carry the constraint.
+  | { op: "create_group"; name: string; color?: string }
+  // null clears the group (this person stops belonging to any context).
+  | { op: "set_group"; person: string; group: string | null };
 
 // What gets stored on the proposal and executed on confirm.
 //
@@ -62,12 +105,31 @@ export type ResolvedPersonOp =
       pendingPerson?: string | null;
     }
   | { kind: "archive"; personId: string; name: string }
-  | { kind: "restore"; personId: string; name: string };
+  | { kind: "restore"; personId: string; name: string }
+  // color null = let the column default decide.
+  | { kind: "create_group"; name: string; color: string | null }
+  // Three distinguishable states, and the executor needs all three:
+  // groupId set = an existing group; pendingGroup set = a create_group op
+  // earlier in this batch; both null = clear the person's group.
+  | {
+      kind: "set_group";
+      personId: string | null;
+      name: string;
+      groupId: string | null;
+      groupName: string | null;
+      pendingPerson?: string | null;
+      pendingGroup?: string | null;
+    };
 
 export type ResolvablePerson = {
   id: string;
   name: string;
   archived: boolean;
+};
+
+export type ResolvableGroup = {
+  id: string;
+  name: string;
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -211,6 +273,70 @@ export function validatePeopleOps(raw: unknown): Result<PersonOp[]> {
         ops.push({ op, person });
         break;
       }
+      case "create_group": {
+        const name = refString(entry.name);
+        if (!name) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (create_group): name is required`,
+          };
+        }
+        if (name.length > MAX_NAME_LENGTH) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (create_group): name too long`,
+          };
+        }
+        if (isRankingGroupName(name)) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (create_group ${name}): groups are CONTEXTS — where the user knows someone from (family, ubc, work, brazil) — never closeness tiers. "${name}" ranks people, and this app does not rank people.`,
+          };
+        }
+        let color: string | undefined;
+        if (entry.color !== undefined && entry.color !== null) {
+          const value = refString(entry.color);
+          if (!value || !HEX_COLOR.test(value)) {
+            return {
+              ok: false,
+              error: `operation ${i + 1} (create_group ${name}): color must be a hex color like #B5FF3C`,
+            };
+          }
+          color = value;
+        }
+        ops.push({ op, name, color });
+        break;
+      }
+      case "set_group": {
+        const person = refString(entry.person);
+        if (!person) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (set_group): person is required`,
+          };
+        }
+        // Same contract as set_checkin: an omitted field is a mistake, an
+        // explicit null is the clear.
+        if (entry.group === undefined) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (set_group ${person}): group is required (null clears it)`,
+          };
+        }
+        if (entry.group === null) {
+          ops.push({ op, person, group: null });
+          break;
+        }
+        const group = refString(entry.group);
+        if (!group) {
+          return {
+            ok: false,
+            error: `operation ${i + 1} (set_group ${person}): group must be a group id or name, or null to clear`,
+          };
+        }
+        ops.push({ op, person, group });
+        break;
+      }
       default:
         return { ok: false, error: `operation ${i + 1}: unknown op "${String(op)}"` };
     }
@@ -251,17 +377,65 @@ export function resolvePersonRef(
   return { ok: false, error: `no person matching "${ref}"` };
 }
 
+// Deliberately the SAME machinery as resolvePersonRef — id → exact → unique
+// substring, ambiguity fails loudly with candidates — and not inventory's
+// exact-only matchGroup. "put davi in fam" should work the way "log davi"
+// does; one resolution contract across the feature is the point.
+export function resolveGroupRef(
+  ref: string,
+  pool: ResolvableGroup[],
+): Result<ResolvableGroup> {
+  const byId = pool.find((g) => g.id === ref);
+  if (byId) return { ok: true, value: byId };
+
+  const needle = ref.toLowerCase();
+  const exact = pool.filter((g) => g.name.toLowerCase() === needle);
+  // people_groups_user_name_key makes an exact duplicate impossible, so a
+  // multi-match here can only be a caller passing a stale pool — still
+  // reported rather than silently taking the first.
+  if (exact.length === 1) return { ok: true, value: exact[0] };
+  if (exact.length > 1) {
+    return {
+      ok: false,
+      error: `"${ref}" matches multiple groups: ${exact.map((g) => `${g.name} (${g.id})`).join(", ")} — use an id`,
+    };
+  }
+
+  const partial = pool.filter((g) => g.name.toLowerCase().includes(needle));
+  if (partial.length === 1) return { ok: true, value: partial[0] };
+  if (partial.length > 1) {
+    return {
+      ok: false,
+      error: `"${ref}" is ambiguous: ${partial.map((g) => `${g.name} (${g.id})`).join(", ")} — use an id`,
+    };
+  }
+  return {
+    ok: false,
+    error: `no group matching "${ref}"${pool.length ? ` (groups: ${pool.map((g) => g.name).join(", ")})` : ""}`,
+  };
+}
+
 // Resolves a whole batch or nothing: any ambiguity or miss fails the proposal so
 // the caller can retry precisely.
+//
+// `groups` is REQUIRED, not defaulted: an omitted pool would silently turn
+// every set_group into "no group matching …" at the one call site that forgot
+// to fetch it. Required arguments are this repo's mechanism for making tsc
+// enumerate callers (see the timezone convention in AGENTS.md).
 export function resolvePeopleOps(
   ops: PersonOp[],
   people: ResolvablePerson[],
+  groups: ResolvableGroup[],
 ): Result<ResolvedPersonOp[]> {
   const active = people.filter((p) => !p.archived);
   const archived = people.filter((p) => p.archived);
   // People created earlier in the same batch: lowercased ref → display name.
-  // Later log/set_checkin ops resolve against these as pendingPerson.
+  // Later log/set_checkin/set_group ops resolve against these as pendingPerson.
   const createdNames = new Map<string, string>();
+  // Groups created earlier in the same batch (name, no id yet); a later
+  // set_group referencing one resolves to pendingGroup and the executor fills
+  // the id in after the insert (inventory-ops.ts's pendingGroup pattern).
+  const createdGroups = new Map<string, string>();
 
   // Shared by log and set_checkin: a pending create wins, then the active
   // roster. An archived match is reported as such rather than silently
@@ -294,6 +468,32 @@ export function resolvePeopleOps(
     return {
       ok: true,
       value: { personId: found.value.id, name: found.value.name, pendingPerson: null },
+    };
+  };
+
+  const groupRef = (
+    ref: string,
+  ): Result<{
+    groupId: string | null;
+    groupName: string;
+    pendingGroup: string | null;
+  }> => {
+    const pending = createdGroups.get(ref.toLowerCase());
+    if (pending) {
+      return {
+        ok: true,
+        value: { groupId: null, groupName: pending, pendingGroup: pending },
+      };
+    }
+    const found = resolveGroupRef(ref, groups);
+    if (!found.ok) return found;
+    return {
+      ok: true,
+      value: {
+        groupId: found.value.id,
+        groupName: found.value.name,
+        pendingGroup: null,
+      },
     };
   };
 
@@ -375,6 +575,52 @@ export function resolvePeopleOps(
         resolved.push({ kind: "restore", personId: found.value.id, name: found.value.name });
         break;
       }
+      case "create_group": {
+        const key = op.name.toLowerCase();
+        if (createdGroups.has(key)) {
+          return { ok: false, error: `"${op.name}" is created twice in this batch` };
+        }
+        const clash = groups.find((g) => g.name.toLowerCase() === key);
+        if (clash) {
+          return {
+            ok: false,
+            error: `you already have a ${clash.name} group (${clash.id})`,
+          };
+        }
+        createdGroups.set(key, op.name);
+        resolved.push({ kind: "create_group", name: op.name, color: op.color ?? null });
+        break;
+      }
+      case "set_group": {
+        // Routed through personRef, so create_person → set_group works in one
+        // batch exactly as create_group → set_group does.
+        const target = personRef(op.person);
+        if (!target.ok) return target;
+        if (op.group === null) {
+          resolved.push({
+            kind: "set_group",
+            personId: target.value.personId,
+            name: target.value.name,
+            groupId: null,
+            groupName: null,
+            pendingPerson: target.value.pendingPerson,
+            pendingGroup: null,
+          });
+          break;
+        }
+        const group = groupRef(op.group);
+        if (!group.ok) return group;
+        resolved.push({
+          kind: "set_group",
+          personId: target.value.personId,
+          name: target.value.name,
+          groupId: group.value.groupId,
+          groupName: group.value.groupName,
+          pendingPerson: target.value.pendingPerson,
+          pendingGroup: group.value.pendingGroup,
+        });
+        break;
+      }
     }
   }
 
@@ -415,6 +661,15 @@ export function receiptLine(op: ResolvedPersonOp): string {
       return `${op.name}  stop tracking`;
     case "restore":
       return `${op.name}  tracking again`;
+    case "create_group":
+      return `${op.name}  new group`;
+    case "set_group":
+      // groupName carries a pending group's display name too, so a
+      // create_group → set_group batch previews the destination by name
+      // rather than as a placeholder the user cannot check.
+      return op.groupName
+        ? `${op.name}  moved to ${op.groupName}`
+        : `${op.name}  no group`;
   }
 }
 
@@ -502,6 +757,40 @@ export function validateResolvedPeopleOps(
           kind: entry.kind,
           personId: entry.personId,
           name: String(entry.name ?? ""),
+        });
+        break;
+      }
+      case "create_group": {
+        const name = refString(entry.name);
+        if (!name) return { ok: false, error: "malformed create_group operation" };
+        const color = refString(entry.color);
+        if (color !== null && !HEX_COLOR.test(color)) {
+          return { ok: false, error: "malformed create_group operation" };
+        }
+        ops.push({ kind: "create_group", name, color });
+        break;
+      }
+      case "set_group": {
+        const pendingPerson = refString(entry.pendingPerson);
+        const personId = typeof entry.personId === "string" ? entry.personId : null;
+        if (!personId && !pendingPerson) {
+          return { ok: false, error: "malformed set_group operation" };
+        }
+        const groupId = typeof entry.groupId === "string" ? entry.groupId : null;
+        const pendingGroup = refString(entry.pendingGroup);
+        // A stored op that names both an id and a pending create is
+        // contradictory — the executor would have to pick one silently.
+        if (groupId && pendingGroup) {
+          return { ok: false, error: "malformed set_group operation" };
+        }
+        ops.push({
+          kind: "set_group",
+          personId,
+          name: String(entry.name ?? ""),
+          groupId,
+          groupName: refString(entry.groupName),
+          pendingPerson,
+          pendingGroup,
         });
         break;
       }

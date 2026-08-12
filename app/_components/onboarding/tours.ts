@@ -340,5 +340,11 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
       title: "attention is opt-in",
       body: "give someone a check-in rhythm on their page and i'll quietly surface them when it's been too long — one at a time, with the reason, never a guilt list. no rhythm set, no noise.",
     },
+    {
+      anchor: "people-sort",
+      title: "contexts, in color",
+      body: "put people in groups — family, school, work — and their rows wear the group's color. flip between a–z and by group here, and ✦ suggest groups has me read your notes and propose contexts you confirm. never rankings.",
+      placement: "bottom",
+    },
   ],
 };

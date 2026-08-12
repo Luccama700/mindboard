@@ -12,6 +12,9 @@ import {
   seedAliases,
   upsertPeopleRows,
 } from "@/app/lib/people/sync";
+import { suggestPeopleGroups } from "@/app/lib/people/suggest-groups";
+import { loadProposal } from "@/app/lib/mcp/audit";
+import { cancelProposal, confirmProposal } from "@/app/actions/assistant";
 
 // User-initiated People writes. Every row that touches a `people` record sets
 // updated_at explicitly — no triggers exist in this codebase to do it
@@ -19,11 +22,13 @@ import {
 // interaction edits deliberately set none.
 
 const PEOPLE_COLUMNS =
-  "id, name, vault_path, aliases, checkin_days, attention_snoozed_until, archived, archived_at, created_at, updated_at";
+  "id, name, vault_path, aliases, group_id, checkin_days, attention_snoozed_until, archived, archived_at, created_at, updated_at";
+const GROUP_COLUMNS = "id, name, color, created_at";
 const INTERACTION_COLUMNS =
   "id, person_id, summary, occurred_at, occurred_precision, source, created_at";
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const PRECISIONS = new Set(["exact", "approx"]);
 const MIN_ALIAS_LENGTH = 3;
 const UNIQUE_VIOLATION = "23505";
@@ -35,6 +40,10 @@ function nowStamp(): string {
 
 function nameTaken(name: string): string {
   return `you already have a ${name} — add a distinguishing name`;
+}
+
+function groupNameTaken(name: string): string {
+  return `you already have a ${name} group`;
 }
 
 // Bounded on purpose, not just tidied: every alias compiles to a regex that the
@@ -671,4 +680,207 @@ export async function confirmSeeding(
 
   revalidatePath("/people");
   return { error: null, seeded };
+}
+
+// ---------- groups ----------
+//
+// Groups are optional CONTEXTS (family / ubc / work), never closeness tiers —
+// see the header of 0049_people_groups.sql. Nothing below can enforce that; the
+// UI copy and the suggester's prompt carry the rule.
+
+// DELIBERATELY UNGUARDED against ranking names, unlike the agent path
+// (isRankingGroupName in app/lib/mcp/people-ops.ts, enforced in create_group).
+// The anti-ranking rule exists to stop the PRODUCT from imposing a hierarchy on
+// the user's relationships (docs/people-plan.md §3.6); it is not a rule about
+// what the user is permitted to call their own groups. A model proposing
+// "acquaintances" is the product ranking people. A person typing it is not.
+export async function createPeopleGroup(name: string, color: string) {
+  const trimmed = name?.trim();
+  if (!trimmed) return { error: "name required" };
+  if (trimmed.length > MAX_NAME_LENGTH) return { error: "name too long" };
+  // The value is fed straight into an inline style, so it is validated rather
+  // than trusted: this action is a public POST endpoint.
+  if (!HEX_COLOR_RE.test(color ?? "")) return { error: "invalid color" };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { data, error } = await supabase
+    .from("people_groups")
+    .insert({ user_id: user.id, name: trimmed, color })
+    .select(GROUP_COLUMNS)
+    .single();
+
+  if (error) {
+    if (error.code === UNIQUE_VIOLATION) return { error: groupNameTaken(trimmed) };
+    return { error: error.message };
+  }
+
+  revalidatePath("/people");
+  return { error: null, group: data };
+}
+
+export async function updatePeopleGroup(
+  groupId: string,
+  updates: { name?: string; color?: string },
+) {
+  if (!groupId) return { error: "group required" };
+
+  const patch: Record<string, unknown> = {};
+  if (updates.name !== undefined) {
+    const trimmed = updates.name?.trim();
+    if (!trimmed) return { error: "name required" };
+    if (trimmed.length > MAX_NAME_LENGTH) return { error: "name too long" };
+    patch.name = trimmed;
+  }
+  if (updates.color !== undefined) {
+    if (!HEX_COLOR_RE.test(updates.color ?? "")) return { error: "invalid color" };
+    patch.color = updates.color;
+  }
+  if (Object.keys(patch).length === 0) return { error: null };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { data, error } = await supabase
+    .from("people_groups")
+    .update(patch)
+    .eq("user_id", user.id)
+    .eq("id", groupId)
+    .select(GROUP_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === UNIQUE_VIOLATION) {
+      return { error: groupNameTaken(String(patch.name ?? "that")) };
+    }
+    return { error: error.message };
+  }
+  if (!data) return { error: "group not found" };
+
+  revalidatePath("/people");
+  return { error: null, group: data };
+}
+
+// people.group_id is ON DELETE SET NULL, so deleting a context never deletes
+// the people in it — they just become unassigned.
+//
+// `members` is ALWAYS 0 and must not be rendered. Deleting a group is not the
+// destructive act getDeleteImpact guards (no interaction history is lost), so
+// the confirm copy is static and nothing consumes a count; the field is kept
+// only because it is part of the caller's result shape. Do not "restore" a
+// pre-count query to fill it in without a caller that actually shows it.
+export async function deletePeopleGroup(groupId: string) {
+  if (!groupId) return { error: "group required", members: 0 };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated", members: 0 };
+
+  const { error } = await supabase
+    .from("people_groups")
+    .delete()
+    .eq("user_id", user.id)
+    .eq("id", groupId);
+
+  if (error) return { error: error.message, members: 0 };
+
+  revalidatePath("/people");
+  return { error: null, members: 0 };
+}
+
+export async function setPersonGroup(personId: string, groupId: string | null) {
+  if (!personId) return { error: "person required" };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  // Foreign keys do not run through RLS, so nothing at the database level stops
+  // this row pointing at ANOTHER tenant's group id. Same accepted composite-FK
+  // gap logInteraction guards against, guarded the same way: in code.
+  if (groupId) {
+    const { data: group } = await supabase
+      .from("people_groups")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("id", groupId)
+      .maybeSingle();
+    if (!group) return { error: "group not found" };
+  }
+
+  const { data, error } = await supabase
+    .from("people")
+    .update({ group_id: groupId, updated_at: nowStamp() })
+    .eq("user_id", user.id)
+    .eq("id", personId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) return { error: error.message };
+  if (!data) return { error: "person not found" };
+
+  revalidatePerson(personId);
+  return { error: null };
+}
+
+// ---------- AI group suggestions ----------
+
+// "Sort my people into groups": one Claude call on the user's stored key, then
+// the ordinary update_people propose → confirm rail. userId comes from the
+// session and is NEVER a parameter — every export here is a public POST
+// endpoint, so a caller-supplied id would be a cross-tenant write.
+export async function proposeGroupSuggestions(): Promise<{
+  error: string | null;
+  proposalId?: string;
+  receipt?: string;
+}> {
+  const { user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  const outcome = await suggestPeopleGroups(user.id);
+  if (!outcome.ok) return { error: outcome.error };
+  return {
+    error: null,
+    proposalId: outcome.value.proposalId,
+    receipt: outcome.value.preview,
+  };
+}
+
+// The page's confirm/reject rail. These delegate to the assistant's own
+// confirm/cancel — the SAME EXECUTORS entry the MCP server and the in-app
+// assistant use, so there is exactly one apply path — and add a tool-name guard
+// so a /people control can only ever resolve a people proposal.
+export async function confirmPeopleProposal(proposalId: string): Promise<{
+  error: string | null;
+  receipt?: string;
+}> {
+  if (!proposalId) return { error: "proposal required" };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  const proposal = await loadProposal(supabase, user.id, proposalId);
+  if (!proposal) return { error: "proposal not found or already resolved" };
+  if (proposal.tool_name !== "update_people") {
+    return { error: "that proposal isn't a people change" };
+  }
+
+  const result = await confirmProposal(proposalId);
+  return { error: result.error, receipt: result.preview };
+}
+
+export async function rejectPeopleProposal(
+  proposalId: string,
+): Promise<{ error: string | null }> {
+  if (!proposalId) return { error: "proposal required" };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  const proposal = await loadProposal(supabase, user.id, proposalId);
+  if (!proposal) return { error: "proposal not found or already resolved" };
+  if (proposal.tool_name !== "update_people") {
+    return { error: "that proposal isn't a people change" };
+  }
+
+  return cancelProposal(proposalId);
 }

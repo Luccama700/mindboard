@@ -2,13 +2,16 @@ import { describe, expect, test } from "vitest";
 
 import {
   MAX_PEOPLE_OPS,
+  isRankingGroupName,
   receiptLine,
   renderPeopleReceipt,
+  resolveGroupRef,
   resolvePeopleOps,
   resolvePersonRef,
   validatePeopleOps,
   validateResolvedPeopleOps,
   type PersonOp,
+  type ResolvableGroup,
   type ResolvablePerson,
   type ResolvedPersonOp,
 } from "@/app/lib/mcp/people-ops";
@@ -20,14 +23,23 @@ const LUIS: ResolvablePerson = { id: "p-luis", name: "Luis", archived: true };
 
 const ROSTER = [DAVI, EMMA, LUIS];
 
+const FAMILY: ResolvableGroup = { id: "g-family", name: "family" };
+const SCHOOL: ResolvableGroup = { id: "g-school", name: "school" };
+
+const GROUPS = [FAMILY, SCHOOL];
+
 function ops(raw: unknown) {
   return validatePeopleOps({ operations: raw });
 }
 
-function resolveOk(raw: unknown, people: ResolvablePerson[] = ROSTER) {
+function resolveOk(
+  raw: unknown,
+  people: ResolvablePerson[] = ROSTER,
+  groups: ResolvableGroup[] = GROUPS,
+) {
   const parsed = ops(raw);
   if (!parsed.ok) throw new Error(`validation failed: ${parsed.error}`);
-  return resolvePeopleOps(parsed.value, people);
+  return resolvePeopleOps(parsed.value, people, groups);
 }
 
 describe("validatePeopleOps", () => {
@@ -183,7 +195,7 @@ describe("resolvePeopleOps", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const ids = result.value.map((op) =>
-      op.kind === "create" ? null : op.personId,
+      op.kind === "create" || op.kind === "create_group" ? null : op.personId,
     );
     expect(ids).toEqual(["p-davi", "p-emma", "p-emma", "p-luis"]);
     // The invariant that matters: nothing carries a name the user typed as the
@@ -455,6 +467,352 @@ describe("validateResolvedPeopleOps", () => {
         operations: [{ kind: "archive", name: "Davi" }],
       }),
     ).toEqual({ ok: false, error: "malformed archive operation" });
+  });
+});
+
+describe("isRankingGroupName", () => {
+  test("catches closeness tiers whatever they are called", () => {
+    for (const name of [
+      "close friends",
+      "Closest People",
+      "inner circle",
+      "outer circle",
+      "acquaintances",
+      "best friend",
+      "favourites",
+      "favorites",
+      "tier 1",
+      "VIP",
+      "a-list",
+      "casual friends",
+      "distant",
+      "strangers",
+      "core people",
+    ]) {
+      expect(isRankingGroupName(name)).toBe(true);
+    }
+  });
+
+  test("leaves real contexts alone", () => {
+    for (const name of [
+      "family",
+      "ubc",
+      "work",
+      "brazil",
+      "climbing gym",
+      "high school",
+      "band",
+      "closet organizers",
+    ]) {
+      expect(isRankingGroupName(name)).toBe(false);
+    }
+  });
+});
+
+describe("groups: validation", () => {
+  test("create_group rejects a closeness tier, citing the contexts rule", () => {
+    const result = ops([{ op: "create_group", name: "close friends" }]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("groups are CONTEXTS");
+    expect(result.error).toContain("this app does not rank people");
+  });
+
+  test("the rejection survives casing and fails the whole batch", () => {
+    const result = ops([
+      { op: "log_interaction", person: "Davi" },
+      { op: "create_group", name: "Inner Circle" },
+    ]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("operation 2 (create_group Inner Circle)");
+  });
+
+  test("create_group requires a name and accepts an optional hex color", () => {
+    expect(ops([{ op: "create_group" }])).toEqual({
+      ok: false,
+      error: "operation 1 (create_group): name is required",
+    });
+    expect(ops([{ op: "create_group", name: " family " }])).toEqual({
+      ok: true,
+      value: [{ op: "create_group", name: "family", color: undefined }],
+    });
+    expect(ops([{ op: "create_group", name: "family", color: "#B5FF3C" }])).toEqual({
+      ok: true,
+      value: [{ op: "create_group", name: "family", color: "#B5FF3C" }],
+    });
+  });
+
+  test("create_group rejects a color that is not a hex triplet", () => {
+    expect(ops([{ op: "create_group", name: "family", color: "chartreuse" }])).toEqual({
+      ok: false,
+      error:
+        "operation 1 (create_group family): color must be a hex color like #B5FF3C",
+    });
+  });
+
+  test("set_group distinguishes an omitted group from an explicit null", () => {
+    expect(ops([{ op: "set_group", person: "Davi" }])).toEqual({
+      ok: false,
+      error: "operation 1 (set_group Davi): group is required (null clears it)",
+    });
+    expect(ops([{ op: "set_group", person: "Davi", group: null }])).toEqual({
+      ok: true,
+      value: [{ op: "set_group", person: "Davi", group: null }],
+    });
+  });
+
+  test("set_group requires a person", () => {
+    expect(ops([{ op: "set_group", group: "family" }])).toEqual({
+      ok: false,
+      error: "operation 1 (set_group): person is required",
+    });
+  });
+});
+
+describe("resolveGroupRef", () => {
+  test("matches by id, exact name, then unique substring", () => {
+    expect(resolveGroupRef("g-family", GROUPS)).toEqual({ ok: true, value: FAMILY });
+    expect(resolveGroupRef("FAMILY", GROUPS)).toEqual({ ok: true, value: FAMILY });
+    expect(resolveGroupRef("scho", GROUPS)).toEqual({ ok: true, value: SCHOOL });
+  });
+
+  test("ambiguity fails with candidates rather than picking one", () => {
+    const pool = [FAMILY, { id: "g-fam2", name: "family friends" }];
+    const result = resolveGroupRef("fam", pool);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("ambiguous");
+    expect(result.error).toContain("g-fam2");
+  });
+
+  test("a miss lists what does exist", () => {
+    const result = resolveGroupRef("brazil", GROUPS);
+    expect(result).toEqual({
+      ok: false,
+      error: 'no group matching "brazil" (groups: family, school)',
+    });
+  });
+});
+
+describe("groups: resolution", () => {
+  test("set_group resolves the person and the group to ids", () => {
+    const result = resolveOk([{ op: "set_group", person: "Davi", group: "fam" }]);
+    expect(result).toEqual({
+      ok: true,
+      value: [
+        {
+          kind: "set_group",
+          personId: "p-davi",
+          name: "Davi",
+          groupId: "g-family",
+          groupName: "family",
+          pendingPerson: null,
+          pendingGroup: null,
+        },
+      ],
+    });
+  });
+
+  test("a null group resolves to a clear, not a lookup failure", () => {
+    const result = resolveOk([{ op: "set_group", person: "Davi", group: null }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0]).toMatchObject({
+      kind: "set_group",
+      groupId: null,
+      groupName: null,
+      pendingGroup: null,
+    });
+  });
+
+  test("create_group then set_group works in one batch via pendingGroup", () => {
+    const result = resolveOk([
+      { op: "create_group", name: "brazil" },
+      { op: "set_group", person: "Davi", group: "brazil" },
+    ]);
+    expect(result).toEqual({
+      ok: true,
+      value: [
+        { kind: "create_group", name: "brazil", color: null },
+        {
+          kind: "set_group",
+          personId: "p-davi",
+          name: "Davi",
+          groupId: null,
+          groupName: "brazil",
+          pendingPerson: null,
+          pendingGroup: "brazil",
+        },
+      ],
+    });
+  });
+
+  test("create_person then set_group works in one batch too", () => {
+    const result = resolveOk([
+      { op: "create_person", name: "Denise" },
+      { op: "set_group", person: "Denise", group: "family" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[1]).toEqual({
+      kind: "set_group",
+      personId: null,
+      name: "Denise",
+      groupId: "g-family",
+      groupName: "family",
+      pendingPerson: "Denise",
+      pendingGroup: null,
+    });
+  });
+
+  test("create_person + create_group + set_group all chain in one batch", () => {
+    const result = resolveOk([
+      { op: "create_person", name: "Denise" },
+      { op: "create_group", name: "brazil" },
+      { op: "set_group", person: "Denise", group: "brazil" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[2]).toEqual({
+      kind: "set_group",
+      personId: null,
+      name: "Denise",
+      groupId: null,
+      groupName: "brazil",
+      pendingPerson: "Denise",
+      pendingGroup: "brazil",
+    });
+    // Both pendings survive the stored-shape round trip, which is what the
+    // executor reads back on confirm.
+    expect(
+      validateResolvedPeopleOps({ operations: result.value }),
+    ).toEqual(result);
+  });
+
+  test("create_group refuses a name that already exists", () => {
+    const result = resolveOk([{ op: "create_group", name: "Family" }]);
+    expect(result).toEqual({
+      ok: false,
+      error: "you already have a family group (g-family)",
+    });
+  });
+
+  test("create_group refuses a duplicate inside one batch", () => {
+    const result = resolveOk([
+      { op: "create_group", name: "brazil" },
+      { op: "create_group", name: "Brazil" },
+    ]);
+    expect(result).toEqual({
+      ok: false,
+      error: '"Brazil" is created twice in this batch',
+    });
+  });
+
+  test("set_group onto an archived person fails with the restore hint", () => {
+    const result = resolveOk([{ op: "set_group", person: "Luis", group: "family" }]);
+    expect(result).toEqual({
+      ok: false,
+      error: '"Luis" is not being tracked — add a restore op first',
+    });
+  });
+
+  test("an unknown group fails the whole batch", () => {
+    const result = resolveOk([
+      { op: "log_interaction", person: "Davi" },
+      { op: "set_group", person: "Emma", group: "climbing" },
+    ]);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('no group matching "climbing"');
+  });
+});
+
+describe("groups: receipts", () => {
+  test("a move names the destination, a clear says so", () => {
+    expect(
+      receiptLine({
+        kind: "set_group",
+        personId: "p-davi",
+        name: "Davi",
+        groupId: "g-family",
+        groupName: "family",
+      }),
+    ).toBe("Davi  moved to family");
+    expect(
+      receiptLine({
+        kind: "set_group",
+        personId: "p-davi",
+        name: "Davi",
+        groupId: null,
+        groupName: null,
+      }),
+    ).toBe("Davi  no group");
+  });
+
+  test("a pending group still previews by name", () => {
+    const result = resolveOk([
+      { op: "create_group", name: "brazil" },
+      { op: "set_group", person: "Davi", group: "brazil" },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(renderPeopleReceipt(result.value)).toBe(
+      "brazil  new group\nDavi  moved to brazil",
+    );
+  });
+});
+
+describe("groups: stored-shape revalidation", () => {
+  test("round-trips both new kinds", () => {
+    const stored: ResolvedPersonOp[] = [
+      { kind: "create_group", name: "brazil", color: "#3CD9FF" },
+      {
+        kind: "set_group",
+        personId: "p-davi",
+        name: "Davi",
+        groupId: "g-family",
+        groupName: "family",
+        pendingPerson: null,
+        pendingGroup: null,
+      },
+    ];
+    const result = validateResolvedPeopleOps({ operations: stored });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toEqual(stored);
+  });
+
+  test("rejects a stored create_group with a bad color", () => {
+    expect(
+      validateResolvedPeopleOps({
+        operations: [{ kind: "create_group", name: "brazil", color: "red" }],
+      }),
+    ).toEqual({ ok: false, error: "malformed create_group operation" });
+  });
+
+  test("rejects a stored set_group with neither an id nor a pending create", () => {
+    expect(
+      validateResolvedPeopleOps({
+        operations: [{ kind: "set_group", name: "Davi", groupId: "g-family" }],
+      }),
+    ).toEqual({ ok: false, error: "malformed set_group operation" });
+  });
+
+  test("rejects a stored set_group naming both a group id and a pending group", () => {
+    expect(
+      validateResolvedPeopleOps({
+        operations: [
+          {
+            kind: "set_group",
+            personId: "p-davi",
+            name: "Davi",
+            groupId: "g-family",
+            pendingGroup: "brazil",
+          },
+        ],
+      }),
+    ).toEqual({ ok: false, error: "malformed set_group operation" });
   });
 });
 
