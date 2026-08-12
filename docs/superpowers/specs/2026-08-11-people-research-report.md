@@ -334,7 +334,113 @@ regression-tested, not just documented.
 
 ## 5. Outside prior art — PKM workflows and the science of keeping in touch
 
-<!-- PENDING: prior-art agent -->
+### 5.1 What Obsidian/Logseq practitioners actually build, and what rots
+
+The recurring shape: a **person note** (frontmatter + context) plus an **interaction log** that is
+either backlinked from daily notes or kept as dated interaction notes, then queried with Dataview
+to surface who is overdue.
+
+- [Dan B's person-note template](https://dannb.org/blog/2022/obsidian-people-note-template/) —
+  frontmatter (company, location, title, email, aliases) with `date_last_spoken`/`follow_up` as
+  **optional** fields only for people who need them. Meetings surface automatically via a Dataview
+  query over backlinks — no manual "log an interaction" step.
+- [Building a Personal CRM with Obsidian and Dataview](http://oneforthecode.com/posts/2025-01-03-building-a-personal-crm-with-obsidian-and-dataview/)
+  — the most complete version found: Person template (`lastContact`, `nextFollowUp`, `strength`)
+  + Interaction template, joined by **one Templater command that logs the interaction and updates
+  `lastContact` in a single action**. His stated design rule is the one to internalize:
+  > **"If it takes more than 30 seconds to log an interaction, you won't do it."**
+
+  Sustained by a 5-minute weekly review, not a live alert.
+- [Obsidian forum: relationship/contact management with Dataview](https://forum.obsidian.md/t/relationship-and-contact-management-with-dataview-when-was-the-last-time-i-called-thought-about-my-friend/27413)
+  — per-person `Contact Frequency` (7 days / 1 month / 2 years), `last-contact` computed by
+  `FLATTEN` over daily-note backlinks, overdue people flagged with an emoji.
+- [Logseq CRM thread](https://discuss.logseq.com/t/advanced-queries-for-use-with-crm/14379) —
+  `@person` pages with a `contact` interval property. Initially praised ("saved me a subscription
+  on a CRM system"), then hit numeric-interval bugs and block-reference capture gaps needing manual
+  workarounds; a returning user later asked whether the setup still worked. A soft abandonment signal.
+
+**The maintenance lesson, stated near-verbatim across sources:** anything requiring a separate
+action *outside the normal communication flow* gets skipped when busy, goes stale, and the whole
+system loses trust and is quietly abandoned
+([RareFriend, "Why Obsidian Fails as a Personal CRM"](https://rarefriend.com/blog/obsidian-personal-crm-why-it-fails)).
+Survives: capture folded into an existing habit; periodic review over live nagging. Rots: manual
+separate-app entry; elaborate optional fields (attachment style, personality type) that are never
+revisited
+([forum thread](https://forum.obsidian.md/t/making-and-maintaining-notes-on-friends-relationships/82918/15)).
+
+### 5.2 Two practitioners who reject cadence tracking outright
+
+Worth taking seriously, because both are people who *built* the thing:
+
+- [Nat Eliason](https://www.nateliason.com/blog/personal-crm) deliberately **excludes** a
+  "last contacted" field: *"I hate forced check-ins. I'd rather stay in touch with people
+  organically, when there's a good reason or trigger for talking to each other."* His CRM stores
+  **context** (how you met, interests, location, skills) to support organic reach-out.
+- [Joe Gannon](https://joegannon.substack.com/p/exploring-the-personal-crm) stays genuinely
+  ambivalent — *"to what extent should relationships be intentional?"* vs. *"why are we leaving
+  maintaining relationships up to chance?"* — and admits he never got his own system running.
+
+### 5.3 The science: what is solid
+
+| Claim | Evidence | Strength |
+|---|---|---|
+| Friendships decay without active contact — the default outcome is losing touch | ["Managing Relationship Decay"](https://pmc.ncbi.nlm.nih.gov/articles/PMC4626528/) — 18-month longitudinal, 25 students, 1,291 network members, closeness rated at 0/9/18mo | **Strong.** The core premise of the feature. |
+| People **underestimate** how much reaching out is appreciated | [Liu, Rim, Min & Min (2023), *JPSP* 124(4):754–771](https://www.apa.org/pubs/journals/releases/psp-pspi0000402.pdf) — 13 preregistered studies, ~6,000 participants; [independent replication](https://replications.clearerthinking.org/replication-2023jpsp124-4/) | **Strong.** The single most load-bearing finding. |
+| …but the effect **shrinks when contact feels obligatory** | Same paper — mechanism is the recipient's *surprise* at being thought of | **Strong**, and it is the warning attached to the licence. |
+| Quantifying an activity increases output but **decreases enjoyment** | [Etkin (2016), *JCR* 42(6):967–984](https://academic.oup.com/jcr/article-abstract/42/6/967/2358309) — six experiments; makes an activity "feel more like work" | **Strong.** Directly anti-streak. |
+| Dormant ties are an asset, not a failure | [Levin, Walter & Murnighan (2011), *Organization Science* 22(4):923–939](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1625543) — reconnected dormant contacts gave advice rated **more novel and more trustworthy** than active ties | **Strong.** |
+| Weak ties matter and are ~60% of daily social interaction | [Sandstrom & Dunn (2014), *PSPB*](https://journals.sagepub.com/doi/abs/10.1177/0146167214529799) | **Moderate–strong.** |
+| Concrete if-then plans get acted on ~2–3× more than bare intentions | [Gollwitzer & Brandstätter (1997)](https://sparq.stanford.edu/sites/g/files/sbiybj19021/files/media/file/gollwitzer_brandstatter_1997_-_implementation_intentions_effective_goal_pursuit.pdf); bare goal intentions succeed only ~20–40% | **Strong**, well-replicated. |
+| Autonomy-supportive framing beats controlling language | Deci & Ryan / SDT; [health-messaging evidence](https://econtent.hogrefe.com/doi/10.1027/2512-8442/a000159) | **Moderate–strong.** |
+| Call frequency tracks emotional closeness; friendships (unlike kin) need active investment | [Roberts & Dunbar (2011), *Personal Relationships*](https://onlinelibrary.wiley.com/doi/10.1111/j.1475-6811.2010.01310.x), n=251 | **Moderate** (cross-sectional). |
+
+Cautionary analogy, not causal evidence: Snapchat streaks — converting voluntary contact into a
+visible loss-averse metric produces obligation-driven rather than relationship-driven maintenance
+([peer-reviewed study on streaks/FOMO in early adolescents](https://www.sciencedirect.com/science/article/pii/S2772503023000476)).
+Different population; treat as illustration of the Etkin mechanism, not proof.
+
+### 5.4 Design rules the research supports
+
+1. **No streaks, no counters, no persistent "days since" score** on the overview. Quantification
+   makes it feel like work (Etkin 2016), it is the exact convention Eliason removed, and it mirrors
+   the streak failure mode. Prefer a qualitative band ("it's been a while").
+2. **Every suggestion is a specific person + a specific hook**, never "reach out to someone"
+   (Gollwitzer). This is precisely what a vault full of context is for.
+3. **Invitation, never indictment.** Guilt appeals tend to backfire, most of all on someone who
+   already feels the guilt — which is exactly who a "you've been neglecting X" line targets.
+4. **Opt-in, dismissible, one calm surfacing** — matches the app's existing inventory philosophy
+   and the PKM evidence that nagging systems get abandoned.
+5. **Say the Liu et al. finding out loud, and hand over a draft rather than sending anything.**
+   The research licenses pushing the user past reach-out hesitation *and* warns that making the
+   contact feel scripted blunts the very effect that makes it work.
+6. **Dormant and weak ties are legitimate candidates**, not lesser ones (Levin 2011;
+   Sandstrom & Dunn 2014).
+7. **Do not hardcode a product-imposed "every N days" per tier.** See 5.5.
+8. **Optimize for one meaningful touch, not touch volume.**
+
+### 5.5 Claims that did NOT survive — do not design around them
+
+- **Any specific "contact every N days" number.** Not supported. The paper that stress-tested the
+  numerics behind Dunbar's tiers —
+  [Lindenfors, Wartel & Lind (2021), *Biology Letters*](https://royalsocietypublishing.org/doi/10.1098/rsbl.2021.0158)
+  — found confidence intervals of **4–520** and **2–336**, concluding *"specifying any one number
+  is futile."*
+- **Dunbar's 5/15/50/150 as hard caps or a rigid tier UI.** The layered *pattern* has real support
+  in call-frequency data ([Mac Carron, Kaski & Dunbar 2016](https://arxiv.org/abs/1604.02400)) but
+  is noisy in the middle layers. Loose inspiration only.
+- **"It takes 50/90/200 hours to become a friend" (Hall 2018) as a maintenance cadence.** Real
+  finding, but it measures friendship *formation from near-zero*, not the contact needed to avoid
+  losing an existing friendship. Reusing it would misapply the study.
+- **That reminders themselves make relationships more meaningful.** No study establishes this. What
+  is established is that *reaching out, once done*, is appreciated more than expected. Whether an
+  app nudge corrupts that sincerity is genuinely unresolved — practitioners argue both sides.
+- **Precise optimal notification timing.** Strongest alert-fatigue evidence is clinical/nursing;
+  different population. "One calm dismissible surfacing" is a reasonable inference, not a tested result.
+
+> **Note on the tension with `checkin_days`.** Rule 7 forbids the *product* prescribing a cadence
+> per tier. It does not forbid the *user* declaring one for a specific person — that is an
+> autonomy-supportive choice, and it is what the approved opt-in `checkin_days` already is. The
+> design must not ship default cadences by relationship type.
 
 ---
 
