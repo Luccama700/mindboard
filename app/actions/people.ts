@@ -3,6 +3,9 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { noteTitle } from "@/app/lib/brain/parse";
+import { todayKey } from "@/app/lib/mcp/config";
+import { addDaysKey } from "@/app/_components/finance-projection";
+import type { BackfillResult } from "@/app/lib/snapshots/people";
 import {
   PEOPLE_FOLDER,
   readCuratedAliases,
@@ -334,6 +337,148 @@ export async function updatePersonAliases(id: string, aliases: string[]) {
   if (error) return { error: error.message };
 
   revalidatePerson(id);
+  return { error: null };
+}
+
+// Setting a cadence and seeding its baseline are ONE action, and the pairing is
+// load-bearing (docs/people-plan.md §10 M3): if the cadence lands and the
+// backfill row does not, the person has a cadence with no logged interaction —
+// which §7's exclusion rule silently suppresses, producing a cadence the user
+// set that never fires, with nothing on screen to explain it.
+//
+// supabase-js has no client-side transactions, so atomicity here is a
+// COMPENSATING revert, not a real one: on insert failure the previous
+// checkin_days is written back and the failure is surfaced. That leaves one
+// unhandled window — if the revert itself fails, the half-applied state stands —
+// which is why the error is returned rather than swallowed.
+//
+// `backfill` is the resolved chip, not the chip name: the page owns the
+// today-arithmetic (backfillToDate in app/lib/snapshots/people.ts, shared with
+// the chip UI so the two cannot drift), because the day lands in a `date`
+// column and a server-derived one would be the UTC process clock. null =
+// "not sure", a legitimate terminal state that writes no row.
+export async function setPersonCadence(input: {
+  personId: string;
+  checkinDays: number | null;
+  backfill: BackfillResult | null;
+}) {
+  if (!input.personId) return { error: "person required" };
+  if (
+    input.checkinDays !== null &&
+    (!Number.isInteger(input.checkinDays) ||
+      input.checkinDays <= 0 ||
+      // Same ceiling the agent path enforces (MAX_CHECKIN_DAYS in
+      // app/lib/mcp/people-ops.ts): the two write surfaces must not accept
+      // different cadences for the same column.
+      input.checkinDays > 3650)
+  ) {
+    return { error: "cadence must be a positive whole number of days" };
+  }
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  const backfill = input.backfill;
+  if (backfill) {
+    if (!DATE_KEY_RE.test(backfill.occurredAt ?? "")) {
+      return { error: "invalid date" };
+    }
+    if (!PRECISIONS.has(backfill.precision)) {
+      return { error: "invalid precision" };
+    }
+    // A conversation cannot have happened tomorrow. Compared against the
+    // owner's zone day, not the process clock.
+    const today = await todayKey(supabase, user.id);
+    if (backfill.occurredAt > today) {
+      return { error: "that day hasn't happened yet" };
+    }
+  }
+
+  const { data: existing } = await supabase
+    .from("people")
+    .select("checkin_days")
+    .eq("user_id", user.id)
+    .eq("id", input.personId)
+    .maybeSingle();
+  if (!existing) return { error: "person not found" };
+  const previous = (existing as { checkin_days: number | null }).checkin_days;
+
+  const { error: cadenceError } = await supabase
+    .from("people")
+    .update({ checkin_days: input.checkinDays, updated_at: nowStamp() })
+    .eq("user_id", user.id)
+    .eq("id", input.personId);
+  if (cadenceError) return { error: cadenceError.message };
+
+  if (backfill) {
+    const { error: logError } = await supabase
+      .from("person_interactions")
+      .insert({
+        user_id: user.id,
+        person_id: input.personId,
+        summary: null,
+        occurred_at: backfill.occurredAt,
+        occurred_precision: backfill.precision,
+        source: "logged",
+      });
+    if (logError) {
+      await supabase
+        .from("people")
+        .update({ checkin_days: previous, updated_at: nowStamp() })
+        .eq("user_id", user.id)
+        .eq("id", input.personId);
+      return { error: logError.message };
+    }
+  }
+
+  revalidatePerson(input.personId);
+  return { error: null };
+}
+
+// A persisted "not now" (§8). Dismissal has to be state: a suggestion that
+// reappears on reload or on another device is exactly the nagging principle 8
+// forbids, which is why this is a column and not component state.
+const SNOOZE_DAYS = 7;
+
+export async function snoozePerson(personId: string) {
+  if (!personId) return { error: "person required" };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  // Resolved in the owner's zone, like app/actions/finance.ts does, because the
+  // value lands in a `date` column — the process clock is UTC on Vercel, so a
+  // late-evening dismissal would otherwise snooze from tomorrow.
+  const today = await todayKey(supabase, user.id);
+  const until = addDaysKey(today, SNOOZE_DAYS);
+
+  const { error } = await supabase
+    .from("people")
+    .update({ attention_snoozed_until: until, updated_at: nowStamp() })
+    .eq("user_id", user.id)
+    .eq("id", personId);
+
+  if (error) return { error: error.message };
+
+  revalidatePerson(personId);
+  return { error: null, until };
+}
+
+export async function unsnoozePerson(personId: string) {
+  if (!personId) return { error: "person required" };
+
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "not authenticated" };
+
+  const { error } = await supabase
+    .from("people")
+    .update({ attention_snoozed_until: null, updated_at: nowStamp() })
+    .eq("user_id", user.id)
+    .eq("id", personId);
+
+  if (error) return { error: error.message };
+
+  revalidatePerson(personId);
   return { error: null };
 }
 

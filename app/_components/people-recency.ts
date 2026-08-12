@@ -34,6 +34,18 @@ export function looseBand(daysSince: number): string {
   return "not lately";
 }
 
+// Rough span for suggestion copy — "davi · 3 weeks". The number appears
+// here because inside a suggestion it is a reason, not a score (§3.1).
+export function roughSpan(days: number): string {
+  if (days < 7) return `${days} day${days === 1 ? "" : "s"}`;
+  if (days < 28) {
+    const weeks = Math.round(days / 7);
+    return `${weeks} week${weeks === 1 ? "" : "s"}`;
+  }
+  const months = Math.round(days / 30);
+  return months <= 1 ? "a month" : `${months} months`;
+}
+
 // 'approx' rows never render a fabricated date (§2.4).
 export function formatOccurred(
   interaction: Pick<PersonInteraction, "occurred_at" | "occurred_precision">,

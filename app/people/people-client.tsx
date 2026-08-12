@@ -4,10 +4,20 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { createPerson, restorePerson, deletePerson } from "@/app/actions/people";
+import {
+  createPerson,
+  restorePerson,
+  deletePerson,
+  snoozePerson,
+} from "@/app/actions/people";
 import { SectionRuler, INPUT_CLASS } from "@/app/_components/ui";
 import type { Person, RosterEntry } from "@/app/_components/people-types";
-import { daysBetweenKeys, recencyBand } from "@/app/_components/people-recency";
+import {
+  daysBetweenKeys,
+  recencyBand,
+  roughSpan,
+} from "@/app/_components/people-recency";
+import type { PersonAttention } from "@/app/lib/snapshots/people";
 
 // The roster's interactive shell only (docs/people-plan.md §8). Rows are
 // plain <Link>s to /people/[id]; this component never receives a
@@ -17,11 +27,13 @@ export function PeopleClient({
   archived,
   vaultConnected,
   today,
+  suggestion,
 }: {
   entries: RosterEntry[];
   archived: Person[];
   vaultConnected: boolean;
   today: string;
+  suggestion: PersonAttention | null;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -84,6 +96,10 @@ export function PeopleClient({
         )}
         {error && <p className="mt-2 text-meta text-danger">{error}</p>}
       </form>
+
+      {suggestion && (
+        <SuggestionCard suggestion={suggestion} onDismissed={() => router.refresh()} />
+      )}
 
       <section className="space-y-1">
         <SectionRuler label="people" count={entries.length} />
@@ -165,6 +181,51 @@ export function PeopleClient({
         </section>
       )}
     </div>
+  );
+}
+
+// At most ONE, dismissible, never red (§3.8, §8). "not now" persists via
+// attention_snoozed_until so the dismissal holds across reloads and devices.
+function SuggestionCard({
+  suggestion,
+  onDismissed,
+}: {
+  suggestion: PersonAttention;
+  onDismissed: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const loop = suggestion.openLoops[0] ?? null;
+
+  return (
+    <section
+      className="glass-panel rounded-pop px-4 py-3 space-y-2"
+      data-tour="people-suggestion"
+    >
+      <p className="text-label uppercase text-muted">✎ worth a message</p>
+      <p className="text-body text-fg">
+        {suggestion.name.toLowerCase()} · {roughSpan(suggestion.daysSinceTalked)}
+        {loop ? ` · ${loop}` : ""}
+      </p>
+      <div className="flex items-center gap-2">
+        <Link
+          href={`/people/${suggestion.personId}`}
+          className="inline-flex items-center min-h-11 px-4 text-action lowercase border rounded-full border-hairline text-fg hover:border-accent transition-colors"
+        >
+          open
+        </Link>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void snoozePerson(suggestion.personId).then(() => onDismissed());
+          }}
+          className="inline-flex items-center min-h-11 px-4 text-action lowercase text-muted hover:text-fg transition-colors disabled:opacity-40"
+        >
+          not now
+        </button>
+      </div>
+    </section>
   );
 }
 

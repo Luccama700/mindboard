@@ -24,6 +24,7 @@ import {
 import { daysLate } from "@/app/lib/snapshots/urgency";
 import { subscribeCapture } from "./capture-bus";
 import { formatMoney } from "./money";
+import { roughSpan } from "./people-recency";
 import { SectionRuler } from "./ui";
 import {
   DailyLogSheet,
@@ -1066,6 +1067,20 @@ export function StreamClient({
           {renderSection("next", "next", nextCards, snapshot.nextOverflow, "/tasks")}
           {renderSection("later", "later", laterCards, snapshot.laterOverflow, "/week")}
         </div>
+      )}
+
+      {/* At most one quiet people row (docs/people-plan.md §10 M3) — a link,
+          not an alarm; the loop text lives on the person page. */}
+      {snapshot.people?.suggestion && (
+        <p className="mb-8">
+          <Link
+            href={`/people/${snapshot.people.suggestion.personId}`}
+            className="text-meta text-muted hover:text-fg transition-colors min-h-11 inline-flex items-center"
+          >
+            ✎ worth a message — {snapshot.people.suggestion.name.toLowerCase()} ·{" "}
+            {roughSpan(snapshot.people.suggestion.daysSinceTalked)} →
+          </Link>
+        </p>
       )}
 
       {renderSection("loose", "loose ends", looseCards, 0, "/tasks")}

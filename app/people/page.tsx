@@ -17,7 +17,12 @@ import {
   VaultNotConfiguredError,
   type VaultCorpus,
 } from "@/app/lib/brain/vault";
-import { extractIntro } from "@/app/lib/brain/parse";
+import { extractIntro, extractSectionBullets } from "@/app/lib/brain/parse";
+import {
+  computePeopleAttention,
+  hydratePeopleAttention,
+  type PersonAttention,
+} from "@/app/lib/snapshots/people";
 import type { RosterEntry } from "@/app/_components/people-types";
 import { PeopleClient } from "./people-client";
 import { SeedingChecklist } from "./seeding-checklist";
@@ -128,6 +133,28 @@ export default async function PeoplePage() {
 
   entries.sort((a, b) => a.name.localeCompare(b.name));
 
+  // The single "worth a message" card (§7, §8): attention[0] hydrated with
+  // open loops straight from the corpus this page already paid for.
+  const vitals = computePeopleAttention({
+    people,
+    interactions: [...latest.values()],
+    candidates: [],
+    today,
+  });
+  let suggestion: PersonAttention | null = null;
+  if (vitals.attention.length > 0) {
+    const top = vitals.attention.slice(0, 1);
+    const loops: Record<string, string[]> = {};
+    for (const entry of top) {
+      const path = people.find((p) => p.id === entry.personId)?.vault_path;
+      const note = path ? (corpus?.notes.get(path) ?? null) : null;
+      loops[entry.personId] = note
+        ? extractSectionBullets(note.body, "Open questions")
+        : [];
+    }
+    suggestion = hydratePeopleAttention(top, loops)[0] ?? null;
+  }
+
   return (
     <Shell>
       <PeopleClient
@@ -135,6 +162,7 @@ export default async function PeoplePage() {
         archived={archived}
         vaultConnected={vaultConnected}
         today={today}
+        suggestion={suggestion}
       />
     </Shell>
   );

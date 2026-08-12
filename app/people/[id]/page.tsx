@@ -21,6 +21,7 @@ import {
   looseBand,
   recencyBand,
 } from "@/app/_components/people-recency";
+import { CadenceControl } from "./cadence-control";
 import { LogControl } from "./log-control";
 
 // The dossier (docs/people-plan.md §6): a server-rendered route, not a sheet
@@ -152,6 +153,15 @@ export default async function PersonPage(props: {
         <LogControl
           personId={person.id}
           interactions={interactions}
+          today={today}
+        />
+      </section>
+
+      <section className="mb-8">
+        <CadenceControl
+          personId={person.id}
+          checkinDays={person.checkin_days}
+          hasInteractions={interactions.length > 0}
           today={today}
         />
       </section>

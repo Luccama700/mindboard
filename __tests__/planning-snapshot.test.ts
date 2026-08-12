@@ -231,6 +231,37 @@ describe("planningSnapshot", () => {
       targetDate: "2026-09-01",
     });
   });
+
+  test("passes people through verbatim — the assembler owns the two-step", () => {
+    const input = baseInput();
+    input.people = {
+      total: 20,
+      tracked: 3,
+      attention: [
+        {
+          personId: "p1",
+          name: "Davi",
+          vaultPath: "People/Davi.md",
+          daysSinceTalked: 21,
+          checkinDays: 7,
+          overdueBy: 14,
+          lastInteraction: null,
+          openLoops: ["denise asked for an update — send one"],
+        },
+      ],
+    };
+    expect(planningSnapshot(input).people).toEqual(input.people);
+  });
+
+  test("people defaults to empty when the assembler supplies none", () => {
+    const input = baseInput();
+    delete input.people;
+    expect(planningSnapshot(input).people).toEqual({
+      total: 0,
+      tracked: 0,
+      attention: [],
+    });
+  });
 });
 
 describe("planningSnapshot with approved slots", () => {

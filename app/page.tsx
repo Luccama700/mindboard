@@ -26,6 +26,8 @@ import {
   getBalanceChangesOn,
 } from "./lib/data/finance";
 import { getInventoryItems, getInventoryUsages } from "./lib/data/inventory";
+import { getLatestInteractions, getPeople } from "./lib/data/people";
+import { computePeopleAttention } from "./lib/snapshots/people";
 import {
   getMindspaceShareBar,
   type MindshareBar,
@@ -100,6 +102,8 @@ const getStreamData = cache(
       items,
       usages,
       todayChanges,
+      people,
+      latestInteractions,
       goalsResult,
       logResult,
       proposalsResult,
@@ -118,6 +122,8 @@ const getStreamData = cache(
       getInventoryItems(userId),
       getInventoryUsages(userId),
       getBalanceChangesOn(userId, today),
+      getPeople(userId),
+      getLatestInteractions(userId),
       supabase
         .from("goals")
         .select("id, title, status, created_at")
@@ -252,10 +258,29 @@ const getStreamData = cache(
 
     const log = logResult.data as { mood: number | null } | null;
 
+    // The dashboard never pays for the vault corpus, so the stream row
+    // carries no open-loop text — the person page has it (§10 M3).
+    const topAttention = computePeopleAttention({
+      people,
+      interactions: [...latestInteractions.values()],
+      candidates: [],
+      today,
+    }).attention[0];
+
     const snapshot = streamSnapshot({
       today,
       now,
       tasks,
+      people: {
+        suggestion: topAttention
+          ? {
+              personId: topAttention.personId,
+              name: topAttention.name,
+              daysSinceTalked: topAttention.daysSinceTalked,
+              openLoop: null,
+            }
+          : null,
+      },
       events: dash.events.map((e) => ({
         id: e.id,
         summary: e.summary,

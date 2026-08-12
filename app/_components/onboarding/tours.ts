@@ -336,5 +336,9 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
       title: "one tap when you talk",
       body: "saw them? called them? tap 'talked today' on their page and that's the whole chore. i never guess contact from your notes — only you say you talked.",
     },
+    {
+      title: "attention is opt-in",
+      body: "give someone a check-in rhythm on their page and i'll quietly surface them when it's been too long — one at a time, with the reason, never a guilt list. no rhythm set, no noise.",
+    },
   ],
 };

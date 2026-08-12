@@ -100,6 +100,7 @@ function rtaskCard(id: string, title: string): StreamCard {
 
 const snapshot: StreamSnapshot = {
   pulse: { todayDelta: 0, currency: "CAD", toClear: 0, freeHours: 4, mood: null },
+  people: { suggestion: null },
   now: [taskCard("t0", "overdue thing")],
   nowOverflow: 0,
   next: [
