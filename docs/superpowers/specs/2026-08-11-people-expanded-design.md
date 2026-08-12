@@ -282,6 +282,15 @@ Step 2 is not optional. Without it, a person created by hand from the search fie
 case) whose note later appears in the vault would hit `people_user_name_key` and the insert would
 throw. Adoption is also what makes the sync idempotent across renames-back-and-forth.
 
+**Accepted limitations of this scheme**, both consequences of keying on the name and both fine at
+one user's scale:
+
+- A vault **rename produces a new row**; the old row keeps its interaction history and has to be
+  archived by hand. (Carried over from the v1 baseline.)
+- **Two distinct people who share a first name get conflated** by the `lower(name)` unique index and
+  the adoption step. Same class of limitation as the rename case. The escape hatch already exists —
+  rename one of them to something distinguishing, exactly as the vault itself would have to.
+
 Name comes from `noteTitle(path)`. Aliases seed as the distinct tokens of the name with length ≥ 3
 (so "Lucca Martins de Andrade" seeds `{lucca, martins, andrade}`) — the same `MIN_TERM_LENGTH = 3`
 floor the mindspace matcher uses, for the same reason. Never delete rows for notes that disappeared;
@@ -427,6 +436,25 @@ Rules, all of them boring on purpose:
 (`planning.ts:204-207`), with the fetch added to the `Promise.all` in `buildPlanningSnapshot`
 (`planning-read.ts:95-184`) so MCP and the in-app assistant share one read.
 
+**Assemble it in two steps, and do not drag the corpus in.** `peopleSnapshot` takes `openLoops` as an
+input, so the naive assembler would call `getVaultCorpus` — which downloads *every* blob in the vault
+— on every `get_snapshot` wide call from every MCP client. That is unacceptable for a tool the
+assistant hits on routine planning turns. Instead:
+
+1. Compute `attention[]` from Postgres rows alone (`people` + `person_interactions`). This is the
+   whole cadence calculation; it needs no vault data.
+2. **Then** hydrate `openLoops` for only the people that survived — at most three — via
+   `readVaultNoteRaw(credentials, vaultTag(userId), vaultPath)`, which is a single-note fetch and
+   fresh by default (`vault.ts:288-302`).
+
+So the vault cost is bounded by the number of people the user actually opted into tracking, not by
+the size of the vault. `peopleSnapshot` stays pure and unchanged; this is purely the assembler's job.
+
+**Scope of what leaves the app.** `get_snapshot` carries open loops **only for the people in
+`attention[]`** — never for the whole roster — and carries no mindspace mention snippets at all. See
+§9; the bound is the same one the two-step assembly already imposes, which is why this costs nothing
+extra to honour.
+
 The payload it carries is the whole trick. When Lucca asks *"what can I do?"*, the assistant already
 holds: the name, the days, the last interaction summary, and **the open-loop bullets straight out of
 the vault note**. It composes the sentence; it does not compute anything.
@@ -516,9 +544,22 @@ unedited raw writing about third parties, and should be designed knowing that.
    counts. Not note bodies, not interaction summaries, not mention snippets. A separate `get_person`
    returns the dossier. This means the common agent call cannot bulk-export a social graph with
    commentary.
-2. **Mention snippets stay on-page.** They render in the `/people` UI and in `get_person`, but are
-   **not** included in `get_snapshot` wide mode — which flows to any connected MCP client on every
-   planning call. Recency counts go in the snapshot; raw text does not.
+2. **What `get_snapshot` may carry, stated exactly.** This tool flows to any connected MCP client on
+   every routine planning call, so it is the widest surface and deserves a precise rule rather than a
+   slogan:
+   - **Mention snippets: never.** Mention *counts* and recency, yes; raw `user_text` excerpts, no.
+     Those require an explicit `get_person` call.
+   - **Open loops: yes, but only for the people in `attention[]`** — never the whole roster.
+
+   The second point is a deliberate narrowing of an earlier draft of this doc, which said "raw text
+   does not" go in the snapshot at all. That was too blunt: open loops are the entire payload that
+   makes a suggestion concrete rather than a content-free nudge (§7), and withholding them would
+   reduce the assistant to exactly the "follow up with Davi" failure this design exists to avoid.
+   The honest accounting is that open loops are vault prose, and **the vault is already fully
+   MCP-readable** through `read_brain_note` — so this is not new exposure, it is the same exposure
+   arriving without a second round-trip. The bound that keeps it proportionate is that it covers only
+   people the user explicitly opted into tracking, and it is the same bound the two-step assembly in
+   §7 imposes for performance reasons.
 3. **A content rule for `summary`.** Interaction summaries record **what the user did or said**, not
    inferences about the other person's state. "coffee, he's writing again" is fine; a characterisation
    of someone's mental health is not. This goes in the `log_interaction` tool description, where the
