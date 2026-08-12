@@ -38,6 +38,13 @@ import {
   readVaultNoteRaw,
   vaultTag,
 } from "@/app/lib/brain/vault";
+import {
+  extractIntro,
+  extractSectionBullets,
+  parseFrontmatter,
+} from "@/app/lib/brain/parse";
+import { daysBetweenKeys } from "@/app/_components/people-recency";
+import { resolvePersonRef, type ResolvablePerson } from "./people-ops";
 import type {
   Account,
   BalanceChange,
@@ -976,6 +983,288 @@ export async function getInventoryForecast(userId: string) {
   });
 
   return { today, items };
+}
+
+// ---------- people reads ----------
+
+// The vault section whose bullets are the per-person open loops. 17 of 20
+// person notes carry one; three do not, and an absent section is normal.
+const OPEN_LOOPS_HEADING = "Open questions";
+// One person's log is a page, not an archive. The app's own per-person read is
+// unbounded; this bound only exists so a tool payload stays a readable size.
+const MAX_PERSON_INTERACTIONS = 50;
+// Roster-wide interaction scan, for counts and last-talked across everyone.
+const MAX_INTERACTION_SCAN = 5000;
+// Raw session excerpts are the most sensitive thing this tool carries (§9), so
+// only a handful travel — enough to review, never a bulk export.
+const MAX_PERSON_MENTIONS = 5;
+
+type PersonRow = {
+  id: string;
+  name: string;
+  vault_path: string | null;
+  aliases: string[] | null;
+  checkin_days: number | null;
+  attention_snoozed_until: string | null;
+  archived: boolean;
+  created_at: string;
+};
+
+const PERSON_COLUMNS =
+  "id, name, vault_path, aliases, checkin_days, attention_snoozed_until, archived, created_at";
+
+// METADATA ONLY, per docs/people-plan.md §9: names, cadence, recency inputs and
+// counts. No note bodies, no interaction summaries, no mention snippets — those
+// need an explicit get_person call, which is the privacy bound that stops a
+// routine agent call from bulk-exporting a social graph with commentary.
+//
+// Recency is returned as INPUTS (lastTalked date + precision, daysSinceTalked,
+// interactions count), not as a band: band vocabulary belongs to the M3 snapshot
+// so one definition serves the UI and the assistant, rather than two drifting.
+export async function listPeopleFor(
+  supabase: SupabaseClient,
+  userId: string,
+  args?: { includeArchived?: boolean },
+) {
+  const includeArchived = args?.includeArchived === true;
+  const today = await todayKey(supabase, userId);
+
+  let peopleQuery = supabase
+    .from("people")
+    .select(PERSON_COLUMNS)
+    .eq("user_id", userId)
+    .order("name", { ascending: true });
+  if (!includeArchived) peopleQuery = peopleQuery.eq("archived", false);
+
+  const [peopleRes, interactionsRes] = await Promise.all([
+    peopleQuery,
+    supabase
+      .from("person_interactions")
+      .select("person_id, occurred_at, occurred_precision")
+      .eq("user_id", userId)
+      // Descending + capped: an overflowing log costs the oldest history
+      // first, so lastTalked stays correct and only very old counts can
+      // undercount. The order ends in id to make the cap boundary total.
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
+      .limit(MAX_INTERACTION_SCAN),
+  ]);
+
+  const rows = (peopleRes.data ?? []) as PersonRow[];
+  const counts = new Map<string, number>();
+  const latest = new Map<string, { date: string; precision: string }>();
+  for (const row of (interactionsRes.data ?? []) as {
+    person_id: string;
+    occurred_at: string;
+    occurred_precision: string;
+  }[]) {
+    counts.set(row.person_id, (counts.get(row.person_id) ?? 0) + 1);
+    if (!latest.has(row.person_id)) {
+      latest.set(row.person_id, {
+        date: row.occurred_at,
+        precision: row.occurred_precision,
+      });
+    }
+  }
+
+  return {
+    today,
+    people: rows.map((row) => {
+      const last = latest.get(row.id) ?? null;
+      return {
+        id: row.id,
+        name: row.name,
+        vaultPath: row.vault_path,
+        aliases: row.aliases ?? [],
+        checkinDays: row.checkin_days,
+        attentionSnoozedUntil: row.attention_snoozed_until,
+        archived: row.archived,
+        interactions: counts.get(row.id) ?? 0,
+        // 'talked' only — vault `updated` never enters this, per the doctrine
+        // (§2). null means nothing has been logged, which is a real answer.
+        lastTalked: last
+          ? {
+              date: last.date,
+              // 'approx' rows must never be rendered as a firm day.
+              precision: last.precision,
+              daysSince: daysBetweenKeys(last.date, today),
+            }
+          : null,
+      };
+    }),
+  };
+}
+
+export async function listPeople(
+  userId: string,
+  args?: { includeArchived?: boolean },
+) {
+  const { supabase, ownerId } = scoped(userId);
+  return listPeopleFor(supabase, ownerId, args);
+}
+
+// The dossier for ONE person. Vault cost is bounded to a single note read (one
+// tree fetch + one blob) — never getVaultCorpus, which downloads every blob in
+// the vault (§7, §9).
+//
+// Mention candidates ARE carried here (M4) — an explicit per-person call is the
+// privacy bound §9 sets for raw session excerpts, and get_snapshot still
+// carries none of them. Deliberately absent: the full note body (read_brain_note
+// already serves that) and `connected` (backlinks need the corpus's cross-note
+// link graph, so it stays an M-later gap rather than a corpus-weight read on
+// every call).
+export async function getPersonFor(
+  supabase: SupabaseClient,
+  userId: string,
+  args: { person?: unknown },
+) {
+  const ref = typeof args?.person === "string" ? args.person.trim() : "";
+  if (!ref) throw new Error("person is required (id or name)");
+
+  const { data: peopleData } = await supabase
+    .from("people")
+    .select(PERSON_COLUMNS)
+    .eq("user_id", userId);
+  const rows = (peopleData ?? []) as PersonRow[];
+
+  // Same id → exact → unique substring contract as update_people's resolver,
+  // across the whole roster: reading an archived person is legitimate.
+  const found = resolvePersonRef(
+    ref,
+    rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      archived: row.archived,
+    })) as ResolvablePerson[],
+  );
+  if (!found.ok) throw new Error(found.error);
+  const row = rows.find((r) => r.id === found.value.id);
+  if (!row) throw new Error(`no person matching "${ref}"`);
+
+  const today = await todayKey(supabase, userId);
+  const { data: interactionData } = await supabase
+    .from("person_interactions")
+    .select("id, summary, occurred_at, occurred_precision, source, created_at")
+    .eq("user_id", userId)
+    .eq("person_id", row.id)
+    .order("occurred_at", { ascending: false })
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: true })
+    .limit(MAX_PERSON_INTERACTIONS);
+  const interactions = (interactionData ?? []) as {
+    id: string;
+    summary: string | null;
+    occurred_at: string;
+    occurred_precision: string;
+    source: string;
+    created_at: string;
+  }[];
+
+  const [countRes, candidateRes] = await Promise.all([
+    supabase
+      .from("person_mention_candidates")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("person_id", row.id)
+      .eq("status", "new"),
+    supabase
+      .from("person_mention_candidates")
+      .select("id, occurred_at, excerpt, matched_term, source_kind")
+      .eq("user_id", userId)
+      .eq("person_id", row.id)
+      .eq("status", "new")
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
+      .limit(MAX_PERSON_MENTIONS),
+  ]);
+  const candidateCount = countRes.count ?? 0;
+  const candidates = (candidateRes.data ?? []) as {
+    id: string;
+    occurred_at: string;
+    excerpt: string | null;
+    matched_term: string | null;
+    source_kind: string;
+  }[];
+
+  // Best-effort, always: a missing vault, revoked token, renamed-away note or
+  // GitHub outage yields no loops and nothing more. An optional context
+  // enhancement must never fail the tool (§7).
+  let intro: string | null = null;
+  let openLoops: string[] = [];
+  let noteUpdated: string | null = null;
+  let noteMissing = false;
+  if (row.vault_path) {
+    try {
+      const credentials = await readVaultCredentials(supabase, userId);
+      const note = credentials
+        ? await readVaultNoteRaw(credentials, vaultTag(userId), row.vault_path)
+        : null;
+      if (note) {
+        intro = extractIntro(note.markdown);
+        openLoops = extractSectionBullets(note.markdown, OPEN_LOOPS_HEADING);
+        noteUpdated = parseFrontmatter(note.markdown).frontmatter.updated ?? null;
+      } else {
+        noteMissing = true;
+      }
+    } catch (error) {
+      console.warn("person note read failed", error);
+    }
+  }
+
+  return {
+    today,
+    person: {
+      id: row.id,
+      name: row.name,
+      vaultPath: row.vault_path,
+      aliases: row.aliases ?? [],
+      checkinDays: row.checkin_days,
+      attentionSnoozedUntil: row.attention_snoozed_until,
+      archived: row.archived,
+      createdAt: row.created_at,
+    },
+    intro,
+    openLoops,
+    // The 'noted' signal: when the note was last revised. NOT contact, and it
+    // never advances lastTalked (§2).
+    noteUpdated,
+    noteMissing,
+    lastTalked: interactions[0]
+      ? {
+          date: interactions[0].occurred_at,
+          precision: interactions[0].occurred_precision,
+          daysSince: daysBetweenKeys(interactions[0].occurred_at, today),
+        }
+      : null,
+    interactions: interactions.map((row_) => ({
+      id: row_.id,
+      summary: row_.summary,
+      occurredAt: row_.occurred_at,
+      precision: row_.occurred_precision,
+      source: row_.source,
+    })),
+    interactionsTruncated: interactions.length === MAX_PERSON_INTERACTIONS,
+    // Unreviewed evidence that this person was ON YOUR MIND — never contact.
+    // Only the user's explicit confirm turns one into an interaction, so these
+    // are strictly reviewable material, not a recency signal.
+    mentions: {
+      unreviewed: candidateCount,
+      recent: candidates.map((c) => ({
+        id: c.id,
+        occurredAt: c.occurred_at,
+        excerpt: c.excerpt,
+        matchedTerm: c.matched_term,
+        sourceKind: c.source_kind,
+      })),
+    },
+  };
+}
+
+export async function getPerson(userId: string, args: { person?: unknown }) {
+  const { supabase, ownerId } = scoped(userId);
+  return getPersonFor(supabase, ownerId, args);
 }
 
 // ---------- second-brain reads ----------

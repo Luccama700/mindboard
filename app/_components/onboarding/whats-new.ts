@@ -14,6 +14,18 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-08-12-people",
+    date: "2026-08-12",
+    title: "the people in your life",
+    items: [
+      "there's a people section now (≡ more → people): everyone from your vault's people notes plus anyone you add, each with their own page — who they are, the open questions between you, when you actually last talked.",
+      "logging is one tap: 'talked today'. i never turn a note edit or a chat mention into contact on my own — only you say you talked.",
+      "give someone a check-in rhythm and i'll quietly suggest reaching out when it's been too long — one person at a time, with the reason, and 'not now' actually means a week of quiet.",
+      "when you mention someone in our chats, it shows up on their page as an unreviewed mention you can confirm ('we talked') or wave off ('just thinking about them').",
+      "your other ais can read and log people too, over mcp — every write shows you a receipt before it lands.",
+    ],
+  },
+  {
     id: "2026-08-11-nav-trim",
     date: "2026-08-11",
     title: "a quieter rail",

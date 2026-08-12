@@ -116,6 +116,19 @@ export type StreamCard = {
   tier?: 0 | 1 | 2 | 3;
 };
 
+// At most ONE person, ever (§3.8, §7): the rest of the attention array exists
+// for the assistant only, never as a notification queue on the dashboard.
+// openLoop is null wherever the caller has no vault corpus to read it from —
+// the dashboard deliberately never pays for one.
+export type StreamPeople = {
+  suggestion: {
+    personId: string;
+    name: string;
+    daysSinceTalked: number;
+    openLoop: string | null;
+  } | null;
+};
+
 export type StreamSnapshot = {
   pulse: {
     todayDelta: number;
@@ -124,6 +137,7 @@ export type StreamSnapshot = {
     freeHours: number;
     mood: number | null;
   };
+  people: StreamPeople;
   now: StreamCard[];
   nowOverflow: number;
   next: StreamCard[];
@@ -155,6 +169,11 @@ export type StreamInput = {
   items: StreamItemInput[];
   usagesByItem: Record<string, UsageRule[]>;
   goals: StreamGoalInput[];
+  // The caller passes computePeopleAttention(...).attention[0] or null. This
+  // snapshot does NO people math — it threads the already-decided suggestion
+  // through, so the one definition of "who is overdue" stays in
+  // app/lib/snapshots/people.ts.
+  people?: StreamPeople;
   hasDailyLogToday: boolean;
   moodToday: number | null;
   pendingProposals: number;
@@ -818,6 +837,7 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       freeHours: freeHoursToday,
       mood: moodToday,
     },
+    people: { suggestion: input.people?.suggestion ?? null },
     now: nowCards,
     nowOverflow,
     next: nextCards,

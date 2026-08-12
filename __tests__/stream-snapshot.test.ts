@@ -59,6 +59,28 @@ function ids(cards: { id: string }[]): string[] {
   return cards.map((c) => c.id);
 }
 
+describe("people suggestion", () => {
+  // Pure pass-through: the one definition of "who is overdue" lives in
+  // app/lib/snapshots/people.ts, so this snapshot must do no people math.
+  test("threads the caller's suggestion through untouched", () => {
+    const suggestion = {
+      personId: "p1",
+      name: "Davi",
+      daysSinceTalked: 21,
+      openLoop: "denise asked for an update — send one",
+    };
+    const snap = streamSnapshot(base({ people: { suggestion } }));
+    expect(snap.people.suggestion).toEqual(suggestion);
+  });
+
+  test("is null when the caller passes nothing", () => {
+    expect(streamSnapshot(base()).people.suggestion).toBeNull();
+    expect(
+      streamSnapshot(base({ people: { suggestion: null } })).people.suggestion,
+    ).toBeNull();
+  });
+});
+
 describe("NOW is the urgency board", () => {
   test("all due-today tasks (timed or not) are NOW, ranked by urgency; NEXT holds no plain tasks", () => {
     const snap = streamSnapshot(

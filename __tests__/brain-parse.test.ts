@@ -3,6 +3,8 @@ import { describe, expect, test } from "vitest";
 import {
   buildResolver,
   computeBacklinks,
+  extractIntro,
+  extractSectionBullets,
   extractWikilinks,
   noteFolder,
   noteHref,
@@ -187,6 +189,195 @@ describe("computeBacklinks", () => {
     expect(backlinks.get("CLAUDE.md")).toEqual(["Journal/A.md", "Home.md"]);
     expect(backlinks.get("Journal/A.md")).toEqual(["Home.md"]);
     expect(backlinks.get("Home.md")).toBeUndefined();
+  });
+});
+
+// Fixtures modelled on the real People/*.md notes (docs/people-plan.md §6):
+// a note with the standard section plus a resolved (struck-through) question,
+// a note with no `## Open questions` at all, Emma's missing blank line after
+// the closing `---`, and Carla's wikilink-opening intro.
+const DAVI = `---
+type: person
+updated: 2026-08-09
+---
+
+# Davi
+
+Cousin, 14, writes short stories. Lives with [[Denise]] in Santos.
+
+Second paragraph, not the intro.
+
+## Open questions
+
+- does he still want the writing feedback?
+- ~~does he still play [[Hytale]]?~~ Overtaken by events: he quit (resolved 2026-07-20)
+- [[Denise|his mom]] asked for an update — send one
+- \`nothing\` here is still a bullet
+
+## Threads
+
+- unrelated bullet
+`;
+
+const LUCIANO = `---
+type: person
+---
+
+# Luciano
+
+Clubbing friend from the Faculdade crowd.
+
+## Threads
+
+- went to Bemvindo in July
+`;
+
+const EMMA = `---
+type: person
+updated: 2026-08-02
+---
+# Emma
+
+Isabella's friend, does ceramics on weekends.
+
+## Open questions
+
+- is the studio still running?
+`;
+
+const CARLA = `---
+type: person
+---
+
+# Carla
+
+[[Lucca Martins de Andrade|Lucca]]'s aunt, hosts the Sunday lunches.
+`;
+
+const NO_PROSE = `---
+type: person
+---
+
+# Vini
+
+## Open questions
+
+- who introduced us?
+`;
+
+describe("extractSectionBullets", () => {
+  const cases: [string, string, string, string[]][] = [
+    [
+      "takes the section's bullets and skips struck-through (resolved) ones",
+      DAVI,
+      "Open questions",
+      [
+        "does he still want the writing feedback?",
+        "his mom asked for an update — send one",
+        "`nothing` here is still a bullet",
+      ],
+    ],
+    [
+      "stops at the next heading rather than bleeding into it",
+      DAVI,
+      "Threads",
+      ["unrelated bullet"],
+    ],
+    ["a missing section is normal and yields []", LUCIANO, "Open questions", []],
+    [
+      "matches the heading with no blank line after the frontmatter",
+      EMMA,
+      "Open questions",
+      ["is the studio still running?"],
+    ],
+    ["is case-insensitive on the heading", DAVI, "open QUESTIONS", [
+      "does he still want the writing feedback?",
+      "his mom asked for an update — send one",
+      "`nothing` here is still a bullet",
+    ]],
+    ["an empty heading argument yields []", DAVI, "  ", []],
+  ];
+
+  test.each(cases)("%s", (_label, markdown, heading, expected) => {
+    expect(extractSectionBullets(markdown, heading)).toEqual(expected);
+  });
+
+  test("ignores headings and bullets inside fenced code", () => {
+    const md = [
+      "## Open questions",
+      "",
+      "```md",
+      "## Threads",
+      "- fenced bullet",
+      "```",
+      "",
+      "- real bullet",
+    ].join("\n");
+    expect(extractSectionBullets(md, "Open questions")).toEqual([
+      "real bullet",
+    ]);
+  });
+
+  test("a deeper subheading stays inside the section", () => {
+    const md = "## Open questions\n\n- a\n\n### later\n\n- b\n\n## Threads\n\n- c";
+    expect(extractSectionBullets(md, "Open questions")).toEqual(["a", "b"]);
+  });
+});
+
+describe("extractIntro", () => {
+  const cases: [string, string, string | null][] = [
+    [
+      "first prose paragraph, wikilinks reduced to labels",
+      DAVI,
+      "Cousin, 14, writes short stories. Lives with Denise in Santos.",
+    ],
+    [
+      "no blank line after the closing frontmatter fence",
+      EMMA,
+      "Isabella's friend, does ceramics on weekends.",
+    ],
+    [
+      "an intro opening with an aliased wikilink renders the alias",
+      CARLA,
+      "Lucca's aunt, hosts the Sunday lunches.",
+    ],
+    ["a note with no prose paragraph is null", NO_PROSE, null],
+    ["an empty note is null", "", null],
+    ["a note that is only frontmatter is null", "---\ntype: person\n---\n", null],
+  ];
+
+  test.each(cases)("%s", (_label, markdown, expected) => {
+    expect(extractIntro(markdown)).toBe(expected);
+  });
+
+  test("joins a wrapped paragraph and stops at the blank line", () => {
+    const md = "# X\n\nfirst line\nsecond line\n\nlater paragraph";
+    expect(extractIntro(md)).toBe("first line second line");
+  });
+
+  test("skips callouts, tables, rules and fenced code before the prose", () => {
+    const md = [
+      "# X",
+      "",
+      "> [!note] a callout",
+      "",
+      "| a | b |",
+      "",
+      "***",
+      "",
+      "```ts",
+      "const notProse = 1;",
+      "```",
+      "",
+      "the actual intro",
+    ].join("\n");
+    expect(extractIntro(md)).toBe("the actual intro");
+  });
+
+  test("reduces markdown links to their label", () => {
+    expect(extractIntro("# X\n\nsee [the plan](https://example.com/a) first")).toBe(
+      "see the plan first",
+    );
   });
 });
 

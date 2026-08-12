@@ -19,6 +19,7 @@ export const TOUR_KEYS = [
   "tasks",
   "brain",
   "learn",
+  "people",
 ] as const;
 
 export type TourKey = (typeof TOUR_KEYS)[number];
@@ -53,6 +54,7 @@ const ROUTE_TOURS: [string, TourKey][] = [
   ["/tasks", "tasks"],
   ["/brain", "brain"],
   ["/learn", "learn"],
+  ["/people", "people"],
 ];
 
 export function routeTourKey(pathname: string): TourKey | null {
@@ -317,6 +319,26 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       title: "grounded, always",
       body: "everything i generate cites the actual page it came from. no vibes-based studying.",
+    },
+  ],
+  people: [
+    {
+      anchor: "people-search",
+      title: "the people in your life",
+      body: "everyone from your vault's people notes, plus anyone you add right here. type a name — search finds them, and an unknown name becomes an add button.",
+      placement: "bottom",
+    },
+    {
+      title: "tap a name for the whole story",
+      body: "who they are, the open loops between you, when you last actually talked — pulled from your notes, never typed into a form.",
+    },
+    {
+      title: "one tap when you talk",
+      body: "saw them? called them? tap 'talked today' on their page and that's the whole chore. i never guess contact from your notes — only you say you talked.",
+    },
+    {
+      title: "attention is opt-in",
+      body: "give someone a check-in rhythm on their page and i'll quietly surface them when it's been too long — one at a time, with the reason, never a guilt list. no rhythm set, no noise.",
     },
   ],
 };

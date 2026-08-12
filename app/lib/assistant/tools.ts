@@ -23,12 +23,17 @@ import {
   proposeCreateRecurringTaskFor,
   proposeDeleteSpendLimitFor,
   proposeSetSpendLimitFor,
+  proposePeopleUpdateFor,
   proposeUpdateFinanceFor,
   proposeUpdateStockFor,
   proposeUpsertGoalFor,
   spendLimitWarningBlock,
 } from "@/app/lib/mcp/writes";
-import { buildSpendLimitStatus } from "@/app/lib/mcp/reads";
+import {
+  buildSpendLimitStatus,
+  getPersonFor,
+  listPeopleFor,
+} from "@/app/lib/mcp/reads";
 import { queueReel } from "@/app/lib/mcp/reels";
 import { lookupPricesByRefs } from "@/app/lib/shopping/price-lookup";
 import {
@@ -245,6 +250,90 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: { includeArchived: { type: "boolean" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_people",
+    description:
+      "The people roster: id, name, vault note path, aliases, check-in cadence, archived flag, how many interactions are logged, and when the user last TALKED to them (date + precision + daysSince, or null when nothing is logged). Metadata only — no note bodies, no interaction summaries. Use it to find person ids/names before propose_update_people or get_person; pass includeArchived to also see untracked people (needed before a restore op). 'Last talked' counts logged conversations ONLY: editing someone's note is being informed, not being in touch, and never advances it.",
+    input_schema: {
+      type: "object",
+      properties: { includeArchived: { type: "boolean" } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_person",
+    description:
+      "One person's dossier: their row, the intro line and OPEN LOOPS pulled from their vault note's `## Open questions` section, their recent logged interactions (newest first, capped), when the note was last updated, and any unreviewed MENTION candidates (excerpt + matched term + evidence date). `person` accepts an id or a name (case-insensitive; unique substrings work). Open loops are what make a suggestion concrete — 'you owe Denise an update on his writing practice' rather than 'follow up with Davi'. Mentions are evidence the person was ON YOUR MIND, never that contact happened — only the user's explicit confirm turns one into an interaction, so never report a mention as 'you talked to them'. Does NOT return the full note body (use read_brain_note). A missing or unreachable vault yields empty loops rather than an error.",
+    input_schema: {
+      type: "object",
+      properties: { person: { type: "string" } },
+      required: ["person"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_update_people",
+    description:
+      "Propose a batch of people edits in one confirmable receipt: log_interaction (record that the user TALKED to someone), create_person (someone with no vault note yet), set_checkin (how often they want to be in touch, in days; null clears it — there are no default cadences), archive (stop tracking), restore (track again). A create_person earlier in the batch can be logged against or given a cadence by name in the SAME batch. `person` accepts an id or a name (case-insensitive; unique substrings work — ambiguity fails with candidates; get ids from list_people). User must confirm.\n\nlog_interaction records that CONTACT HAPPENED — only ever when the user says so. Talking ABOUT someone is not talking TO them, and a wrong 'you talked to X on Y' is the one error this feature cannot afford, so never infer contact from a mention, a calendar entry, or a note edit. `summary` records what the USER did or said (\"coffee, he's writing again\"), never an inference about the other person's state or wellbeing — write it as though they might read it. Omit `date` for today (resolved in the user's timezone when they confirm). If the user was vague (\"last month\"), give your best-guess date AND set approx:true so the app says \"about a month ago\" instead of inventing a specific day.",
+    input_schema: {
+      type: "object",
+      properties: {
+        operations: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            properties: {
+              op: {
+                type: "string",
+                enum: [
+                  "log_interaction",
+                  "create_person",
+                  "set_checkin",
+                  "archive",
+                  "restore",
+                ],
+              },
+              person: {
+                type: "string",
+                description:
+                  "Person id or name (every op except create_person).",
+              },
+              name: {
+                type: "string",
+                description: "New person's name (create_person).",
+              },
+              summary: {
+                type: "string",
+                description:
+                  "What the user did or said, one line (log_interaction; optional). Never a characterisation of the other person.",
+              },
+              date: {
+                type: "string",
+                description:
+                  "Day the conversation happened, YYYY-MM-DD (log_interaction). Omit for today.",
+              },
+              approx: {
+                type: "boolean",
+                description:
+                  "Set with a best-guess date when the user was vague about when. Requires an explicit date.",
+              },
+              days: {
+                type: ["number", "null"],
+                description:
+                  "Check-in cadence in days (set_checkin; null clears it).",
+              },
+            },
+            required: ["op"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["operations"],
       additionalProperties: false,
     },
   },
@@ -1115,6 +1204,31 @@ export async function runAssistantTool(
       }
       case "propose_update_stock": {
         const outcome = await proposeUpdateStockFor(supabase, userId, input, {
+          source: "assistant",
+          conversationId,
+        });
+        if (!outcome.ok) return { type: "error", error: outcome.error };
+        return { type: "proposal", ...outcome.value };
+      }
+      // The three People tools reuse the MCP reads/writes directly with the
+      // SESSION client, so RLS scopes them and one implementation serves both
+      // surfaces (docs/people-plan.md §10 M2).
+      case "list_people": {
+        return {
+          type: "result",
+          content: await listPeopleFor(supabase, userId, {
+            includeArchived: input.includeArchived === true,
+          }),
+        };
+      }
+      case "get_person": {
+        return {
+          type: "result",
+          content: await getPersonFor(supabase, userId, input),
+        };
+      }
+      case "propose_update_people": {
+        const outcome = await proposePeopleUpdateFor(supabase, userId, input, {
           source: "assistant",
           conversationId,
         });

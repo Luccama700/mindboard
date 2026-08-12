@@ -28,6 +28,7 @@ import {
   zonedWallTimeToUtcMs,
 } from "@/app/lib/snapshots/zoned-time";
 import type { ForecastDay } from "@/app/lib/finance/forecast";
+import type { PeopleVitals } from "@/app/lib/snapshots/people";
 import type { TaskWithGroup } from "@/app/_components/types";
 
 const WEEKDAY_SHORT = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -111,6 +112,10 @@ export type PlanningInput = {
 
   checkins: PlanningCheckin[];
   goals: PlanningGoal[];
+  // Already computed and hydrated by the assembler (§7's two-step): attention
+  // is a BOUNDED slice carrying open loops for at most three people. Optional
+  // so existing callers and tests keep compiling; absent = nobody tracked.
+  people?: PeopleVitals;
 };
 
 // ---------- output types ----------
@@ -205,6 +210,11 @@ export type PlanningSnapshot = {
     checkins: PlanningCheckin[];
     goals: { id: string; title: string; horizon: string | null; status: string; targetDate: string | null }[];
   };
+  // Open loops travel ONLY for the people in attention[] — never the whole
+  // roster — and no mindspace mention snippets travel at all (§9). `quieted`
+  // carries names only, so the assistant can explain a suppressed nudge instead
+  // of black-boxing it, without any excerpt leaving the app.
+  people: PeopleVitals;
 };
 
 // ---------- helpers ----------
@@ -555,6 +565,12 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
         status: g.status,
         targetDate: g.target_date,
       })),
+    },
+    people: input.people ?? {
+      total: 0,
+      tracked: 0,
+      attention: [],
+      quieted: [],
     },
   };
 }

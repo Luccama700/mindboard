@@ -58,6 +58,15 @@ import {
   type ResolvableItem,
 } from "./inventory-ops";
 import {
+  dateLabel,
+  renderPeopleReceipt,
+  resolvePeopleOps,
+  validatePeopleOps,
+  validateResolvedPeopleOps,
+  type ResolvablePerson,
+} from "./people-ops";
+import { seedAliases } from "@/app/lib/people/sync";
+import {
   financeOpsDateSpan,
   financeReceiptLine,
   renderFinanceReceipt,
@@ -476,6 +485,53 @@ export async function proposeUpdateStockFor(
 
 export async function proposeUpdateStock(userId: string, raw: unknown): Promise<Result<Proposal>> {
   return proposeUpdateStockFor(createServiceClient(), userId, raw);
+}
+
+// Shared with the in-app assistant (session client + RLS) and the MCP server
+// (service client + explicit user scoping), like proposeUpdateStockFor above.
+//
+// Note what is NOT resolved here: a log op with no date stays null and becomes
+// the user's today at EXECUTE time (docs/people-plan.md §10 M2). Resolving it at
+// propose time would date a conversation by when the assistant happened to draft
+// the proposal, which near midnight is the wrong day.
+export async function proposePeopleUpdateFor(
+  supabase: SupabaseClient,
+  userId: string,
+  raw: unknown,
+  options?: { source?: "mcp" | "assistant"; conversationId?: string | null },
+): Promise<Result<Proposal>> {
+  const parsed = validatePeopleOps(raw);
+  if (!parsed.ok) return parsed;
+
+  const { data, error } = await supabase
+    .from("people")
+    .select("id, name, archived")
+    .eq("user_id", userId);
+  if (error) return { ok: false, error: error.message };
+
+  const resolved = resolvePeopleOps(
+    parsed.value,
+    (data ?? []) as ResolvablePerson[],
+  );
+  if (!resolved.ok) return resolved;
+
+  const preview = renderPeopleReceipt(resolved.value);
+  const proposalId = await recordProposal(
+    supabase,
+    userId,
+    "update_people",
+    { operations: resolved.value } as unknown as Record<string, unknown>,
+    preview,
+    options,
+  );
+  return { ok: true, value: { proposalId, preview } };
+}
+
+export async function proposePeopleUpdate(
+  userId: string,
+  raw: unknown,
+): Promise<Result<Proposal>> {
+  return proposePeopleUpdateFor(createServiceClient(), userId, raw);
 }
 
 // Direct execute (no propose step): AI price lookups only write source-labeled
@@ -2757,6 +2813,185 @@ async function executeManageFinance(
   return { ok: true, value: { applied } };
 }
 
+// Applies a confirmed people batch. Ops apply sequentially and the first
+// failure aborts the rest (already-applied ops stand; the error says how far it
+// got) — the executeUpdateStock contract.
+//
+// Every `people` write sets updated_at explicitly: no triggers exist in this
+// codebase (docs/people-plan.md §10). person_interactions has no updated_at.
+async function executePeopleUpdate(
+  supabase: SupabaseClient,
+  ownerId: string,
+  input: Record<string, unknown>,
+): Promise<Result<Record<string, unknown>>> {
+  const parsed = validateResolvedPeopleOps(input);
+  if (!parsed.ok) return parsed;
+  const ops = parsed.value;
+
+  const personIds = [
+    ...new Set(
+      ops.flatMap((op) => {
+        if (op.kind === "create") return [];
+        // Ops targeting a person created earlier in this batch have no id yet.
+        return op.personId ? [op.personId] : [];
+      }),
+    ),
+  ];
+  const liveNames = new Map<string, string>();
+  if (personIds.length > 0) {
+    const { data, error } = await supabase
+      .from("people")
+      .select("id, name")
+      .eq("user_id", ownerId)
+      .in("id", personIds);
+    if (error) return { ok: false, error: error.message };
+    for (const row of (data ?? []) as { id: string; name: string }[]) {
+      liveNames.set(row.id, row.name);
+    }
+    const missing = personIds.filter((id) => !liveNames.has(id));
+    if (missing.length > 0) {
+      return { ok: false, error: "a person in this proposal no longer exists" };
+    }
+  }
+
+  const applied: string[] = [];
+  const now = new Date().toISOString();
+  // People created earlier in this batch, so later log/checkin ops can target
+  // them (resolved as pendingPerson at propose time).
+  const createdPeople = new Map<string, string>(); // lowercased name → id
+  // Resolved once, lazily, and only if some log op needs it: the user's own
+  // day, never the UTC process clock.
+  let today: string | null = null;
+
+  const personIdFor = (op: {
+    personId: string | null;
+    pendingPerson?: string | null;
+  }): Result<string> => {
+    if (op.personId) return { ok: true, value: op.personId };
+    const pending = op.pendingPerson?.toLowerCase();
+    const created = pending ? createdPeople.get(pending) : undefined;
+    if (!created) {
+      return { ok: false, error: "a person this batch depends on was not created" };
+    }
+    return { ok: true, value: created };
+  };
+
+  for (const op of ops) {
+    switch (op.kind) {
+      case "create": {
+        const { data, error } = await supabase
+          .from("people")
+          .insert({
+            user_id: ownerId,
+            name: op.name,
+            vault_path: null,
+            // Same seed the page's create path uses, so an MCP-created person
+            // and a hand-created one are indistinguishable afterwards.
+            aliases: seedAliases(op.name),
+            updated_at: now,
+          })
+          .select("id")
+          .single();
+        if (error) {
+          if (error.code === "23505") {
+            return {
+              ok: false,
+              error: `you already have a ${op.name} — add a distinguishing name (applied: ${applied.length})`,
+            };
+          }
+          return { ok: false, error: error.message };
+        }
+        createdPeople.set(op.name.toLowerCase(), (data as { id: string }).id);
+        applied.push(`created ${op.name}`);
+        break;
+      }
+      case "log": {
+        const target = personIdFor(op);
+        if (!target.ok) return target;
+        // Resolved for EVERY log op, not just undated ones: a caller-supplied
+        // date has to be checked against something. Execute-time is the only
+        // correct anchor — a proposal can be confirmed days after it was made,
+        // so a date that was future at propose time may legitimately be past
+        // now, and vice versa.
+        if (today === null) today = await todayKey(supabase, ownerId);
+        const occurredAt = op.date ?? today;
+        if (!occurredAt) return { ok: false, error: "could not resolve today" };
+        // A future row is not a harmless typo: daysSinceTalked goes NEGATIVE,
+        // which is never greater than any cadence, so the person is silenced
+        // until that day arrives. Same guard the server actions apply — this is
+        // the third write path into the same column.
+        if (occurredAt > today) {
+          return {
+            ok: false,
+            error: `that day hasn't happened yet (${op.name}: ${occurredAt}) (applied: ${applied.length})`,
+          };
+        }
+        const { error } = await supabase.from("person_interactions").insert({
+          user_id: ownerId,
+          person_id: target.value,
+          summary: op.summary,
+          occurred_at: occurredAt,
+          occurred_precision: op.precision,
+          // 'logged' = stated outright by the user or the assistant on their
+          // behalf. 'confirmed' belongs to M4's candidate promotion only.
+          source: "logged",
+        });
+        if (error) return { ok: false, error: error.message };
+        applied.push(`logged ${op.name} on ${dateLabel(occurredAt, op.precision)}`);
+        break;
+      }
+      case "checkin": {
+        const target = personIdFor(op);
+        if (!target.ok) return target;
+        const { error } = await supabase
+          .from("people")
+          .update({ checkin_days: op.days, updated_at: now })
+          .eq("user_id", ownerId)
+          .eq("id", target.value);
+        if (error) return { ok: false, error: error.message };
+        applied.push(
+          op.days === null
+            ? `cleared ${op.name}'s cadence`
+            : `${op.name} every ${op.days} days`,
+        );
+        break;
+      }
+      case "archive": {
+        const { error } = await supabase
+          .from("people")
+          .update({ archived: true, archived_at: now, updated_at: now })
+          .eq("user_id", ownerId)
+          .eq("id", op.personId);
+        if (error) return { ok: false, error: error.message };
+        applied.push(`stopped tracking ${op.name}`);
+        break;
+      }
+      case "restore": {
+        const { error } = await supabase
+          .from("people")
+          .update({ archived: false, archived_at: null, updated_at: now })
+          .eq("user_id", ownerId)
+          .eq("id", op.personId);
+        if (error) {
+          // people_user_name_key is partial on `not archived`, so un-archiving
+          // is the one update that can collide with a live person's name.
+          if (error.code === "23505") {
+            return {
+              ok: false,
+              error: `you already have a ${liveNames.get(op.personId) ?? op.name} — rename one of them first (applied: ${applied.length})`,
+            };
+          }
+          return { ok: false, error: error.message };
+        }
+        applied.push(`tracking ${op.name} again`);
+        break;
+      }
+    }
+  }
+
+  return { ok: true, value: { applied } };
+}
+
 export const EXECUTORS: Record<
   string,
   (
@@ -2782,6 +3017,7 @@ export const EXECUTORS: Record<
   update_settings: executeUpdateSettings,
   log_spend: executeLogSpend,
   update_stock: executeUpdateStock,
+  update_people: executePeopleUpdate,
   update_finance: executeUpdateFinance,
   manage_finance: executeManageFinance,
   set_spend_limit: executeSetSpendLimit,

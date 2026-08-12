@@ -12,6 +12,19 @@ import {
   type PlanningRecurringRule,
   type PlanningSnapshot,
 } from "@/app/lib/snapshots/planning";
+import {
+  computePeopleAttention,
+  hydratePeopleAttention,
+  type MentionCandidateRef,
+  type PeopleVitals,
+} from "@/app/lib/snapshots/people";
+import {
+  readVaultCredentials,
+  readVaultNoteRaw,
+  vaultTag,
+} from "@/app/lib/brain/vault";
+import { extractSectionBullets } from "@/app/lib/brain/parse";
+import type { Person, PersonInteraction } from "@/app/_components/people-types";
 import type { TaskWithGroup } from "@/app/_components/types";
 
 // Session-less assembler for the horizon planning snapshot. Fetches every domain
@@ -24,6 +37,62 @@ const HORIZON_MIN = 1;
 const HORIZON_MAX = 60;
 const DEFAULT_BEFORE_HOUR = 17;
 const CHECKIN_HISTORY = 14;
+// The vault section whose bullets are the per-person open loops.
+const OPEN_LOOPS_HEADING = "Open questions";
+// How many overdue people get vault prose attached. The bound is what keeps the
+// vault cost at one tree fetch plus at most three blobs regardless of vault or
+// roster size (§7).
+const HYDRATE_LIMIT = 3;
+// Descending + capped, like every other ledger-shaped read here: an overflowing
+// log costs the oldest history first, so last-talked stays correct.
+const INTERACTION_SCAN = 5000;
+
+// Step 2 of §7's two-step assembly: attach open loops to an ALREADY-BOUNDED
+// slice. BEST-EFFORT BY CONTRACT — a missing vault, revoked token, renamed-away
+// note, GitHub outage or parse failure yields no loops and nothing more. Cadence
+// is entirely Postgres-backed, so an optional context enhancement must never
+// take down routine planning calls for the assistant and every connected MCP
+// client.
+//
+// readVaultNoteRaw defaults to a FRESH tree fetch per call, which for three
+// people would be three uncached listings — most of the cost this two-step
+// exists to avoid. { fresh: false } shares one cached tree across the three
+// reads, and staleness is harmless here (a note edited moments ago is not a
+// correctness problem for open loops, unlike an agent verifying its own write).
+// The reads are sequential on purpose: concurrent first-calls can each miss the
+// data cache and issue their own tree fetch.
+async function hydrateOpenLoops(
+  supabase: SupabaseClient,
+  userId: string,
+  vitals: PeopleVitals,
+): Promise<PeopleVitals> {
+  const top = vitals.attention.slice(0, HYDRATE_LIMIT);
+  if (top.length === 0) return { ...vitals, attention: [] };
+
+  const loops: Record<string, string[]> = {};
+  try {
+    const credentials = await readVaultCredentials(supabase, userId);
+    if (credentials) {
+      const tag = vaultTag(userId);
+      for (const entry of top) {
+        // Denise has no note at all; skip rather than pay a read for nothing.
+        if (!entry.vaultPath) continue;
+        const note = await readVaultNoteRaw(credentials, tag, entry.vaultPath, {
+          fresh: false,
+        });
+        if (!note) continue;
+        loops[entry.personId] = extractSectionBullets(
+          note.markdown,
+          OPEN_LOOPS_HEADING,
+        );
+      }
+    }
+  } catch (error) {
+    console.warn("people open-loop hydration failed", error);
+  }
+
+  return { ...vitals, attention: hydratePeopleAttention(top, loops) };
+}
 
 type Rel<T> = T | T[] | null;
 function firstRel<T>(rel: Rel<T>): T | null {
@@ -104,6 +173,9 @@ export async function buildPlanningSnapshot(params: {
     tasksRes,
     goalsRes,
     logsRes,
+    peopleRes,
+    interactionsRes,
+    candidatesRes,
     events,
     forecast,
   ] = await Promise.all([
@@ -172,6 +244,34 @@ export async function buildPlanningSnapshot(params: {
       .eq("user_id", userId)
       .order("log_date", { ascending: false })
       .limit(CHECKIN_HISTORY),
+    supabase
+      .from("people")
+      .select(
+        "id, name, vault_path, aliases, checkin_days, attention_snoozed_until, archived, archived_at, created_at, updated_at",
+      )
+      .eq("user_id", userId)
+      .eq("archived", false),
+    supabase
+      .from("person_interactions")
+      .select("id, person_id, summary, occurred_at, occurred_precision, source, created_at")
+      .eq("user_id", userId)
+      .order("occurred_at", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true })
+      .limit(INTERACTION_SCAN),
+    // Suppression inputs only (§2's asymmetry rule). Three columns, and
+    // NO excerpt: raw session text never leaves via get_snapshot (§9).
+    supabase
+      .from("person_mention_candidates")
+      .select("person_id, status, occurred_at")
+      .eq("user_id", userId)
+      .eq("status", "new")
+      // Ordered because it is capped: an unordered cap truncates an arbitrary
+      // subset, which here could drop a person's NEWEST candidate and silently
+      // fail to suppress. Descending, so overflow costs the oldest evidence —
+      // which the suppression rule never reads anyway.
+      .order("occurred_at", { ascending: false })
+      .limit(INTERACTION_SCAN),
     eventsPromise,
     buildFinanceForecast({
       supabase,
@@ -292,6 +392,19 @@ export async function buildPlanningSnapshot(params: {
     }))
     .sort((a, b) => a.date.localeCompare(b.date)); // oldest → newest trend
 
+  // Step 1: the whole cadence calculation, from Postgres rows alone — it needs
+  // no vault data at all. Step 2 then hydrates only the survivors (§7).
+  const people = await hydrateOpenLoops(
+    supabase,
+    userId,
+    computePeopleAttention({
+      people: (peopleRes.data ?? []) as Person[],
+      interactions: (interactionsRes.data ?? []) as PersonInteraction[],
+      candidates: (candidatesRes.data ?? []) as MentionCandidateRef[],
+      today,
+    }),
+  );
+
   return planningSnapshot({
     today,
     now,
@@ -318,5 +431,6 @@ export async function buildPlanningSnapshot(params: {
     usagesByItem,
     checkins,
     goals,
+    people,
   });
 }
