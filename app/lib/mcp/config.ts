@@ -26,6 +26,18 @@ export function workerAllowedUserIds(): string[] {
   return [...new Set([ownerUserId(), ...extra])];
 }
 
+// The home worker's bearer. Prefer the dedicated WORKER_BEARER_TOKEN so a
+// compromised worker PC holds only the job-queue door, not the legacy
+// full-access MCP bearer; MCP_BEARER_TOKEN remains a fallback until the env
+// migration lands (set WORKER_BEARER_TOKEN on Vercel + the PC, then remove
+// MCP_BEARER_TOKEN — which also retires the legacy static MCP mapping, since
+// that mapping only activates when MCP_BEARER_TOKEN is set).
+export function workerBearerToken(): string | null {
+  return (
+    process.env.WORKER_BEARER_TOKEN ?? process.env.MCP_BEARER_TOKEN ?? null
+  );
+}
+
 // Hosts that Dynamic Client Registration may register a redirect_uri on.
 // Registration is unauthenticated by design (RFC 7591, and claude.ai needs it),
 // so this is the gate that stops an attacker from registering their own host
