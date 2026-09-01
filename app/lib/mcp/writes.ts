@@ -2876,6 +2876,13 @@ async function executePeopleUpdate(
 
   const applied: string[] = [];
   const now = new Date().toISOString();
+  // Every in-loop failure carries how far the batch got — the executeUpdateStock
+  // contract, applied uniformly so a partially-applied people batch is as
+  // legible as a stock or finance one.
+  const fail = (message: string): Result<Record<string, unknown>> => ({
+    ok: false,
+    error: `${message} (applied: ${applied.length})`,
+  });
   // People created earlier in this batch, so later log/checkin/set_group ops
   // can target them (resolved as pendingPerson at propose time).
   const createdPeople = new Map<string, string>(); // lowercased name → id
@@ -2916,12 +2923,9 @@ async function executePeopleUpdate(
           .single();
         if (error) {
           if (error.code === "23505") {
-            return {
-              ok: false,
-              error: `you already have a ${op.name} — add a distinguishing name (applied: ${applied.length})`,
-            };
+            return fail(`you already have a ${op.name} — add a distinguishing name`);
           }
-          return { ok: false, error: error.message };
+          return fail(error.message);
         }
         createdPeople.set(op.name.toLowerCase(), (data as { id: string }).id);
         applied.push(`created ${op.name}`);
@@ -2929,7 +2933,7 @@ async function executePeopleUpdate(
       }
       case "log": {
         const target = personIdFor(op);
-        if (!target.ok) return target;
+        if (!target.ok) return fail(target.error);
         // Resolved for EVERY log op, not just undated ones: a caller-supplied
         // date has to be checked against something. Execute-time is the only
         // correct anchor — a proposal can be confirmed days after it was made,
@@ -2937,16 +2941,13 @@ async function executePeopleUpdate(
         // now, and vice versa.
         if (today === null) today = await todayKey(supabase, ownerId);
         const occurredAt = op.date ?? today;
-        if (!occurredAt) return { ok: false, error: "could not resolve today" };
+        if (!occurredAt) return fail("could not resolve today");
         // A future row is not a harmless typo: daysSinceTalked goes NEGATIVE,
         // which is never greater than any cadence, so the person is silenced
         // until that day arrives. Same guard the server actions apply — this is
         // the third write path into the same column.
         if (occurredAt > today) {
-          return {
-            ok: false,
-            error: `that day hasn't happened yet (${op.name}: ${occurredAt}) (applied: ${applied.length})`,
-          };
+          return fail(`that day hasn't happened yet (${op.name}: ${occurredAt})`);
         }
         const { error } = await supabase.from("person_interactions").insert({
           user_id: ownerId,
@@ -2958,19 +2959,19 @@ async function executePeopleUpdate(
           // behalf. 'confirmed' belongs to M4's candidate promotion only.
           source: "logged",
         });
-        if (error) return { ok: false, error: error.message };
+        if (error) return fail(error.message);
         applied.push(`logged ${op.name} on ${dateLabel(occurredAt, op.precision)}`);
         break;
       }
       case "checkin": {
         const target = personIdFor(op);
-        if (!target.ok) return target;
+        if (!target.ok) return fail(target.error);
         const { error } = await supabase
           .from("people")
           .update({ checkin_days: op.days, updated_at: now })
           .eq("user_id", ownerId)
           .eq("id", target.value);
-        if (error) return { ok: false, error: error.message };
+        if (error) return fail(error.message);
         applied.push(
           op.days === null
             ? `cleared ${op.name}'s cadence`
@@ -2984,7 +2985,7 @@ async function executePeopleUpdate(
           .update({ archived: true, archived_at: now, updated_at: now })
           .eq("user_id", ownerId)
           .eq("id", op.personId);
-        if (error) return { ok: false, error: error.message };
+        if (error) return fail(error.message);
         applied.push(`stopped tracking ${op.name}`);
         break;
       }
@@ -2998,12 +2999,11 @@ async function executePeopleUpdate(
           // people_user_name_key is partial on `not archived`, so un-archiving
           // is the one update that can collide with a live person's name.
           if (error.code === "23505") {
-            return {
-              ok: false,
-              error: `you already have a ${liveNames.get(op.personId) ?? op.name} — rename one of them first (applied: ${applied.length})`,
-            };
+            return fail(
+              `you already have a ${liveNames.get(op.personId) ?? op.name} — rename one of them first`,
+            );
           }
-          return { ok: false, error: error.message };
+          return fail(error.message);
         }
         applied.push(`tracking ${op.name} again`);
         break;
@@ -3022,12 +3022,9 @@ async function executePeopleUpdate(
           .single();
         if (error) {
           if (error.code === "23505") {
-            return {
-              ok: false,
-              error: `you already have a ${op.name} group (applied: ${applied.length})`,
-            };
+            return fail(`you already have a ${op.name} group`);
           }
-          return { ok: false, error: error.message };
+          return fail(error.message);
         }
         createdGroups.set(op.name.toLowerCase(), (data as { id: string }).id);
         applied.push(`created the ${op.name} group`);
@@ -3035,15 +3032,12 @@ async function executePeopleUpdate(
       }
       case "set_group": {
         const target = personIdFor(op);
-        if (!target.ok) return target;
+        if (!target.ok) return fail(target.error);
         let groupId = op.groupId;
         if (!groupId && op.pendingGroup) {
           const created = createdGroups.get(op.pendingGroup.toLowerCase());
           if (!created) {
-            return {
-              ok: false,
-              error: `a group this batch depends on was not created (applied: ${applied.length})`,
-            };
+            return fail("a group this batch depends on was not created");
           }
           groupId = created;
         }
@@ -3052,7 +3046,7 @@ async function executePeopleUpdate(
           .update({ group_id: groupId, updated_at: now })
           .eq("user_id", ownerId)
           .eq("id", target.value);
-        if (error) return { ok: false, error: error.message };
+        if (error) return fail(error.message);
         applied.push(
           groupId
             ? `moved ${op.name} to ${op.groupName ?? "a group"}`
