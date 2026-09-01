@@ -177,7 +177,7 @@ Theme colors are centralized in `app/globals.css` and `app/_components/themes.ts
 
 For AI agents and Claude Code, read `AGENTS.md` first. It contains the current architecture, product constraints, security rules, and implementation notes. `CLAUDE.md` points to that file.
 
-`CODEX_HANDOFF.md` is historical checkpoint context and should not be treated as current ground truth.
+`docs/CODEX_HANDOFF.md` is historical checkpoint context and should not be treated as current ground truth.
 
 ## Deployment
 
