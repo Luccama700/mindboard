@@ -97,6 +97,7 @@ import type {
 } from "@/app/_components/finance-types";
 import type { BillRule, SpendHistoryRow } from "@/app/_components/spend-baseline";
 import { addDaysKey } from "@/app/_components/finance-projection";
+import { endOfBlock } from "@/app/_components/date-utils";
 
 // The MCP write layer. Each write is two steps (the plan's locked
 // write-with-confirmation rule):
@@ -1743,14 +1744,6 @@ export async function proposeUpdateTask(userId: string, raw: unknown): Promise<R
   return proposeUpdateTaskFor(createServiceClient(), userId, raw);
 }
 
-function addMinutesToClock(time: string, minutes: number): string {
-  const [h, m] = time.split(":").map(Number);
-  const total = Math.min(h * 60 + m + minutes, 23 * 60 + 59);
-  const hh = String(Math.floor(total / 60)).padStart(2, "0");
-  const mm = String(total % 60).padStart(2, "0");
-  return `${hh}:${mm}:00`;
-}
-
 async function ownerTimezone(
   supabase: SupabaseClient,
   ownerId: string,
@@ -1841,13 +1834,14 @@ async function executeUpdateTask(
     try {
       const timeZone = await ownerTimezone(supabase, ownerId);
       const start = task.due_time.length === 5 ? `${task.due_time}:00` : task.due_time;
-      const end = addMinutesToClock(
+      const end = endOfBlock(
+        task.due_date,
         start.slice(0, 5),
         task.duration_min ?? task.estimated_minutes ?? 30,
       );
       await updateEvent(ownerId, task.gcal_calendar_id, task.gcal_event_id, {
         start: { dateTime: `${task.due_date}T${start}`, timeZone },
-        end: { dateTime: `${task.due_date}T${end}`, timeZone },
+        end: { dateTime: `${end.date}T${end.time}`, timeZone },
       });
       result.calendarSynced = true;
     } catch {
@@ -1867,14 +1861,15 @@ async function executeUpdateTask(
       try {
         const timeZone = await ownerTimezone(supabase, ownerId);
         const start = task.due_time.length === 5 ? `${task.due_time}:00` : task.due_time;
-        const end = addMinutesToClock(
+        const end = endOfBlock(
+          task.due_date,
           start.slice(0, 5),
           task.duration_min ?? task.estimated_minutes ?? 30,
         );
         const eventId = await createEvent(ownerId, calendarId, {
           summary: task.title,
           start: { dateTime: `${task.due_date}T${start}`, timeZone },
-          end: { dateTime: `${task.due_date}T${end}`, timeZone },
+          end: { dateTime: `${end.date}T${end.time}`, timeZone },
           description: "from mindboard",
         });
         const { error: saveError } = await supabase
@@ -2396,11 +2391,11 @@ async function executeCreateEvent(
     if (v.startTime) {
       const timeZone = await ownerTimezone(supabase, ownerId);
       const start = `${v.startTime}:00`;
-      const end = addMinutesToClock(v.startTime, v.durationMin);
+      const end = endOfBlock(v.date, v.startTime, v.durationMin);
       eventId = await createEvent(ownerId, v.calendarId, {
         summary: v.summary,
         start: { dateTime: `${v.date}T${start}`, timeZone },
-        end: { dateTime: `${v.date}T${end}`, timeZone },
+        end: { dateTime: `${end.date}T${end.time}`, timeZone },
         ...(v.description ? { description: v.description } : {}),
       });
     } else {
@@ -2881,6 +2876,13 @@ async function executePeopleUpdate(
 
   const applied: string[] = [];
   const now = new Date().toISOString();
+  // Every in-loop failure carries how far the batch got — the executeUpdateStock
+  // contract, applied uniformly so a partially-applied people batch is as
+  // legible as a stock or finance one.
+  const fail = (message: string): Result<Record<string, unknown>> => ({
+    ok: false,
+    error: `${message} (applied: ${applied.length})`,
+  });
   // People created earlier in this batch, so later log/checkin/set_group ops
   // can target them (resolved as pendingPerson at propose time).
   const createdPeople = new Map<string, string>(); // lowercased name → id
@@ -2921,12 +2923,9 @@ async function executePeopleUpdate(
           .single();
         if (error) {
           if (error.code === "23505") {
-            return {
-              ok: false,
-              error: `you already have a ${op.name} — add a distinguishing name (applied: ${applied.length})`,
-            };
+            return fail(`you already have a ${op.name} — add a distinguishing name`);
           }
-          return { ok: false, error: error.message };
+          return fail(error.message);
         }
         createdPeople.set(op.name.toLowerCase(), (data as { id: string }).id);
         applied.push(`created ${op.name}`);
@@ -2934,7 +2933,7 @@ async function executePeopleUpdate(
       }
       case "log": {
         const target = personIdFor(op);
-        if (!target.ok) return target;
+        if (!target.ok) return fail(target.error);
         // Resolved for EVERY log op, not just undated ones: a caller-supplied
         // date has to be checked against something. Execute-time is the only
         // correct anchor — a proposal can be confirmed days after it was made,
@@ -2942,16 +2941,13 @@ async function executePeopleUpdate(
         // now, and vice versa.
         if (today === null) today = await todayKey(supabase, ownerId);
         const occurredAt = op.date ?? today;
-        if (!occurredAt) return { ok: false, error: "could not resolve today" };
+        if (!occurredAt) return fail("could not resolve today");
         // A future row is not a harmless typo: daysSinceTalked goes NEGATIVE,
         // which is never greater than any cadence, so the person is silenced
         // until that day arrives. Same guard the server actions apply — this is
         // the third write path into the same column.
         if (occurredAt > today) {
-          return {
-            ok: false,
-            error: `that day hasn't happened yet (${op.name}: ${occurredAt}) (applied: ${applied.length})`,
-          };
+          return fail(`that day hasn't happened yet (${op.name}: ${occurredAt})`);
         }
         const { error } = await supabase.from("person_interactions").insert({
           user_id: ownerId,
@@ -2963,19 +2959,19 @@ async function executePeopleUpdate(
           // behalf. 'confirmed' belongs to M4's candidate promotion only.
           source: "logged",
         });
-        if (error) return { ok: false, error: error.message };
+        if (error) return fail(error.message);
         applied.push(`logged ${op.name} on ${dateLabel(occurredAt, op.precision)}`);
         break;
       }
       case "checkin": {
         const target = personIdFor(op);
-        if (!target.ok) return target;
+        if (!target.ok) return fail(target.error);
         const { error } = await supabase
           .from("people")
           .update({ checkin_days: op.days, updated_at: now })
           .eq("user_id", ownerId)
           .eq("id", target.value);
-        if (error) return { ok: false, error: error.message };
+        if (error) return fail(error.message);
         applied.push(
           op.days === null
             ? `cleared ${op.name}'s cadence`
@@ -2989,7 +2985,7 @@ async function executePeopleUpdate(
           .update({ archived: true, archived_at: now, updated_at: now })
           .eq("user_id", ownerId)
           .eq("id", op.personId);
-        if (error) return { ok: false, error: error.message };
+        if (error) return fail(error.message);
         applied.push(`stopped tracking ${op.name}`);
         break;
       }
@@ -3003,12 +2999,11 @@ async function executePeopleUpdate(
           // people_user_name_key is partial on `not archived`, so un-archiving
           // is the one update that can collide with a live person's name.
           if (error.code === "23505") {
-            return {
-              ok: false,
-              error: `you already have a ${liveNames.get(op.personId) ?? op.name} — rename one of them first (applied: ${applied.length})`,
-            };
+            return fail(
+              `you already have a ${liveNames.get(op.personId) ?? op.name} — rename one of them first`,
+            );
           }
-          return { ok: false, error: error.message };
+          return fail(error.message);
         }
         applied.push(`tracking ${op.name} again`);
         break;
@@ -3027,12 +3022,9 @@ async function executePeopleUpdate(
           .single();
         if (error) {
           if (error.code === "23505") {
-            return {
-              ok: false,
-              error: `you already have a ${op.name} group (applied: ${applied.length})`,
-            };
+            return fail(`you already have a ${op.name} group`);
           }
-          return { ok: false, error: error.message };
+          return fail(error.message);
         }
         createdGroups.set(op.name.toLowerCase(), (data as { id: string }).id);
         applied.push(`created the ${op.name} group`);
@@ -3040,15 +3032,12 @@ async function executePeopleUpdate(
       }
       case "set_group": {
         const target = personIdFor(op);
-        if (!target.ok) return target;
+        if (!target.ok) return fail(target.error);
         let groupId = op.groupId;
         if (!groupId && op.pendingGroup) {
           const created = createdGroups.get(op.pendingGroup.toLowerCase());
           if (!created) {
-            return {
-              ok: false,
-              error: `a group this batch depends on was not created (applied: ${applied.length})`,
-            };
+            return fail("a group this batch depends on was not created");
           }
           groupId = created;
         }
@@ -3057,7 +3046,7 @@ async function executePeopleUpdate(
           .update({ group_id: groupId, updated_at: now })
           .eq("user_id", ownerId)
           .eq("id", target.value);
-        if (error) return { ok: false, error: error.message };
+        if (error) return fail(error.message);
         applied.push(
           groupId
             ? `moved ${op.name} to ${op.groupName ?? "a group"}`

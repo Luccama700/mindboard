@@ -116,6 +116,30 @@ export function formatRelativeToNow(iso: string): string {
   return `in ${Math.round(minutes / (60 * 24))}d`;
 }
 
+// End of a timed block: start clock + duration, rolling past midnight into the
+// next day instead of clamping at 23:59 (a 23:30 block with 60min used to
+// silently truncate to 23:59). Pure calendar-key math, zone-agnostic — the
+// caller pairs the result with an explicit timeZone when building event stamps.
+export function endOfBlock(
+  dateKey: string,
+  time: string,
+  minutes: number,
+): { date: string; time: string } {
+  const [h, m] = time.split(":").map(Number);
+  const total = h * 60 + m + minutes;
+  const dayOffset = Math.floor(total / 1440);
+  const clock = total % 1440;
+  const hh = String(Math.floor(clock / 60)).padStart(2, "0");
+  const mm = String(clock % 60).padStart(2, "0");
+  let date = dateKey;
+  if (dayOffset > 0) {
+    const [y, mo, d] = dateKey.split("-").map(Number);
+    const next = new Date(Date.UTC(y, mo - 1, d + dayOffset));
+    date = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
+  }
+  return { date, time: `${hh}:${mm}:00` };
+}
+
 const PRIORITY_RANK: Record<string, number> = { high: 0, med: 1, low: 2 };
 
 export function priorityRank(p: string): number {

@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
 import { createServiceClient } from "@/utils/supabase/service";
+import { revealSecret, sealSecret } from "@/app/lib/assistant/crypto";
 
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
@@ -157,9 +158,15 @@ async function loadTokenRow(
 
 async function getValidAccessToken(userId: string): Promise<string> {
   const { row, client: supabase } = await loadTokenRow(userId);
+  // Stored encrypted (legacy rows plaintext until the next refresh re-writes
+  // them sealed). Undecryptable = effectively disconnected — the standard
+  // "sign out and back in" error, never a garbage bearer sent to Google.
+  const accessToken = revealSecret(row.access_token);
+  const refreshToken = revealSecret(row.refresh_token);
+  if (!accessToken || !refreshToken) throw new GoogleCalendarConnectionError();
   const expiresAt = new Date(row.expires_at).getTime();
   if (expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) {
-    return row.access_token;
+    return accessToken;
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -174,7 +181,7 @@ async function getValidAccessToken(userId: string): Promise<string> {
     body: new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
-      refresh_token: row.refresh_token,
+      refresh_token: refreshToken,
       grant_type: "refresh_token",
     }),
   });
@@ -195,14 +202,14 @@ async function getValidAccessToken(userId: string): Promise<string> {
   const nextExpiresAt = new Date(
     Date.now() + refreshed.expires_in * 1000,
   ).toISOString();
-  const nextRefreshToken = refreshed.refresh_token ?? row.refresh_token;
+  const nextRefreshToken = refreshed.refresh_token ?? refreshToken;
   const nextScopes = refreshed.scope ?? row.scopes;
 
   const { error: updateError } = await supabase
     .from("google_tokens")
     .update({
-      access_token: refreshed.access_token,
-      refresh_token: nextRefreshToken,
+      access_token: sealSecret(refreshed.access_token),
+      refresh_token: sealSecret(nextRefreshToken),
       expires_at: nextExpiresAt,
       scopes: nextScopes,
       updated_at: new Date().toISOString(),

@@ -732,25 +732,28 @@ const MAX_EVENT_RANGE_DAYS = 62;
 
 export async function listCalendarEvents(userId: string, filter?: { from?: string; to?: string }) {
   const { supabase, ownerId } = scoped(userId);
-  const today = await todayKey(supabase, ownerId);
+  const prefs = await readPreferencesRow(userId);
+  const timeZone = safeTimeZone(prefs.timezone);
+  const today = todayISO(timeZone);
   const from = filter?.from && ISO_DATE_RE.test(filter.from) ? filter.from : today;
   const defaultTo = addDaysKey(from, 7);
   let to = filter?.to && ISO_DATE_RE.test(filter.to) ? filter.to : defaultTo;
   if (to < from) to = from;
 
-  const start = new Date(`${from}T00:00:00`);
-  const end = new Date(`${to}T00:00:00`);
-  end.setDate(end.getDate() + 1); // inclusive `to`
-  const spanDays = (end.getTime() - start.getTime()) / 86_400_000;
-  if (spanDays > MAX_EVENT_RANGE_DAYS) {
+  // Inclusive span in key-space (`to` + 1 day), like the old Date math.
+  if (daysBetweenKeys(from, to) + 1 > MAX_EVENT_RANGE_DAYS) {
     throw new Error(`date range too large (max ${MAX_EVENT_RANGE_DAYS} days)`);
   }
 
+  // Window edges are the USER'S midnights, not the process clock's (UTC on
+  // Vercel) — same resolution getScheduleSnapshot uses above.
+  const timeMin = new Date(zonedWallTimeToUtcMs(from, 0, 0, timeZone)).toISOString();
+  const timeMax = new Date(
+    zonedWallTimeToUtcMs(addDaysKey(to, 1), 0, 0, timeZone),
+  ).toISOString();
+
   const [events, groupsRes] = await Promise.all([
-    listEvents(ownerId, {
-      timeMin: start.toISOString(),
-      timeMax: end.toISOString(),
-    }),
+    listEvents(ownerId, { timeMin, timeMax }),
     supabase
       .from("groups")
       .select("name, google_calendar_id")

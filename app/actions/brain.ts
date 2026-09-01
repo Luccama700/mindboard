@@ -4,6 +4,7 @@ import { updateTag } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
 import { normalizeVaultSettingsInput } from "@/app/lib/brain/settings";
+import { revealSecret, sealSecret } from "@/app/lib/assistant/crypto";
 import { githubHeaders, vaultTag } from "@/app/lib/brain/vault";
 
 export type VaultActionResult = { error: string | null };
@@ -58,7 +59,10 @@ export async function saveVaultSettings(input: {
       .eq("user_id", user.id)
       .maybeSingle();
     if (!existing) return { error: "token required" };
-    token = existing.github_token as string;
+    // Stored encrypted (legacy rows plaintext); GitHub needs the plaintext.
+    const revealed = revealSecret(existing.github_token as string);
+    if (!revealed) return { error: "stored token is unreadable — paste it again" };
+    token = revealed;
   }
 
   const accessError = await verifyVaultAccess(
@@ -71,7 +75,7 @@ export async function saveVaultSettings(input: {
   const { error } = await supabase.from("vault_settings").upsert(
     {
       user_id: user.id,
-      github_token: token,
+      github_token: sealSecret(token),
       repo: normalized.repo,
       branch: normalized.branch,
       updated_at: new Date().toISOString(),

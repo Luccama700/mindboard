@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
+import { endOfBlock } from "@/app/_components/date-utils";
 import { TASK_COLUMNS } from "@/app/_components/types";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -11,15 +12,6 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 function normalizeTime(value: string): string {
   // "HH:MM" | "HH:MM:SS" -> "HH:MM:SS"
   return value.length === 5 ? `${value}:00` : value;
-}
-
-function addMinutesToTime(time: string, minutes: number): string {
-  const [h, m] = time.split(":").map(Number);
-  const total = h * 60 + m + minutes;
-  const capped = Math.min(total, 23 * 60 + 59);
-  const hh = String(Math.floor(capped / 60)).padStart(2, "0");
-  const mm = String(capped % 60).padStart(2, "0");
-  return `${hh}:${mm}:00`;
 }
 
 type ScheduleRow = {
@@ -41,13 +33,14 @@ async function syncPushedTask(userId: string, task: ScheduleRow) {
     const prefs = await getUserPreferences(userId);
     const timeZone = prefs.timezone ?? "UTC";
     const start = normalizeTime(task.due_time);
-    const end = addMinutesToTime(
+    const end = endOfBlock(
+      task.due_date,
       start.slice(0, 5),
       task.duration_min ?? task.estimated_minutes ?? 30,
     );
     await updateEvent(userId, task.gcal_calendar_id, task.gcal_event_id, {
       start: { dateTime: `${task.due_date}T${start}`, timeZone },
-      end: { dateTime: `${task.due_date}T${end}`, timeZone },
+      end: { dateTime: `${end.date}T${end.time}`, timeZone },
     });
   } catch {
     // fail soft — the local block is the source of truth
@@ -297,7 +290,8 @@ export async function pushTaskToCalendar(id: string) {
   const prefs = await getUserPreferences(user.id);
   const timeZone = prefs.timezone ?? "UTC";
   const start = normalizeTime(task.due_time as string);
-  const end = addMinutesToTime(
+  const end = endOfBlock(
+    task.due_date as string,
     start.slice(0, 5),
     (task.duration_min as number | null) ??
       (task.estimated_minutes as number | null) ??
@@ -309,7 +303,7 @@ export async function pushTaskToCalendar(id: string) {
     eventId = await createEvent(user.id, calendarId, {
       summary: task.title as string,
       start: { dateTime: `${task.due_date}T${start}`, timeZone },
-      end: { dateTime: `${task.due_date}T${end}`, timeZone },
+      end: { dateTime: `${end.date}T${end.time}`, timeZone },
       description: "from mindboard",
     });
   } catch (error) {

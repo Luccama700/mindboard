@@ -49,7 +49,7 @@ describe("bearerAuthorized", () => {
     expect(bearerAuthorized("Bearer s3cret", "s3cret")).toBe(true);
   });
 
-  test.each([
+  test.each<[string | null, string]>([
     ["Bearer wrong!", "wrong token"],
     ["Bearer s3cret-longer", "wrong length"],
     ["s3cret", "missing Bearer prefix"],

@@ -110,7 +110,6 @@ export function sniffExtension(bytes: Buffer): string {
 function decodeUtf8Text(bytes: Buffer): string | null {
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    // eslint-disable-next-line no-control-regex
     if (!/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)) return text;
   } catch {
     // not text

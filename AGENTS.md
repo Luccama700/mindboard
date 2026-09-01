@@ -20,7 +20,7 @@ The longer-term direction is to evolve Mindboard into an AI "second brain" / lif
 - No UI library and no state library. Use React built-ins and hand-rolled Tailwind.
 - `@dnd-kit/core` is the one allowed behavior dependency, used for drag-to-reschedule in the week view. Do not pull in `@dnd-kit/sortable` or `@dnd-kit/modifiers` unless a new feature actually needs them.
 - Tests run on Vitest (`npm run test`); pure logic (projections, snapshots, money/split math) is unit-tested under `__tests__/`.
-- `app/lib/` holds non-UI logic: `app/lib/data/*` (reusable, `cache()`-deduped, RLS-scoped reads), `app/lib/snapshots/*` (pure cross-domain rollups), and `app/lib/agent/registry.ts` (the agent tool-layer seam — see the AI Second-Brain Direction section).
+- `app/lib/` holds non-UI logic: `app/lib/data/*` (reusable, `cache()`-deduped, RLS-scoped reads), `app/lib/snapshots/*` (pure cross-domain rollups), and `app/lib/mcp/*` — whose shared `proposeXFor`/`EXECUTORS` layer in `writes.ts` is the agent tool seam both AI surfaces confirm through (see the AI Second-Brain Direction section).
 
 ## Product State
 
@@ -28,13 +28,17 @@ Shipped routes:
 
 - `/` dashboard: a **stream** (daily pulse header + NOW/NEXT/LATER task sections) as the left column, with a week calendar pane beside it on desktop (`hidden lg:block`, ~50/50 two-column grid); on mobile the stream stands alone and the calendar is the dedicated `/week` route.
 - `/login`: Google OAuth sign-in.
-- `/auth/callback`: exchanges Supabase OAuth code and persists Google provider tokens.
-- `/groups`: group list with inline create form, inbox card, and per-group edit panels for renaming, type, color, and Google Calendar link.
-- `/groups/[id]`: tasks for one group, plus upcoming events from the linked Google Calendar (if any).
-- `/inbox`: tasks with no group.
-- `/finance`: accounts + ledger + recurring expenses + income sources + spending categories on the left, a cashflow-forecast calendar on the right. See the Finance section.
+- `/auth/callback`: exchanges Supabase OAuth code and persists Google provider tokens (sealed at rest — see `app/lib/assistant/crypto.ts`).
+- `/tasks`: every task list in one route — inbox and per-group views via `?group=`, group management (`app/tasks/groups-client.tsx`), repeating tasks (`app/tasks/recurring-client.tsx`), and `/tasks/history`. The old `/groups`, `/groups/[id]`, and `/inbox` routes are permanent redirects into it (`next.config.ts`).
+- `/week`: the dedicated week-calendar route (on desktop the dashboard renders the week pane beside the stream instead).
+- `/finance`: accounts + ledger + recurring expenses + income sources + spending categories, with the cashflow-forecast calendar; `/finance/setup` holds the recurring-expense and income-source managers. See the Finance section.
 - `/inventory`: stock items grouped, with a per-item depletion-forecast calendar. See the Inventory section.
-- `/learn`: courses + sources + audio overviews (NotebookLM-style study engine); `/learn/[id]/chat` (grounded chat with citations) and `/learn/[id]/study` (flashcards + study-document generators). See the Learn section and `docs/education-plan.md`.
+- `/learn`: courses + sources + audio overviews (NotebookLM-style study engine); `/learn/[id]/chat` (grounded chat with citations) and `/learn/[id]/study` (flashcards + study-document generators). See the Learn section and `docs/education-plan.md`. Hidden from the nav rail since 2026-08-11 (code and URL kept) — do not re-surface without the user.
+- `/brain`, `/brain/graph`, `/brain/note/[...path]`: the vault viewer over the GitHub second brain (corpus reads in `app/lib/brain/vault.ts`).
+- `/mindspace` (+ `/mindspace/import`): the mindspace topics layer. See `docs/mindspace-plan.md`.
+- `/people`, `/people/[id]`: the relationship layer. See the People section and `docs/people-plan.md`.
+- `/plan`: the plan copilot.
+- `/settings`: preferences, appearance, connections (provider keys, vault, MCP token, worker status).
 
 Onboarding lives in `app/_components/onboarding/` (mounted globally via `TourMount` in `app/layout.tsx`): a first-run intro carousel plus per-screen coach-mark tours, all defined as pure data in `tours.ts` and anchored to `[data-tour]` stamps on chrome (never data rows). Completion persists in `user_settings.completed_tours` (jsonb) plus the localStorage mirror `TOURS_MIRROR_KEY`; a floating `?` (top right) replays the current screen's tour. Next to it, a `※` "what's new" button opens hand-written patch notes from `whats-new.ts` (newest first, unread accent dot keyed on `localStorage["mb-news-seen"]` vs the latest entry id — per-device, no DB column). When shipping user-facing features, append a `whats-new.ts` entry and update the affected tour copy in `tours.ts`.
 
@@ -75,7 +79,7 @@ The active theme palette lives in `app/globals.css` via `@theme inline` tokens s
 
 Palette customization is per theme. Overrides persist in `localStorage` under `palette-${theme}` and are applied by setting CSS variables at runtime.
 
-`app/_components/get-started-screen.tsx` lets first-time users choose dark or cream before login. `app/_components/settings-panel.tsx` renders the appearance section inline on `/settings`: a theme dropdown plus a collapsed "customize colors" disclosure wrapping the shared `ColorPicker` palette editor. Legacy plaintext image-gen keys in `localStorage` migrate to encrypted provider columns via `app/_components/legacy-image-key-migration.tsx` on the next `/settings` visit. `app/_components/theme-initializer.tsx` applies the saved theme class and palette variables after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
+The logged-out `/` is the scroll-driven landing page (`app/_components/landing/`), whose theme-split section lets first-time users pick dark or cream before login (it replaced the old `get-started-screen.tsx` in v0.4.0). `app/_components/settings-panel.tsx` renders the appearance section inline on `/settings`: a theme dropdown plus a collapsed "customize colors" disclosure wrapping the shared `ColorPicker` palette editor. Legacy plaintext image-gen keys in `localStorage` migrate to encrypted provider columns via `app/_components/legacy-image-key-migration.tsx` on the next `/settings` visit. `app/_components/theme-initializer.tsx` applies the saved theme class and palette variables after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
 
 `app/_components/color-picker.tsx` is the shared 12-swatch palette + custom RGB picker, used by both the group edit panel and the settings panel.
 
@@ -201,15 +205,11 @@ Event rescheduling (write-back of `start`/`end`) is shipped. Event creation, del
 
 ## Task UX
 
-The task capture bar is the highest-priority interaction.
+Capture lives in the **Dock** (`app/_components/dock.tsx`, mounted globally by `app/_components/dock-mount.tsx`) — the fixed bottom island that replaced the old `task-capture-bar.tsx`. It is still the highest-priority interaction: reachable on iPhone, usable while scrolling, input focused after submit.
 
-- File: `app/_components/task-capture-bar.tsx`
-- It is a fixed bottom island.
-- It should stay usable while scrolling.
-- The input should stay focused after submit.
-- Due-date chips stick across submits for quick batch entry.
-- The group selector chip also sticks across submits. It opens a compact bottom-adjacent picker with "inbox" plus every active group, and new tasks should be inserted into the selected group.
-- The `+ notes` chip opens a compact textarea for Markdown notes. Notes are trimmed, stored in `tasks.notes`, and cleared after submit. Keep the stored value as raw Markdown text; do not render HTML from it unless a future feature adds a sanitizer.
+- One field, the **three-mode capture grammar** (`app/lib/capture/parse.ts`, pure + unit-tested): bare text = task, `$` = spend log, `?` = copilot handoff. Exactly three modes — parser trust is a budget, spent on these. Task mode has trailing extractors (time, estimate, recurrence), not extra modes.
+- The Dock also carries the nav rail (with inbox/brain badges), the group picker sheet (with a people tab for people-groups), and the in-app assistant entry.
+- Notes stay raw Markdown text in `tasks.notes`; do not render HTML from it unless a future feature adds a sanitizer.
 
 Tapping the title of any task row expands an inline edit panel with four fields, all auto-saving where applicable:
 
@@ -219,7 +219,7 @@ Tapping the title of any task row expands an inline edit panel with four fields,
 - Markdown notes textarea (saves on blur into `tasks.notes`).
 - Delete is in the same panel.
 
-Group edit lives in `app/groups/groups-client.tsx`. Tapping the `···` on a group row opens an inline panel with rename, type, color, Google Calendar link, and archive. The shared `ColorPicker` and `TypePicker` components are reused by the create form and the edit panel. `CalendarLinkPicker` lists every readable Google Calendar from `listCalendars`.
+Group edit lives in `app/tasks/groups-client.tsx` (moved from the retired `/groups` route). Tapping the `···` on a group row opens an inline panel with rename, type, color, Google Calendar link, and archive. The shared `ColorPicker` and `TypePicker` components are reused by the create form and the edit panel. `CalendarLinkPicker` lists every readable Google Calendar from `listCalendars`.
 
 Color picker:
 
@@ -229,7 +229,7 @@ Color picker:
 
 Task optimistic UI patterns are in:
 
-- `app/_components/today-client.tsx`: dashboard list, merges tasks with virtual events from linked calendars. Optimistic capture should map the selected group id to `group_name`/`group_color` immediately.
+- `app/_components/stream-client.tsx`: the dashboard stream's NOW/NEXT/LATER sections (the old `today-client.tsx` is gone). Optimistic capture should map the selected group id to `group_name`/`group_color` immediately.
 - `app/_components/tasks-client.tsx`: inbox and single-group list, removes a task from the visible list when its group is changed off the current page. Optimistic capture should only show a new task if its selected group belongs on the current page.
 
 Mutations live in:
@@ -277,7 +277,7 @@ Files: `app/inventory/page.tsx`, `app/inventory/inventory-client.tsx`, `app/_com
 
 - **Ingestion, three paths, one contract** (markdown → vault via the create-only `Courses/` writer, a second fenced direct-write exception alongside `capture_to_brain`'s `Inbox/`): (1) chat-AI transcription over MCP — `begin_source_upload` → `append_source_markdown` (contiguous 1-based parts ≤20k chars) → `finalize_source`, on subscription tokens; (2) the home worker (MinerU, free); (3) Claude-API conversion on the stored key (`app/lib/learn/convert.ts`: `unpdf` probe → `pdf-lib` ~20-page slices with 1-page overlap → per-slice document-block calls → anchor-trimmed stitch). Original PDFs upload browser→storage directly (private `course-files`, `{user}/{source}/` folders).
 - **Audio overviews** (`app/lib/learn/episodes.ts` + `podcast-script.ts`): Claude writes a typed script — two hosts (flavors deep-dive/brief/debate) or a single narrator (flavor solo) — from the sources' vault markdown; voices render via **Gemini Flash TTS** (one multi-speaker request; PCM→WAV in pure JS — no ffmpeg on Vercel) or **VibeVoice on the home worker** ($0, queued). Episodes live in `audio_episodes` + the private `course-audio` bucket, played via signed URLs. MCP `generate_audio_overview` is propose → confirm (it spends money); the in-app tap executes directly.
-- **Home worker** (`worker/worker.py` + `worker/README.md`): pull-based, no inbound ports, no DB key on the PC — it polls `POST /api/worker` (bearer = `MCP_BEARER_TOKEN`) for claim/heartbeat/complete/fail; claims are atomic (`claim_next_job(allowed_users)`, stale-heartbeat reclaim, 3-attempt dead-letter) and **allowlist-gated**: only jobs from the owner + `WORKER_ALLOWED_USER_IDS` (comma-separated ids; `workerAllowedUserIds()` in `app/lib/mcp/config.ts`) are claimed, and the enqueue paths (`queueSourceConversion`, the vibevoice branch of `generateEpisodeFor`) refuse non-allowlisted users up front. PDFs travel via signed download URLs and audio via signed upload URLs; all vault/Postgres finalization stays in the app. The settings connections card shows online/queue state from `worker_status`.
+- **Home worker** (`worker/worker.py` + `worker/README.md`): pull-based, no inbound ports, no DB key on the PC — it polls `POST /api/worker` (bearer = `WORKER_BEARER_TOKEN`, falling back to the legacy `MCP_BEARER_TOKEN` until the env split lands) for claim/heartbeat/complete/fail; claims are atomic (`claim_next_job(allowed_users)`, stale-heartbeat reclaim, 3-attempt dead-letter) and **allowlist-gated**: only jobs from the owner + `WORKER_ALLOWED_USER_IDS` (comma-separated ids; `workerAllowedUserIds()` in `app/lib/mcp/config.ts`) are claimed, and the enqueue paths (`queueSourceConversion`, the vibevoice branch of `generateEpisodeFor`) refuse non-allowlisted users up front. PDFs travel via signed download URLs and audio via signed upload URLs; all vault/Postgres finalization stays in the app. The settings connections card shows online/queue state from `worker_status`.
 - **Grounded chat** (`/api/course-chat` + `/learn/[id]/chat`): selected sources attach as citation-enabled text documents; answers stream over SSE and end with numbered citation chips (quoted passage + `noteHref` deep link into `/brain`). Source-subset toggling is the context strategy — no pgvector, honoring the cancelled Phase 3.
 - **Study** (`/learn/[id]/study` + `app/lib/learn/artifacts.ts`): study guide/FAQ/briefing/timeline generate as vault notes (`type: course-artifact`); flashcards persist in `course_cards` with got/miss progress (reveal → grade, retest-missed, weak-cards deck).
 - **Connections** (settings): every provider key lives in one section, one `ConnectionCard` recipe (status dot, last-4 hint, plain-language "powers" line, verify-on-save), all encrypted server-side via `app/actions/connections.ts` + `app/lib/connections/keys.ts`. Icon-generation keys moved here from localStorage; only provider/model prefs stay client-side.
@@ -323,9 +323,9 @@ There are exactly **two blessed boundary resolvers** — `todayKey(supabase, use
 
 ## AI Second-Brain Direction
 
-Mindboard is being evolved into an AI "second brain" / life command center. The architectural spine is a single **agent tool layer** (`app/lib/agent/registry.ts`): a typed catalog of read/write tools intended to be exposed three ways without rewriting logic — an in-app assistant, a remote MCP server, and a proactive "what should I do next" planner. The registry is currently the catalog (the seam); live handlers, an `ai_audit_log`, and the confirmation step are wired in a later phase.
+Mindboard is being evolved into an AI "second brain" / life command center. The architectural spine is the **shared propose/execute layer in `app/lib/mcp/writes.ts`**: `proposeXFor(...)` functions (taking either the session or the service client) record `ai_audit_log` proposals, and the `EXECUTORS` map applies confirmed ones — so the in-app assistant (`app/lib/assistant/tools.ts`) and the remote MCP server (`app/api/mcp/[transport]/route.ts`) share one write path with one confirmation step. (The earlier `app/lib/agent/registry.ts` catalog never became that seam and was deleted 2026-09-01 — see the dated note in `docs/second-brain-plan.md`; a single generated catalog is worth revisiting only if a third surface, the proactive planner, materializes.)
 
-Decided constraints: assistant writes are **propose → confirm** (never silent), and finance is read-safe by default. The AI stack (raw Anthropic SDK vs Vercel AI SDK vs Claude Agent SDK) is intentionally not yet chosen — Phase 0/1 (the read/tool layer + the dashboard stream/command center) are stack-agnostic. The full vision, phased roadmap, and decisions are in `docs/second-brain-plan.md`. This direction is what authorizes the future notes/goals/pgvector tables noted in the Data Model scope note.
+Decided constraints: assistant writes are **propose → confirm** (never silent), and finance is read-safe by default. The full vision, phased roadmap, and decisions are in `docs/second-brain-plan.md`. This direction is what authorizes the future notes/goals/pgvector tables noted in the Data Model scope note.
 
 ## Important Files
 
@@ -343,11 +343,11 @@ Decided constraints: assistant writes are **propose → confirm** (never silent)
 - `app/_components/calendar-types.ts`: shared `CalendarItem` discriminated union for tasks, events, and finance changes in the calendar widget.
 - `app/_components/task-row.tsx`: shared task row with inline edit panel (title, date, group, Markdown notes, delete).
 - `app/_components/event-row.tsx`: read-only virtual row for events from a linked Google Calendar.
-- `app/_components/today-client.tsx`: dashboard task list, mixes tasks with virtual events from linked calendars.
 - `app/_components/tasks-client.tsx`: inbox and single-group task list.
+- `app/_components/dock.tsx` + `dock-mount.tsx`: the bottom Dock — capture field (three-mode grammar), nav rail, group sheet, assistant entry.
 - `app/_components/types.ts`: shared task types.
 - `app/_components/date-utils.ts`: date helpers.
-- `app/groups/groups-client.tsx`: group list, create form, per-group edit panel, color picker, calendar linker.
+- `app/tasks/groups-client.tsx`: group list, create form, per-group edit panel, color picker, calendar linker.
 - `app/finance/finance-client.tsx`: finance UI — accounts, ledger, recurring expenses, income sources, categories, and the balance-update panel with multi-category split.
 - `app/_components/finance-projection.ts`: pure, unit-tested net-worth/cashflow projection.
 - `app/_components/money.ts`: money formatting + `splitEvenly`/`sumMoney`.
@@ -355,7 +355,7 @@ Decided constraints: assistant writes are **propose → confirm** (never silent)
 - `app/_components/inventory-projection.ts`: pure, unit-tested depletion forecast.
 - `app/_components/stream-client.tsx`: the dashboard stream (daily pulse + NOW/NEXT/LATER task sections).
 - `app/lib/data/*`, `app/lib/snapshots/*`: reusable reads and pure cross-domain rollups feeding the dashboard stream, the calendar, and the MCP/assistant snapshots.
-- `app/lib/agent/registry.ts`: the agent tool-layer seam (see AI Second-Brain Direction).
+- `app/lib/mcp/writes.ts`: the propose/EXECUTORS agent tool seam (see AI Second-Brain Direction).
 - `docs/second-brain-plan.md`: the second-brain vision, roadmap, and decisions.
 
 ## Engineering Rules
@@ -367,7 +367,8 @@ Decided constraints: assistant writes are **propose → confirm** (never silent)
 - Validate user input and external API responses; trust internal code where reasonable.
 - Avoid comments unless they explain a non-obvious invariant or constraint.
 - Use `rg` for search.
-- Use `npm run lint`, `npm run test`, and `npm run build` before declaring code changes complete.
+- Use `npm run lint`, `npm run typecheck`, `npm run test`, and `npm run build` before declaring code changes complete. CI (`.github/workflows/ci.yml`) runs the first three on every push/PR.
+- If a change adds, moves, or deletes a route or any file this document names, update AGENTS.md in the same PR (the sibling of the whats-new/tours rule above).
 - Next build may need network access to fetch Google Fonts.
 - Do not touch or commit unrelated local changes. In particular, `.claude/settings.local.json` has been locally dirty before and should be ignored unless the user asks.
 
