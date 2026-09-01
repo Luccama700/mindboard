@@ -84,7 +84,7 @@ try {
   console.log(`  user A ${a.id}`);
   console.log(`  user B ${b.id}`);
 
-  const { data: taskA, error: seedAErr } = await a.client
+  const { error: seedAErr } = await a.client
     .from("tasks").insert({ user_id: a.id, title: "A secret task" }).select("id").single();
   const { data: taskB, error: seedBErr } = await b.client
     .from("tasks").insert({ user_id: b.id, title: "B secret task" }).select("id").single();
