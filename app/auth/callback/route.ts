@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/utils/supabase/server";
+import { revealSecret, sealSecret } from "@/app/lib/assistant/crypto";
 import { CALENDAR_SCOPES } from "@/utils/google/scopes";
 
 export async function GET(request: Request) {
@@ -22,7 +23,11 @@ export async function GET(request: Request) {
             .select("refresh_token")
             .eq("user_id", session.user.id)
             .maybeSingle();
-          refreshToken = existing?.refresh_token ?? null;
+          // Stored form may be encrypted (or legacy plaintext) — reveal to
+          // plaintext here so the seal below never double-encrypts.
+          refreshToken = existing?.refresh_token
+            ? revealSecret(existing.refresh_token as string)
+            : null;
         }
 
         if (refreshToken) {
@@ -34,8 +39,8 @@ export async function GET(request: Request) {
           await supabase.from("google_tokens").upsert(
             {
               user_id: session.user.id,
-              access_token: providerToken,
-              refresh_token: refreshToken,
+              access_token: sealSecret(providerToken),
+              refresh_token: sealSecret(refreshToken),
               expires_at: expiresAt,
               scopes: CALENDAR_SCOPES,
               updated_at: new Date().toISOString(),
