@@ -97,6 +97,7 @@ import type {
 } from "@/app/_components/finance-types";
 import type { BillRule, SpendHistoryRow } from "@/app/_components/spend-baseline";
 import { addDaysKey } from "@/app/_components/finance-projection";
+import { endOfBlock } from "@/app/_components/date-utils";
 
 // The MCP write layer. Each write is two steps (the plan's locked
 // write-with-confirmation rule):
@@ -1743,14 +1744,6 @@ export async function proposeUpdateTask(userId: string, raw: unknown): Promise<R
   return proposeUpdateTaskFor(createServiceClient(), userId, raw);
 }
 
-function addMinutesToClock(time: string, minutes: number): string {
-  const [h, m] = time.split(":").map(Number);
-  const total = Math.min(h * 60 + m + minutes, 23 * 60 + 59);
-  const hh = String(Math.floor(total / 60)).padStart(2, "0");
-  const mm = String(total % 60).padStart(2, "0");
-  return `${hh}:${mm}:00`;
-}
-
 async function ownerTimezone(
   supabase: SupabaseClient,
   ownerId: string,
@@ -1841,13 +1834,14 @@ async function executeUpdateTask(
     try {
       const timeZone = await ownerTimezone(supabase, ownerId);
       const start = task.due_time.length === 5 ? `${task.due_time}:00` : task.due_time;
-      const end = addMinutesToClock(
+      const end = endOfBlock(
+        task.due_date,
         start.slice(0, 5),
         task.duration_min ?? task.estimated_minutes ?? 30,
       );
       await updateEvent(ownerId, task.gcal_calendar_id, task.gcal_event_id, {
         start: { dateTime: `${task.due_date}T${start}`, timeZone },
-        end: { dateTime: `${task.due_date}T${end}`, timeZone },
+        end: { dateTime: `${end.date}T${end.time}`, timeZone },
       });
       result.calendarSynced = true;
     } catch {
@@ -1867,14 +1861,15 @@ async function executeUpdateTask(
       try {
         const timeZone = await ownerTimezone(supabase, ownerId);
         const start = task.due_time.length === 5 ? `${task.due_time}:00` : task.due_time;
-        const end = addMinutesToClock(
+        const end = endOfBlock(
+          task.due_date,
           start.slice(0, 5),
           task.duration_min ?? task.estimated_minutes ?? 30,
         );
         const eventId = await createEvent(ownerId, calendarId, {
           summary: task.title,
           start: { dateTime: `${task.due_date}T${start}`, timeZone },
-          end: { dateTime: `${task.due_date}T${end}`, timeZone },
+          end: { dateTime: `${end.date}T${end.time}`, timeZone },
           description: "from mindboard",
         });
         const { error: saveError } = await supabase
@@ -2396,11 +2391,11 @@ async function executeCreateEvent(
     if (v.startTime) {
       const timeZone = await ownerTimezone(supabase, ownerId);
       const start = `${v.startTime}:00`;
-      const end = addMinutesToClock(v.startTime, v.durationMin);
+      const end = endOfBlock(v.date, v.startTime, v.durationMin);
       eventId = await createEvent(ownerId, v.calendarId, {
         summary: v.summary,
         start: { dateTime: `${v.date}T${start}`, timeZone },
-        end: { dateTime: `${v.date}T${end}`, timeZone },
+        end: { dateTime: `${end.date}T${end.time}`, timeZone },
         ...(v.description ? { description: v.description } : {}),
       });
     } else {

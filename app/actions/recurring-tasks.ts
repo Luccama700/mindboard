@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { createEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
+import { endOfBlock } from "@/app/_components/date-utils";
 import { todayKey } from "@/app/lib/mcp/config";
 import {
   RECURRING_TASK_COLUMNS,
@@ -12,14 +13,6 @@ import {
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function addMinutesToTime(time: string, minutes: number): string {
-  const [h, m] = time.split(":").map(Number);
-  const total = h * 60 + m + minutes;
-  const capped = Math.min(total, 23 * 60 + 59);
-  const hh = String(Math.floor(capped / 60)).padStart(2, "0");
-  const mm = String(capped % 60).padStart(2, "0");
-  return `${hh}:${mm}:00`;
-}
 const FREQUENCIES = new Set(["daily", "weekly", "monthly", "custom"]);
 const PRIORITIES = new Set(["low", "med", "high"]);
 
@@ -409,14 +402,14 @@ export async function promoteRecurringToEvent(input: {
   const prefs = await getUserPreferences(user.id);
   const timeZone = prefs.timezone ?? "UTC";
   const startTime = input.start.length === 5 ? `${input.start}:00` : input.start;
-  const endTime = addMinutesToTime(startTime.slice(0, 5), durationMin);
+  const end = endOfBlock(input.occurredOn, startTime.slice(0, 5), durationMin);
 
   let eventId: string;
   try {
     eventId = await createEvent(user.id, calendarId, {
       summary: title,
       start: { dateTime: `${input.occurredOn}T${startTime}`, timeZone },
-      end: { dateTime: `${input.occurredOn}T${endTime}`, timeZone },
+      end: { dateTime: `${end.date}T${end.time}`, timeZone },
       description: "from mindboard routine",
     });
   } catch (error) {
