@@ -69,6 +69,14 @@ is `app/page.tsx` (to mount the vitals strip). Verified: `npm run lint` clean,
   tools (cataloged, `confirm: true`, mapped to existing `app/actions/*`). No LLM wiring yet;
   this is the single source of truth Phase 2 + the MCP server will both consume.
 
+> **Deleted 2026-09-01 (audit-2026-09-01 §3.1).** The registry never became the
+> seam: the MCP server registered its tools inline and the in-app assistant
+> defined its own, leaving the catalog a third, unconsumed copy that only
+> drifted. The seam that *actually* emerged — and is now blessed — is the shared
+> `proposeXFor`/`EXECUTORS` layer in `app/lib/mcp/writes.ts`, which both
+> surfaces confirm through. Revisit a generated single catalog only if a third
+> surface (the proactive planner) materializes.
+
 **Tests:**
 - `__tests__/vitals-snapshots.test.ts` — 17 tests across the four snapshots + registry validity.
 

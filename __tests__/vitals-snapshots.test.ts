@@ -3,12 +3,6 @@ import { financeSnapshot } from "@/app/lib/snapshots/finance";
 import { inventorySnapshot } from "@/app/lib/snapshots/inventory";
 import { tasksSnapshot } from "@/app/lib/snapshots/tasks";
 import { scheduleSnapshot, type ScheduleEvent } from "@/app/lib/snapshots/schedule";
-import {
-  getTool,
-  readTools,
-  toolRegistry,
-  writeTools,
-} from "@/app/lib/agent/registry";
 import type {
   Account,
   BalanceChange,
@@ -461,36 +455,5 @@ describe("scheduleSnapshot", () => {
       now: new Date(2026, 5, 1, 23, 0, 0),
     });
     expect(snap.freeHoursToday).toBe(0);
-  });
-});
-
-// ---------- registry seam ----------
-
-describe("tool registry", () => {
-  test("tool names are unique", () => {
-    const names = toolRegistry.map((t) => t.name);
-    expect(new Set(names).size).toBe(names.length);
-  });
-
-  test("every tool has a valid kind and maps to an implementation", () => {
-    for (const tool of toolRegistry) {
-      expect(["read", "write"]).toContain(tool.kind);
-      expect(tool.mapsTo).toMatch(/#/);
-      expect(tool.description.length).toBeGreaterThan(0);
-    }
-  });
-
-  test("write tools require confirmation (agreed autonomy stance)", () => {
-    for (const tool of writeTools()) {
-      expect(tool.confirm).toBe(true);
-    }
-    expect(readTools().length).toBeGreaterThan(0);
-    expect(writeTools().length).toBeGreaterThan(0);
-  });
-
-  test("getTool looks up by name", () => {
-    expect(getTool("life.financeSnapshot")?.kind).toBe("read");
-    expect(getTool("tasks.create")?.kind).toBe("write");
-    expect(getTool("nope")).toBeUndefined();
   });
 });
