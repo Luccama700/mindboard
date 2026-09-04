@@ -124,6 +124,7 @@ MCP_BEARER_TOKEN=a_long_random_secret        # legacy static token, maps to the 
 MINDBOARD_OWNER_USER_ID=your_supabase_auth_user_id   # owner mapping + worker heartbeat
 MCP_OAUTH_SECRET=a_long_random_secret        # signs the stateless OAuth tokens
 WORKER_ALLOWED_USER_IDS=uuid1,uuid2          # optional: extra users allowed on the home worker
+WATCH_TOKEN=a_long_random_secret             # Apple Watch API bearer (see below)
 ```
 
 Tools:
@@ -133,6 +134,23 @@ Tools:
 - `confirm_action` executes a proposal (applies the write and flips its audit row to `executed`); `cancel_action` discards it.
 
 In production, add it to claude.ai as a custom connector (Settings → Connectors → Add custom connector) pointing at `https://<your-domain>/api/mcp/mcp` — claude.ai runs the OAuth flow and each user approves once via their own Google login. Test locally with the MCP inspector (`npx @modelcontextprotocol/inspector`) using OAuth, a per-user `mbp_` token from `/settings`, or the legacy static bearer.
+
+## Apple Watch API
+
+The watchOS client (`mindboard-watch`, a separate repo) talks to a small JSON API under `/api/watch/*`, authenticated with a bearer token from the `WATCH_TOKEN` env var:
+
+- Plain string: `WATCH_TOKEN=a_long_random_secret` — maps to the deployment owner (`MINDBOARD_OWNER_USER_ID`), like the legacy static MCP token.
+- JSON map, one token per tenant: `WATCH_TOKEN={"secret_for_lucca":"<lucca_user_id>","secret_for_friend":"<friend_user_id>"}`.
+
+Generate a token with `openssl rand -base64 48`, set it in Vercel (Production) and in `.env.local`, then paste the same value into the watch app's `Secrets.xcconfig`. Rotating the token is just changing the env var and redeploying; a missing or malformed `WATCH_TOKEN` makes every watch request 401.
+
+Endpoints (all `Authorization: Bearer <token>`; writes are JSON `POST`s and accept an `Idempotency-Key` header so a retried request from a flaky watch connection never double-logs — the key derives the `ai_audit_log` row id, and a repeat replays the first attempt's result):
+
+- `GET /api/watch/today` — overdue + due-today tasks, today's routines with done state, next timed event, free hours left, plus `meta` (server time, user timezone).
+- `POST /api/watch/complete` `{ "type": "task" | "recurring", "id" }` — same executors as the MCP `complete_task` / `complete_recurring_task` tools (recurring: today's occurrence only).
+- `POST /api/watch/task` `{ "title" }` — inbox task, no group, priority med.
+- `POST /api/watch/spend` `{ "amount", "note"? }` — logs a spend today against the default account (the oldest active one, as the dock's `$` capture does).
+- `POST /api/watch/capture` `{ "text" }` — `capture_to_brain` with source `"apple watch"`.
 
 ## Project Structure
 
