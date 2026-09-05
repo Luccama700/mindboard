@@ -22,6 +22,7 @@ import type { CalendarRecurringTask } from "@/app/lib/data/dashboard";
 import type { RecurringSlotRow } from "@/app/lib/data/recurring-tasks";
 import { formatRecurrence, taskRuleLandsOn } from "@/app/lib/recurrence";
 import type { CalendarItem } from "./calendar-types";
+import { eventDateKey, wallMinutesToIso } from "./event-time";
 import {
   formatClockTime,
   formatMonthDay,
@@ -116,20 +117,12 @@ function addDaysToKey(dateKey: string, days: number) {
   return toDateKey(date);
 }
 
-function eventDateKey(start: string, allDay: boolean) {
-  if (allDay) return start.slice(0, 10);
-  return toDateKey(new Date(start));
-}
-
-function formatEventRange(item: Extract<CalendarItem, { kind: "event" }>) {
+function formatEventRange(
+  item: Extract<CalendarItem, { kind: "event" }>,
+  timeZone: string | null,
+) {
   if (item.allDay) return "all day";
-  return `${formatClockTime(item.start)} – ${formatClockTime(item.end)}`;
-}
-
-function combineDateAndMinutes(dateKey: string, minutes: number): Date {
-  const date = new Date(`${dateKey}T00:00:00`);
-  date.setMinutes(minutes);
-  return date;
+  return `${formatClockTime(item.start, timeZone)} – ${formatClockTime(item.end, timeZone)}`;
 }
 
 function buildGrid(month: string) {
@@ -147,6 +140,7 @@ function buildGrid(month: string) {
 export function DashboardCalendar({
   month,
   today,
+  timeZone,
   tasks,
   events,
   finance = [],
@@ -168,6 +162,12 @@ export function DashboardCalendar({
   // drag-reschedule / slot-approval writes, so deriving it from the device
   // clock put a capture-bar task in one column while highlighting another.
   today: string;
+  // The USER'S zone (user_settings.timezone; null = device). Google events
+  // arrive as instants — which day column and which hour a block lands on, the
+  // time labels, the now-line, and the instants written back by drag / the edit
+  // panel are all resolved in this zone so a Vancouver schedule viewed from
+  // London still reads in Vancouver time.
+  timeZone: string | null;
   tasks: TaskWithGroup[];
   events: CalendarEvent[];
   finance?: FinanceChange[];
@@ -250,7 +250,7 @@ export function DashboardCalendar({
       const start = override?.start ?? event.start;
       const end = override?.end ?? event.end;
       const allDay = override?.allDay ?? event.allDay;
-      const key = eventDateKey(start, allDay);
+      const key = eventDateKey(start, allDay, timeZone);
       const items = map.get(key) ?? [];
       const link = calendarLinks[event.calendarId];
       items.push({
@@ -368,6 +368,7 @@ export function DashboardCalendar({
           now,
           wakeStartHour,
           wakeEndHour,
+          timeZone,
         });
         const slots = planUntimedOccurrences({
           rules: untimed.map((item) => {
@@ -407,6 +408,7 @@ export function DashboardCalendar({
     promotedKeys,
     grid,
     today,
+    timeZone,
     wakeStartHour,
     wakeEndHour,
   ]);
@@ -468,17 +470,13 @@ export function DashboardCalendar({
       payload.newStartMinutes !== null &&
       payload.newEndMinutes !== null
     ) {
-      const newStart = combineDateAndMinutes(
-        payload.newDateKey,
-        payload.newStartMinutes,
-      );
-      const newEnd = combineDateAndMinutes(
-        payload.newDateKey,
-        payload.newEndMinutes,
-      );
       void commitEventReschedule(item, {
-        start: newStart.toISOString(),
-        end: newEnd.toISOString(),
+        start: wallMinutesToIso(
+          payload.newDateKey,
+          payload.newStartMinutes,
+          timeZone,
+        ),
+        end: wallMinutesToIso(payload.newDateKey, payload.newEndMinutes, timeZone),
         allDay: false,
       });
     }
@@ -884,6 +882,7 @@ export function DashboardCalendar({
           wakeEndHour={wakeEndHour}
           onResizeTask={onResizeTask}
           today={today}
+          timeZone={timeZone}
           itemsByDate={itemsByDate}
           onSelect={setSelected}
           onRescheduleEvent={onRescheduleEvent}
@@ -956,13 +955,14 @@ export function DashboardCalendar({
                                       ? `~${item.plannedStart.slice(0, 5)}`
                                       : "anytime"
                               }${item.done ? " · done" : ""}`
-                            : `${item.calendar} · ${formatEventRange(item)}`}
+                            : `${item.calendar} · ${formatEventRange(item, timeZone)}`}
                     </p>
                   </button>
 
                   {isExpanded && item.kind === "event" && isEditableEvent && (
                     <EventEditPanel
                       event={item}
+                      timeZone={timeZone}
                       onSubmit={(next) => {
                         onEditEvent(item, next);
                         setExpandedItem(null);

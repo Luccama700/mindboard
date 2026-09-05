@@ -14,6 +14,15 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-09-06-calendar-zone",
+    date: "2026-09-06",
+    title: "the calendar keeps your timezone",
+    items: [
+      "the week and month calendars now place every google event by the timezone you saved in settings, not the device you're holding. a vancouver 9am stays at 9am when you open the board from london.",
+      "same for the day list labels, the now-line, and any event you drag or edit — the time you see is the time that gets saved.",
+    ],
+  },
+  {
     id: "2026-09-06-timezone-picker",
     date: "2026-09-06",
     title: "pick your timezone from a list",
