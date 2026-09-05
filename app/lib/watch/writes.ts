@@ -15,6 +15,7 @@ import {
   validateLogSpend,
   type Result,
 } from "@/app/lib/mcp/validate";
+import { addDaysKey } from "@/app/_components/finance-projection";
 import {
   captureTitleFromText,
   idempotentProposalId,
@@ -251,6 +252,41 @@ export async function missTaskFromWatch(
     "miss_task",
     { taskId },
     `Mark task "${task.title}" as missed.`,
+    idempotencyKey,
+  );
+}
+
+// "Tomorrow": push a dated task's due date by one day through the MCP
+// update_task executor, which keeps due_time (and moves a pushed calendar
+// block along with it). The Idempotency-Key matters here more than anywhere:
+// a blind retry would otherwise push the task two days.
+export async function deferTaskFromWatch(
+  userId: string,
+  taskId: string,
+  idempotencyKey: string | null,
+): Promise<WatchWriteOutcome> {
+  const supabase = createServiceClient();
+  const { data } = await supabase
+    .from("tasks")
+    .select("id, title, status, due_date")
+    .eq("id", taskId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!data) return { ok: false, status: 404, error: "task not found" };
+  const task = data as { id: string; title: string; status: string; due_date: string | null };
+  if (task.status === "done" || task.status === "missed") {
+    return { ok: false, status: 400, error: `"${task.title}" is already ${task.status}` };
+  }
+  if (!task.due_date) {
+    return { ok: false, status: 400, error: `"${task.title}" has no due date to push` };
+  }
+  const dueDate = addDaysKey(task.due_date, 1);
+  return runThroughConfirm(
+    supabase,
+    userId,
+    "update_task",
+    { taskId, dueDate },
+    `Move task "${task.title}" to ${dueDate}.`,
     idempotencyKey,
   );
 }

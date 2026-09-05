@@ -25,16 +25,19 @@ import {
 // (the watch can still show tasks).
 
 const TASK_COLUMNS =
-  "id, title, due_date, due_time, status, priority, notes, created_at, groups(name)";
+  "id, title, due_date, due_time, status, priority, notes, created_at, groups(name, color)";
 const RULE_COLUMNS =
-  "id, title, frequency, weekdays, day_of_month, interval_days, start_date, due_time";
+  "id, title, frequency, weekdays, day_of_month, interval_days, start_date, due_time, groups(color)";
 
 type Rel<T> = T | T[] | null;
 function firstRel<T>(rel: Rel<T>): T | null {
   return Array.isArray(rel) ? (rel[0] ?? null) : (rel ?? null);
 }
 
-type TaskRow = Omit<WatchTaskInput, "group_name"> & { groups: Rel<{ name: string }> };
+type TaskRow = Omit<WatchTaskInput, "group_name" | "group_color"> & {
+  groups: Rel<{ name: string; color: string }>;
+};
+type RuleRow = Omit<WatchRoutineRule, "group_color"> & { groups: Rel<{ color: string }> };
 
 export async function getWatchToday(userId: string): Promise<WatchToday> {
   const supabase = createServiceClient();
@@ -92,7 +95,7 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
       // the dashboard and MCP list_events do.
       supabase
         .from("groups")
-        .select("name, google_calendar_id")
+        .select("name, color, google_calendar_id")
         .eq("user_id", userId)
         .eq("archived", false)
         .not("google_calendar_id", "is", null),
@@ -100,10 +103,9 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
     ]);
 
   const linkedGroups = new Map(
-    ((groupsRes.data ?? []) as { name: string; google_calendar_id: string }[]).map((g) => [
-      g.google_calendar_id,
-      g.name,
-    ]),
+    ((groupsRes.data ?? []) as { name: string; color: string; google_calendar_id: string }[]).map(
+      (g) => [g.google_calendar_id, { name: g.name, color: g.color }],
+    ),
   );
   const events: WatchEventInput[] | null = rawEvents
     ? rawEvents.map((e) => ({
@@ -112,7 +114,8 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
         start: e.start,
         end: e.end,
         allDay: e.allDay,
-        calendar: linkedGroups.get(e.calendarId) ?? e.calendarSummary,
+        calendar: linkedGroups.get(e.calendarId)?.name ?? e.calendarSummary,
+        color: linkedGroups.get(e.calendarId)?.color ?? null,
         location: e.location ?? null,
         description: e.description ?? null,
       }))
@@ -122,9 +125,13 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
     tasks: ((tasksRes.data ?? []) as unknown as TaskRow[]).map(({ groups, ...task }) => ({
       ...task,
       group_name: firstRel(groups)?.name ?? null,
+      group_color: firstRel(groups)?.color ?? null,
     })),
     doneTodayCount: doneRes.count ?? 0,
-    rules: (rulesRes.data ?? []) as WatchRoutineRule[],
+    rules: ((rulesRes.data ?? []) as unknown as RuleRow[]).map(({ groups, ...rule }) => ({
+      ...rule,
+      group_color: firstRel(groups)?.color ?? null,
+    })),
     completedRuleIds: new Set(
       ((completionsRes.data ?? []) as { rule_id: string }[]).map((c) => c.rule_id),
     ),
