@@ -223,6 +223,38 @@ export async function completeRecurringFromWatch(
   );
 }
 
+// "Didn't do it": the MCP miss_task executor — an accountability record,
+// distinct from done. Marking an already-missed task is a no-op success.
+export async function missTaskFromWatch(
+  userId: string,
+  taskId: string,
+  idempotencyKey: string | null,
+): Promise<WatchWriteOutcome> {
+  const supabase = createServiceClient();
+  const { data } = await supabase
+    .from("tasks")
+    .select("id, title, status")
+    .eq("id", taskId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!data) return { ok: false, status: 404, error: "task not found" };
+  const task = data as { id: string; title: string; status: string };
+  if (task.status === "missed") {
+    return { ok: true, replayed: true, result: { task, alreadyMissed: true } };
+  }
+  if (task.status === "done") {
+    return { ok: false, status: 400, error: `"${task.title}" is already done` };
+  }
+  return runThroughConfirm(
+    supabase,
+    userId,
+    "miss_task",
+    { taskId },
+    `Mark task "${task.title}" as missed.`,
+    idempotencyKey,
+  );
+}
+
 // ---------- create task ----------
 
 export async function createTaskFromWatch(

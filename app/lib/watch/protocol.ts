@@ -101,6 +101,14 @@ export function validateComplete(raw: unknown): Result<WatchCompleteInput> {
   return { ok: true, value: { type: body.type, id: body.id.trim() } };
 }
 
+export function validateTaskId(raw: unknown): Result<{ id: string }> {
+  const body = (raw ?? {}) as { id?: unknown };
+  if (typeof body.id !== "string" || !body.id.trim()) {
+    return { ok: false, error: "id is required" };
+  }
+  return { ok: true, value: { id: body.id.trim() } };
+}
+
 export function validateTaskTitle(raw: unknown): Result<{ title: string }> {
   const body = (raw ?? {}) as { title?: unknown };
   const title = typeof body.title === "string" ? body.title.trim() : "";
