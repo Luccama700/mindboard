@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   composeWatchToday,
+  WATCH_NOTES_MAX,
   WATCH_SECTION_LIMIT,
   type WatchTodayInput,
 } from "@/app/lib/watch/today";
@@ -21,7 +22,9 @@ function task(
     due_time: null,
     status: "todo",
     priority: "med",
+    notes: null,
     created_at: "2026-09-01T00:00:00Z",
+    group_name: null,
     ...extra,
   };
 }
@@ -33,6 +36,7 @@ function base(overrides: Partial<WatchTodayInput> = {}): WatchTodayInput {
     rules: [],
     completedRuleIds: new Set(),
     slotStartByRule: new Map(),
+    events: null,
     schedule: null,
     today: TODAY,
     now: NOW,
@@ -60,6 +64,7 @@ describe("composeWatchToday", () => {
     expect(out.overdue.map((t) => t.id)).toEqual(["older", "old-high", "old-low"]);
     expect(out.dueToday.map((t) => t.id)).toEqual(["today-9", "today-untimed"]);
     expect(out.dueToday[0].time).toBe("09:00");
+    expect(out.dueToday[0]).toMatchObject({ priority: "med", group: null, notes: null });
     expect(out.counts).toEqual({
       overdue: 3,
       dueToday: 2,
@@ -108,6 +113,41 @@ describe("composeWatchToday", () => {
     const without = composeWatchToday(base());
     expect(without.nextEvent).toBeNull();
     expect(without.freeHours).toBeNull();
+  });
+
+  test("rows carry group, priority and clipped notes for the detail screen", () => {
+    const out = composeWatchToday(
+      base({
+        tasks: [
+          task("t", TODAY, {
+            priority: "high",
+            group_name: "CPSC 110",
+            notes: `  ${"x".repeat(WATCH_NOTES_MAX + 50)}  `,
+          }),
+          task("blank", TODAY, { notes: "   " }),
+        ],
+      }),
+    );
+    expect(out.dueToday[0]).toMatchObject({ priority: "high", group: "CPSC 110" });
+    expect(out.dueToday[0].notes).toHaveLength(WATCH_NOTES_MAX);
+    expect(out.dueToday[0].notes?.endsWith("…")).toBe(true);
+    expect(out.dueToday[1].notes).toBeNull();
+  });
+
+  test("events keep what's left of the day: all-day first, ended timed events dropped", () => {
+    const out = composeWatchToday(
+      base({
+        events: [
+          { summary: "Later", start: "2026-09-04T19:00:00.000Z", end: "2026-09-04T20:00:00.000Z", allDay: false },
+          { summary: "Ended", start: "2026-09-04T16:00:00.000Z", end: "2026-09-04T17:00:00.000Z", allDay: false },
+          { summary: "Ongoing", start: "2026-09-04T17:00:00.000Z", end: "2026-09-04T18:00:00.000Z", allDay: false },
+          { summary: "Holiday", start: TODAY, end: "2026-09-05", allDay: true },
+        ],
+      }),
+    );
+    expect(out.events.map((e) => e.title)).toEqual(["Holiday", "Ongoing", "Later"]);
+    expect(out.events[0]).toEqual({ title: "Holiday", start: TODAY, end: "2026-09-05", allDay: true });
+    expect(composeWatchToday(base()).events).toEqual([]);
   });
 
   test("sections are capped but counts stay total", () => {
