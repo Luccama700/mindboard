@@ -1,14 +1,17 @@
 // Pure composer for GET /api/watch/today. Row bucketing reuses the same
-// day math as tasksSnapshot (daysBetween: <0 overdue, 0 today) and the same
-// "lands today" predicate the dashboard uses for routines (taskRuleLandsOn on
-// the user-local day), so the watch agrees with the app and the MCP snapshots.
-// `today` and `now` are passed in so the function stays deterministic.
+// day math as tasksSnapshot (daysBetween: <0 overdue, 0 today, 1..7 soon) and
+// the same "lands today" predicate the dashboard uses for routines
+// (taskRuleLandsOn on the user-local day), so the watch agrees with the app
+// and the MCP snapshots. `today` and `now` are passed in so the function
+// stays deterministic.
 
 import { daysBetween } from "@/app/_components/inventory-projection";
 import { priorityRank } from "@/app/_components/date-utils";
+import { addDaysKey } from "@/app/_components/finance-projection";
 import { taskRuleLandsOn, type TaskRecurrence } from "@/app/lib/recurrence";
 import { tasksSnapshot } from "@/app/lib/snapshots/tasks";
-import type { ScheduleEvent, ScheduleVitals } from "@/app/lib/snapshots/schedule";
+import { scheduleSnapshot, type ScheduleEvent } from "@/app/lib/snapshots/schedule";
+import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import type { TaskWithGroup } from "@/app/_components/types";
 
 // Per-section cap: the watch shows ~8 rows plus a "more" row, so anything
@@ -16,6 +19,9 @@ import type { TaskWithGroup } from "@/app/_components/types";
 export const WATCH_SECTION_LIMIT = 20;
 // Notes are Markdown of any length; the detail screen shows this much.
 export const WATCH_NOTES_MAX = 1000;
+// "Upcoming" = the next 7 days after today, the same window tasksSnapshot
+// calls dueSoon and MCP list_events defaults to.
+export const WATCH_UPCOMING_DAYS = 7;
 
 export type WatchTaskRow = {
   id: string;
@@ -47,6 +53,8 @@ export type WatchToday = {
   dueToday: WatchTaskRow[];
   events: WatchEventRow[]; // today's events that haven't ended yet
   routines: WatchRoutineRow[];
+  upcomingEvents: WatchEventRow[]; // tomorrow … +7 days
+  upcomingTasks: WatchTaskRow[]; // due tomorrow … +7 days
   nextEvent: { title: string; start: string } | null;
   freeHours: number | null;
   counts: {
@@ -70,15 +78,17 @@ export type WatchTaskInput = Pick<
 > & { group_name: string | null };
 
 export type WatchTodayInput = {
-  // Open (todo/doing), dated tasks with due_date <= today.
+  // Open (todo/doing), dated tasks with due_date <= today + WATCH_UPCOMING_DAYS.
   tasks: WatchTaskInput[];
   doneTodayCount: number;
   rules: WatchRoutineRule[];
   completedRuleIds: ReadonlySet<string>;
   slotStartByRule: ReadonlyMap<string, string>;
-  // Today's Google events (null when the calendar isn't reachable).
+  // Google events from the start of today through +WATCH_UPCOMING_DAYS in the
+  // user's zone (null when the calendar isn't reachable).
   events: ScheduleEvent[] | null;
-  schedule: ScheduleVitals | null;
+  wakeStartHour: number;
+  wakeEndHour: number;
   today: string;
   now: Date;
   timeZone: string | null;
@@ -106,41 +116,59 @@ function toRow(task: WatchTaskInput): WatchTaskRow {
   };
 }
 
-// All-day events lead (no clock to sort by), then timed events by start;
-// timed events that already ended are gone — this is what's left of the day.
-function eventRows(events: ScheduleEvent[], nowMs: number): WatchEventRow[] {
-  return events
-    .filter((e) => e.allDay || new Date(e.end).getTime() > nowMs)
-    .sort((a, b) => {
-      if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
-      return a.start.localeCompare(b.start) || a.summary.localeCompare(b.summary);
-    })
-    .map((e) => ({ title: e.summary, start: e.start, end: e.end, allDay: e.allDay }));
+function byDueThenPriority(a: WatchTaskInput, b: WatchTaskInput): number {
+  return (
+    (a.due_date as string).localeCompare(b.due_date as string) ||
+    (a.due_time ?? "99").localeCompare(b.due_time ?? "99") ||
+    priorityRank(a.priority) - priorityRank(b.priority) ||
+    a.created_at.localeCompare(b.created_at)
+  );
+}
+
+// The user-local day an event belongs to: all-day events carry a date key
+// already; timed ones are instants, bucketed in the user's zone.
+function eventDayKey(event: ScheduleEvent, timeZone: string | null): string {
+  if (event.allDay) return event.start.slice(0, 10);
+  const ms = new Date(event.start).getTime();
+  return Number.isFinite(ms) ? zonedDateKey(ms, timeZone) : event.start.slice(0, 10);
+}
+
+// Still part of today: an all-day event covering today (Google's all-day
+// `end` is the exclusive next day), or a timed event that hasn't ended.
+function isLeftToday(event: ScheduleEvent, today: string, nowMs: number, timeZone: string | null): boolean {
+  if (event.allDay) return event.start.slice(0, 10) <= today && event.end.slice(0, 10) > today;
+  return eventDayKey(event, timeZone) <= today && new Date(event.end).getTime() > nowMs;
+}
+
+function byDayThenStart(timeZone: string | null) {
+  return (a: ScheduleEvent, b: ScheduleEvent): number => {
+    const dayA = eventDayKey(a, timeZone);
+    const dayB = eventDayKey(b, timeZone);
+    if (dayA !== dayB) return dayA.localeCompare(dayB);
+    if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
+    return a.start.localeCompare(b.start) || a.summary.localeCompare(b.summary);
+  };
+}
+
+function toEventRow(e: ScheduleEvent): WatchEventRow {
+  return { title: e.summary, start: e.start, end: e.end, allDay: e.allDay };
 }
 
 export function composeWatchToday(input: WatchTodayInput): WatchToday {
-  const { today } = input;
+  const { today, timeZone } = input;
+  const nowMs = input.now.getTime();
+  const horizon = addDaysKey(today, WATCH_UPCOMING_DAYS);
+
   const open = input.tasks.filter(
     (t) => (t.status === "todo" || t.status === "doing") && t.due_date,
   );
+  const dayOffset = (t: WatchTaskInput) => daysBetween(today, t.due_date as string);
 
-  const overdue = open
-    .filter((t) => daysBetween(today, t.due_date as string) < 0)
-    .sort(
-      (a, b) =>
-        (a.due_date as string).localeCompare(b.due_date as string) ||
-        priorityRank(a.priority) - priorityRank(b.priority) ||
-        a.created_at.localeCompare(b.created_at),
-    );
-
-  const dueToday = open
-    .filter((t) => daysBetween(today, t.due_date as string) === 0)
-    .sort(
-      (a, b) =>
-        (a.due_time ?? "99").localeCompare(b.due_time ?? "99") ||
-        priorityRank(a.priority) - priorityRank(b.priority) ||
-        a.created_at.localeCompare(b.created_at),
-    );
+  const overdue = open.filter((t) => dayOffset(t) < 0).sort(byDueThenPriority);
+  const dueToday = open.filter((t) => dayOffset(t) === 0).sort(byDueThenPriority);
+  const upcomingTasks = open
+    .filter((t) => dayOffset(t) > 0 && dayOffset(t) <= WATCH_UPCOMING_DAYS)
+    .sort(byDueThenPriority);
 
   const todayDate = new Date(`${today}T00:00:00`);
   const routines: WatchRoutineRow[] = input.rules
@@ -158,22 +186,48 @@ export function composeWatchToday(input: WatchTodayInput): WatchToday {
         a.title.localeCompare(b.title),
     );
 
+  const allEvents = input.events ?? [];
+  const todayEvents = allEvents
+    .filter((e) => isLeftToday(e, today, nowMs, timeZone))
+    .sort(byDayThenStart(timeZone));
+  const upcomingEvents = allEvents
+    .filter((e) => {
+      const day = eventDayKey(e, timeZone);
+      return day > today && day <= horizon;
+    })
+    .sort(byDayThenStart(timeZone));
+
+  // Header vitals are about TODAY: the next event still to come today and the
+  // free waking hours left, so the "No more events" line stays true to the
+  // screen even when tomorrow is busy.
+  const schedule = input.events
+    ? scheduleSnapshot({
+        events: todayEvents,
+        now: input.now,
+        wakeStartHour: input.wakeStartHour,
+        wakeEndHour: input.wakeEndHour,
+        timeZone,
+      })
+    : null;
+
   const counts = tasksSnapshot(open as unknown as TaskWithGroup[], today);
 
   return {
     meta: {
       serverTime: input.now.toISOString(),
-      timeZone: input.timeZone,
+      timeZone,
       today,
     },
     overdue: overdue.slice(0, WATCH_SECTION_LIMIT).map(toRow),
     dueToday: dueToday.slice(0, WATCH_SECTION_LIMIT).map(toRow),
-    events: eventRows(input.events ?? [], input.now.getTime()).slice(0, WATCH_SECTION_LIMIT),
+    events: todayEvents.slice(0, WATCH_SECTION_LIMIT).map(toEventRow),
     routines: routines.slice(0, WATCH_SECTION_LIMIT),
-    nextEvent: input.schedule?.nextEvent
-      ? { title: input.schedule.nextEvent.summary, start: input.schedule.nextEvent.start }
+    upcomingEvents: upcomingEvents.slice(0, WATCH_SECTION_LIMIT).map(toEventRow),
+    upcomingTasks: upcomingTasks.slice(0, WATCH_SECTION_LIMIT).map(toRow),
+    nextEvent: schedule?.nextEvent
+      ? { title: schedule.nextEvent.summary, start: schedule.nextEvent.start }
       : null,
-    freeHours: input.schedule ? input.schedule.freeHoursToday : null,
+    freeHours: schedule ? schedule.freeHoursToday : null,
     counts: {
       overdue: counts.overdue,
       dueToday: counts.dueToday,

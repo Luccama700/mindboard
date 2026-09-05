@@ -3,11 +3,12 @@ import { createServiceClient } from "@/utils/supabase/service";
 import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { addDaysKey } from "@/app/_components/finance-projection";
 import { getPreferences } from "@/app/lib/mcp/reads";
-import { scheduleSnapshot, type ScheduleEvent } from "@/app/lib/snapshots/schedule";
+import type { ScheduleEvent } from "@/app/lib/snapshots/schedule";
 import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import { listEvents } from "@/utils/google/calendar";
 import {
   composeWatchToday,
+  WATCH_UPCOMING_DAYS,
   type WatchRoutineRule,
   type WatchTaskInput,
   type WatchToday,
@@ -16,10 +17,11 @@ import {
 
 // Read layer for GET /api/watch/today. Same shape as app/lib/mcp/reads.ts:
 // service client, every query pinned to the authenticated user id, the pure
-// composer does the rest. One Google fetch covers the user's local day and
-// feeds both the events section and the schedule_snapshot math (next event,
-// free hours); an unreachable calendar degrades those to null/empty instead of
-// failing the whole payload (the watch can still show tasks).
+// composer does the rest. One Google fetch covers the user's local day plus
+// the next WATCH_UPCOMING_DAYS and feeds today's events, the upcoming events,
+// and the schedule_snapshot math (next event, free hours); an unreachable
+// calendar degrades those to null/empty instead of failing the whole payload
+// (the watch can still show tasks).
 
 const TASK_COLUMNS =
   "id, title, due_date, due_time, status, priority, notes, created_at, groups(name)";
@@ -40,11 +42,12 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
   const today = todayISO(timeZone);
   const now = new Date();
 
+  const horizon = addDaysKey(today, WATCH_UPCOMING_DAYS);
   const dayStartMs = zonedWallTimeToUtcMs(today, 0, 0, timeZone);
-  const dayEndMs = zonedWallTimeToUtcMs(addDaysKey(today, 1), 0, 0, timeZone);
+  const horizonEndMs = zonedWallTimeToUtcMs(addDaysKey(horizon, 1), 0, 0, timeZone);
   const eventsPromise: Promise<ScheduleEvent[] | null> = listEvents(userId, {
     timeMin: new Date(dayStartMs).toISOString(),
-    timeMax: new Date(dayEndMs).toISOString(),
+    timeMax: new Date(horizonEndMs).toISOString(),
   })
     .then((events) =>
       events.map((e) => ({ summary: e.summary, start: e.start, end: e.end, allDay: e.allDay })),
@@ -62,7 +65,7 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
         .eq("user_id", userId)
         .in("status", ["todo", "doing"])
         .not("due_date", "is", null)
-        .lte("due_date", today)
+        .lte("due_date", horizon)
         .order("due_date", { ascending: true })
         .order("created_at", { ascending: true })
         .limit(200),
@@ -108,15 +111,8 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
       ]),
     ),
     events,
-    schedule: events
-      ? scheduleSnapshot({
-          events,
-          now,
-          wakeStartHour: prefs.wakeStartHour,
-          wakeEndHour: prefs.wakeEndHour,
-          timeZone,
-        })
-      : null,
+    wakeStartHour: prefs.wakeStartHour,
+    wakeEndHour: prefs.wakeEndHour,
     today,
     now,
     timeZone,

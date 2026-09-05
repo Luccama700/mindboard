@@ -37,7 +37,8 @@ function base(overrides: Partial<WatchTodayInput> = {}): WatchTodayInput {
     completedRuleIds: new Set(),
     slotStartByRule: new Map(),
     events: null,
-    schedule: null,
+    wakeStartHour: 8,
+    wakeEndHour: 22,
     today: TODAY,
     now: NOW,
     timeZone: "America/Vancouver",
@@ -99,20 +100,56 @@ describe("composeWatchToday", () => {
     expect(out.counts.routinesDone).toBe(1);
   });
 
-  test("schedule maps to nextEvent + freeHours and degrades to nulls", () => {
-    const withSchedule = composeWatchToday(
+  test("header vitals come from today's events only and degrade to nulls", () => {
+    const out = composeWatchToday(
       base({
-        schedule: {
-          nextEvent: { summary: "standup", start: "2026-09-04T18:00:00.000Z" },
-          freeHoursToday: 2.5,
-        },
+        events: [
+          { summary: "tomorrow", start: "2026-09-05T16:00:00.000Z", end: "2026-09-05T17:00:00.000Z", allDay: false },
+          { summary: "standup", start: "2026-09-04T18:00:00.000Z", end: "2026-09-04T18:30:00.000Z", allDay: false },
+        ],
       }),
     );
-    expect(withSchedule.nextEvent).toEqual({ title: "standup", start: "2026-09-04T18:00:00.000Z" });
-    expect(withSchedule.freeHours).toBe(2.5);
+    expect(out.nextEvent).toEqual({ title: "standup", start: "2026-09-04T18:00:00.000Z" });
+    // 10:30–22:00 Vancouver minus the 30-minute standup.
+    expect(out.freeHours).toBe(11);
+    const onlyTomorrow = composeWatchToday(
+      base({
+        events: [
+          { summary: "tomorrow", start: "2026-09-05T16:00:00.000Z", end: "2026-09-05T17:00:00.000Z", allDay: false },
+        ],
+      }),
+    );
+    expect(onlyTomorrow.nextEvent).toBeNull();
+    expect(onlyTomorrow.freeHours).toBe(11.5);
     const without = composeWatchToday(base());
     expect(without.nextEvent).toBeNull();
     expect(without.freeHours).toBeNull();
+  });
+
+  test("upcoming buckets: tasks and events for the next 7 days, in day order", () => {
+    const out = composeWatchToday(
+      base({
+        tasks: [
+          task("in-10", "2026-09-14"),
+          task("in-3", "2026-09-07"),
+          task("in-1-late", "2026-09-05", { due_time: "17:00:00" }),
+          task("in-1-early", "2026-09-05", { due_time: "09:00:00" }),
+          task("today", TODAY),
+        ],
+        events: [
+          { summary: "in 8 days", start: "2026-09-12T16:00:00.000Z", end: "2026-09-12T17:00:00.000Z", allDay: false },
+          { summary: "day after", start: "2026-09-06T16:00:00.000Z", end: "2026-09-06T17:00:00.000Z", allDay: false },
+          // 01:00 UTC on the 6th is still the evening of the 5th in Vancouver.
+          { summary: "tomorrow night", start: "2026-09-06T01:00:00.000Z", end: "2026-09-06T02:00:00.000Z", allDay: false },
+          { summary: "tomorrow all day", start: "2026-09-05", end: "2026-09-06", allDay: true },
+          { summary: "today", start: "2026-09-04T19:00:00.000Z", end: "2026-09-04T20:00:00.000Z", allDay: false },
+        ],
+      }),
+    );
+    expect(out.upcomingTasks.map((t) => t.id)).toEqual(["in-1-early", "in-1-late", "in-3"]);
+    expect(out.dueToday.map((t) => t.id)).toEqual(["today"]);
+    expect(out.upcomingEvents.map((e) => e.title)).toEqual(["tomorrow all day", "tomorrow night", "day after"]);
+    expect(out.events.map((e) => e.title)).toEqual(["today"]);
   });
 
   test("rows carry group, priority and clipped notes for the detail screen", () => {
