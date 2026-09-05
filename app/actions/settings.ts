@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
 import { isAgentModelId } from "@/app/_components/agent-models";
+import { safeTimeZone } from "@/app/_components/date-utils";
 
 const TIMEZONE_RE = /^[A-Za-z_+-]+(?:\/[A-Za-z0-9_+-]+){0,2}$/;
 
@@ -48,7 +49,11 @@ export async function savePreferences(input: {
   streamMaxTasks: number;
 }): Promise<{ error: string | null }> {
   const timezone = input.timezone?.trim() || "UTC";
-  if (timezone.length > 64 || !TIMEZONE_RE.test(timezone)) {
+  if (
+    timezone.length > 64 ||
+    !TIMEZONE_RE.test(timezone) ||
+    !safeTimeZone(timezone)
+  ) {
     return { error: "invalid timezone" };
   }
   const wakeStartHour = Math.trunc(input.wakeStartHour);
