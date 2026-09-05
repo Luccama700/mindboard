@@ -25,6 +25,7 @@ function task(
     notes: null,
     created_at: "2026-09-01T00:00:00Z",
     group_name: null,
+    group_color: null,
     ...extra,
   };
 }
@@ -65,7 +66,7 @@ describe("composeWatchToday", () => {
     expect(out.overdue.map((t) => t.id)).toEqual(["older", "old-high", "old-low"]);
     expect(out.dueToday.map((t) => t.id)).toEqual(["today-9", "today-untimed"]);
     expect(out.dueToday[0].time).toBe("09:00");
-    expect(out.dueToday[0]).toMatchObject({ priority: "med", group: null, notes: null });
+    expect(out.dueToday[0]).toMatchObject({ priority: "med", group: null, groupColor: null, notes: null });
     expect(out.counts).toEqual({
       overdue: 3,
       dueToday: 2,
@@ -84,7 +85,7 @@ describe("composeWatchToday", () => {
     const out = composeWatchToday(
       base({
         rules: [
-          { id: "daily", title: "stretch", frequency: "daily", weekdays: null, day_of_month: null, interval_days: null, start_date: null, due_time: "07:30:00" },
+          { id: "daily", title: "stretch", frequency: "daily", weekdays: null, day_of_month: null, interval_days: null, start_date: null, due_time: "07:30:00", group_color: "#ff6b6b" },
           { id: "fri", title: "gym", frequency: "weekly", weekdays: [5], day_of_month: null, interval_days: null, start_date: null, due_time: null },
           { id: "mon", title: "laundry", frequency: "weekly", weekdays: [1], day_of_month: null, interval_days: null, start_date: null, due_time: null },
         ],
@@ -93,8 +94,8 @@ describe("composeWatchToday", () => {
       }),
     );
     expect(out.routines).toEqual([
-      { id: "fri", title: "gym", time: "18:00", done: false },
-      { id: "daily", title: "stretch", time: "07:30", done: true },
+      { id: "fri", title: "gym", time: "18:00", done: false, color: null },
+      { id: "daily", title: "stretch", time: "07:30", done: true, color: "#ff6b6b" },
     ]);
     expect(out.counts.routines).toBe(2);
     expect(out.counts.routinesDone).toBe(1);
@@ -137,13 +138,14 @@ describe("composeWatchToday", () => {
             end: "2026-09-04T20:00:00.000Z",
             allDay: false,
             calendar: "Personal",
+            color: "#6d8fe8",
             location: "  Room 4  ",
             description: "y".repeat(WATCH_NOTES_MAX + 10),
           },
         ],
       }),
     );
-    expect(out.events[0]).toMatchObject({ id: "cal:ev1", calendar: "Personal", location: "Room 4" });
+    expect(out.events[0]).toMatchObject({ id: "cal:ev1", calendar: "Personal", color: "#6d8fe8", location: "Room 4" });
     expect(out.events[0].description).toHaveLength(WATCH_NOTES_MAX);
   });
 
@@ -180,13 +182,14 @@ describe("composeWatchToday", () => {
           task("t", TODAY, {
             priority: "high",
             group_name: "CPSC 110",
+            group_color: "#b5ff3c",
             notes: `  ${"x".repeat(WATCH_NOTES_MAX + 50)}  `,
           }),
           task("blank", TODAY, { notes: "   " }),
         ],
       }),
     );
-    expect(out.dueToday[0]).toMatchObject({ priority: "high", group: "CPSC 110" });
+    expect(out.dueToday[0]).toMatchObject({ priority: "high", group: "CPSC 110", groupColor: "#b5ff3c" });
     expect(out.dueToday[0].notes).toHaveLength(WATCH_NOTES_MAX);
     expect(out.dueToday[0].notes?.endsWith("…")).toBe(true);
     expect(out.dueToday[1].notes).toBeNull();
@@ -204,7 +207,7 @@ describe("composeWatchToday", () => {
       }),
     );
     expect(out.events.map((e) => e.title)).toEqual(["Holiday", "Ongoing", "Later"]);
-    expect(out.events[0]).toMatchObject({ title: "Holiday", start: TODAY, end: "2026-09-05", allDay: true, calendar: null, location: null, description: null });
+    expect(out.events[0]).toMatchObject({ title: "Holiday", start: TODAY, end: "2026-09-05", allDay: true, calendar: null, color: null, location: null, description: null });
     expect(out.events[0].id).toBe(`${TODAY}|2026-09-05|Holiday`);
     expect(composeWatchToday(base()).events).toEqual([]);
   });

@@ -30,6 +30,7 @@ export type WatchTaskRow = {
   time: string | null; // "HH:MM"
   priority: "low" | "med" | "high";
   group: string | null;
+  groupColor: string | null; // #rrggbb, the same group color the app renders
   notes: string | null;
 };
 
@@ -38,6 +39,7 @@ export type WatchRoutineRow = {
   title: string;
   time: string | null; // "HH:MM" — an approved slot for today wins over the rule's due_time
   done: boolean;
+  color: string | null; // the rule's group color
 };
 
 export type WatchEventRow = {
@@ -47,6 +49,7 @@ export type WatchEventRow = {
   end: string;
   allDay: boolean;
   calendar: string | null; // linked Mindboard group name, else the Google calendar name
+  color: string | null; // the linked group's color; null for unlinked calendars
   location: string | null;
   description: string | null;
 };
@@ -56,6 +59,7 @@ export type WatchEventRow = {
 export type WatchEventInput = ScheduleEvent & {
   id?: string;
   calendar?: string | null;
+  color?: string | null;
   location?: string | null;
   description?: string | null;
 };
@@ -83,12 +87,13 @@ export type WatchRoutineRule = TaskRecurrence & {
   id: string;
   title: string;
   due_time: string | null;
+  group_color?: string | null;
 };
 
 export type WatchTaskInput = Pick<
   TaskWithGroup,
   "id" | "title" | "due_date" | "due_time" | "status" | "priority" | "notes" | "created_at"
-> & { group_name: string | null };
+> & { group_name: string | null; group_color: string | null };
 
 export type WatchTodayInput = {
   // Open (todo/doing), dated tasks with due_date <= today + WATCH_UPCOMING_DAYS.
@@ -125,6 +130,7 @@ function toRow(task: WatchTaskInput): WatchTaskRow {
     time: shortTime(task.due_time),
     priority: task.priority,
     group: task.group_name,
+    groupColor: task.group_color,
     notes: clipNotes(task.notes),
   };
 }
@@ -171,6 +177,7 @@ function toEventRow(e: WatchEventInput): WatchEventRow {
     end: e.end,
     allDay: e.allDay,
     calendar: e.calendar ?? null,
+    color: e.color ?? null,
     location: e.location?.trim() || null,
     description: clipNotes(e.description),
   };
@@ -200,6 +207,7 @@ export function composeWatchToday(input: WatchTodayInput): WatchToday {
       title: rule.title,
       time: shortTime(input.slotStartByRule.get(rule.id) ?? rule.due_time),
       done: input.completedRuleIds.has(rule.id),
+      color: rule.group_color ?? null,
     }))
     .sort(
       (a, b) =>

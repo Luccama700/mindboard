@@ -146,9 +146,10 @@ Generate a token with `openssl rand -base64 48`, set it in Vercel (Production) a
 
 Endpoints (all `Authorization: Bearer <token>`; writes are JSON `POST`s and accept an `Idempotency-Key` header so a retried request from a flaky watch connection never double-logs — the key derives the `ai_audit_log` row id, and a repeat replays the first attempt's result):
 
-- `GET /api/watch/today` — overdue + due-today tasks (with group, priority, and notes for the detail screen), today's remaining calendar events (with calendar, location, and description for the event screen), today's routines with done state, upcoming events and tasks for the next 7 days, next timed event, free hours left, plus `meta` (server time, user timezone).
+- `GET /api/watch/today` — overdue + due-today tasks (with group name + color, priority, and notes for the detail screen), today's remaining calendar events (with calendar, location, and description for the event screen), today's routines with done state, upcoming events and tasks for the next 7 days, next timed event, free hours left, plus `meta` (server time, user timezone).
 - `POST /api/watch/complete` `{ "type": "task" | "recurring", "id" }` — same executors as the MCP `complete_task` / `complete_recurring_task` tools (recurring: today's occurrence only).
 - `POST /api/watch/miss` `{ "id" }` — mark a task missed (the MCP `miss_task` executor).
+- `POST /api/watch/defer` `{ "id" }` — push a task's due date by one day, keeping its time (the MCP `update_task` executor). Send an `Idempotency-Key`: a retried request would otherwise push it twice.
 - `POST /api/watch/task` `{ "title" }` — inbox task, no group, priority med.
 - `POST /api/watch/spend` `{ "amount", "note"? }` — logs a spend today against the default account (the oldest active one, as the dock's `$` capture does).
 - `POST /api/watch/capture` `{ "text" }` — `capture_to_brain` with source `"apple watch"`.
