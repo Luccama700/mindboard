@@ -31,7 +31,7 @@ describe("date utilities", () => {
   test("formats calendar labels consistently", () => {
     const date = new Date(2026, 4, 23, 14, 5);
 
-    expect(formatClockTime("2026-05-23T14:05:00")).toBe("14:05");
+    expect(formatClockTime("2026-05-23T14:05:00", null)).toBe("14:05");
     expect(formatHourLabel(6)).toBe("06");
     expect(formatMonthYear(date)).toBe("May 2026");
     expect(formatMonthDay(date)).toBe("May 23");

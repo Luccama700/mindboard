@@ -14,8 +14,10 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 import { freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
 import { busyFromDayItems, rtaskEffectiveTiming } from "@/app/lib/snapshots/gap-plan";
+import { zonedClockMinutes } from "@/app/lib/snapshots/zoned-time";
 import type { CalendarItem } from "./calendar-types";
 import { formatClockTime, formatHourLabel } from "./date-utils";
+import { eventMinutes } from "./event-time";
 import { formatSignedChange } from "./money";
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -47,11 +49,6 @@ function startOfWeek(date: Date) {
   return addDays(date, -date.getDay());
 }
 
-function minutesIntoDay(value: string) {
-  const date = new Date(value);
-  return date.getHours() * 60 + date.getMinutes();
-}
-
 function timeToMinutes(time: string) {
   const [h, m] = time.split(":").map(Number);
   return h * 60 + m;
@@ -79,13 +76,16 @@ function blockStyle(startMinutes: number, endMinutes: number) {
   };
 }
 
-function timedStyle(item: EventItem) {
-  return blockStyle(minutesIntoDay(item.start), minutesIntoDay(item.end));
+function timedStyle(item: EventItem, timeZone: string | null) {
+  return blockStyle(
+    eventMinutes(item.start, timeZone),
+    eventMinutes(item.end, timeZone),
+  );
 }
 
-function formatRange(item: EventItem) {
+function formatRange(item: EventItem, timeZone: string | null) {
   if (item.allDay) return "all day";
-  return `${formatClockTime(item.start)} – ${formatClockTime(item.end)}`;
+  return `${formatClockTime(item.start, timeZone)} – ${formatClockTime(item.end, timeZone)}`;
 }
 
 function buildWeek(selected: string) {
@@ -496,9 +496,11 @@ function RtaskDueChip({ item }: { item: RtaskItem }) {
 function TimedEventBlock({
   item,
   dateKey,
+  timeZone,
 }: {
   item: EventItem;
   dateKey: string;
+  timeZone: string | null;
 }) {
   const isWritable = item.writable !== false;
   const draggable = useDraggable({
@@ -508,8 +510,8 @@ function TimedEventBlock({
       kind: "event-timed",
       id: item.id,
       dateKey,
-      startMinutes: minutesIntoDay(item.start),
-      endMinutes: minutesIntoDay(item.end),
+      startMinutes: eventMinutes(item.start, timeZone),
+      endMinutes: eventMinutes(item.end, timeZone),
     } satisfies DragData,
   });
   const { attributes, listeners, setNodeRef, isDragging } = draggable;
@@ -523,12 +525,12 @@ function TimedEventBlock({
         isWritable ? "cursor-grab" : "cursor-default opacity-60"
       } ${isDragging ? "opacity-30" : ""}`}
       style={{
-        ...timedStyle(item),
+        ...timedStyle(item, timeZone),
         backgroundColor: item.color,
       }}
     >
       <p className="truncate text-[11px] font-bold">{item.title}</p>
-      <p className="truncate text-[10px]">{formatRange(item)}</p>
+      <p className="truncate text-[10px]">{formatRange(item, timeZone)}</p>
     </div>
   );
 }
@@ -548,7 +550,13 @@ function FinanceChip({
   );
 }
 
-function DragPreview({ item }: { item: CalendarItem }) {
+function DragPreview({
+  item,
+  timeZone,
+}: {
+  item: CalendarItem;
+  timeZone: string | null;
+}) {
   if (item.kind === "finance") return null;
   if (item.kind === "rtask") {
     const timing = rtaskEffectiveTiming(item);
@@ -585,11 +593,11 @@ function DragPreview({ item }: { item: CalendarItem }) {
       style={{
         backgroundColor: color,
         width: "9rem",
-        height: timedStyle(item).height,
+        height: timedStyle(item, timeZone).height,
       }}
     >
       <p className="truncate text-[11px] font-bold">{item.title}</p>
-      <p className="truncate text-[10px]">{formatRange(item)}</p>
+      <p className="truncate text-[10px]">{formatRange(item, timeZone)}</p>
     </div>
   );
 }
@@ -614,6 +622,7 @@ function FreeGapUnderlay({
   recurring,
   dateKey,
   now,
+  timeZone,
   wakeStartHour,
   wakeEndHour,
 }: {
@@ -622,6 +631,7 @@ function FreeGapUnderlay({
   recurring: RtaskItem[];
   dateKey: string;
   now: Date;
+  timeZone: string | null;
   wakeStartHour: number;
   wakeEndHour: number;
 }) {
@@ -640,6 +650,7 @@ function FreeGapUnderlay({
     now,
     wakeStartHour,
     wakeEndHour,
+    timeZone,
   });
 
   return (
@@ -678,6 +689,8 @@ function FreeGapUnderlay({
 type WeekViewProps = {
   selected: string;
   today: string;
+  // The user's stored zone (null = device); see DashboardCalendar's prop note.
+  timeZone: string | null;
   itemsByDate: Map<string, CalendarItem[]>;
   onSelect: (key: string) => void;
   onRescheduleEvent: (e: RescheduleEvent) => void;
@@ -698,6 +711,7 @@ type WeekViewProps = {
 export function WeekView({
   selected,
   today,
+  timeZone,
   itemsByDate,
   onSelect,
   onRescheduleEvent,
@@ -713,7 +727,7 @@ export function WeekView({
   const [activeItem, setActiveItem] = useState<CalendarItem | null>(null);
 
   const now = new Date();
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowMinutes = zonedClockMinutes(now.getTime(), timeZone);
 
   // Mouse-only on purpose: drag-to-reschedule is a desktop affordance. On
   // touch it fought scrolling (and needed touch-action: none on every chip),
@@ -1093,12 +1107,18 @@ export function WeekView({
                     recurring={recurringItems}
                     dateKey={key}
                     now={now}
+                    timeZone={timeZone}
                     wakeStartHour={wakeStartHour}
                     wakeEndHour={wakeEndHour}
                   />
 
                   {timedItems.map((item) => (
-                    <TimedEventBlock key={item.id} item={item} dateKey={key} />
+                    <TimedEventBlock
+                      key={item.id}
+                      item={item}
+                      dateKey={key}
+                      timeZone={timeZone}
+                    />
                   ))}
 
                   {recurringItems.map((item) => (
@@ -1134,7 +1154,9 @@ export function WeekView({
       </div>
 
       <DragOverlay dropAnimation={null}>
-        {activeItem ? <DragPreview item={activeItem} /> : null}
+        {activeItem ? (
+          <DragPreview item={activeItem} timeZone={timeZone} />
+        ) : null}
       </DragOverlay>
     </DndContext>
   );
