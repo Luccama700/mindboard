@@ -41,10 +41,23 @@ export type WatchRoutineRow = {
 };
 
 export type WatchEventRow = {
+  id: string;
   title: string;
   start: string; // ISO instant, or YYYY-MM-DD for all-day
   end: string;
   allDay: boolean;
+  calendar: string | null; // linked Mindboard group name, else the Google calendar name
+  location: string | null;
+  description: string | null;
+};
+
+// Google event fields the watch's detail screen shows, on top of the
+// schedule shape the free-time math consumes.
+export type WatchEventInput = ScheduleEvent & {
+  id?: string;
+  calendar?: string | null;
+  location?: string | null;
+  description?: string | null;
 };
 
 export type WatchToday = {
@@ -86,7 +99,7 @@ export type WatchTodayInput = {
   slotStartByRule: ReadonlyMap<string, string>;
   // Google events from the start of today through +WATCH_UPCOMING_DAYS in the
   // user's zone (null when the calendar isn't reachable).
-  events: ScheduleEvent[] | null;
+  events: WatchEventInput[] | null;
   wakeStartHour: number;
   wakeEndHour: number;
   today: string;
@@ -98,7 +111,7 @@ function shortTime(value: string | null): string | null {
   return value ? value.slice(0, 5) : null;
 }
 
-function clipNotes(notes: string | null): string | null {
+function clipNotes(notes: string | null | undefined): string | null {
   const trimmed = notes?.trim() ?? "";
   if (!trimmed) return null;
   return trimmed.length > WATCH_NOTES_MAX ? `${trimmed.slice(0, WATCH_NOTES_MAX - 1)}…` : trimmed;
@@ -150,8 +163,17 @@ function byDayThenStart(timeZone: string | null) {
   };
 }
 
-function toEventRow(e: ScheduleEvent): WatchEventRow {
-  return { title: e.summary, start: e.start, end: e.end, allDay: e.allDay };
+function toEventRow(e: WatchEventInput): WatchEventRow {
+  return {
+    id: e.id ?? `${e.start}|${e.end}|${e.summary}`,
+    title: e.summary,
+    start: e.start,
+    end: e.end,
+    allDay: e.allDay,
+    calendar: e.calendar ?? null,
+    location: e.location?.trim() || null,
+    description: clipNotes(e.description),
+  };
 }
 
 export function composeWatchToday(input: WatchTodayInput): WatchToday {

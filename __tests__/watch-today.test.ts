@@ -126,6 +126,27 @@ describe("composeWatchToday", () => {
     expect(without.freeHours).toBeNull();
   });
 
+  test("event rows carry detail fields, clipped like notes", () => {
+    const out = composeWatchToday(
+      base({
+        events: [
+          {
+            id: "cal:ev1",
+            summary: "Therapy",
+            start: "2026-09-04T19:00:00.000Z",
+            end: "2026-09-04T20:00:00.000Z",
+            allDay: false,
+            calendar: "Personal",
+            location: "  Room 4  ",
+            description: "y".repeat(WATCH_NOTES_MAX + 10),
+          },
+        ],
+      }),
+    );
+    expect(out.events[0]).toMatchObject({ id: "cal:ev1", calendar: "Personal", location: "Room 4" });
+    expect(out.events[0].description).toHaveLength(WATCH_NOTES_MAX);
+  });
+
   test("upcoming buckets: tasks and events for the next 7 days, in day order", () => {
     const out = composeWatchToday(
       base({
@@ -183,7 +204,8 @@ describe("composeWatchToday", () => {
       }),
     );
     expect(out.events.map((e) => e.title)).toEqual(["Holiday", "Ongoing", "Later"]);
-    expect(out.events[0]).toEqual({ title: "Holiday", start: TODAY, end: "2026-09-05", allDay: true });
+    expect(out.events[0]).toMatchObject({ title: "Holiday", start: TODAY, end: "2026-09-05", allDay: true, calendar: null, location: null, description: null });
+    expect(out.events[0].id).toBe(`${TODAY}|2026-09-05|Holiday`);
     expect(composeWatchToday(base()).events).toEqual([]);
   });
 

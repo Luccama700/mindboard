@@ -3,12 +3,13 @@ import { createServiceClient } from "@/utils/supabase/service";
 import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { addDaysKey } from "@/app/_components/finance-projection";
 import { getPreferences } from "@/app/lib/mcp/reads";
-import type { ScheduleEvent } from "@/app/lib/snapshots/schedule";
+
 import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import { listEvents } from "@/utils/google/calendar";
 import {
   composeWatchToday,
   WATCH_UPCOMING_DAYS,
+  type WatchEventInput,
   type WatchRoutineRule,
   type WatchTaskInput,
   type WatchToday,
@@ -45,19 +46,15 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
   const horizon = addDaysKey(today, WATCH_UPCOMING_DAYS);
   const dayStartMs = zonedWallTimeToUtcMs(today, 0, 0, timeZone);
   const horizonEndMs = zonedWallTimeToUtcMs(addDaysKey(horizon, 1), 0, 0, timeZone);
-  const eventsPromise: Promise<ScheduleEvent[] | null> = listEvents(userId, {
+  const eventsPromise = listEvents(userId, {
     timeMin: new Date(dayStartMs).toISOString(),
     timeMax: new Date(horizonEndMs).toISOString(),
-  })
-    .then((events) =>
-      events.map((e) => ({ summary: e.summary, start: e.start, end: e.end, allDay: e.allDay })),
-    )
-    .catch((error) => {
-      console.warn("watch calendar read failed", error);
-      return null;
-    });
+  }).catch((error) => {
+    console.warn("watch calendar read failed", error);
+    return null;
+  });
 
-  const [tasksRes, doneRes, rulesRes, completionsRes, slotsRes, events] =
+  const [tasksRes, doneRes, rulesRes, completionsRes, slotsRes, groupsRes, rawEvents] =
     await Promise.all([
       supabase
         .from("tasks")
@@ -91,8 +88,35 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
         .select("rule_id, start_time")
         .eq("user_id", userId)
         .eq("occurred_on", today),
+      // Events from a calendar linked to a group wear the group's name, as
+      // the dashboard and MCP list_events do.
+      supabase
+        .from("groups")
+        .select("name, google_calendar_id")
+        .eq("user_id", userId)
+        .eq("archived", false)
+        .not("google_calendar_id", "is", null),
       eventsPromise,
     ]);
+
+  const linkedGroups = new Map(
+    ((groupsRes.data ?? []) as { name: string; google_calendar_id: string }[]).map((g) => [
+      g.google_calendar_id,
+      g.name,
+    ]),
+  );
+  const events: WatchEventInput[] | null = rawEvents
+    ? rawEvents.map((e) => ({
+        id: e.id,
+        summary: e.summary,
+        start: e.start,
+        end: e.end,
+        allDay: e.allDay,
+        calendar: linkedGroups.get(e.calendarId) ?? e.calendarSummary,
+        location: e.location ?? null,
+        description: e.description ?? null,
+      }))
+    : null;
 
   const input: WatchTodayInput = {
     tasks: ((tasksRes.data ?? []) as unknown as TaskRow[]).map(({ groups, ...task }) => ({
