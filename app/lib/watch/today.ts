@@ -49,7 +49,7 @@ export type WatchEventRow = {
   end: string;
   allDay: boolean;
   calendar: string | null; // linked Mindboard group name, else the Google calendar name
-  color: string | null; // the linked group's color; null for unlinked calendars
+  color: string | null; // the linked group's color, else the Google calendar's color
   location: string | null;
   description: string | null;
 };

@@ -115,7 +115,9 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
         end: e.end,
         allDay: e.allDay,
         calendar: linkedGroups.get(e.calendarId)?.name ?? e.calendarSummary,
-        color: linkedGroups.get(e.calendarId)?.color ?? null,
+        // Linked group color, else the Google calendar's own color — the same
+        // rule the dashboard calendar uses.
+        color: linkedGroups.get(e.calendarId)?.color ?? e.calendarColor ?? null,
         location: e.location ?? null,
         description: e.description ?? null,
       }))
