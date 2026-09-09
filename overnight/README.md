@@ -69,7 +69,7 @@ that keeps killing its run is retired as failed after **3** claims
 
 ### First-run checklist (do this once, before pointing it at anything real)
 
-1. Apply `supabase/migrations/0047_task_dispatches.sql` (agents never apply
+1. Apply `supabase/migrations/0051_task_dispatches.sql` (agents never apply
    migrations — this one is yours to run).
 2. Make a sandbox task, e.g. "agent smoke test".
 3. On the day stream, tap `✦ do it` and send the note
