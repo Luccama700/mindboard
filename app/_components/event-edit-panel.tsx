@@ -2,54 +2,37 @@
 
 import { useState } from "react";
 import type { CalendarItem } from "./calendar-types";
+import { formatClockTime } from "./date-utils";
+import { eventDateKey, wallTimeToIso } from "./event-time";
 
 type EventItem = Extract<CalendarItem, { kind: "event" }>;
 
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-function localDateInput(value: string, allDay: boolean): string {
-  if (allDay) {
-    return value.slice(0, 10);
-  }
-  const d = new Date(value);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function localTimeInput(value: string): string {
-  const d = new Date(value);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function combineDateAndTime(date: string, time: string): string {
-  const [year, month, day] = date.split("-").map(Number);
-  const [hours, minutes] = time.split(":").map(Number);
-  const d = new Date(year, month - 1, day, hours, minutes);
-  return d.toISOString();
-}
-
+// The inputs read and write wall-clock values in the user's stored zone (the
+// same zone the grid positions the block in), so editing from a device in
+// another zone neither shows nor saves a shifted time.
 export function EventEditPanel({
   event,
+  timeZone,
   onSubmit,
   onCancel,
 }: {
   event: EventItem;
+  timeZone: string | null;
   onSubmit: (next: { start: string; end: string; allDay: boolean }) => void;
   onCancel: () => void;
 }) {
   const [allDay, setAllDay] = useState(event.allDay);
   const [startDate, setStartDate] = useState(
-    localDateInput(event.start, event.allDay),
+    eventDateKey(event.start, event.allDay, timeZone),
   );
   const [startTime, setStartTime] = useState(
-    event.allDay ? "09:00" : localTimeInput(event.start),
+    event.allDay ? "09:00" : formatClockTime(event.start, timeZone),
   );
   const [endDate, setEndDate] = useState(
-    localDateInput(event.end, event.allDay),
+    eventDateKey(event.end, event.allDay, timeZone),
   );
   const [endTime, setEndTime] = useState(
-    event.allDay ? "10:00" : localTimeInput(event.end),
+    event.allDay ? "10:00" : formatClockTime(event.end, timeZone),
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -76,8 +59,8 @@ export function EventEditPanel({
       return;
     }
 
-    const startIso = combineDateAndTime(startDate, startTime);
-    const endIso = combineDateAndTime(endDate, endTime);
+    const startIso = wallTimeToIso(startDate, startTime, timeZone);
+    const endIso = wallTimeToIso(endDate, endTime, timeZone);
     if (Date.parse(endIso) <= Date.parse(startIso)) {
       setError("end must be after start");
       return;

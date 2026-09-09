@@ -1,9 +1,30 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useSyncExternalStore, useTransition } from "react";
 import { savePreferences } from "@/app/actions/settings";
 import { Button } from "@/app/_components/ui";
 import { INPUT_CLASS } from "@/app/_components/ui";
+import { groupTimeZones, listTimeZones } from "@/app/_components/timezones";
+
+// The zone list comes from the runtime's ICU data, which differs between the
+// Node build and the browser, so it is only rendered after hydration — the
+// server HTML carries just the saved value as a single option.
+const subscribeNoop = () => () => {};
+function useIsClient() {
+  return useSyncExternalStore(
+    subscribeNoop,
+    () => true,
+    () => false,
+  );
+}
+
+function deviceTimeZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
 
 export function PreferencesForm({
   initialTimezone,
@@ -16,11 +37,19 @@ export function PreferencesForm({
   initialWakeEnd: number;
   initialStreamMaxTasks: number;
 }) {
-  const guessed =
-    typeof Intl !== "undefined"
-      ? Intl.DateTimeFormat().resolvedOptions().timeZone
-      : "UTC";
-  const [timezone, setTimezone] = useState(initialTimezone ?? guessed);
+  const isClient = useIsClient();
+  // null = nothing saved and nothing picked yet; the device's zone is then the
+  // preselected option (a form default, never persisted until save).
+  const [picked, setPicked] = useState<string | null>(initialTimezone);
+  const timezone = picked ?? (isClient ? deviceTimeZone() : null) ?? "UTC";
+  const zoneGroups = useMemo(
+    () => groupTimeZones(isClient ? listTimeZones() : [], new Date()),
+    [isClient],
+  );
+  const knownZone = useMemo(
+    () => zoneGroups.some((g) => g.zones.some((z) => z.id === timezone)),
+    [zoneGroups, timezone],
+  );
   const [wakeStart, setWakeStart] = useState(String(initialWakeStart));
   const [wakeEnd, setWakeEnd] = useState(String(initialWakeEnd));
   const [streamMax, setStreamMax] = useState(String(initialStreamMaxTasks));
@@ -52,17 +81,33 @@ export function PreferencesForm({
       className="space-y-4"
     >
       <div>
-        <p className="text-label uppercase text-muted mb-1.5">timezone</p>
-        <input
-          type="text"
+        <label
+          htmlFor="preferences-timezone"
+          className="text-label uppercase text-muted mb-1.5 block"
+        >
+          timezone
+        </label>
+        <select
+          id="preferences-timezone"
           value={timezone}
-          onChange={(e) => setTimezone(e.target.value)}
-          placeholder="America/Vancouver"
-          autoComplete="off"
-          autoCapitalize="off"
-          spellCheck={false}
+          onChange={(e) => setPicked(e.target.value)}
           className={INPUT_CLASS}
-        />
+        >
+          {!knownZone && <option value={timezone}>{timezone}</option>}
+          {zoneGroups.map((group) => (
+            <optgroup key={group.region} label={group.region}>
+              {group.zones.map((zone) => (
+                <option key={zone.id} value={zone.id}>
+                  {zone.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        <p className="text-meta text-muted leading-relaxed mt-1.5">
+          the board&rsquo;s &ldquo;today&rdquo;, due times and free hours all follow
+          this zone, whatever device you open it on.
+        </p>
       </div>
 
       <div className="flex gap-3">

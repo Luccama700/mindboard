@@ -1,0 +1,225 @@
+import { describe, expect, test } from "vitest";
+
+import {
+  composeWatchToday,
+  WATCH_NOTES_MAX,
+  WATCH_SECTION_LIMIT,
+  type WatchTodayInput,
+} from "@/app/lib/watch/today";
+
+const TODAY = "2026-09-04"; // a Friday
+const NOW = new Date("2026-09-04T17:30:00.000Z");
+
+function task(
+  id: string,
+  due: string,
+  extra: Partial<WatchTodayInput["tasks"][number]> = {},
+): WatchTodayInput["tasks"][number] {
+  return {
+    id,
+    title: id,
+    due_date: due,
+    due_time: null,
+    status: "todo",
+    priority: "med",
+    notes: null,
+    created_at: "2026-09-01T00:00:00Z",
+    group_name: null,
+    group_color: null,
+    ...extra,
+  };
+}
+
+function base(overrides: Partial<WatchTodayInput> = {}): WatchTodayInput {
+  return {
+    tasks: [],
+    doneTodayCount: 0,
+    rules: [],
+    completedRuleIds: new Set(),
+    slotStartByRule: new Map(),
+    events: null,
+    wakeStartHour: 8,
+    wakeEndHour: 22,
+    today: TODAY,
+    now: NOW,
+    timeZone: "America/Vancouver",
+    ...overrides,
+  };
+}
+
+describe("composeWatchToday", () => {
+  test("buckets overdue vs due today and orders by date, time, priority", () => {
+    const out = composeWatchToday(
+      base({
+        tasks: [
+          task("later", "2026-09-10"),
+          task("old-low", "2026-09-01", { priority: "low" }),
+          task("old-high", "2026-09-01", { priority: "high" }),
+          task("older", "2026-08-30"),
+          task("today-untimed", TODAY),
+          task("today-9", TODAY, { due_time: "09:00:00" }),
+          task("done", TODAY, { status: "done" }),
+        ],
+        doneTodayCount: 1,
+      }),
+    );
+    expect(out.overdue.map((t) => t.id)).toEqual(["older", "old-high", "old-low"]);
+    expect(out.dueToday.map((t) => t.id)).toEqual(["today-9", "today-untimed"]);
+    expect(out.dueToday[0].time).toBe("09:00");
+    expect(out.dueToday[0]).toMatchObject({ priority: "med", group: null, groupColor: null, notes: null });
+    expect(out.counts).toEqual({
+      overdue: 3,
+      dueToday: 2,
+      doneToday: 1,
+      routines: 0,
+      routinesDone: 0,
+    });
+    expect(out.meta).toEqual({
+      serverTime: NOW.toISOString(),
+      timeZone: "America/Vancouver",
+      today: TODAY,
+      followups: { pending: 0, failed: 0 },
+    });
+    expect(
+      composeWatchToday(base({ followups: { pending: 2, failed: 1 } })).meta.followups,
+    ).toEqual({ pending: 2, failed: 1 });
+  });
+
+  test("routines are the rules landing today, done state from completions, slot time wins", () => {
+    const out = composeWatchToday(
+      base({
+        rules: [
+          { id: "daily", title: "stretch", frequency: "daily", weekdays: null, day_of_month: null, interval_days: null, start_date: null, due_time: "07:30:00", group_color: "#ff6b6b" },
+          { id: "fri", title: "gym", frequency: "weekly", weekdays: [5], day_of_month: null, interval_days: null, start_date: null, due_time: null },
+          { id: "mon", title: "laundry", frequency: "weekly", weekdays: [1], day_of_month: null, interval_days: null, start_date: null, due_time: null },
+        ],
+        completedRuleIds: new Set(["daily"]),
+        slotStartByRule: new Map([["fri", "18:00:00"]]),
+      }),
+    );
+    expect(out.routines).toEqual([
+      { id: "fri", title: "gym", time: "18:00", done: false, color: null },
+      { id: "daily", title: "stretch", time: "07:30", done: true, color: "#ff6b6b" },
+    ]);
+    expect(out.counts.routines).toBe(2);
+    expect(out.counts.routinesDone).toBe(1);
+  });
+
+  test("header vitals come from today's events only and degrade to nulls", () => {
+    const out = composeWatchToday(
+      base({
+        events: [
+          { summary: "tomorrow", start: "2026-09-05T16:00:00.000Z", end: "2026-09-05T17:00:00.000Z", allDay: false },
+          { summary: "standup", start: "2026-09-04T18:00:00.000Z", end: "2026-09-04T18:30:00.000Z", allDay: false },
+        ],
+      }),
+    );
+    expect(out.nextEvent).toEqual({ title: "standup", start: "2026-09-04T18:00:00.000Z" });
+    // 10:30–22:00 Vancouver minus the 30-minute standup.
+    expect(out.freeHours).toBe(11);
+    const onlyTomorrow = composeWatchToday(
+      base({
+        events: [
+          { summary: "tomorrow", start: "2026-09-05T16:00:00.000Z", end: "2026-09-05T17:00:00.000Z", allDay: false },
+        ],
+      }),
+    );
+    expect(onlyTomorrow.nextEvent).toBeNull();
+    expect(onlyTomorrow.freeHours).toBe(11.5);
+    const without = composeWatchToday(base());
+    expect(without.nextEvent).toBeNull();
+    expect(without.freeHours).toBeNull();
+  });
+
+  test("event rows carry detail fields, clipped like notes", () => {
+    const out = composeWatchToday(
+      base({
+        events: [
+          {
+            id: "cal:ev1",
+            summary: "Therapy",
+            start: "2026-09-04T19:00:00.000Z",
+            end: "2026-09-04T20:00:00.000Z",
+            allDay: false,
+            calendar: "Personal",
+            color: "#6d8fe8",
+            location: "  Room 4  ",
+            description: "y".repeat(WATCH_NOTES_MAX + 10),
+          },
+        ],
+      }),
+    );
+    expect(out.events[0]).toMatchObject({ id: "cal:ev1", calendar: "Personal", color: "#6d8fe8", location: "Room 4" });
+    expect(out.events[0].description).toHaveLength(WATCH_NOTES_MAX);
+  });
+
+  test("upcoming buckets: tasks and events for the next 7 days, in day order", () => {
+    const out = composeWatchToday(
+      base({
+        tasks: [
+          task("in-10", "2026-09-14"),
+          task("in-3", "2026-09-07"),
+          task("in-1-late", "2026-09-05", { due_time: "17:00:00" }),
+          task("in-1-early", "2026-09-05", { due_time: "09:00:00" }),
+          task("today", TODAY),
+        ],
+        events: [
+          { summary: "in 8 days", start: "2026-09-12T16:00:00.000Z", end: "2026-09-12T17:00:00.000Z", allDay: false },
+          { summary: "day after", start: "2026-09-06T16:00:00.000Z", end: "2026-09-06T17:00:00.000Z", allDay: false },
+          // 01:00 UTC on the 6th is still the evening of the 5th in Vancouver.
+          { summary: "tomorrow night", start: "2026-09-06T01:00:00.000Z", end: "2026-09-06T02:00:00.000Z", allDay: false },
+          { summary: "tomorrow all day", start: "2026-09-05", end: "2026-09-06", allDay: true },
+          { summary: "today", start: "2026-09-04T19:00:00.000Z", end: "2026-09-04T20:00:00.000Z", allDay: false },
+        ],
+      }),
+    );
+    expect(out.upcomingTasks.map((t) => t.id)).toEqual(["in-1-early", "in-1-late", "in-3"]);
+    expect(out.dueToday.map((t) => t.id)).toEqual(["today"]);
+    expect(out.upcomingEvents.map((e) => e.title)).toEqual(["tomorrow all day", "tomorrow night", "day after"]);
+    expect(out.events.map((e) => e.title)).toEqual(["today"]);
+  });
+
+  test("rows carry group, priority and clipped notes for the detail screen", () => {
+    const out = composeWatchToday(
+      base({
+        tasks: [
+          task("t", TODAY, {
+            priority: "high",
+            group_name: "CPSC 110",
+            group_color: "#b5ff3c",
+            notes: `  ${"x".repeat(WATCH_NOTES_MAX + 50)}  `,
+          }),
+          task("blank", TODAY, { notes: "   " }),
+        ],
+      }),
+    );
+    expect(out.dueToday[0]).toMatchObject({ priority: "high", group: "CPSC 110", groupColor: "#b5ff3c" });
+    expect(out.dueToday[0].notes).toHaveLength(WATCH_NOTES_MAX);
+    expect(out.dueToday[0].notes?.endsWith("…")).toBe(true);
+    expect(out.dueToday[1].notes).toBeNull();
+  });
+
+  test("events keep what's left of the day: all-day first, ended timed events dropped", () => {
+    const out = composeWatchToday(
+      base({
+        events: [
+          { summary: "Later", start: "2026-09-04T19:00:00.000Z", end: "2026-09-04T20:00:00.000Z", allDay: false },
+          { summary: "Ended", start: "2026-09-04T16:00:00.000Z", end: "2026-09-04T17:00:00.000Z", allDay: false },
+          { summary: "Ongoing", start: "2026-09-04T17:00:00.000Z", end: "2026-09-04T18:00:00.000Z", allDay: false },
+          { summary: "Holiday", start: TODAY, end: "2026-09-05", allDay: true },
+        ],
+      }),
+    );
+    expect(out.events.map((e) => e.title)).toEqual(["Holiday", "Ongoing", "Later"]);
+    expect(out.events[0]).toMatchObject({ title: "Holiday", start: TODAY, end: "2026-09-05", allDay: true, calendar: null, color: null, location: null, description: null });
+    expect(out.events[0].id).toBe(`${TODAY}|2026-09-05|Holiday`);
+    expect(composeWatchToday(base()).events).toEqual([]);
+  });
+
+  test("sections are capped but counts stay total", () => {
+    const tasks = Array.from({ length: 25 }, (_, i) => task(`t${i}`, TODAY));
+    const out = composeWatchToday(base({ tasks }));
+    expect(out.dueToday).toHaveLength(WATCH_SECTION_LIMIT);
+    expect(out.counts.dueToday).toBe(25);
+  });
+});

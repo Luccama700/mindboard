@@ -1,3 +1,5 @@
+import { zonedClock } from "@/app/lib/snapshots/zoned-time";
+
 // The timeZone argument is REQUIRED on purpose: the process clock is UTC on
 // Vercel, so an omitted zone silently produced the wrong day for every
 // server-side caller. Pass an explicit `null` to mean "process clock,
@@ -60,12 +62,11 @@ export function formatDue(iso: string, today: string) {
   });
 }
 
-export function formatClockTime(value: string) {
-  return new Date(value).toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
+// "HH:MM" of an instant in the user's zone. Required for the same reason as
+// todayISO's: the calendar's event labels must agree with the grid position,
+// which is computed in the stored zone, not the device's.
+export function formatClockTime(value: string, timeZone: string | null) {
+  return zonedClock(Date.parse(value), timeZone);
 }
 
 export function formatHourLabel(hour: number) {

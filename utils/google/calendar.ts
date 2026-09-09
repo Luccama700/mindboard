@@ -19,6 +19,9 @@ export type CalendarEvent = {
   calendarSummary: string;
   calendarColor: string;
   writable: boolean;
+  // Optional detail fields (the watch's event screen); absent on synthetic events.
+  location?: string | null;
+  description?: string | null;
 };
 
 export type CalendarListEntry = {
@@ -38,6 +41,8 @@ type TokenRow = {
 type GoogleEvent = {
   id: string;
   summary?: string;
+  description?: string;
+  location?: string;
   status?: string;
   start?: {
     date?: string;
@@ -117,6 +122,8 @@ async function fetchCalendarEvents(
         calendarSummary: calendar.summary ?? "google calendar",
         calendarColor: calendar.backgroundColor ?? "#6d8fe8",
         writable: isWritableRole(calendar.accessRole),
+        location: event.location ?? null,
+        description: event.description ?? null,
       };
     })
     .filter((event) => event.start);

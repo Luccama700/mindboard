@@ -451,6 +451,7 @@ async function WeekPaneSection({
       key={`${month}:${selectedDay ?? ""}`}
       month={month}
       today={today}
+      timeZone={timeZone}
       tasks={calendarTasks}
       events={events}
       finance={finance}

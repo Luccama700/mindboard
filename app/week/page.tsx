@@ -85,6 +85,7 @@ export default async function WeekPage({
           key={`${month}:${selectedDay ?? ""}`}
           month={month}
           today={today}
+          timeZone={timeZone}
           tasks={calendarTasks}
           events={events}
           finance={finance}

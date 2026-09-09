@@ -14,6 +14,24 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-09-06-calendar-zone",
+    date: "2026-09-06",
+    title: "the calendar keeps your timezone",
+    items: [
+      "the week and month calendars now place every google event by the timezone you saved in settings, not the device you're holding. a vancouver 9am stays at 9am when you open the board from london.",
+      "same for the day list labels, the now-line, and any event you drag or edit — the time you see is the time that gets saved.",
+    ],
+  },
+  {
+    id: "2026-09-06-timezone-picker",
+    date: "2026-09-06",
+    title: "pick your timezone from a list",
+    items: [
+      "settings → preferences: timezone is a real dropdown now — every zone grouped by region with its current utc offset, instead of a text field prefilled from whatever device you happened to be holding.",
+      "your device's zone is still the starting pick if you've never saved one. once saved, the board's 'today', due times and free hours follow that zone on every device.",
+    ],
+  },
+  {
     id: "2026-08-12-people-groups",
     date: "2026-08-12",
     title: "your people, in their contexts",
