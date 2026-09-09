@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  endOfBlock,
   formatClock12,
   formatClockTime,
   formatDue,
@@ -127,6 +128,50 @@ describe("date utilities", () => {
       expect(
         formatRelativeToNow(new Date(NOW.getTime() + 3 * 24 * 60 * 60_000).toISOString()),
       ).toBe("in 3d");
+    });
+  });
+});
+
+describe("endOfBlock", () => {
+  test("same-day block keeps the date", () => {
+    expect(endOfBlock("2026-09-01", "14:00", 90)).toEqual({
+      date: "2026-09-01",
+      time: "15:30:00",
+    });
+  });
+
+  test("block ending exactly at midnight rolls to 00:00 next day", () => {
+    expect(endOfBlock("2026-09-01", "23:00", 60)).toEqual({
+      date: "2026-09-02",
+      time: "00:00:00",
+    });
+  });
+
+  test("crossing midnight rolls the date instead of clamping at 23:59", () => {
+    expect(endOfBlock("2026-09-01", "23:30", 60)).toEqual({
+      date: "2026-09-02",
+      time: "00:30:00",
+    });
+  });
+
+  test("rolls across a month boundary", () => {
+    expect(endOfBlock("2026-09-30", "23:45", 30)).toEqual({
+      date: "2026-10-01",
+      time: "00:15:00",
+    });
+  });
+
+  test("rolls across a year boundary", () => {
+    expect(endOfBlock("2026-12-31", "23:00", 120)).toEqual({
+      date: "2027-01-01",
+      time: "01:00:00",
+    });
+  });
+
+  test("multi-day durations advance more than one day", () => {
+    expect(endOfBlock("2026-09-01", "12:00", 36 * 60)).toEqual({
+      date: "2026-09-03",
+      time: "00:00:00",
     });
   });
 });

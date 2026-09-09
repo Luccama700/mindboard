@@ -5,7 +5,8 @@ Pulls jobs from the Vercel app over HTTPS (no database key on this machine):
 
     claim -> run MinerU (ocr) or VibeVoice (tts) -> complete/fail
 
-Auth is a single bearer token (the app's MCP_BEARER_TOKEN). Audio results are
+Auth is a single bearer token (the app's WORKER_BEARER_TOKEN; legacy deploys
+may still use MCP_BEARER_TOKEN as the value). Audio results are
 PUT directly to a Supabase signed upload URL; markdown returns in the
 complete body. See worker/README.md for WSL2 setup.
 

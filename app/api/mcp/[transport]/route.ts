@@ -98,7 +98,8 @@ export const maxDuration = 300;
 // (see app/lib/mcp/writes.ts). Multi-tenant: the auth layer resolves every
 // request to a Supabase user id (OAuth token sub, per-user PAT, or the static
 // bearer mapped to the configured owner) and every tool scopes its queries to
-// that user. Tool names mirror app/lib/agent/registry.ts.
+// that user. The shared proposeXFor/EXECUTORS layer in app/lib/mcp/writes.ts
+// is the seam this server and the in-app assistant both stand on.
 
 type ToolText = { content: { type: "text"; text: string }[]; isError?: boolean };
 

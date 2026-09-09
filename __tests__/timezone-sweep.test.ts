@@ -10,6 +10,13 @@
 // covered: spring-forward 2026-03-08 (02:00 PST -> 03:00 PDT, i.e. 10:00Z) and
 // fall-back 2026-11-01 (02:00 PDT -> 01:00 PST, i.e. 09:00Z).
 //
+// The fall-back rows resolve wall times in America/Los_Angeles, not Vancouver:
+// tzdata 2026b (bundled with Node >= 24.19 via ICU 78.3) keeps
+// America/Vancouver on UTC-7 permanently from November 2026, so under that
+// data Vancouver has no 2026 fall-back to test and the rows failed in CI while
+// passing on a machine with tzdata 2025c. Los Angeles still falls back on
+// 2026-11-01 under both, and exercises the identical PDT -> PST resolution.
+//
 // ON "how many of these catch a regression": vitest.config.mts now pins
 // process.env.TZ = "UTC", so the answer is stable rather than a property of
 // whoever ran it. It is still not a meaningful headline number — under the pin
@@ -33,6 +40,8 @@ import { freeGaps, scheduleSnapshot } from "@/app/lib/snapshots/schedule";
 import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 
 const VANCOUVER = "America/Vancouver";
+// Pacific zone with a 2026 fall-back under every tzdata version (see header).
+const LOS_ANGELES = "America/Los_Angeles";
 const TOKYO = "Asia/Tokyo";
 const UTC = "UTC";
 
@@ -221,15 +230,15 @@ const WALL_CLOCK_CASES: WallClockCase[] = [
     expectedUtc: Date.UTC(2026, 2, 8, 16, 0),
   },
   {
-    label: "Vancouver fall-back day, before the repeat (still PDT)",
-    zone: VANCOUVER,
+    label: "Pacific fall-back day, before the repeat (still PDT)",
+    zone: LOS_ANGELES,
     dateKey: "2026-11-01",
     dueTime: "00:30",
     expectedUtc: Date.UTC(2026, 10, 1, 7, 30),
   },
   {
-    label: "Vancouver fall-back day, after the repeat (PST)",
-    zone: VANCOUVER,
+    label: "Pacific fall-back day, after the repeat (PST)",
+    zone: LOS_ANGELES,
     dateKey: "2026-11-01",
     dueTime: "09:00",
     expectedUtc: Date.UTC(2026, 10, 1, 17, 0),
