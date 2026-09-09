@@ -211,12 +211,15 @@ Capture lives in the **Dock** (`app/_components/dock.tsx`, mounted globally by `
 - The Dock also carries the nav rail (with inbox/brain badges), the group picker sheet (with a people tab for people-groups), and the in-app assistant entry.
 - Notes stay raw Markdown text in `tasks.notes`; do not render HTML from it unless a future feature adds a sanitizer.
 
+Every open task row on `/tasks` wears a thin 2×28px trim in its group's colour between the checkbox and the title (`TaskRow` resolves it from the `groups` prop by `group_id`, since `/tasks` passes bare `Task`s without `group_color`); inbox tasks keep the slot blank so titles stay aligned, and done rows drop it. The dashboard stream's `CardRow` is a separate component and still carries the group colour on its left edge.
+
 Tapping the title of any task row expands an inline edit panel with four fields, all auto-saving where applicable:
 
 - Rename (saves on Enter or blur).
 - Due date via the same today/+date/clear chips as the capture bar.
 - Group selector (a dropdown of every active group plus "inbox"), used to sort inbox tasks into the right group from any list. When the task's new group no longer matches the current page (inbox or a single group), the row drops off the list optimistically.
 - Markdown notes textarea (saves on blur into `tasks.notes`).
+- `✦ follow up` (open tasks only): a textarea + "send to claude" that queues the same `followup` job the Apple Watch dictates (`queueTaskFollowup` in `app/actions/tasks.ts` → `queueFollowupFromWatch` in `app/lib/watch/followup.ts`, payload `source: "mindboard app"`). The home worker's Claude Code run does the research and creates one follow-up task in the same group with the same due date; the original stays open. The panel only shows "queued" at submit time — there is no in-app pending/failed indicator yet (the watch reads `meta.followups`). Non-allowlisted accounts see the worker's "no home worker serves this account" error inline.
 - Delete is in the same panel.
 
 Group edit lives in `app/tasks/groups-client.tsx` (moved from the retired `/groups` route). Tapping the `···` on a group row opens an inline panel with rename, type, color, Google Calendar link, and archive. The shared `ColorPicker` and `TypePicker` components are reused by the create form and the edit panel. `CalendarLinkPicker` lists every readable Google Calendar from `listCalendars`.
@@ -234,7 +237,7 @@ Task optimistic UI patterns are in:
 
 Mutations live in:
 
-- `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group, notes), `deleteTask`.
+- `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group, notes), `deleteTask`, `queueTaskFollowup` (queues a `followup` worker job from the edit panel).
 - `app/actions/groups.ts`: `createGroup`, `updateGroup` (name, type, color, Google Calendar link), `archiveGroup`.
 - `app/actions/calendar.ts`: `rescheduleEvent` (Google Calendar PATCH on `start`/`end`).
 - `app/actions/finance.ts`: category/account/recurring-expense/income-source CRUD, `recordBalanceChange` (balance update → transaction rows + reconciliation anchor), `updateBalanceChange` (amount/date/category/note edits), and `deleteBalanceChange` — the latter two re-derive the cached account balance (see Finance).

@@ -440,7 +440,7 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     return result
 
 
-FOLLOWUP_PROMPT = """You are the follow-up agent for Mindboard, running on Lucca's PC. Lucca dictated a follow-up on one of his open tasks from his Apple Watch. Do what the instruction needs, then record the outcome in Mindboard.
+FOLLOWUP_PROMPT = """You are the follow-up agent for Mindboard, running on Lucca's PC. Lucca sent a follow-up on one of his open tasks from his {source}. Do what the instruction needs, then record the outcome in Mindboard.
 
 ORIGINAL TASK
 - title: {title}
@@ -450,7 +450,7 @@ ORIGINAL TASK
 - notes:
 {notes}
 
-INSTRUCTION (dictated, may contain speech-to-text errors — read for intent):
+INSTRUCTION (possibly dictated, so it may contain speech-to-text errors — read for intent):
 \"\"\"{instruction}\"\"\"
 
 HOW TO WORK
@@ -471,6 +471,7 @@ def handle_followup(claim: dict, workdir: Path) -> dict:
     if followup.get("due_time"):
         due += f" {str(followup['due_time'])[:5]}"
     prompt = FOLLOWUP_PROMPT.format(
+        source=followup.get("source") or "apple watch",
         title=followup.get("title", ""),
         group=followup.get("group_name") or "inbox",
         group_id=json.dumps(followup.get("group_id")),

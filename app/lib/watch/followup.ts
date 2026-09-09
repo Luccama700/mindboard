@@ -5,10 +5,11 @@ import { workerAllowedUserIds } from "@/app/lib/mcp/config";
 import { idempotentProposalId } from "./protocol";
 import type { WatchWriteOutcome } from "./writes";
 
-// "Follow-up" from the watch: a dictated instruction about an open task,
-// queued as a `followup` job for the home worker, where Claude Code turns it
-// into a new task (same group, same due date) after doing whatever research
-// it needs. Nothing runs on Vercel; the job just waits if the PC is off.
+// "Follow-up" on an open task — dictated from the watch, or typed in the task
+// edit panel (`queueTaskFollowup` in app/actions/tasks.ts) — queued as a
+// `followup` job for the home worker, where Claude Code turns it into a new
+// task (same group, same due date) after doing whatever research it needs.
+// Nothing runs on Vercel; the job just waits if the PC is off.
 // Idempotent the same way the audit-log writes are: with an Idempotency-Key
 // the job id is derived from (user, key), so a retry collides and reports the
 // job that already exists instead of queuing a second run.
@@ -54,11 +55,14 @@ function describe(job: JobRow, replayed: boolean): WatchWriteOutcome {
   };
 }
 
+export type FollowupSource = "apple watch" | "mindboard app";
+
 export async function queueFollowupFromWatch(
   userId: string,
   taskId: string,
   instruction: string,
   idempotencyKey: string | null,
+  source: FollowupSource = "apple watch",
 ): Promise<WatchWriteOutcome> {
   if (!workerAllowedUserIds().includes(userId)) {
     return { ok: false, status: 503, error: "no home worker serves this account" };
@@ -103,7 +107,7 @@ export async function queueFollowupFromWatch(
         group_id: task.group_id,
         group_name: firstRel(task.groups)?.name ?? null,
         instruction,
-        source: "apple watch",
+        source,
       },
     })
     .select("id, status, result, error")
