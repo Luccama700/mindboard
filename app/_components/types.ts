@@ -8,7 +8,7 @@ export type Task = {
   status: "todo" | "doing" | "done" | "missed";
   priority: "low" | "med" | "high";
   // Overnight-agent lifecycle (null = not an AI task); see docs/overnight-agent-plan.md.
-  ai_state: "planned" | "approved" | "building" | "built" | "failed" | null;
+  ai_state: "planned" | "approved" | "building" | "built" | "failed" | "declined" | null;
   notes: string | null;
   group_id: string | null;
   gcal_event_id: string | null;

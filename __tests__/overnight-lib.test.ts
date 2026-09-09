@@ -1,10 +1,16 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import {
+  declineNote,
+  FLAG_WITHOUT_VALUE,
   MODEL_CHOICES,
   appendSection,
+  argValue,
   branchNameFor,
   clip,
+  dispatchPrompt,
   execPrompt,
   extractPlan,
   extractSection,
@@ -18,6 +24,7 @@ import {
   quoteArg,
   resolveModel,
   reviewPrompt,
+  shouldDrainDispatches,
   slugify,
   triagePrompt,
 } from "../overnight/lib.mjs";
@@ -311,6 +318,108 @@ describe("resolveModel", () => {
   });
 });
 
+describe("argValue", () => {
+  test("reads the value that follows a flag", () => {
+    expect(argValue(["--task", "3f1c"], "--task")).toBe("3f1c");
+    expect(argValue(["--dry", "--task", "3f1c"], "--task")).toBe("3f1c");
+  });
+
+  test("reads the --flag=value form", () => {
+    expect(argValue(["--task=3f1c"], "--task")).toBe("3f1c");
+  });
+
+  test("null only when the flag is absent", () => {
+    expect(argValue(["--dry"], "--task")).toBeNull();
+    expect(argValue([], "--task")).toBeNull();
+  });
+
+  // A valueless --task must never read as "no --task given" — that would turn
+  // a targeted run into a full sweep over the whole board.
+  test("a valueless flag is its own answer, not absence", () => {
+    expect(argValue(["--task"], "--task")).toBe(FLAG_WITHOUT_VALUE);
+    expect(argValue(["--task", "--dry"], "--task")).toBe(FLAG_WITHOUT_VALUE);
+    expect(argValue(["--dry", "--task"], "--task")).toBe(FLAG_WITHOUT_VALUE);
+    expect(argValue(["--task="], "--task")).toBe(FLAG_WITHOUT_VALUE);
+  });
+});
+
+describe("shouldDrainDispatches", () => {
+  test("drains on the poll and on a full run", () => {
+    expect(shouldDrainDispatches(["--if-requested"])).toBe(true);
+    expect(shouldDrainDispatches([])).toBe(true);
+    expect(shouldDrainDispatches(["--dry"])).toBe(true);
+  });
+
+  test("a narrowed run does not get dragged into someone's dispatch", () => {
+    for (const flag of ["--plan-only", "--build-only", "--code-only", "--life-only"]) {
+      expect(shouldDrainDispatches([flag])).toBe(false);
+      expect(shouldDrainDispatches(["--if-requested", flag])).toBe(false);
+    }
+  });
+});
+
+describe("dispatchPrompt (Track C)", () => {
+  const TASK = {
+    id: "t1",
+    title: "book the practice room",
+    notes: "prefer mornings",
+  };
+
+  test("carries the task, the operator note, the manifest, and the guardrails", () => {
+    const prompt = dispatchPrompt(
+      TASK,
+      "check the booking site and hold 9am",
+      "MANIFEST BODY",
+    );
+    expect(prompt).toContain("book the practice room");
+    expect(prompt).toContain("prefer mornings");
+    expect(prompt).toContain("check the booking site and hold 9am");
+    // the Track C manifest, not Track B's web-only capabilities.md
+    expect(prompt).toContain("YOUR DISPATCH CAPABILITIES MANIFEST:");
+    expect(prompt).toContain("MANIFEST BODY");
+    // the verbatim guardrail block
+    expect(prompt).toContain("never submit");
+    expect(prompt).toContain("No credential handling");
+    expect(prompt).toContain("Graded coursework");
+    expect(prompt).toContain("ai/*");
+    expect(prompt).toContain("never main");
+    // The cwd is the real fence; the prompt has to say so, because the
+    // disallow list is only pattern matching.
+    expect(prompt).toContain("NEVER on a repo outside your workspace");
+    expect(prompt).toContain("worktree");
+  });
+
+  // run.mjs feeds this file to dispatchPrompt; capabilities.md (Track B) is
+  // web-only and would contradict the Track C profile it is paired with.
+  test("the Track C manifest exists and grants local powers under the hard rules", () => {
+    const manifest = readFileSync(
+      join(import.meta.dirname, "..", "overnight", "dispatch-capabilities.md"),
+      "utf8",
+    );
+    expect(manifest).toContain("dispatched");
+    expect(manifest).toContain("Shell");
+    expect(manifest).toContain("ai/*");
+    expect(manifest).toContain("Never");
+    expect(manifest).toContain("credentials");
+    expect(manifest).toContain("main");
+    expect(manifest).toContain("repo outside your workspace");
+    expect(manifest).toContain("git worktree add");
+  });
+
+  test("survives a task with no notes and clips a huge one", () => {
+    const bare = dispatchPrompt({ id: "t1", title: "x", notes: null }, "go", "M");
+    expect(bare).toContain("TASK: x");
+    expect(bare).not.toContain("THE TASK'S NOTES");
+
+    const big = dispatchPrompt(
+      { ...TASK, notes: "n".repeat(20000) },
+      "go",
+      "M",
+    );
+    expect(big).toContain("[truncated]");
+  });
+});
+
 describe("quoteArg", () => {
   test("leaves simple tokens bare", () => {
     expect(quoteArg("--max-turns")).toBe("--max-turns");
@@ -321,4 +430,12 @@ describe("quoteArg", () => {
     expect(quoteArg("Bash(npm run lint)")).toBe('"Bash(npm run lint)"');
     expect(quoteArg('say "hi"')).toBe('"say ""hi"""');
   });
+});
+
+test("declineNote: reason first, then the follow-up nudge; empty reason gets a default", () => {
+  const note = declineNote("needs a phone call");
+  expect(note.startsWith("needs a phone call\n\n")).toBe(true);
+  expect(note).toContain("✦ follow up or ✦ do it");
+  expect(declineNote("").startsWith("not something I can take on from here")).toBe(true);
+  expect(declineNote(" ".repeat(5) + "x".repeat(400)).length).toBeLessThan(400);
 });

@@ -66,3 +66,6 @@ worker/logs/
 
 # mindspace sync local cursor
 overnight/.mindspace-sync.json
+
+# rc spike scratch (overnight/rc-spike.ps1)
+overnight/rc-spike-runs/

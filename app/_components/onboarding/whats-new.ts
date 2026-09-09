@@ -23,6 +23,26 @@ export const NEWS: NewsEntry[] = [
     ],
   },
   {
+    id: "2026-09-09-not-taken",
+    date: "2026-09-09",
+    title: "approve means now, and a straight answer when i can't",
+    items: [
+      "approving a plan wakes the pc: it picks the task up within about five minutes instead of waiting for 4am. the badge walks ✦ queued → ✦ working… → ✦ done.",
+      "when overnight triage decides a task isn't something it can take on, the task now says so — ✦ not taken, with the reason — and the ✦ follow up box is already open so you can tell the pc what to look into instead. clear the badge and it gets a fresh look next run.",
+    ],
+  },
+  {
+    id: "2026-09-09-do-it",
+    date: "2026-09-09",
+    title: "hand a task to the agent",
+    items: [
+      "every open task on the day stream carries a ✦ do it now. tap it, type anything the agent should know, send — the pc picks it up within about five minutes and works it at full power.",
+      "your note lands in the task's notes as an operator note, and the result comes back the same way. the card stays quiet while it waits, wears ✦ working… once the pc actually starts, then ✦ done.",
+      "it researches, drafts, and builds. it never sends, signs, buys, or submits anything in your name — that part stays yours.",
+      "it's in the task edit panel too, right beside ✦ follow up — follow up adds a new task for you; do it works this one.",
+    ],
+  },
+  {
     id: "2026-09-09-group-trim",
     date: "2026-09-09",
     title: "a splash of group colour on every task",
