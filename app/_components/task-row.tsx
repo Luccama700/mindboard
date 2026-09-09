@@ -101,6 +101,14 @@ export function TaskRow({
   const hasGroupInfo = "group_name" in task;
   const groupName = hasGroupInfo ? task.group_name : null;
   const groupColor = hasGroupInfo ? task.group_color : null;
+  // /tasks rows arrive as bare Tasks (no group_color), so the trim beside the
+  // checkbox resolves the colour from the groups list by group_id. Inbox tasks
+  // keep the slot but paint nothing, so every title stays on the same x.
+  const trimColor =
+    groupColor ??
+    (task.group_id
+      ? (groups.find((g) => g.id === task.group_id)?.color ?? null)
+      : null);
 
   const showDate = task.due_date && !isDone && !hideDate;
   const hasNotes = Boolean(task.notes?.trim());
@@ -143,6 +151,14 @@ export function TaskRow({
             </svg>
           )}
         </button>
+
+        {!isDone && (
+          <span
+            aria-hidden
+            className="flex-shrink-0 w-0.5 h-7 rounded-[1px]"
+            style={{ backgroundColor: trimColor ?? "transparent" }}
+          />
+        )}
 
         <button
           onClick={toggleOpen}
