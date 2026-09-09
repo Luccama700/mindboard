@@ -22,6 +22,7 @@ export const AI_BADGE: Record<
   building: { label: "✦ working…", tone: "text-muted" },
   built: { label: "✦ done", tone: "text-accent" },
   failed: { label: "✦ failed", tone: "text-danger" },
+  declined: { label: "✦ not taken", tone: "text-muted" },
 };
 
 export type GroupOption = {

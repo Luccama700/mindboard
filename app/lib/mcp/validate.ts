@@ -270,7 +270,7 @@ export type UpdateTaskInput = {
 };
 
 // Overnight-agent lifecycle states (docs/overnight-agent-plan.md).
-export const AI_STATES = ["planned", "approved", "building", "built", "failed"] as const;
+export const AI_STATES = ["planned", "approved", "building", "built", "failed", "declined"] as const;
 export type AiState = (typeof AI_STATES)[number];
 
 export function validateUpdateTask(raw: Record<string, unknown>): Result<UpdateTaskInput> {
