@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-09-09-do-it",
+    date: "2026-09-09",
+    title: "hand a task to the agent",
+    items: [
+      "every open task on the day stream carries a ✦ do it now. tap it, type anything the agent should know, send — the pc picks it up within about five minutes and works it at full power.",
+      "your note lands in the task's notes as an operator note, and the result comes back the same way. the card stays quiet while it waits, wears ✦ working… once the pc actually starts, then ✦ done.",
+      "it researches, drafts, and builds. it never sends, signs, buys, or submits anything in your name — that part stays yours.",
+    ],
+  },
+  {
     id: "2026-09-09-group-trim",
     date: "2026-09-09",
     title: "a splash of group colour on every task",
