@@ -1,4 +1,4 @@
-# Throwaway spike for docs/superpowers/specs/2026-09-09-agent-handoff-design.md
+﻿# Throwaway spike for docs/superpowers/specs/2026-09-09-agent-handoff-design.md
 # (sub-project 3). Run ONCE on the home PC from the repo checkout:
 #
 #   powershell -ExecutionPolicy Bypass -File overnight\rc-spike.ps1
@@ -10,8 +10,11 @@
 # and prints the auth / env facts RC depends on. It launches three throwaway
 # sessions named rc-spike-hidden, rc-spike-min, rc-spike-flags, waits six
 # minutes for you to look for them under Remote Control (phone or desktop
-# app — each should have replied READY), then kills all three. Nothing else
+# app - each should have replied READY), then kills all three. Nothing else
 # on this machine is touched. Report lands in overnight\logs\rc-spike.txt.
+#
+# ASCII only on purpose: Windows PowerShell 5.1 reads a BOM-less UTF-8 file as
+# ANSI, and an em dash then decodes to a curly quote that breaks every string.
 
 $ErrorActionPreference = "Continue"
 $repo = Split-Path $PSScriptRoot -Parent
@@ -22,14 +25,23 @@ $spikeRoot = Join-Path $PSScriptRoot "rc-spike-runs"
 Remove-Item -Recurse -Force $spikeRoot -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $spikeRoot | Out-Null
 
-function Say($text) { $text | Tee-Object -FilePath $report -Append }
+function Say($text) {
+  Write-Host $text
+  Add-Content -Path $report -Value $text -Encoding UTF8
+}
 
-"" | Out-File $report
+Set-Content -Path $report -Value "" -Encoding UTF8
 Say "rc-spike $(Get-Date -Format s) on $env:COMPUTERNAME"
 Say "repo: $repo"
 
 $claude = (Get-Command claude -ErrorAction SilentlyContinue).Source
 if (-not $claude) { Say "FAIL: claude not on PATH"; exit 1 }
+# npm installs claude, claude.cmd and claude.ps1 side by side; PowerShell
+# resolves the .ps1 first, which cannot be started in its own console.
+if ($claude -like "*.ps1") {
+  $cmdShim = [System.IO.Path]::ChangeExtension($claude, ".cmd")
+  if (Test-Path $cmdShim) { $claude = $cmdShim }
+}
 Say "claude: $claude"
 Say "version: $(& $claude --version 2>&1)"
 Say "auth: $(& $claude auth status 2>&1 | Out-String)"
@@ -53,8 +65,9 @@ function Launch($sessionName, $style, $extraArgs) {
   "Reply with the single word READY and then wait for further instructions. Do not touch any files." | Out-File (Join-Path $dir "prompt.md") -Encoding utf8
   $rel = "rc-spike-runs\$sessionName\prompt.md"
   $argList = @("--remote-control", $sessionName, "--dangerously-skip-permissions") + $extraArgs + @("`"Read overnight\$rel and do exactly what it says.`"")
+  # Only stderr is captured: redirecting stdout would make the interactive TUI
+  # think it has no terminal, which is exactly what this spike must not do.
   $err = Join-Path $dir "stderr.txt"
-  $out = Join-Path $dir "stdout.txt"
   if ($style -eq "hidden") {
     # Same route the scheduled tasks use: WScript.Shell.Run(..., 0, False).
     $cmdLine = "cmd /c `"$claude`" $($argList -join ' ') 2> `"$err`""
@@ -64,9 +77,9 @@ function Launch($sessionName, $style, $extraArgs) {
     return $null
   }
   if ($viaCmd) {
-    $p = Start-Process -FilePath "cmd.exe" -ArgumentList (@("/c", "`"$claude`"") + $argList) -WorkingDirectory $repo -WindowStyle Minimized -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
+    $p = Start-Process -FilePath "cmd.exe" -ArgumentList (@("/c", "`"$claude`"") + $argList) -WorkingDirectory $repo -WindowStyle Minimized -PassThru -RedirectStandardError $err
   } else {
-    $p = Start-Process -FilePath $claude -ArgumentList $argList -WorkingDirectory $repo -WindowStyle Minimized -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
+    $p = Start-Process -FilePath $claude -ArgumentList $argList -WorkingDirectory $repo -WindowStyle Minimized -PassThru -RedirectStandardError $err
   }
   Say "launched $sessionName minimized: pid $($p.Id)"
   return $p
@@ -93,7 +106,7 @@ foreach ($sessionName in "rc-spike-hidden","rc-spike-min","rc-spike-flags") {
 
 Say ""
 Say "NOW: open Remote Control on the phone or the desktop app and look for"
-Say "  rc-spike-hidden / rc-spike-min / rc-spike-flags — note which are listed"
+Say "  rc-spike-hidden / rc-spike-min / rc-spike-flags - note which are listed"
 Say "  and which replied READY. You have six minutes."
 Start-Sleep -Seconds 360
 
