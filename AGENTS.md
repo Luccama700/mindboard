@@ -211,6 +211,8 @@ The task capture bar is the highest-priority interaction.
 - The group selector chip also sticks across submits. It opens a compact bottom-adjacent picker with "inbox" plus every active group, and new tasks should be inserted into the selected group.
 - The `+ notes` chip opens a compact textarea for Markdown notes. Notes are trimmed, stored in `tasks.notes`, and cleared after submit. Keep the stored value as raw Markdown text; do not render HTML from it unless a future feature adds a sanitizer.
 
+Every open task row on `/tasks` wears a thin 2×28px trim in its group's colour between the checkbox and the title (`TaskRow` resolves it from the `groups` prop by `group_id`, since `/tasks` passes bare `Task`s without `group_color`); inbox tasks keep the slot blank so titles stay aligned, and done rows drop it. The dashboard stream's `CardRow` is a separate component and still carries the group colour on its left edge.
+
 Tapping the title of any task row expands an inline edit panel with four fields, all auto-saving where applicable:
 
 - Rename (saves on Enter or blur).
