@@ -6,6 +6,7 @@ import { getPreferences } from "@/app/lib/mcp/reads";
 
 import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import { listEvents } from "@/utils/google/calendar";
+import { countFollowups } from "./followup";
 import {
   composeWatchToday,
   WATCH_UPCOMING_DAYS,
@@ -57,7 +58,7 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
     return null;
   });
 
-  const [tasksRes, doneRes, rulesRes, completionsRes, slotsRes, groupsRes, rawEvents] =
+  const [tasksRes, doneRes, rulesRes, completionsRes, slotsRes, groupsRes, rawEvents, followups] =
     await Promise.all([
       supabase
         .from("tasks")
@@ -100,6 +101,7 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
         .eq("archived", false)
         .not("google_calendar_id", "is", null),
       eventsPromise,
+      countFollowups(supabase, userId, now.toISOString()),
     ]);
 
   const linkedGroups = new Map(
@@ -146,6 +148,7 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
     events,
     wakeStartHour: prefs.wakeStartHour,
     wakeEndHour: prefs.wakeEndHour,
+    followups,
     today,
     now,
     timeZone,

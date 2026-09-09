@@ -17,6 +17,18 @@ templates, so switching later means changing two variables, not code.
 PDF *pipeline* — layout, reading order, tables, LaTeX — and llama.cpp has no
 audio output, so no VibeVoice.)
 
+## Follow-ups from the Apple Watch
+
+A `followup` job is a dictated instruction about an open task (see the main
+README, "Apple Watch API"). The worker runs the Claude Code CLI on this PC —
+`claude -p` with permissions bypassed, the prompt on stdin, and a temporary
+`--mcp-config` pointing at the deployed Mindboard MCP server on this worker's
+bearer — and Claude creates the follow-up task itself (same group, same due
+date; the original stays open). Requirements: `claude` on PATH (or set
+`CLAUDE_CMD`) and a logged-in Claude Code. Budget/turn caps:
+`FOLLOWUP_BUDGET_USD` (default 5), `FOLLOWUP_MAX_TURNS` (60),
+`FOLLOWUP_TIMEOUT_SECONDS` (1800). Restart the worker after pulling this.
+
 ## Option A — one-time setup (Windows 11 → WSL2)
 
 1. **WSL2** (PowerShell as admin): `wsl --install -d Ubuntu`, reboot, open

@@ -78,7 +78,11 @@ describe("composeWatchToday", () => {
       serverTime: NOW.toISOString(),
       timeZone: "America/Vancouver",
       today: TODAY,
+      followups: { pending: 0, failed: 0 },
     });
+    expect(
+      composeWatchToday(base({ followups: { pending: 2, failed: 1 } })).meta.followups,
+    ).toEqual({ pending: 2, failed: 1 });
   });
 
   test("routines are the rules landing today, done state from completions, slot time wins", () => {

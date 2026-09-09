@@ -65,7 +65,13 @@ export type WatchEventInput = ScheduleEvent & {
 };
 
 export type WatchToday = {
-  meta: { serverTime: string; timeZone: string | null; today: string };
+  meta: {
+    serverTime: string;
+    timeZone: string | null;
+    today: string;
+    // Follow-up jobs on the home worker: in flight, and failed in the last day.
+    followups: { pending: number; failed: number };
+  };
   overdue: WatchTaskRow[];
   dueToday: WatchTaskRow[];
   events: WatchEventRow[]; // today's events that haven't ended yet
@@ -107,6 +113,7 @@ export type WatchTodayInput = {
   events: WatchEventInput[] | null;
   wakeStartHour: number;
   wakeEndHour: number;
+  followups?: { pending: number; failed: number };
   today: string;
   now: Date;
   timeZone: string | null;
@@ -247,6 +254,7 @@ export function composeWatchToday(input: WatchTodayInput): WatchToday {
       serverTime: input.now.toISOString(),
       timeZone,
       today,
+      followups: input.followups ?? { pending: 0, failed: 0 },
     },
     overdue: overdue.slice(0, WATCH_SECTION_LIMIT).map(toRow),
     dueToday: dueToday.slice(0, WATCH_SECTION_LIMIT).map(toRow),
