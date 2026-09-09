@@ -43,7 +43,7 @@ export const maxDuration = 60;
 type JobRow = {
   id: string;
   user_id: string;
-  kind: "ocr" | "tts" | "reel";
+  kind: "ocr" | "tts" | "reel" | "followup";
   payload: Record<string, unknown>;
   status: string;
   attempts: number;
@@ -134,6 +134,12 @@ async function failJob(job: JobRow, message: string) {
 async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
   const supabase = createServiceClient();
 
+  if (job.kind === "followup") {
+    // Claude Code on the PC does the work through the MCP server; the claim
+    // only carries the task context and the dictated instruction.
+    return { job: { id: job.id, kind: job.kind }, followup: job.payload };
+  }
+
   if (job.kind === "reel") {
     // The worker downloads the reel itself (yt-dlp); it only needs the URL.
     // Transcript + frame notes + a cover thumbnail come back in the complete
@@ -209,6 +215,20 @@ async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
     },
     upload_url: upload.signedUrl,
     audio_path: audioPath,
+  };
+}
+
+// The follow-up's writes already landed through MCP (create_task /
+// update_task → confirm_action, audited); the job row just keeps the receipt.
+function completeFollowup(body: Record<string, unknown>): Record<string, unknown> {
+  const ids = Array.isArray(body.created_task_ids)
+    ? body.created_task_ids.filter((id): id is string => typeof id === "string")
+    : [];
+  return {
+    created_task_ids: ids,
+    updated_original: body.updated_original === true,
+    summary: typeof body.summary === "string" ? body.summary.slice(0, 500) : "",
+    cost_usd: typeof body.cost_usd === "number" ? body.cost_usd : null,
   };
 }
 
@@ -461,7 +481,9 @@ export async function POST(request: Request) {
           ? await completeOcr(job, body)
           : job.kind === "reel"
             ? await completeReel(job, body)
-            : await completeTts(job, body);
+            : job.kind === "followup"
+              ? completeFollowup(body)
+              : await completeTts(job, body);
 
       await supabase
         .from("jobs")

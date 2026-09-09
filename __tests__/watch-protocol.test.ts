@@ -7,6 +7,7 @@ import {
   readIdempotencyKey,
   resolveWatchUserId,
   validateComplete,
+  validateFollowup,
   validateSpend,
   validateTaskId,
 } from "@/app/lib/watch/protocol";
@@ -79,6 +80,16 @@ describe("watch bodies", () => {
     expect(validateTaskId({ id: " t1 " })).toEqual({ ok: true, value: { id: "t1" } });
     expect(validateTaskId({}).ok).toBe(false);
     expect(validateTaskId({ id: 3 }).ok).toBe(false);
+  });
+
+  test("follow-up needs an id and non-empty text", () => {
+    expect(validateFollowup({ id: "t1", text: "  find the syllabus pdf " })).toEqual({
+      ok: true,
+      value: { id: "t1", text: "find the syllabus pdf" },
+    });
+    expect(validateFollowup({ id: "t1", text: "  " }).ok).toBe(false);
+    expect(validateFollowup({ text: "x" }).ok).toBe(false);
+    expect(validateFollowup({ id: "t1", text: "x".repeat(4001) }).ok).toBe(false);
   });
 
   test("spend rounds to cents and drops a blank note", () => {

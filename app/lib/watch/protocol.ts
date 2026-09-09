@@ -109,6 +109,21 @@ export function validateTaskId(raw: unknown): Result<{ id: string }> {
   return { ok: true, value: { id: body.id.trim() } };
 }
 
+export const FOLLOWUP_TEXT_MAX = 4000;
+
+export function validateFollowup(raw: unknown): Result<{ id: string; text: string }> {
+  const body = (raw ?? {}) as { id?: unknown; text?: unknown };
+  if (typeof body.id !== "string" || !body.id.trim()) {
+    return { ok: false, error: "id is required" };
+  }
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (!text) return { ok: false, error: "text is required" };
+  if (text.length > FOLLOWUP_TEXT_MAX) {
+    return { ok: false, error: `text must be at most ${FOLLOWUP_TEXT_MAX} characters` };
+  }
+  return { ok: true, value: { id: body.id.trim(), text } };
+}
+
 export function validateTaskTitle(raw: unknown): Result<{ title: string }> {
   const body = (raw ?? {}) as { title?: unknown };
   const title = typeof body.title === "string" ? body.title.trim() : "";

@@ -17,6 +17,8 @@ Env:
                        --model_path /models/VibeVoice-Large-Q8 \
                        --txt_path {text} --output_path {wav} --speaker_names Ava Ben
   WORKER_POLL_SECONDS  default 30
+  CLAUDE_CMD         default: claude — the Claude Code CLI, for followup jobs
+  FOLLOWUP_BUDGET_USD  default 5; FOLLOWUP_MAX_TURNS default 60
 """
 
 import base64
@@ -68,6 +70,18 @@ YTDLP_INFO_CMD = os.environ.get(
 VISION_MODEL = os.environ.get("VISION_MODEL", "qwen3-vl:8b")  # "" disables visuals
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 REEL_MAX_FRAMES = int(os.environ.get("REEL_MAX_FRAMES", "10"))
+
+# --- Follow-ups from the watch (kind 'followup') ---
+# A dictated instruction about an open task. Claude Code runs here on the PC
+# with permissions bypassed (Lucca's call: the instruction came from his own
+# voice), talks to Mindboard only through the deployed MCP server on this
+# worker's bearer, and creates the follow-up task itself. The prompt goes in
+# on stdin (Windows argv limits); the MCP config is a file in the job's
+# workdir so the token never appears on a command line.
+CLAUDE_CMD = os.environ.get("CLAUDE_CMD", "claude")
+FOLLOWUP_BUDGET_USD = os.environ.get("FOLLOWUP_BUDGET_USD", "5")
+FOLLOWUP_MAX_TURNS = os.environ.get("FOLLOWUP_MAX_TURNS", "60")
+FOLLOWUP_TIMEOUT_SECONDS = int(os.environ.get("FOLLOWUP_TIMEOUT_SECONDS", "1800"))
 
 
 def log(message: str) -> None:
@@ -425,6 +439,109 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     return result
 
 
+FOLLOWUP_PROMPT = """You are the follow-up agent for Mindboard, running on Lucca's PC. Lucca dictated a follow-up on one of his open tasks from his Apple Watch. Do what the instruction needs, then record the outcome in Mindboard.
+
+ORIGINAL TASK
+- title: {title}
+- group: {group} (groupId: {group_id})
+- due: {due}
+- priority: {priority}
+- notes:
+{notes}
+
+INSTRUCTION (dictated, may contain speech-to-text errors — read for intent):
+\"\"\"{instruction}\"\"\"
+
+HOW TO WORK
+1. Do the actual work first: research with WebSearch/WebFetch, read or write files, run commands — whatever the instruction calls for. Be concrete; gather links, numbers, steps.
+2. Then use the `mindboard` MCP tools. Every write is propose → confirm: call the propose tool, then `confirm_action` with its proposalId.
+3. Create exactly ONE follow-up task with `create_task`: same groupId ({group_id} — pass null if null), dueDate {due_date_json}, priority "{priority}", a short imperative title, and notes that begin with "Follow-up of: {title}" followed by what you found (links, decisions, next steps) in plain Markdown.
+4. If the instruction is really a change to the original task (its title, notes, date, priority), apply that with `update_task` instead of, or in addition to, the follow-up task.
+5. Never complete, miss, or delete the original task. Never create more than one new task.
+
+FINISH with one final line exactly in this form (valid JSON after the marker):
+FOLLOWUP_RESULT: {{"created_task_ids": ["..."], "updated_original": false, "summary": "one sentence"}}
+"""
+
+
+def handle_followup(claim: dict, workdir: Path) -> dict:
+    followup = claim["followup"]
+    due = followup.get("due_date") or "none"
+    if followup.get("due_time"):
+        due += f" {str(followup['due_time'])[:5]}"
+    prompt = FOLLOWUP_PROMPT.format(
+        title=followup.get("title", ""),
+        group=followup.get("group_name") or "inbox",
+        group_id=json.dumps(followup.get("group_id")),
+        due=due,
+        due_date_json=json.dumps(followup.get("due_date")),
+        priority=followup.get("priority") or "med",
+        notes=(followup.get("notes") or "(none)").strip(),
+        instruction=(followup.get("instruction") or "").strip(),
+    )
+    mcp_config = workdir / "mcp.json"
+    mcp_config.write_text(json.dumps({
+        "mcpServers": {
+            "mindboard": {
+                "type": "http",
+                "url": f"{APP_URL}/api/mcp/mcp",
+                "headers": {"Authorization": f"Bearer {TOKEN}"},
+            }
+        }
+    }))
+    args = [
+        CLAUDE_CMD, "-p",
+        "--output-format", "json",
+        "--dangerously-skip-permissions",
+        "--mcp-config", str(mcp_config),
+        "--strict-mcp-config",
+        "--max-turns", FOLLOWUP_MAX_TURNS,
+        "--max-budget-usd", FOLLOWUP_BUDGET_USD,
+    ]
+    log(f"  $ {CLAUDE_CMD} -p … (followup on \"{followup.get('title', '')[:40]}\")")
+    # A spawned `claude -p` refuses to start if it thinks it's nested inside
+    # another Claude Code session; the worker never is, but strip the marker
+    # in case it was launched from one.
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    completed = subprocess.run(
+        args,
+        input=prompt,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=FOLLOWUP_TIMEOUT_SECONDS,
+        shell=(os.name == "nt"),
+        env=env,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"claude exited {completed.returncode}: {(completed.stderr or completed.stdout)[:400]}")
+    try:
+        parsed = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"claude returned non-JSON output: {completed.stdout[:200]}") from error
+    text = str(parsed.get("result") or "")
+    if parsed.get("is_error"):
+        raise RuntimeError(f"claude run errored: {text[:400]}")
+
+    result: dict = {
+        "created_task_ids": [],
+        "updated_original": False,
+        "summary": text.strip().splitlines()[-1][:500] if text.strip() else "",
+        "cost_usd": parsed.get("total_cost_usd"),
+    }
+    marker = "FOLLOWUP_RESULT:"
+    if marker in text:
+        try:
+            tail = json.loads(text.rsplit(marker, 1)[1].strip().splitlines()[0])
+            result["created_task_ids"] = [str(i) for i in tail.get("created_task_ids", [])]
+            result["updated_original"] = bool(tail.get("updated_original"))
+            result["summary"] = str(tail.get("summary", result["summary"]))[:500]
+        except (json.JSONDecodeError, IndexError, AttributeError):
+            log("  could not parse FOLLOWUP_RESULT; keeping the run's last line")
+    return result
+
+
 def process(claim: dict) -> None:
     job = claim["job"]
     job_id, kind = job["id"], job["kind"]
@@ -440,6 +557,8 @@ def process(claim: dict) -> None:
             result = handle_ocr(claim, workdir)
         elif kind == "reel":
             result = handle_reel(claim, workdir)
+        elif kind == "followup":
+            result = handle_followup(claim, workdir)
         else:
             result = handle_tts(claim, workdir)
         api({"op": "complete", "job_id": job_id, **result})
