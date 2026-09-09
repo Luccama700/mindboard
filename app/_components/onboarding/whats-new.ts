@@ -14,6 +14,15 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-09-09-top-chrome",
+    date: "2026-09-09",
+    title: "nothing hides under the top edge anymore",
+    items: [
+      "on the phone, the installed app used to slide its first row up under the clock and the island — history, run agent now, the ? and ※ buttons all fought for the same corner. every screen now leaves room for that band, so everything up there is tappable.",
+      "on desktop the ※ and ? buttons no longer sit on top of the calendar pane's header — they have their own strip above the page.",
+    ],
+  },
+  {
     id: "2026-09-09-group-trim",
     date: "2026-09-09",
     title: "a splash of group colour on every task",
