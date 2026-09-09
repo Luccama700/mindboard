@@ -244,6 +244,8 @@ Mutations live in:
 - `app/actions/inventory.ts`: inventory group/item/usage CRUD and quantity adjustments; `app/actions/inventory-icon.ts`: item icon upload/generation.
 - `app/actions/auth.ts`.
 
+**Agent hand-off (2026-09-09; design: `docs/superpowers/specs/2026-09-09-agent-handoff-design.md`).** Two ways to hand an open task to the home PC, both in the task edit panel: `✦ follow up` (a `followup` job → `worker.py` → one new follow-up task, same group and due date) and `✦ do it` (`app/_components/dispatch-sheet.tsx` → `requestTaskDispatch` → a `task_dispatches` row, migration 0051 → `run.mjs` Track C drains it on the 5-minute poll and writes `## Agent result` into the notes, `ai_state` building → built/failed). `✦ do it` also sits on the stream cards, where it renders only for the owner (`agentServicesUser` in `app/page.tsx`): `run.mjs` claims over the owner's personal MCP token, which is user-scoped, while follow-ups gate on `workerAllowedUserIds()` because `worker.py` claims through the worker bearer on the service role. Neither button is gated in the panel; the action answers "no agent PC serves this account". Executor guardrails: `overnight/dispatch-capabilities.md` (never submit/send/sign/purchase, never `main`, never `git push`).
+
 ## Finance
 
 `/finance` is a money tracker and cashflow forecast. No bank/Plaid sync — but statement screenshots import through the `update_finance` MCP/assistant tool (see below). Design + decisions: `docs/finance-automation-plan.md`.
@@ -345,6 +347,7 @@ Decided constraints: assistant writes are **propose → confirm** (never silent)
 - `app/_components/dashboard-calendar.tsx`: embedded calendar shell + month grid + selected-day list with inline event edit.
 - `app/_components/week-view.tsx`: week grid with `@dnd-kit/core` drag-to-reschedule for tasks, all-day events, and timed events.
 - `app/_components/event-edit-panel.tsx`: inline form for editing an event's start/end date/time.
+- `app/_components/dispatch-sheet.tsx`: the `✦ do it` sheet (one note → `requestTaskDispatch`), used by stream cards and the task edit panel.
 - `app/_components/calendar-types.ts`: shared `CalendarItem` discriminated union for tasks, events, and finance changes in the calendar widget.
 - `app/_components/task-row.tsx`: shared task row with inline edit panel (title, date, group, Markdown notes, delete).
 - `app/_components/event-row.tsx`: read-only virtual row for events from a linked Google Calendar.
