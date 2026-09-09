@@ -387,3 +387,11 @@ export function execPrompt(task, approach) {
     `short "suggested next steps for you" list at the end. No preamble.`,
   ].join("\n");
 }
+
+// What the triage writes under "## AI triage — <date>" when it declines a
+// task. First line is the reason (the app shows it beside ✦ not taken); the
+// nudge names the two fallbacks the spec gives the user.
+export function declineNote(reason) {
+  const line = clip((reason ?? "").trim() || "not something I can take on from here", 300);
+  return `${line}\n\n*✦ follow up or ✦ do it if you want the PC to try anyway.*`;
+}

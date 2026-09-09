@@ -42,6 +42,7 @@ import {
   buildPrompt,
   clip,
   dispatchPrompt,
+  declineNote,
   execPrompt,
   extractPlan,
   extractSection,
@@ -661,7 +662,7 @@ async function buildPhase(tasks) {
 // One cheap triage call over every untouched non-code task: feasible ones get
 // their proposed approach written into the notes as an approval request
 // (ai_state 'planned' — the same badge/button as code tasks); infeasible ones
-// are cached locally and left alone.
+// are marked declined on the task with the reason in the notes.
 async function triagePhase(allTasks, codeGroupId, state) {
   const queue = pickLifeTasks(allTasks, codeGroupId, state.infeasible);
   log(`life triage: ${queue.length} new task(s) to assess`);
@@ -695,7 +696,19 @@ async function triagePhase(allTasks, codeGroupId, state) {
     const task = queue.find((t) => t.id === verdict.id);
     try {
       if (!verdict.feasible) {
-        state.infeasible[task.id] = { title: task.title, reason: verdict.reason ?? "", at: today };
+        // The task itself carries the verdict now (ai_state 'declined' +
+        // the reason in the notes) so the app can show ✦ not taken and offer
+        // ✦ follow up. pickLifeTasks skips any non-null ai_state, so clearing
+        // the badge in the app re-triages next run. state.infeasible is no
+        // longer written; it is still read for rows declined before 0052.
+        const reason = (verdict.reason ?? "").trim();
+        const base = await freshNotes(task.id, task.notes);
+        await updateTask(task.id, {
+          notes: appendSection(base, `AI triage — ${today}`, declineNote(reason)),
+          aiState: "declined",
+        });
+        log(`  declined: "${task.title}" — ${clip(reason || "no reason given", 120)}`);
+        outcomes.push({ task, ok: true, declined: true, reason });
         continue;
       }
       const body = `${verdict.approach.trim()}\n\n*approve on this task and I'll do it on the next run.*`;
@@ -1010,7 +1023,11 @@ async function nightReport(planned, built, lifeProposed = [], lifeDone = []) {
   const lines = [
     ...planned.map((o) => `- plan ${o.ok ? "ready" : "FAILED"}: ${o.task.title}`),
     ...built.map((o) => `- build ${o.ok ? `pushed (${o.branch})` : "FAILED"}: ${o.task.title}`),
-    ...lifeProposed.map((o) => `- approach ${o.ok ? "proposed" : "FAILED"}: ${o.task.title}`),
+    ...lifeProposed.map((o) =>
+      o.declined
+        ? `- declined: ${o.task.title} — ${clip(o.reason || "no reason given", 80)}`
+        : `- approach ${o.ok ? "proposed" : "FAILED"}: ${o.task.title}`,
+    ),
     ...lifeDone.map((o) => `- life task ${o.ok ? "done" : "FAILED"}: ${o.task.title}`),
   ];
   try {
