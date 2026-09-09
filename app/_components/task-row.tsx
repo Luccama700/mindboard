@@ -266,6 +266,7 @@ function EditPanel({
   const [pushing, startPush] = useTransition();
   const [aiState, setAiState] = useState(task.ai_state);
   const [aiPending, startAi] = useTransition();
+  const [aiNote, setAiNote] = useState<string | null>(null);
   // A declined task opens with the follow-up composer ready: the triage said
   // no, and follow-up is the fallback the spec names for exactly that. The
   // auto-open must not steal focus (on a phone that pops the keyboard the
@@ -337,7 +338,17 @@ function EditPanel({
   function changeAiState(next: "approved" | "planned" | null) {
     startAi(async () => {
       const result = await setTaskAiState(task.id, next);
-      if (!result.error) setAiState(next);
+      if (result.error) return;
+      setAiState(next);
+      setAiNote(
+        next !== "approved"
+          ? null
+          : result.stamped
+            ? "the pc picks it up within ~5 min"
+            : result.stampError
+              ? "couldn't wake the pc — it runs at 4am"
+              : "queued for the 4am run",
+      );
     });
   }
 
@@ -677,6 +688,7 @@ function EditPanel({
           >
             {AI_BADGE[aiState].label}
           </span>
+          {aiNote && <span className="text-[10px] text-muted">{aiNote}</span>}
           {aiState === "planned" && (
             <>
               <button

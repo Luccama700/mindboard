@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
@@ -335,29 +336,63 @@ export async function pushTaskToCalendar(id: string) {
 // (docs/overnight-agent-plan.md): approve a plan, send a build back to
 // planned, or clear the state entirely. The orchestrator's own transitions
 // (planned/building/built/failed) go through the MCP propose → confirm rails.
+// The PC's poll (run.mjs --if-requested) claims agent_run_requested_at over
+// the OWNER's personal MCP token, which is user-scoped — so only the owner's
+// stamp is ever picked up. Same gate as the stream's ✦ do it.
+async function servesAgentRuns(userId: string): Promise<boolean> {
+  try {
+    const { ownerUserId } = await import("@/app/lib/mcp/config");
+    return ownerUserId() === userId;
+  } catch {
+    return false;
+  }
+}
+
+// Returns the upsert error message, or null when the stamp landed.
+async function stampAgentRun(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<string | null> {
+  const { error } = await supabase.from("user_settings").upsert(
+    { user_id: userId, agent_run_requested_at: new Date().toISOString() },
+    { onConflict: "user_id" },
+  );
+  return error ? error.message : null;
+}
+
 export async function setTaskAiState(
   id: string,
   state: "approved" | "planned" | null,
-) {
+): Promise<{ error: string | null; stamped: boolean; stampError: string | null }> {
   if (state !== null && state !== "approved" && state !== "planned") {
-    return { error: "invalid state" };
+    return { error: "invalid state", stamped: false, stampError: null };
   }
 
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { error: "not authenticated" };
+  if (!user) return { error: "not authenticated", stamped: false, stampError: null };
 
   const { error } = await supabase
     .from("tasks")
     .update({ ai_state: state })
     .eq("id", id);
 
-  if (error) return { error: error.message };
+  if (error) return { error: error.message, stamped: false, stampError: null };
+
+  // Approve means "act on it now": stamp the run request so the 5-minute poll
+  // runs a sweep (docs/superpowers/specs/2026-09-09-agent-handoff-design.md).
+  // Best-effort — the state change above already landed.
+  let stamped = false;
+  let stampError: string | null = null;
+  if (state === "approved" && (await servesAgentRuns(user.id))) {
+    stampError = await stampAgentRun(supabase, user.id);
+    stamped = stampError === null;
+  }
 
   revalidatePath("/", "layout");
-  return { error: null };
+  return { error: null, stamped, stampError };
 }
 
 // The task edit panel's "follow up": the same `followup` job the watch queues
@@ -396,22 +431,11 @@ export async function requestAgentRun() {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
-
-  try {
-    const { ownerUserId } = await import("@/app/lib/mcp/config");
-    if (ownerUserId() !== user.id) {
-      return { error: "no agent PC serves this account" };
-    }
-  } catch {
-    return { error: "agent runs are not configured on this deployment" };
+  if (!(await servesAgentRuns(user.id))) {
+    return { error: "no agent PC serves this account" };
   }
-
-  const { error } = await supabase.from("user_settings").upsert(
-    { user_id: user.id, agent_run_requested_at: new Date().toISOString() },
-    { onConflict: "user_id" },
-  );
-  if (error) return { error: error.message };
-  return { error: null };
+  const stampError = await stampAgentRun(supabase, user.id);
+  return { error: stampError };
 }
 
 // "✦ do it": dispatch one open task to the home worker with a one-shot
