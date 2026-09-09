@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import {
+  declineNote,
   FLAG_WITHOUT_VALUE,
   MODEL_CHOICES,
   appendSection,
