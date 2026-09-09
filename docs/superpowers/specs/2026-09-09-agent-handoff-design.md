@@ -93,10 +93,14 @@ conflicts:
 index). Apply to the live project via the Supabase MCP after merge (house
 rule, memory: migrations are applied, not just committed).
 
-**Gating.** `requestTaskDispatch` gates on `ownerUserId()`; follow-ups gate on
-`workerAllowedUserIds()` (multi-tenant allowlist, migration 0035). Switch
-dispatch to `workerAllowedUserIds().includes(user.id)` so both hand-offs agree
-on who has a PC. Error copy stays "no agent PC serves this account".
+**Gating.** `requestTaskDispatch` (and PR #1's `agentServicesUser` in
+`app/page.tsx`) gate on `ownerUserId()`, and that stays. Follow-ups gate on
+`workerAllowedUserIds()` because `worker.py` claims `jobs` through the worker
+bearer on the service role, which can see every allowlisted user; `run.mjs`
+claims `task_dispatches` and the run request over the owner's personal MCP
+token, which is user-scoped, so a dispatch row for anyone but the owner would
+never be claimed. The two gates differ on purpose; both say "no agent PC
+serves this account".
 
 **UI placement.** "✦ do it" stays on stream cards (PR #1's `DispatchSheet`).
 Add the same button beside "✦ follow up" in the task edit panel
@@ -158,14 +162,15 @@ verdict, instead of only caching in `state.json`:
   read-only compatibility field for one release and is no longer written.
 
 **Approve acts now.** `setTaskAiState(id, "approved")` also stamps
-`user_settings.agent_run_requested_at` for allowlisted users (the same upsert
-`requestAgentRun` does; extract a shared `stampAgentRun(supabase, userId)`
-helper in `app/actions/tasks.ts`). The 5-minute poll claims it via
+`user_settings.agent_run_requested_at` for the owner (the same `ownerUserId()`
+gate and the same upsert `requestAgentRun` does — the poll claims the stamp
+over the owner's PAT; extract shared `servesAgentRuns(userId)` and
+`stampAgentRun(supabase, userId)` helpers in `app/actions/tasks.ts`). The 5-minute poll claims it via
 `claim_agent_run` and runs a normal sweep: code builds keep their worktree and
 lint/test/build gate; life executions run as today; the dispatch drain runs
-too (PR #1 makes it unconditional on polls). Users without a PC in the
-allowlist keep today's behavior (4am). Un-approve does not un-stamp; a sweep
-with nothing approved is a cheap no-op.
+too (PR #1 makes it unconditional on polls). Anyone else keeps today's
+behavior (4am). Un-approve does not un-stamp; a sweep with nothing approved is
+a cheap no-op.
 
 **App.** In the task edit panel, when `aiState === "declined"`:
 
@@ -185,14 +190,16 @@ gains one sentence about `✦ not taken`; a what's-new entry ships with it.
 **Error handling.** The orchestrator's decline write is inside the existing
 per-task try/catch; a failed write logs and leaves the task untouched for the
 next run. The approve stamp is best-effort: if the `user_settings` upsert
-fails the state change still lands and the action returns the upsert error so
-the panel shows it.
+fails the state change still lands; the action returns `stamped: false` plus
+the error, and the panel shows a one-line note ("couldn't wake the pc — it
+runs at 4am"). A non-owner approving gets `stamped: false` with no error and
+the note "queued for the 4am run".
 
 **Tests.** `notes-sections.test.ts` (latest section extraction, absent
 section, multiple sections); `validate` test for `declined` accepted /
 `approved` still rejected; `overnight-lib.test.ts` for the decline note body;
-action test that approving calls the stamp for an allowlisted user and skips
-it otherwise.
+action test that approving calls the stamp for the owner and skips it
+otherwise.
 
 ## Sub-project 3 — Remote Control executor
 
