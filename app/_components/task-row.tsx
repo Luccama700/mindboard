@@ -267,8 +267,11 @@ function EditPanel({
   const [aiState, setAiState] = useState(task.ai_state);
   const [aiPending, startAi] = useTransition();
   // A declined task opens with the follow-up composer ready: the triage said
-  // no, and follow-up is the fallback the spec names for exactly that.
+  // no, and follow-up is the fallback the spec names for exactly that. The
+  // auto-open must not steal focus (on a phone that pops the keyboard the
+  // moment the panel opens), so the focus/scroll effect skips it once.
   const [followupOpen, setFollowupOpen] = useState(task.ai_state === "declined");
+  const followupAutoOpened = useRef(task.ai_state === "declined");
   const [followupDraft, setFollowupDraft] = useState("");
   const [followupState, setFollowupState] = useState<string | null>(null);
   const [followupPending, startFollowup] = useTransition();
@@ -286,6 +289,10 @@ function EditPanel({
   // bring it into view itself (it would otherwise open behind the Dock).
   useEffect(() => {
     if (!followupOpen) return;
+    if (followupAutoOpened.current) {
+      followupAutoOpened.current = false;
+      return;
+    }
     const el = followupRef.current;
     if (!el) return;
     el.focus();

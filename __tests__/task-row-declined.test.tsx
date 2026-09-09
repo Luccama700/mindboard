@@ -68,7 +68,8 @@ afterEach(() => {
 describe("a declined task", () => {
   test("shows ✦ not taken with the triage reason and the follow-up box already open", () => {
     renderOpenRow(task({ ai_state: "declined", notes: DECLINED_NOTES }));
-    expect(screen.getByText("✦ not taken")).toBeTruthy();
+    // The badge renders in the row header AND the panel; either is fine.
+    expect(screen.getAllByText("✦ not taken").length).toBeGreaterThan(0);
     expect(screen.getByText("needs a phone call, which I can't make")).toBeTruthy();
     expect(screen.getByLabelText("follow-up instruction")).toBeTruthy();
     expect(screen.getByRole("button", { name: "✦ do it" })).toBeTruthy();
@@ -90,6 +91,6 @@ describe("a planned task", () => {
   test("does not pre-open the follow-up box", () => {
     renderOpenRow(task({ ai_state: "planned", notes: "## AI plan — 2026-09-09\n\ndo x" }));
     expect(screen.queryByLabelText("follow-up instruction")).toBeNull();
-    expect(screen.getByText("✦ plan ready")).toBeTruthy();
+    expect(screen.getAllByText("✦ plan ready").length).toBeGreaterThan(0);
   });
 });
