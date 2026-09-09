@@ -225,6 +225,23 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Top chrome band. The ※ / ? row (onboarding controller) is fixed at the top
+   right; while it is mounted the body reserves its height so no page header
+   control ends up underneath it, on any dashboard width. The band also absorbs
+   the status-bar / Dynamic Island inset in the installed PWA (viewport-fit is
+   cover, so without this the first header row sits under the clock). */
+:root {
+  --chrome-top: 2.75rem;
+}
+@media (min-width: 64rem) {
+  :root {
+    --chrome-top: 2.25rem;
+  }
+}
+body:has([data-chrome-top]) {
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--chrome-top));
+}
+
 /* Ambient texture — a tiled grayscale SVG grain at a few percent opacity,
    so the glass has material to sit on without tinting the page. One fixed,
    static layer (position:fixed, not background-attachment:fixed, which iOS

@@ -161,8 +161,13 @@ export function OnboardingController({
 
   return (
     <>
+      {/* Marker for globals.css's `body:has([data-chrome-top])`: the body
+          reserves the row's band whenever this screen has the row at all, so
+          starting a tour (which hides the row) doesn't shift the page. */}
+      {routeKey !== null && <span data-chrome-top hidden />}
+
       {showHelp && (
-        <div className="fixed top-[max(env(safe-area-inset-top),0.5rem)] right-2 z-30 lg:top-1 lg:right-1">
+        <div className="fixed top-0 right-2 z-30 pt-[env(safe-area-inset-top,0px)] lg:right-1">
           {newsOpen && <WhatsNewPanel onClose={() => setNewsOpen(false)} />}
           {menuOpen && pathname === "/" && (
             <div className="absolute right-0 top-full mt-1 w-52 glass-pop glass-rise rounded-pop p-2">
@@ -188,7 +193,7 @@ export function OnboardingController({
               </button>
             </div>
           )}
-          <div className="flex items-center">
+          <div className="flex h-[var(--chrome-top)] items-center">
             {/* Mobile-only: desktop already shows the week pane beside the
                 stream, so the shortcut would be a dead-end there. */}
             <Link
