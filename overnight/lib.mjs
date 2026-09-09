@@ -71,6 +71,49 @@ export function pickBuildTasks(tasks, max) {
     .slice(0, max);
 }
 
+// A flag that was passed but carries no value. Distinct from null (absent) so
+// `--task` with a forgotten id is a usage error instead of silently becoming a
+// full sweep over the whole board.
+export const FLAG_WITHOUT_VALUE = Symbol("flag without value");
+
+// Value of a `--flag value` (or `--flag=value`) argument. null when the flag
+// is absent; FLAG_WITHOUT_VALUE when it is present but trailing, empty, or
+// followed by another flag (never swallow the next flag as a value).
+export function argValue(argv, flag) {
+  const args = argv ?? [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = String(args[i]);
+    if (arg.startsWith(`${flag}=`)) {
+      const value = arg.slice(flag.length + 1);
+      return value === "" ? FLAG_WITHOUT_VALUE : value;
+    }
+    if (arg === flag) {
+      const next = args[i + 1];
+      if (next === undefined || String(next).startsWith("--")) {
+        return FLAG_WITHOUT_VALUE;
+      }
+      return String(next);
+    }
+  }
+  return null;
+}
+
+// Narrowing flags: each one says "run this slice of the sweep, nothing else".
+// A dispatch is not part of any slice, so these opt out of the drain — a
+// `--plan-only` run must not spend 45 minutes executing someone's task.
+const DRAIN_BLOCKING_FLAGS = [
+  "--plan-only",
+  "--build-only",
+  "--code-only",
+  "--life-only",
+];
+
+// The queue drains on the 5-minute poll and on full (flagless) runs only.
+export function shouldDrainDispatches(argv) {
+  const args = (argv ?? []).map(String);
+  return !DRAIN_BLOCKING_FLAGS.some((flag) => args.includes(flag));
+}
+
 // Quote a single argument for a Windows cmd.exe command line (spawn shell:true).
 export function quoteArg(arg) {
   const value = String(arg);
@@ -283,6 +326,44 @@ export function parseTriage(text, validIds) {
       typeof v.feasible === "boolean" &&
       (!v.feasible || typeof v.approach === "string"),
   );
+}
+
+// ---------- Track C: dispatched tasks ("do this now") ----------
+
+// The user picked THIS task and asked for it now, so the executor gets full
+// local powers instead of Track B's web-only profile — the guardrails below
+// are what keep that safe, and they are carried verbatim in the prompt beside
+// the Track C manifest (overnight/dispatch-capabilities.md, NOT the web-only
+// capabilities.md). Spec:
+// docs/superpowers/specs/2026-07-31-task-dispatch-design.md.
+export function dispatchPrompt(task, note, manifest) {
+  return [
+    `You are the user's home agent, dispatched by them just now to work ONE`,
+    `task at full power: shell, files, and the browser are yours inside your`,
+    `workspace.`,
+    ``,
+    `HARD RULES: never submit, send, sign, purchase, publish, or post anything`,
+    `in the user's name — you prepare, research, build, and draft, and they`,
+    `act on it. No credential handling. Graded coursework submission stays a`,
+    `human action. Code work happens on ai/* branches only, never main, and`,
+    `NEVER on a repo outside your workspace directory — if the task needs one,`,
+    `clone or git worktree it INTO the workspace and work on that copy.`,
+    ``,
+    `YOUR DISPATCH CAPABILITIES MANIFEST:`,
+    ``,
+    manifest,
+    ``,
+    `TASK: ${task.title}`,
+    task.notes?.trim() ? `THE TASK'S NOTES:\n${clip(task.notes.trim(), 4000)}` : ``,
+    ``,
+    `WHAT THE USER JUST ASKED FOR (this is the brief — it wins over the notes`,
+    `where they disagree):`,
+    clip(String(note ?? "").trim(), 4000),
+    ``,
+    `Do the work now. Your final message is the deliverable itself: plain`,
+    `markdown, concrete results with paths/links/branches where relevant, and`,
+    `a short "suggested next steps for you" list at the end. No preamble.`,
+  ].join("\n");
 }
 
 export function execPrompt(task, approach) {

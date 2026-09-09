@@ -7,12 +7,16 @@ import {
   setTaskAiState,
 } from "@/app/actions/tasks";
 import { formatDue } from "./date-utils";
+import { DispatchSheet } from "./dispatch-sheet";
 import type { Task, TaskWithGroup } from "./types";
 
 // Overnight-agent badge copy per lifecycle state (docs/overnight-agent-plan.md).
 // Copy is track-agnostic: code tasks (mindboard group) build on branches,
 // life tasks get research/drafts — the lifecycle is the same either way.
-const AI_BADGE: Record<NonNullable<Task["ai_state"]>, { label: string; tone: string }> = {
+export const AI_BADGE: Record<
+  NonNullable<Task["ai_state"]>,
+  { label: string; tone: string }
+> = {
   planned: { label: "✦ plan ready", tone: "text-accent" },
   approved: { label: "✦ queued", tone: "text-muted" },
   building: { label: "✦ working…", tone: "text-muted" },
@@ -265,6 +269,7 @@ function EditPanel({
   const [followupState, setFollowupState] = useState<string | null>(null);
   const [followupPending, startFollowup] = useTransition();
   const followupRef = useRef<HTMLTextAreaElement>(null);
+  const [dispatchOpen, setDispatchOpen] = useState(false);
   const dateInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const canFollowup = task.status !== "done" && task.status !== "missed";
@@ -576,6 +581,13 @@ function EditPanel({
             >
               ✦ follow up
             </button>
+            <button
+              type="button"
+              onClick={() => setDispatchOpen(true)}
+              className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors"
+            >
+              ✦ do it
+            </button>
             {followupState && (
               <span
                 className={`text-[10px] ${
@@ -627,6 +639,13 @@ function EditPanel({
             </div>
           )}
         </div>
+      )}
+
+      {dispatchOpen && (
+        <DispatchSheet
+          task={{ id: task.id, title: task.title }}
+          onClose={() => setDispatchOpen(false)}
+        />
       )}
 
       {aiState && (
