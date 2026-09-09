@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/utils/supabase/server";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
+import { queueFollowupFromWatch } from "@/app/lib/watch/followup";
+import { validateFollowup } from "@/app/lib/watch/protocol";
 import { TASK_COLUMNS } from "@/app/_components/types";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -355,6 +357,31 @@ export async function setTaskAiState(
 
   revalidatePath("/", "layout");
   return { error: null };
+}
+
+// The task edit panel's "follow up": the same `followup` job the watch queues
+// (app/lib/watch/followup.ts), so Claude Code on the home worker does the
+// research and adds one follow-up task. Nothing to revalidate — the result
+// only appears once the PC has run the job.
+export async function queueTaskFollowup(id: string, text: string) {
+  const parsed = validateFollowup({ id, text });
+  if (!parsed.ok) return { error: parsed.error };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const outcome = await queueFollowupFromWatch(
+    user.id,
+    parsed.value.id,
+    parsed.value.text,
+    null,
+    "mindboard app",
+  );
+  if (!outcome.ok) return { error: outcome.error };
+  return { error: null, jobId: String(outcome.result.jobId ?? "") };
 }
 
 // "Run agent now": stamp a request the PC's 5-minute poll picks up via the

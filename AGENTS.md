@@ -217,6 +217,7 @@ Tapping the title of any task row expands an inline edit panel with four fields,
 - Due date via the same today/+date/clear chips as the capture bar.
 - Group selector (a dropdown of every active group plus "inbox"), used to sort inbox tasks into the right group from any list. When the task's new group no longer matches the current page (inbox or a single group), the row drops off the list optimistically.
 - Markdown notes textarea (saves on blur into `tasks.notes`).
+- `✦ follow up` (open tasks only): a textarea + "send to claude" that queues the same `followup` job the Apple Watch dictates (`queueTaskFollowup` in `app/actions/tasks.ts` → `queueFollowupFromWatch` in `app/lib/watch/followup.ts`, payload `source: "mindboard app"`). The home worker's Claude Code run does the research and creates one follow-up task in the same group with the same due date; the original stays open. The panel only shows "queued" at submit time — there is no in-app pending/failed indicator yet (the watch reads `meta.followups`). Non-allowlisted accounts see the worker's "no home worker serves this account" error inline.
 - Delete is in the same panel.
 
 Group edit lives in `app/groups/groups-client.tsx`. Tapping the `···` on a group row opens an inline panel with rename, type, color, Google Calendar link, and archive. The shared `ColorPicker` and `TypePicker` components are reused by the create form and the edit panel. `CalendarLinkPicker` lists every readable Google Calendar from `listCalendars`.
@@ -234,7 +235,7 @@ Task optimistic UI patterns are in:
 
 Mutations live in:
 
-- `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group, notes), `deleteTask`.
+- `app/actions/tasks.ts`: `createTask`, `toggleTaskStatus`, `updateTask` (title, due date, group, notes), `deleteTask`, `queueTaskFollowup` (queues a `followup` worker job from the edit panel).
 - `app/actions/groups.ts`: `createGroup`, `updateGroup` (name, type, color, Google Calendar link), `archiveGroup`.
 - `app/actions/calendar.ts`: `rescheduleEvent` (Google Calendar PATCH on `start`/`end`).
 - `app/actions/finance.ts`: category/account/recurring-expense/income-source CRUD, `recordBalanceChange` (balance update → transaction rows + reconciliation anchor), `updateBalanceChange` (amount/date/category/note edits), and `deleteBalanceChange` — the latter two re-derive the cached account balance (see Finance).
