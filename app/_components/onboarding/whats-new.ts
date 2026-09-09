@@ -14,6 +14,15 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-09-09-task-followup",
+    date: "2026-09-09",
+    title: "follow up on any task",
+    items: [
+      "open a task and tap ✦ follow up: tell me what to look into — find the syllabus, compare prices, draft the email — and claude on your pc does the work and adds one follow-up task in the same group with the same due date. the original stays open.",
+      "same feature as the watch's dictated follow-ups, now on the phone and the web. it needs your home worker running; i'll say so if it isn't set up for your account.",
+    ],
+  },
+  {
     id: "2026-09-06-calendar-zone",
     date: "2026-09-06",
     title: "the calendar keeps your timezone",

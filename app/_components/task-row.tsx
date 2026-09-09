@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { pushTaskToCalendar, setTaskAiState } from "@/app/actions/tasks";
+import {
+  pushTaskToCalendar,
+  queueTaskFollowup,
+  setTaskAiState,
+} from "@/app/actions/tasks";
 import { formatDue } from "./date-utils";
 import type { Task, TaskWithGroup } from "./types";
 
@@ -32,6 +36,10 @@ function formatEstimate(minutes: number): string {
 }
 
 const ESTIMATE_CHIPS = [15, 30, 60, 120, 240] as const;
+
+// Mirrors FOLLOWUP_TEXT_MAX in app/lib/watch/protocol.ts, which imports
+// node:crypto and so can't be pulled into this client bundle.
+const FOLLOWUP_MAX = 4000;
 
 type UpdatePatch = {
   title?: string;
@@ -236,8 +244,40 @@ function EditPanel({
   const [pushing, startPush] = useTransition();
   const [aiState, setAiState] = useState(task.ai_state);
   const [aiPending, startAi] = useTransition();
+  const [followupOpen, setFollowupOpen] = useState(false);
+  const [followupDraft, setFollowupDraft] = useState("");
+  const [followupState, setFollowupState] = useState<string | null>(null);
+  const [followupPending, startFollowup] = useTransition();
+  const followupRef = useRef<HTMLTextAreaElement>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const canFollowup = task.status !== "done" && task.status !== "missed";
+
+  // The composer expands after the panel's dock-lift effect already ran, so
+  // bring it into view itself (it would otherwise open behind the Dock).
+  useEffect(() => {
+    if (!followupOpen) return;
+    const el = followupRef.current;
+    if (!el) return;
+    el.focus();
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [followupOpen]);
+
+  function sendFollowup() {
+    const text = followupDraft.trim();
+    if (!text) return;
+    startFollowup(async () => {
+      setFollowupState(null);
+      const result = await queueTaskFollowup(task.id, text);
+      if (result.error) {
+        setFollowupState(result.error);
+        return;
+      }
+      setFollowupDraft("");
+      setFollowupOpen(false);
+      setFollowupState("✦ queued — claude will add a follow-up task");
+    });
+  }
 
   // The capture dock is a fixed island pinned to the bottom of the viewport.
   // A panel that opens for a task low in the list expands directly behind it,
@@ -500,6 +540,78 @@ function EditPanel({
           ))}
         </select>
       </div>
+
+      {canFollowup && (
+        <div className="space-y-2">
+          <div className="flex items-center flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={followupPending}
+              onClick={() => {
+                setFollowupState(null);
+                setFollowupOpen((v) => !v);
+              }}
+              aria-expanded={followupOpen}
+              className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors disabled:opacity-50 ${
+                followupOpen
+                  ? "bg-accent text-accent-fg border-accent"
+                  : "border-line-strong text-muted hover:border-fg hover:text-fg"
+              }`}
+            >
+              ✦ follow up
+            </button>
+            {followupState && (
+              <span
+                className={`text-[10px] ${
+                  followupState.startsWith("✦") ? "text-accent" : "text-danger"
+                }`}
+              >
+                {followupState}
+              </span>
+            )}
+          </div>
+          {followupOpen && (
+            <div className="space-y-2">
+              <textarea
+                ref={followupRef}
+                id={`task-followup-${task.id}`}
+                value={followupDraft}
+                onChange={(e) => setFollowupDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    sendFollowup();
+                  }
+                  if (e.key === "Escape") setFollowupOpen(false);
+                }}
+                placeholder="what should claude look into? it adds one follow-up task here, same group, same due date."
+                maxLength={FOLLOWUP_MAX}
+                rows={3}
+                aria-label="follow-up instruction"
+                className="w-full resize-y bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-sm leading-relaxed px-3 py-2 focus:outline-none transition-colors"
+              />
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={followupPending}
+                  onClick={() => setFollowupOpen(false)}
+                  className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                >
+                  cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={followupPending || !followupDraft.trim()}
+                  onClick={sendFollowup}
+                  className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
+                >
+                  {followupPending ? "queuing…" : "send to claude"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {aiState && (
         <div className="flex items-center flex-wrap gap-2">
