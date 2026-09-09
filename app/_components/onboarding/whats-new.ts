@@ -14,6 +14,15 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-09-09-not-taken",
+    date: "2026-09-09",
+    title: "approve means now, and a straight answer when i can't",
+    items: [
+      "approving a plan wakes the pc: it picks the task up within about five minutes instead of waiting for 4am. the badge walks ✦ queued → ✦ working… → ✦ done.",
+      "when overnight triage decides a task isn't something it can take on, the task now says so — ✦ not taken, with the reason — and the ✦ follow up box is already open so you can tell the pc what to look into instead. clear the badge and it gets a fresh look next run.",
+    ],
+  },
+  {
     id: "2026-09-09-do-it",
     date: "2026-09-09",
     title: "hand a task to the agent",
