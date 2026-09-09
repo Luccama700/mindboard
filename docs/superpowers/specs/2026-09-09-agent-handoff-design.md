@@ -123,8 +123,9 @@ alter table public.tasks add constraint tasks_ai_state_check
   check (ai_state in ('planned','approved','building','built','failed','declined'));
 ```
 
-(Confirm the auto-generated constraint name from the live schema before
-writing the migration; migration 0037 did not name it.)
+(`tasks_ai_state_check` is the auto-generated name, verified against the live
+schema on 2026-09-09; 0050 is the latest applied migration, so 0051/0052 are
+free.)
 
 `declined` = the orchestrator judged the task infeasible for it. Meaning by
 state, after this change:

@@ -52,21 +52,21 @@ function Launch($sessionName, $style, $extraArgs) {
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
   "Reply with the single word READY and then wait for further instructions. Do not touch any files." | Out-File (Join-Path $dir "prompt.md") -Encoding utf8
   $rel = "rc-spike-runs\$sessionName\prompt.md"
-  $args = @("--remote-control", $sessionName, "--dangerously-skip-permissions") + $extraArgs + @("`"Read overnight\$rel and do exactly what it says.`"")
+  $argList = @("--remote-control", $sessionName, "--dangerously-skip-permissions") + $extraArgs + @("`"Read overnight\$rel and do exactly what it says.`"")
   $err = Join-Path $dir "stderr.txt"
   $out = Join-Path $dir "stdout.txt"
   if ($style -eq "hidden") {
     # Same route the scheduled tasks use: WScript.Shell.Run(..., 0, False).
-    $cmdLine = "cmd /c `"$claude`" $($args -join ' ') 2> `"$err`""
+    $cmdLine = "cmd /c `"$claude`" $($argList -join ' ') 2> `"$err`""
     $shell = New-Object -ComObject WScript.Shell
     $shell.Run($cmdLine, 0, $false) | Out-Null
     Say "launched $sessionName hidden: $cmdLine"
     return $null
   }
   if ($viaCmd) {
-    $p = Start-Process -FilePath "cmd.exe" -ArgumentList (@("/c", "`"$claude`"") + $args) -WorkingDirectory $repo -WindowStyle Minimized -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
+    $p = Start-Process -FilePath "cmd.exe" -ArgumentList (@("/c", "`"$claude`"") + $argList) -WorkingDirectory $repo -WindowStyle Minimized -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
   } else {
-    $p = Start-Process -FilePath $claude -ArgumentList $args -WorkingDirectory $repo -WindowStyle Minimized -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
+    $p = Start-Process -FilePath $claude -ArgumentList $argList -WorkingDirectory $repo -WindowStyle Minimized -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
   }
   Say "launched $sessionName minimized: pid $($p.Id)"
   return $p
