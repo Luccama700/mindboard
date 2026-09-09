@@ -8,6 +8,7 @@ import { getUserPreferences } from "@/app/lib/data/settings";
 import { queueFollowupFromWatch } from "@/app/lib/watch/followup";
 import { validateFollowup } from "@/app/lib/watch/protocol";
 import { appendSection } from "@/app/lib/notes";
+import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { TASK_COLUMNS } from "@/app/_components/types";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
@@ -502,7 +503,9 @@ export async function requestTaskDispatch(input: {
   // sweep's queue and a dispatch is not that, and clearing a stale ✦ done /
   // ✦ failed stops the card contradicting the sheet. The worker sets
   // 'building' when the run actually starts.
-  const today = new Date().toISOString().slice(0, 10);
+  // The user's day, not the UTC process clock (AGENTS.md, timezone convention).
+  const prefs = await getUserPreferences(user.id);
+  const today = todayISO(safeTimeZone(prefs.timezone));
   const { error: updErr } = await supabase
     .from("tasks")
     .update({
