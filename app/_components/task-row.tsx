@@ -8,6 +8,7 @@ import {
 } from "@/app/actions/tasks";
 import { formatDue } from "./date-utils";
 import { DispatchSheet } from "./dispatch-sheet";
+import { firstLine, latestSection } from "./notes-sections";
 import type { Task, TaskWithGroup } from "./types";
 
 // Overnight-agent badge copy per lifecycle state (docs/overnight-agent-plan.md).
@@ -22,6 +23,7 @@ export const AI_BADGE: Record<
   building: { label: "✦ working…", tone: "text-muted" },
   built: { label: "✦ done", tone: "text-accent" },
   failed: { label: "✦ failed", tone: "text-danger" },
+  declined: { label: "✦ not taken", tone: "text-muted" },
 };
 
 export type GroupOption = {
@@ -264,7 +266,13 @@ function EditPanel({
   const [pushing, startPush] = useTransition();
   const [aiState, setAiState] = useState(task.ai_state);
   const [aiPending, startAi] = useTransition();
-  const [followupOpen, setFollowupOpen] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
+  // A declined task opens with the follow-up composer ready: the triage said
+  // no, and follow-up is the fallback the spec names for exactly that. The
+  // auto-open must not steal focus (on a phone that pops the keyboard the
+  // moment the panel opens), so the focus/scroll effect skips it once.
+  const [followupOpen, setFollowupOpen] = useState(task.ai_state === "declined");
+  const followupAutoOpened = useRef(task.ai_state === "declined");
   const [followupDraft, setFollowupDraft] = useState("");
   const [followupState, setFollowupState] = useState<string | null>(null);
   const [followupPending, startFollowup] = useTransition();
@@ -273,11 +281,19 @@ function EditPanel({
   const dateInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const canFollowup = task.status !== "done" && task.status !== "missed";
+  const declineReason =
+    aiState === "declined"
+      ? (firstLine(latestSection(notesDraft, "AI triage")) ?? "see the notes")
+      : null;
 
   // The composer expands after the panel's dock-lift effect already ran, so
   // bring it into view itself (it would otherwise open behind the Dock).
   useEffect(() => {
     if (!followupOpen) return;
+    if (followupAutoOpened.current) {
+      followupAutoOpened.current = false;
+      return;
+    }
     const el = followupRef.current;
     if (!el) return;
     el.focus();
@@ -322,7 +338,17 @@ function EditPanel({
   function changeAiState(next: "approved" | "planned" | null) {
     startAi(async () => {
       const result = await setTaskAiState(task.id, next);
-      if (!result.error) setAiState(next);
+      if (result.error) return;
+      setAiState(next);
+      setAiNote(
+        next !== "approved"
+          ? null
+          : result.stamped
+            ? "the pc picks it up within ~5 min"
+            : result.stampError
+              ? "couldn't wake the pc — it runs at 4am"
+              : "queued for the 4am run",
+      );
     });
   }
 
@@ -612,7 +638,11 @@ function EditPanel({
                   }
                   if (e.key === "Escape") setFollowupOpen(false);
                 }}
-                placeholder="what should claude look into? it adds one follow-up task here, same group, same due date."
+                placeholder={
+                  aiState === "declined"
+                    ? "tell the pc what to look into instead — it adds one follow-up task here, same group, same due date."
+                    : "what should claude look into? it adds one follow-up task here, same group, same due date."
+                }
                 maxLength={FOLLOWUP_MAX}
                 rows={3}
                 aria-label="follow-up instruction"
@@ -658,6 +688,7 @@ function EditPanel({
           >
             {AI_BADGE[aiState].label}
           </span>
+          {aiNote && <span className="text-[10px] text-muted">{aiNote}</span>}
           {aiState === "planned" && (
             <>
               <button
@@ -697,6 +728,21 @@ function EditPanel({
             >
               retry tonight
             </button>
+          )}
+          {aiState === "declined" && (
+            <>
+              <span className="text-[10px] text-muted normal-case tracking-normal">
+                {declineReason}
+              </span>
+              <button
+                type="button"
+                disabled={aiPending}
+                onClick={() => changeAiState(null)}
+                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              >
+                clear
+              </button>
+            </>
           )}
           {(aiState === "built" || aiState === "failed" || aiState === "building") && (
             <button

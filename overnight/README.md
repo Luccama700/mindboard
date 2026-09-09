@@ -15,8 +15,9 @@ or on demand — it works the user's board over MCP, two tracks:
 
 - **triages** untouched tasks in one cheap model call against
   `capabilities.md`; feasible ones get an `## AI approach` written into the
-  notes + the same `✦ plan ready` badge; infeasible ones are cached in
-  `state.json` (a retitle re-triages).
+  notes + the same `✦ plan ready` badge; infeasible ones are marked
+  `✦ not taken` on the task with the reason in the notes (clearing the badge
+  in the app re-triages).
 - **executes** approved ones with **WebSearch/WebFetch only** — no shell, no
   file edits, and a hard draft-never-submit rule. Summary lands in the task
   notes, the full result in the brain vault.
@@ -40,6 +41,8 @@ in the edit panel) — same button for both tracks. The agent never touches
   the `Mindboard Agent Poll` scheduled task (every 5 min,
   `run.mjs --if-requested`) claims it via the `claim_agent_run` MCP tool and
   fires a full run.
+- **Approving a plan** stamps the same request, so an approved task starts
+  within the poll window instead of waiting for 4am.
 - **`✦ do it` on a task** (the day stream): writes a `task_dispatches` row +
   an `## Operator note` into the task. It stamps **no** run request — **every**
   run, poll or nightly, drains the dispatch queue first (up to 3 per run,

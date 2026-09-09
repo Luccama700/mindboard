@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import {
+  declineNote,
   FLAG_WITHOUT_VALUE,
   MODEL_CHOICES,
   appendSection,
@@ -429,4 +430,12 @@ describe("quoteArg", () => {
     expect(quoteArg("Bash(npm run lint)")).toBe('"Bash(npm run lint)"');
     expect(quoteArg('say "hi"')).toBe('"say ""hi"""');
   });
+});
+
+test("declineNote: reason first, then the follow-up nudge; empty reason gets a default", () => {
+  const note = declineNote("needs a phone call");
+  expect(note.startsWith("needs a phone call\n\n")).toBe(true);
+  expect(note).toContain("✦ follow up or ✦ do it");
+  expect(declineNote("").startsWith("not something I can take on from here")).toBe(true);
+  expect(declineNote(" ".repeat(5) + "x".repeat(400)).length).toBeLessThan(400);
 });
