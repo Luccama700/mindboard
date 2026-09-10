@@ -16,6 +16,8 @@ import {
   type Result,
 } from "@/app/lib/mcp/validate";
 import { addDaysKey } from "@/app/_components/finance-projection";
+import { todayKey } from "@/app/lib/mcp/config";
+import { slideTarget } from "@/app/lib/tasks/lifecycle";
 import {
   captureTitleFromText,
   idempotentProposalId,
@@ -268,17 +270,39 @@ export async function deferTaskFromWatch(
   const supabase = createServiceClient();
   const { data } = await supabase
     .from("tasks")
-    .select("id, title, status, due_date")
+    .select("id, title, status, due_date, parent_task_id, not_before")
     .eq("id", taskId)
     .eq("user_id", userId)
     .maybeSingle();
   if (!data) return { ok: false, status: 404, error: "task not found" };
-  const task = data as { id: string; title: string; status: string; due_date: string | null };
+  const task = data as {
+    id: string;
+    title: string;
+    status: string;
+    due_date: string | null;
+    parent_task_id: string | null;
+    not_before: string | null;
+  };
   if (task.status === "done" || task.status === "missed") {
     return { ok: false, status: 400, error: `"${task.title}" is already ${task.status}` };
   }
   if (!task.due_date) {
     return { ok: false, status: 400, error: `"${task.title}" has no due date to push` };
+  }
+  // A subtask keeps its window; deferring slides its earliest day instead.
+  if (task.parent_task_id) {
+    const notBefore = slideTarget(task, await todayKey(supabase, userId));
+    if (notBefore === null) {
+      return { ok: true, replayed: false, result: { task, atWindowEnd: true } };
+    }
+    return runThroughConfirm(
+      supabase,
+      userId,
+      "update_task",
+      { taskId, notBefore },
+      `Slide subtask "${task.title}" to not before ${notBefore}.`,
+      idempotencyKey,
+    );
   }
   const dueDate = addDaysKey(task.due_date, 1);
   return runThroughConfirm(

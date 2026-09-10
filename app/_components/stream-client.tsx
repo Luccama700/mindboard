@@ -811,6 +811,13 @@ export function StreamClient({
       const task = card.entity.task;
       resolve(section, card.id);
       startTransition(async () => {
+        // A subtask keeps its window (due_date is its end); snoozing moves the
+        // earliest day the planner may use, clamped to that end.
+        if (task.parent_task_id && task.due_date) {
+          const notBefore = dateKey < task.due_date ? dateKey : task.due_date;
+          await updateTask({ id: task.id, notBefore });
+          return;
+        }
         await updateTask({ id: task.id, dueDate: dateKey, dueTime: null });
       });
     };

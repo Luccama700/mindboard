@@ -6,6 +6,15 @@ const mocks = vi.hoisted(() => ({
   revalidatePath: vi.fn(),
   after: vi.fn(),
   assignEnergyIfUnset: vi.fn(async () => ({ assigned: null })),
+  completeTaskCascade: vi.fn(),
+  reopenTaskCascade: vi.fn(),
+  missTaskCascade: vi.fn(),
+}));
+
+vi.mock("@/app/lib/tasks/lifecycle", () => ({
+  completeTaskCascade: mocks.completeTaskCascade,
+  reopenTaskCascade: mocks.reopenTaskCascade,
+  missTaskCascade: mocks.missTaskCascade,
 }));
 
 vi.mock("next/server", () => ({ after: mocks.after }));
@@ -236,22 +245,41 @@ describe("task actions", () => {
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
-  test("toggleTaskStatus marks done tasks with a completion timestamp", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-23T10:15:00.000Z"));
-    const eq = vi.fn(async () => ({ error: null }));
-    const update = vi.fn(() => ({ eq }));
-    mocks.from.mockReturnValue({ update });
+  test("toggleTaskStatus completes through the cascade for the current user", async () => {
+    mocks.completeTaskCascade.mockResolvedValue({
+      ok: true,
+      value: { parentCompleted: false, childrenCompleted: 0 },
+    });
 
     await expect(toggleTaskStatus("task-1", "todo")).resolves.toEqual({
       error: null,
       nextStatus: "done",
     });
 
-    expect(update).toHaveBeenCalledWith({
-      status: "done",
-      completed_at: "2026-05-23T10:15:00.000Z",
+    expect(mocks.completeTaskCascade).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      "task-1",
+    );
+    expect(mocks.reopenTaskCascade).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  test("toggleTaskStatus on a done task reopens through the cascade", async () => {
+    mocks.reopenTaskCascade.mockResolvedValue({ ok: true, value: { parentReopened: false } });
+
+    await expect(toggleTaskStatus("task-1", "done")).resolves.toEqual({
+      error: null,
+      nextStatus: "todo",
     });
+    expect(mocks.reopenTaskCascade).toHaveBeenCalledWith(expect.anything(), "user-1", "task-1");
+    expect(mocks.completeTaskCascade).not.toHaveBeenCalled();
+  });
+
+  test("toggleTaskStatus surfaces a cascade error and skips revalidation", async () => {
+    mocks.completeTaskCascade.mockResolvedValue({ ok: false, error: "task not found" });
+    await expect(toggleTaskStatus("task-1", "todo")).resolves.toEqual({ error: "task not found" });
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
   test("updateTask maps estimatedMinutes without touching schedule sync", async () => {
@@ -319,53 +347,49 @@ describe("task actions", () => {
     );
   });
 
-  test("markTaskMissed sets status and timestamp when the task is open", async () => {
+  test("markTaskMissed runs the cascade on the user's day and reports a slid subtask", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-22T10:00:00.000Z"));
-    const maybeSingle = vi.fn(async () => ({ data: { status: "todo" }, error: null }));
-    const loadEq = vi.fn(() => ({ maybeSingle }));
-    const loadSelect = vi.fn(() => ({ eq: loadEq }));
-    const updateEq = vi.fn(async () => ({ error: null }));
-    const update = vi.fn(() => ({ eq: updateEq }));
-    mocks.from
-      .mockReturnValueOnce({ select: loadSelect })
-      .mockReturnValueOnce({ update });
-
-    await expect(markTaskMissed("task-1")).resolves.toEqual({ error: null });
-
-    expect(update).toHaveBeenCalledWith({
-      status: "missed",
-      missed_at: "2026-07-22T10:00:00.000Z",
+    mocks.missTaskCascade.mockResolvedValue({
+      ok: true,
+      value: { kind: "slid", notBefore: "2026-07-23", task: {} },
     });
+
+    await expect(markTaskMissed("task-1")).resolves.toEqual({
+      error: null,
+      slidTo: "2026-07-23",
+    });
+
+    expect(mocks.missTaskCascade).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      "task-1",
+      "2026-07-22",
+    );
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
+  test("markTaskMissed on a parent reports no slide", async () => {
+    mocks.missTaskCascade.mockResolvedValue({
+      ok: true,
+      value: { kind: "missed", childrenMissed: 2, task: {} },
+    });
+    await expect(markTaskMissed("task-1")).resolves.toEqual({ error: null, slidTo: undefined });
+  });
+
   test("markTaskMissed refuses a task that is already done", async () => {
-    const maybeSingle = vi.fn(async () => ({ data: { status: "done" }, error: null }));
-    const loadEq = vi.fn(() => ({ maybeSingle }));
-    const loadSelect = vi.fn(() => ({ eq: loadEq }));
-    const update = vi.fn();
-    mocks.from.mockReturnValue({ select: loadSelect, update });
+    mocks.missTaskCascade.mockResolvedValue({ ok: false, error: "already done" });
 
     await expect(markTaskMissed("task-1")).resolves.toEqual({ error: "already done" });
-
-    expect(update).not.toHaveBeenCalled();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
-  test("reopenTask returns a task to todo and clears both timestamps", async () => {
-    const eq = vi.fn(async () => ({ error: null }));
-    const update = vi.fn(() => ({ eq }));
-    mocks.from.mockReturnValue({ update });
+  test("reopenTask returns a task to todo through the cascade", async () => {
+    mocks.reopenTaskCascade.mockResolvedValue({ ok: true, value: { parentReopened: true } });
 
     await expect(reopenTask("task-1")).resolves.toEqual({ error: null });
 
-    expect(update).toHaveBeenCalledWith({
-      status: "todo",
-      missed_at: null,
-      completed_at: null,
-    });
-    expect(eq).toHaveBeenCalledWith("id", "task-1");
+    expect(mocks.reopenTaskCascade).toHaveBeenCalledWith(expect.anything(), "user-1", "task-1");
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 

@@ -8,6 +8,7 @@ import {
 } from "@/app/lib/shopping/price-lookup";
 import { todayKey } from "./config";
 import { assignEnergyIfUnset } from "@/app/lib/tasks/energy";
+import { completeTaskCascade, missTaskCascade } from "@/app/lib/tasks/lifecycle";
 import {
   summarizeCreateRecurringTask,
   summarizeCreateTask,
@@ -925,16 +926,18 @@ async function executeCompleteTask(
   const taskId = input.taskId;
   if (typeof taskId !== "string") return { ok: false, error: "taskId is required" };
 
-  const { data, error } = await supabase
-    .from("tasks")
-    .update({ status: "done", completed_at: new Date().toISOString() })
-    .eq("id", taskId)
-    .eq("user_id", ownerId)
-    .select("id, title, status")
-    .maybeSingle();
-  if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: "task not found" };
-  return { ok: true, value: { task: data } };
+  const r = await completeTaskCascade(supabase, ownerId, taskId);
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    value: {
+      task: { id: r.value.task.id, status: "done" },
+      ...(r.value.parentCompleted ? { parentCompleted: true } : {}),
+      ...(r.value.childrenCompleted > 0
+        ? { childrenCompleted: r.value.childrenCompleted }
+        : {}),
+    },
+  };
 }
 
 async function executeMissTask(
@@ -945,16 +948,27 @@ async function executeMissTask(
   const taskId = input.taskId;
   if (typeof taskId !== "string") return { ok: false, error: "taskId is required" };
 
-  const { data, error } = await supabase
-    .from("tasks")
-    .update({ status: "missed", missed_at: new Date().toISOString() })
-    .eq("id", taskId)
-    .eq("user_id", ownerId)
-    .select("id, title, status")
-    .maybeSingle();
-  if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: "task not found" };
-  return { ok: true, value: { task: data } };
+  const today = await todayKey(supabase, ownerId);
+  const r = await missTaskCascade(supabase, ownerId, taskId, today);
+  if (!r.ok) return r;
+  if (r.value.kind === "slid") {
+    // A subtask never goes missed — it slid inside its window instead.
+    return {
+      ok: true,
+      value: {
+        task: { id: r.value.task.id, status: r.value.task.status },
+        slid: true,
+        notBefore: r.value.notBefore,
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      task: { id: r.value.task.id, status: "missed" },
+      ...(r.value.childrenMissed > 0 ? { childrenMissed: r.value.childrenMissed } : {}),
+    },
+  };
 }
 
 async function executeLogSpend(

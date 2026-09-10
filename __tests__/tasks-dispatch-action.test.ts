@@ -19,6 +19,11 @@ vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/app/lib/tasks/energy", () => ({
   assignEnergyIfUnset: vi.fn(async () => ({ assigned: null })),
 }));
+vi.mock("@/app/lib/tasks/lifecycle", () => ({
+  completeTaskCascade: vi.fn(),
+  reopenTaskCascade: vi.fn(),
+  missTaskCascade: vi.fn(),
+}));
 
 vi.mock("@/utils/google/calendar", () => ({
   createEvent: vi.fn(),

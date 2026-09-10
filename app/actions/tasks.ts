@@ -5,6 +5,11 @@ import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
 import { assignEnergyIfUnset } from "@/app/lib/tasks/energy";
+import {
+  completeTaskCascade,
+  missTaskCascade,
+  reopenTaskCascade,
+} from "@/app/lib/tasks/lifecycle";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { queueFollowupFromWatch } from "@/app/lib/watch/followup";
@@ -146,15 +151,15 @@ export async function toggleTaskStatus(id: string, currentStatus: string) {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
+  // Parent/child cascades (last child done → parent done; parent done → all
+  // children done; a child reopened → parent reopened) live in one place so
+  // the MCP/watch executors agree with this tap.
   const nextStatus = currentStatus === "done" ? "todo" : "done";
-  const completed_at = nextStatus === "done" ? new Date().toISOString() : null;
-
-  const { error } = await supabase
-    .from("tasks")
-    .update({ status: nextStatus, completed_at })
-    .eq("id", id);
-
-  if (error) return { error: error.message };
+  const result =
+    nextStatus === "done"
+      ? await completeTaskCascade(supabase, user.id, id)
+      : await reopenTaskCascade(supabase, user.id, id);
+  if (!result.ok) return { error: result.error };
 
   revalidatePath("/", "layout");
   return { error: null, nextStatus };
@@ -162,6 +167,9 @@ export async function toggleTaskStatus(id: string, currentStatus: string) {
 
 // "missed" is a manual, accountability-focused terminal state for overdue tasks
 // (like done, but negative). No-op-with-error if the task is already resolved.
+// A subtask never goes missed: it slides forward inside its window instead
+// (`slidTo` carries the new not-before day, null when it was already on its
+// last day), and only its parent can carry the missed record.
 export async function markTaskMissed(id: string) {
   const supabase = await createClient();
   const {
@@ -169,26 +177,17 @@ export async function markTaskMissed(id: string) {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const { data: task, error: loadError } = await supabase
-    .from("tasks")
-    .select("status")
-    .eq("id", id)
-    .maybeSingle();
-  if (loadError) return { error: loadError.message };
-  if (!task) return { error: "task not found" };
-  if (task.status === "done" || task.status === "missed") {
-    return { error: `already ${task.status}` };
-  }
-
-  const { error } = await supabase
-    .from("tasks")
-    .update({ status: "missed", missed_at: new Date().toISOString() })
-    .eq("id", id);
-
-  if (error) return { error: error.message };
+  // The slide writes a date column, so it must be the user's day.
+  const prefs = await getUserPreferences(user.id);
+  const today = todayISO(safeTimeZone(prefs.timezone));
+  const result = await missTaskCascade(supabase, user.id, id, today);
+  if (!result.ok) return { error: result.error };
 
   revalidatePath("/", "layout");
-  return { error: null };
+  return {
+    error: null,
+    slidTo: result.value.kind === "slid" ? result.value.notBefore : undefined,
+  };
 }
 
 // Return a done/missed task to the open list.
@@ -199,12 +198,8 @@ export async function reopenTask(id: string) {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const { error } = await supabase
-    .from("tasks")
-    .update({ status: "todo", missed_at: null, completed_at: null })
-    .eq("id", id);
-
-  if (error) return { error: error.message };
+  const result = await reopenTaskCascade(supabase, user.id, id);
+  if (!result.ok) return { error: result.error };
 
   revalidatePath("/", "layout");
   return { error: null };
