@@ -455,6 +455,10 @@ export function Dock({
       created_at: new Date().toISOString(),
       completed_at: null,
       missed_at: null,
+      energy_cost: null,
+      energy_source: null,
+      parent_task_id: null,
+      not_before: null,
     };
 
     emitTaskOptimistic(optimisticTask);

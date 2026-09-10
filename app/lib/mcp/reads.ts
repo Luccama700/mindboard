@@ -82,7 +82,7 @@ const ITEM_COLUMNS =
 const USAGE_COLUMNS =
   "id, inventory_item_id, amount, period, interval_days, created_at";
 const TASK_COLUMNS =
-  "id, title, due_date, status, priority, ai_state, notes, group_id, created_at, completed_at, estimated_minutes, missed_at";
+  "id, title, due_date, status, priority, ai_state, notes, group_id, created_at, completed_at, estimated_minutes, missed_at, energy_cost, energy_source, parent_task_id, not_before";
 const SPEND_LIMIT_COLUMNS =
   "id, scope, category_id, period, amount, archived, created_at";
 

@@ -228,7 +228,7 @@ export async function buildPlanningSnapshot(params: {
     supabase
       .from("tasks")
       .select(
-        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at, groups(name, color)",
+        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at, energy_cost, energy_source, parent_task_id, not_before, groups(name, color)",
       )
       .eq("user_id", userId)
       .in("status", ["todo", "doing"]),
