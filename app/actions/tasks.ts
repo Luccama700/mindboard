@@ -1,8 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
+import { assignEnergyIfUnset } from "@/app/lib/tasks/energy";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { queueFollowupFromWatch } from "@/app/lib/watch/followup";
@@ -12,6 +14,11 @@ import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { TASK_COLUMNS } from "@/app/_components/types";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function validEnergy(value: number | null): boolean {
+  return value === null || (Number.isInteger(value) && value >= 1 && value <= 5);
+}
 
 function normalizeTime(value: string): string {
   // "HH:MM" | "HH:MM:SS" -> "HH:MM:SS"
@@ -67,9 +74,13 @@ export async function createTask(input: {
   notes?: string | null;
   priority?: "low" | "med" | "high";
   estimatedMinutes?: number | null;
+  energyCost?: number | null;
 }) {
   const title = input.title?.trim();
   if (!title) return { error: "title required" };
+  if (input.energyCost !== undefined && !validEnergy(input.energyCost)) {
+    return { error: "energy must be 1-5" };
+  }
   const notes = input.notes?.trim() || null;
   const dueTime = input.dueTime ?? null;
   if (dueTime !== null && !TIME_RE.test(dueTime)) {
@@ -102,11 +113,27 @@ export async function createTask(input: {
       ...(input.estimatedMinutes !== undefined
         ? { estimated_minutes: input.estimatedMinutes }
         : {}),
+      ...(input.energyCost != null
+        ? { energy_cost: input.energyCost, energy_source: "user" }
+        : {}),
     })
     .select(TASK_COLUMNS)
     .single();
 
   if (error) return { error: error.message };
+
+  // The AI energy default lands after the response so capture never waits on
+  // a model; the update is SQL-guarded on energy_source IS NULL.
+  if (input.energyCost == null) {
+    after(async () => {
+      try {
+        const { assigned } = await assignEnergyIfUnset(supabase, user.id, data.id);
+        if (assigned !== null) revalidatePath("/", "layout");
+      } catch {
+        // best-effort: the cost simply stays unset
+      }
+    });
+  }
 
   revalidatePath("/", "layout");
   return { error: null, task: data };
@@ -193,6 +220,8 @@ export async function updateTask(input: {
   groupId?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
+  energyCost?: number | null;
+  notBefore?: string | null;
 }) {
   const supabase = await createClient();
   const {
@@ -241,6 +270,19 @@ export async function updateTask(input: {
   if (input.groupId !== undefined) updates.group_id = input.groupId;
   if (input.notes !== undefined) updates.notes = input.notes?.trim() || null;
   if (input.priority !== undefined) updates.priority = input.priority;
+  // Any edit from the user marks the value as theirs; the AI default only ever
+  // fills a null source, so this can never be undone by a later assignment.
+  if (input.energyCost !== undefined) {
+    if (!validEnergy(input.energyCost)) return { error: "energy must be 1-5" };
+    updates.energy_cost = input.energyCost;
+    updates.energy_source = input.energyCost === null ? null : "user";
+  }
+  if (input.notBefore !== undefined) {
+    if (input.notBefore !== null && !DATE_RE.test(input.notBefore)) {
+      return { error: "invalid not-before date" };
+    }
+    updates.not_before = input.notBefore;
+  }
 
   if (Object.keys(updates).length === 0) return { error: null };
 

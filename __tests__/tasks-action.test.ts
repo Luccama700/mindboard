@@ -4,6 +4,13 @@ const mocks = vi.hoisted(() => ({
   authGetUser: vi.fn(),
   from: vi.fn(),
   revalidatePath: vi.fn(),
+  after: vi.fn(),
+  assignEnergyIfUnset: vi.fn(async () => ({ assigned: null })),
+}));
+
+vi.mock("next/server", () => ({ after: mocks.after }));
+vi.mock("@/app/lib/tasks/energy", () => ({
+  assignEnergyIfUnset: mocks.assignEnergyIfUnset,
 }));
 
 vi.mock("@/utils/supabase/server", () => ({
@@ -96,6 +103,63 @@ describe("task actions", () => {
       notes: "chapter 3",
     });
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  test("createTask without an energy cost schedules the AI default after the response", async () => {
+    const single = vi.fn(async () => ({ data: { id: "task-9" }, error: null }));
+    const select = vi.fn(() => ({ single }));
+    const insert = vi.fn(() => ({ select }));
+    mocks.from.mockReturnValue({ insert });
+
+    await createTask({ title: "call the bank", groupId: null, dueDate: null });
+
+    expect((insert.mock.calls[0] as unknown[])[0]).not.toHaveProperty("energy_cost");
+    expect(mocks.after).toHaveBeenCalledTimes(1);
+    // Run the deferred callback: it rates exactly this task for this user.
+    await (mocks.after.mock.calls[0][0] as () => Promise<void>)();
+    expect(mocks.assignEnergyIfUnset).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      "task-9",
+    );
+  });
+
+  test("createTask with a user-picked energy cost stores it as 'user' and skips the AI", async () => {
+    const single = vi.fn(async () => ({ data: { id: "task-10" }, error: null }));
+    const select = vi.fn(() => ({ single }));
+    const insert = vi.fn(() => ({ select }));
+    mocks.from.mockReturnValue({ insert });
+
+    await createTask({ title: "x", groupId: null, dueDate: null, energyCost: 4 });
+
+    expect((insert.mock.calls[0] as unknown[])[0]).toMatchObject({
+      energy_cost: 4,
+      energy_source: "user",
+    });
+    expect(mocks.after).not.toHaveBeenCalled();
+    await expect(
+      createTask({ title: "x", groupId: null, dueDate: null, energyCost: 7 }),
+    ).resolves.toEqual({ error: "energy must be 1-5" });
+  });
+
+  test("updateTask energy edits flip the source to 'user'; null clears both", async () => {
+    const single = vi.fn(async () => ({ data: {}, error: null }));
+    const select = vi.fn(() => ({ single }));
+    const eq = vi.fn(() => ({ select }));
+    const update = vi.fn(() => ({ eq }));
+    mocks.from.mockReturnValue({ update });
+
+    await updateTask({ id: "task-1", energyCost: 2 });
+    expect(update).toHaveBeenLastCalledWith({ energy_cost: 2, energy_source: "user" });
+
+    await updateTask({ id: "task-1", energyCost: null });
+    expect(update).toHaveBeenLastCalledWith({ energy_cost: null, energy_source: null });
+
+    await updateTask({ id: "task-1", notBefore: "2026-09-18" });
+    expect(update).toHaveBeenLastCalledWith({ not_before: "2026-09-18" });
+    await expect(updateTask({ id: "task-1", notBefore: "soon" })).resolves.toEqual({
+      error: "invalid not-before date",
+    });
   });
 
   test("createTask stores a normalized due time when a date is present", async () => {

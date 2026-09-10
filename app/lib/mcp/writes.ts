@@ -7,6 +7,7 @@ import {
   lookupPricesByRefs,
 } from "@/app/lib/shopping/price-lookup";
 import { todayKey } from "./config";
+import { assignEnergyIfUnset } from "@/app/lib/tasks/energy";
 import {
   summarizeCreateRecurringTask,
   summarizeCreateTask,
@@ -790,6 +791,28 @@ async function executeCreateTask(
   if (v.groupId && !(await ownsRow(supabase, "groups", v.groupId, ownerId))) {
     return { ok: false, error: "group not found" };
   }
+  // Depth one: a subtask's parent must be an open top-level task of the
+  // same user; the child inherits its group.
+  let groupId = v.groupId;
+  if (v.parentTaskId) {
+    const { data: parent } = await supabase
+      .from("tasks")
+      .select("id, group_id, parent_task_id, status")
+      .eq("id", v.parentTaskId)
+      .eq("user_id", ownerId)
+      .maybeSingle();
+    const p = parent as {
+      group_id: string | null;
+      parent_task_id: string | null;
+      status: string;
+    } | null;
+    if (!p) return { ok: false, error: "parent task not found" };
+    if (p.parent_task_id) return { ok: false, error: "a subtask cannot have subtasks" };
+    if (p.status === "done" || p.status === "missed") {
+      return { ok: false, error: `parent task is already ${p.status}` };
+    }
+    groupId = p.group_id;
+  }
 
   // dueTime rides alongside the validated core (the assistant proposes it);
   // a time only sticks when the task has a date to live on.
@@ -802,17 +825,37 @@ async function executeCreateTask(
     .from("tasks")
     .insert({
       user_id: ownerId,
-      group_id: v.groupId,
+      group_id: groupId,
       title: v.title,
       due_date: v.dueDate,
       due_time: v.dueDate ? dueTime : null,
       notes: v.notes,
       priority: v.priority,
       ...(v.estimatedMinutes != null ? { estimated_minutes: v.estimatedMinutes } : {}),
+      // A cost supplied by a chat client is the model's guess, not a tap: it
+      // reads as 'ai' (outlined dots) until the user touches it.
+      ...(v.energyCost != null ? { energy_cost: v.energyCost, energy_source: "ai" } : {}),
+      ...(v.parentTaskId ? { parent_task_id: v.parentTaskId } : {}),
+      ...(v.notBefore ? { not_before: v.notBefore } : {}),
     })
-    .select("id, title, due_date, due_time, status, priority, group_id")
+    .select("id, title, due_date, due_time, status, priority, group_id, energy_cost, parent_task_id, not_before")
     .single();
   if (error || !data) return { ok: false, error: error?.message ?? "insert failed" };
+
+  if (v.energyCost == null) {
+    const taskId = (data as { id: string }).id;
+    try {
+      after(async () => {
+        try {
+          await assignEnergyIfUnset(supabase, ownerId, taskId);
+        } catch {
+          // best-effort: the cost simply stays unset
+        }
+      });
+    } catch {
+      // no request scope (tests): skip the default
+    }
+  }
   return { ok: true, value: { task: data } };
 }
 
@@ -1797,6 +1840,12 @@ async function executeUpdateTask(
   if (v.notes !== undefined) updates.notes = v.notes;
   if (v.priority !== undefined) updates.priority = v.priority;
   if (v.aiState !== undefined) updates.ai_state = v.aiState;
+  // An explicit edit is the user's call (relayed by the client): 'user'.
+  if (v.energyCost !== undefined) {
+    updates.energy_cost = v.energyCost;
+    updates.energy_source = v.energyCost === null ? null : "user";
+  }
+  if (v.notBefore !== undefined) updates.not_before = v.notBefore;
 
   if (Object.keys(updates).length === 0 && !v.pushToCalendar) {
     return { ok: false, error: "nothing to change" };
