@@ -370,6 +370,31 @@ export async function buildPlanningSnapshot(params: {
     },
   );
 
+  // Done children of the open parents, for "n of m" (open rows alone
+  // cannot say how much of a decomposed task is already behind you).
+  const parentIds = [
+    ...new Set(
+      tasks
+        .filter((t) => t.parent_task_id !== null)
+        .map((t) => t.parent_task_id as string),
+    ),
+  ];
+  const doneChildrenByParent = new Map<string, number>();
+  if (parentIds.length > 0) {
+    const { data: doneRows } = await supabase
+      .from("tasks")
+      .select("parent_task_id")
+      .eq("user_id", userId)
+      .eq("status", "done")
+      .in("parent_task_id", parentIds);
+    for (const row of (doneRows ?? []) as { parent_task_id: string }[]) {
+      doneChildrenByParent.set(
+        row.parent_task_id,
+        (doneChildrenByParent.get(row.parent_task_id) ?? 0) + 1,
+      );
+    }
+  }
+
   const goals = (goalsRes.data ?? []) as {
     id: string;
     title: string;
@@ -418,6 +443,7 @@ export async function buildPlanningSnapshot(params: {
     completedRecurring,
     recurringSlots,
     tasks,
+    doneChildrenByParent,
     accounts,
     recurringExpenses,
     todayDelta,

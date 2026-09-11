@@ -11,6 +11,7 @@ import {
 } from "@/app/lib/snapshots/inventory";
 import {
   freeGaps,
+  freeIntervalsForDay,
   scheduleSnapshot,
 } from "@/app/lib/snapshots/schedule";
 import { listEvents, type CalendarEvent } from "@/utils/google/calendar";
@@ -19,6 +20,8 @@ import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import { buildFinanceForecast } from "@/app/lib/finance/forecast";
 import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
+import { planSubtasks } from "@/app/lib/snapshots/gap-plan";
+import { energyBudget, tasksCountedToday } from "@/app/lib/snapshots/energy-budget";
 import {
   effectiveDailyRate,
   daysUntilEmpty,
@@ -282,10 +285,35 @@ export async function getInventorySnapshot(userId: string): Promise<InventoryVit
 
 // ---------- list reads (also give Claude valid ids for the write tools) ----------
 
+// A parent's done/total across ALL its children (any status), so a chat
+// client can read "2 of 5" no matter which status filter it asked for.
+export type TaskChildrenSummary = { done: number; total: number };
+
+async function childrenSummaries(
+  supabase: SupabaseClient,
+  ownerId: string,
+  parentIds: string[],
+): Promise<Map<string, TaskChildrenSummary>> {
+  const out = new Map<string, TaskChildrenSummary>();
+  if (parentIds.length === 0) return out;
+  const { data } = await supabase
+    .from("tasks")
+    .select("parent_task_id, status")
+    .eq("user_id", ownerId)
+    .in("parent_task_id", parentIds);
+  for (const row of (data ?? []) as { parent_task_id: string; status: string }[]) {
+    const cur = out.get(row.parent_task_id) ?? { done: 0, total: 0 };
+    cur.total++;
+    if (row.status === "done") cur.done++;
+    out.set(row.parent_task_id, cur);
+  }
+  return out;
+}
+
 export async function listTasks(userId: string, filter: {
   groupId?: string | null;
   status?: "todo" | "doing" | "done" | "missed";
-}): Promise<TaskWithGroup[]> {
+}): Promise<(TaskWithGroup & { children: TaskChildrenSummary | null })[]> {
   const { supabase, ownerId } = scoped(userId);
 
   let query = supabase
@@ -309,12 +337,19 @@ export async function listTasks(userId: string, filter: {
     groups: Rel<{ name: string; color: string }>;
   };
 
-  return ((data ?? []) as Row[]).map(({ groups, ...task }) => {
+  const rows = (data ?? []) as Row[];
+  const summaries = await childrenSummaries(
+    supabase,
+    ownerId,
+    rows.filter((r) => r.parent_task_id === null).map((r) => r.id),
+  );
+  return rows.map(({ groups, ...task }) => {
     const group = firstRel(groups);
     return {
       ...task,
       group_name: group?.name ?? null,
       group_color: group?.color ?? null,
+      children: summaries.get(task.id) ?? null,
     };
   });
 }
@@ -690,8 +725,10 @@ export async function getPreferences(userId: string) {
   return readPreferencesRow(userId);
 }
 
+const SCHEDULE_SNAPSHOT_DAYS = 3;
+
 export async function getScheduleSnapshot(userId: string) {
-  const ownerId = userId;
+  const { supabase, ownerId } = scoped(userId);
   const prefs = await readPreferencesRow(userId);
   const timeZone = safeTimeZone(prefs.timezone);
   const now = new Date();
@@ -700,12 +737,86 @@ export async function getScheduleSnapshot(userId: string) {
   // "today" that started at 17:00 the previous local afternoon.
   const todayIso = todayISO(timeZone);
   const dayStartMs = zonedWallTimeToUtcMs(todayIso, 0, 0, timeZone);
-  const horizonMs = zonedWallTimeToUtcMs(addDaysKey(todayIso, 3), 0, 0, timeZone);
+  const horizonMs = zonedWallTimeToUtcMs(
+    addDaysKey(todayIso, SCHEDULE_SNAPSHOT_DAYS),
+    0,
+    0,
+    timeZone,
+  );
 
-  const events = await listEvents(ownerId, {
-    timeMin: new Date(dayStartMs).toISOString(),
-    timeMax: new Date(horizonMs).toISOString(),
-  });
+  const [events, tasksRes, logRes] = await Promise.all([
+    listEvents(ownerId, {
+      timeMin: new Date(dayStartMs).toISOString(),
+      timeMax: new Date(horizonMs).toISOString(),
+    }),
+    supabase
+      .from("tasks")
+      .select("id, due_date, parent_task_id, not_before, duration_min, estimated_minutes, energy_cost, created_at")
+      .eq("user_id", ownerId)
+      .in("status", ["todo", "doing"]),
+    supabase
+      .from("daily_logs")
+      .select("energy")
+      .eq("user_id", ownerId)
+      .eq("log_date", todayIso)
+      .maybeSingle(),
+  ]);
+
+  // Today's remaining energy budget (the one allowed aggregate): children
+  // planned for today over these three days' free intervals count alongside
+  // the tasks on today's board.
+  const openTasks = (tasksRes.data ?? []) as {
+    id: string;
+    due_date: string | null;
+    parent_task_id: string | null;
+    not_before: string | null;
+    duration_min: number | null;
+    estimated_minutes: number | null;
+    energy_cost: number | null;
+    created_at: string;
+  }[];
+  const openIds = new Set(openTasks.map((t) => t.id));
+  const dayKeys = Array.from({ length: SCHEDULE_SNAPSHOT_DAYS }, (_, i) =>
+    addDaysKey(todayIso, i),
+  );
+  const intervalsByDay = new Map(
+    dayKeys.map((dateKey) => [
+      dateKey,
+      freeIntervalsForDay({
+        events,
+        dateKey,
+        now,
+        wakeStartHour: prefs.wakeStartHour,
+        wakeEndHour: prefs.wakeEndHour,
+        timeZone,
+      }),
+    ]),
+  );
+  const loggedEnergy = (logRes.data as { energy: number | null } | null)?.energy ?? null;
+  const plannedToday = new Set(
+    planSubtasks({
+      today: todayIso,
+      children: openTasks
+        .filter(
+          (t) =>
+            t.parent_task_id !== null && t.due_date !== null && openIds.has(t.parent_task_id),
+        )
+        .map((t) => ({
+          id: t.id,
+          parent_task_id: t.parent_task_id as string,
+          due_date: t.due_date as string,
+          not_before: t.not_before,
+          duration_min: t.duration_min,
+          estimated_minutes: t.estimated_minutes,
+          energy_cost: t.energy_cost,
+          created_at: t.created_at,
+        })),
+      intervalsByDay,
+      energyByDay: loggedEnergy != null ? new Map([[todayIso, loggedEnergy]]) : undefined,
+    })
+      .filter((p) => p.dateKey === todayIso)
+      .map((p) => p.taskId),
+  );
 
   return {
     ...scheduleSnapshot({
@@ -720,10 +831,14 @@ export async function getScheduleSnapshot(userId: string) {
       now,
       wakeStartHour: prefs.wakeStartHour,
       wakeEndHour: prefs.wakeEndHour,
-      days: 3,
+      days: SCHEDULE_SNAPSHOT_DAYS,
       limit: 6,
       timeZone,
     }),
+    energyBudget: energyBudget(
+      loggedEnergy,
+      tasksCountedToday(openTasks, todayIso, plannedToday),
+    ),
   };
 }
 
