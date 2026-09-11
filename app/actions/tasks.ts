@@ -616,3 +616,17 @@ export async function proposeBreakdown(taskId: string): Promise<{
     children: r.value.children,
   };
 }
+
+// The ProposalCard's two buttons for a breakdown. Dynamic import: the
+// assistant actions module imports this one, so a static import would be a
+// cycle; the confirm rail itself (claim → EXECUTORS.decompose_task → finalize)
+// is exactly the assistant's.
+export async function confirmBreakdown(proposalId: string) {
+  const { confirmProposal } = await import("@/app/actions/assistant");
+  return confirmProposal(proposalId);
+}
+
+export async function cancelBreakdown(proposalId: string) {
+  const { cancelProposal } = await import("@/app/actions/assistant");
+  return cancelProposal(proposalId);
+}
