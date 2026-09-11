@@ -5,6 +5,44 @@ in the linked plan docs; this file records exactly what changed and where.
 
 ---
 
+## Energy cost + decompose and spread (2026-09-10)
+
+Tasks carry an energy cost separate from time, and a big task can be broken
+into subtasks the planner spreads backwards from the deadline — so a due date
+stops being treated as a start date. Design record: the "Energy &
+decomposition" section of `AGENTS.md`.
+
+- **Schema** `supabase/migrations/0053_task_energy_subtasks.sql` (additive):
+  `tasks.energy_cost` 1-5, `energy_source` 'ai'/'user', `parent_task_id`
+  self-FK cascade, `not_before` (CHECK ≤ due_date). RLS untouched.
+- **Energy default** `app/lib/tasks/energy.ts`: one forced-tool Haiku call on
+  the stored key, fired via `after()` from `createTask` and
+  `executeCreateTask`; SQL-guarded on `energy_source IS NULL`. Edits write
+  `'user'`.
+- **Lifecycle** `app/lib/tasks/lifecycle.ts`: completion cascades both ways,
+  reopen reopens the parent, a skipped child slides its `not_before`
+  (`markTaskMissed`, `miss_task`, stream snooze, watch defer) instead of going
+  missed.
+- **Planner** `planSubtasks` in `app/lib/snapshots/gap-plan.ts` (advisory,
+  read-time, energy as a soft preference); wired into the dashboard stream,
+  `planningSnapshot`, and `getScheduleSnapshot`. `energy-budget.ts` is the one
+  allowed aggregate (today only).
+- **Decomposition** `app/lib/mcp/decompose-ops.ts` (pure) +
+  `app/lib/tasks/decompose.ts`: MCP `decompose_task`, assistant
+  `propose_decompose_task`, in-app `proposeBreakdown`; `EXECUTORS.decompose_task`.
+- **MCP/assistant** `create_task`/`update_task` gain `energyCost`,
+  `parentTaskId`, `notBefore`; `list_tasks` returns the new fields + children
+  summary; `get_snapshot`/`schedule_snapshot` carry `energyBudget`.
+- **UI** `app/_components/energy-dots.tsx`; task row/editor (dots, control,
+  `✂ break down`, window, progress); stream cards (dots, no `incomplete` on a
+  child).
+- **Watch** `WatchTaskRow.energy` + `.progress` (additive).
+- **Tests** `task-energy`, `task-lifecycle`, `subtask-plan`, `energy-budget`,
+  `decompose-ops`, `task-row-energy`, plus new cases in `mcp-validate`,
+  `stream-snapshot`, `planning-snapshot`, `tasks-action`, `watch-today`.
+
+---
+
 ## Onboarding refresh: new-feature tours, global reset, ※ what's new (2026-07-10)
 
 The tours catch up with everything shipped since v0.4.0, everyone's onboarding
