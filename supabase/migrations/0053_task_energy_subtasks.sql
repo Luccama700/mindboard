@@ -15,6 +15,10 @@
 --                   due_date (its "must be done by") it is the child's window;
 --                   the planner picks the day inside it at read time and never
 --                   writes it back. A skipped child slides this forward.
+--
+-- DEPLOY ORDERING: apply this migration BEFORE merging the code that selects
+-- these columns (every task read names them), or PostgREST answers
+-- "column does not exist" on the dashboard, /tasks, list_tasks and the watch.
 
 -- (user_id, id) is unique by construction (id is the PK); naming it lets the
 -- parent link be a COMPOSITE foreign key, so a child can only ever point at a

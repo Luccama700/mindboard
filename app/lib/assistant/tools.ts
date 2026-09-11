@@ -16,6 +16,7 @@ import { financeSnapshot } from "@/app/lib/snapshots/finance";
 import { inventorySnapshot } from "@/app/lib/snapshots/inventory";
 import { tasksSnapshot } from "@/app/lib/snapshots/tasks";
 import { freeGaps, scheduleSnapshot } from "@/app/lib/snapshots/schedule";
+import { todayEnergyBudget } from "@/app/lib/snapshots/energy-budget";
 import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
 import { recordProposal } from "@/app/lib/mcp/audit";
 import {
@@ -70,7 +71,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_snapshot",
     description:
-      "Read the live cross-domain snapshot: finance (net worth, today delta, next bill), tasks (overdue/due today/due soon counts), inventory (low/out), schedule (next event, free hours today), and the next free time gaps. Call this first in almost every conversation. For planning across days, pass horizonDays (1–60) or verbose:true to expand into a full horizon read: per-day timed events, time-blocks and recurring occurrences with free gaps + free-hours-before-5pm and committed load; every open task with due time/duration and scheduled flag; upcoming bills and projected net worth per day; inventory run-out estimates; and your recent check-in trend and active goals. Times are in your local timezone with explicit ISO offsets. Omit both for the lean default.",
+      "Read the live cross-domain snapshot: finance (net worth, today delta, next bill), tasks (overdue/due today/due soon counts), inventory (low/out), schedule (next event, free hours today), the next free time gaps, and energyBudget — today's remaining energy room from the check-in (null without one; informational, planning only). Call this first in almost every conversation. For planning across days, pass horizonDays (1–60) or verbose:true to expand into a full horizon read: per-day timed events, time-blocks and recurring occurrences with free gaps + free-hours-before-5pm and committed load; every open task with due time/duration and scheduled flag; upcoming bills and projected net worth per day; inventory run-out estimates; and your recent check-in trend and active goals. Times are in your local timezone with explicit ISO offsets. Omit both for the lean default.",
     input_schema: {
       type: "object",
       properties: {
@@ -871,7 +872,7 @@ export async function runAssistantTool(
           });
           return { type: "result", content: snapshot };
         }
-        const [dash, tasks, accounts, recurring, items, usages, todayChanges, prefs] =
+        const [dash, tasks, accounts, recurring, items, usages, todayChanges, prefs, logRes] =
           await Promise.all([
             getDashboardData(userId, today.slice(0, 7)),
             getOpenTasks(userId),
@@ -881,6 +882,7 @@ export async function runAssistantTool(
             getInventoryUsages(userId),
             getBalanceChangesOn(userId, today),
             getUserPreferences(userId),
+            supabase.from("daily_logs").select("energy").eq("log_date", today).maybeSingle(),
           ]);
         // The wake-window/free-time math must run in the user's zone — the
         // process clock is UTC on Vercel. `prefs.timezone` is already loaded, so
@@ -912,6 +914,19 @@ export async function runAssistantTool(
               wakeEndHour: prefs.wake_end_hour,
               days: 3,
               limit: 6,
+              timeZone,
+            }),
+            // Today's remaining energy room (null without a check-in). The
+            // month's events cover the 3-day plan: the 42-day grid always runs
+            // at least 5 days past month end.
+            energyBudget: todayEnergyBudget({
+              today,
+              loggedEnergy: (logRes.data as { energy: number | null } | null)?.energy ?? null,
+              tasks,
+              events: dash.events,
+              now,
+              wakeStartHour: prefs.wake_start_hour,
+              wakeEndHour: prefs.wake_end_hour,
               timeZone,
             }),
           },

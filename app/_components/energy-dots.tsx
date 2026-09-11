@@ -81,7 +81,7 @@ export function EnergyControl({
             onClick={() =>
               onChange(cost === level && source === "user" ? null : level)
             }
-            className="inline-flex items-center justify-center min-h-11 min-w-9 press"
+            className="inline-flex items-center justify-center min-h-11 min-w-11 press"
           >
             <span
               aria-hidden

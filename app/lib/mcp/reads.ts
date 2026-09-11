@@ -11,9 +11,7 @@ import {
 } from "@/app/lib/snapshots/inventory";
 import {
   freeGaps,
-  freeIntervalsForDay,
   scheduleSnapshot,
-  type ScheduleEvent,
 } from "@/app/lib/snapshots/schedule";
 import { listEvents, type CalendarEvent } from "@/utils/google/calendar";
 import { addDaysKey } from "@/app/_components/finance-projection";
@@ -21,8 +19,7 @@ import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import { buildFinanceForecast } from "@/app/lib/finance/forecast";
 import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
-import { planSubtasks } from "@/app/lib/snapshots/gap-plan";
-import { energyBudget, tasksCountedToday } from "@/app/lib/snapshots/energy-budget";
+import { todayEnergyBudget, type BudgetTaskRow } from "@/app/lib/snapshots/energy-budget";
 import {
   effectiveDailyRate,
   daysUntilEmpty,
@@ -765,80 +762,7 @@ export async function getScheduleSnapshot(userId: string) {
       .maybeSingle(),
   ]);
 
-  // Today's remaining energy budget (the one allowed aggregate): children
-  // planned for today over these three days' free intervals count alongside
-  // the tasks on today's board.
-  const openTasks = (tasksRes.data ?? []) as {
-    id: string;
-    title: string;
-    due_date: string | null;
-    due_time: string | null;
-    parent_task_id: string | null;
-    not_before: string | null;
-    duration_min: number | null;
-    estimated_minutes: number | null;
-    energy_cost: number | null;
-    created_at: string;
-  }[];
-  const openIds = new Set(openTasks.map((t) => t.id));
-  // Time-blocked tasks are commitments too (the dashboard counts them).
-  const busy: ScheduleEvent[] = [...events];
-  for (const t of openTasks) {
-    if (!t.due_date || !t.due_time) continue;
-    const [h, m] = t.due_time.split(":").map(Number);
-    if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
-    const startMs = zonedWallTimeToUtcMs(t.due_date, h, m, timeZone);
-    const endMs = startMs + (t.duration_min ?? t.estimated_minutes ?? 30) * 60_000;
-    busy.push({
-      summary: t.title,
-      start: new Date(startMs).toISOString(),
-      end: new Date(endMs).toISOString(),
-      allDay: false,
-    });
-  }
-  const dayKeys = Array.from({ length: SCHEDULE_SNAPSHOT_DAYS }, (_, i) =>
-    addDaysKey(todayIso, i),
-  );
-  const intervalsByDay = new Map(
-    dayKeys.map((dateKey) => [
-      dateKey,
-      freeIntervalsForDay({
-        events: busy,
-        dateKey,
-        now,
-        wakeStartHour: prefs.wakeStartHour,
-        wakeEndHour: prefs.wakeEndHour,
-        timeZone,
-      }),
-    ]),
-  );
   const loggedEnergy = (logRes.data as { energy: number | null } | null)?.energy ?? null;
-  const plannedToday = new Set(
-    planSubtasks({
-      today: todayIso,
-      children: openTasks
-        .filter(
-          (t) =>
-            t.parent_task_id !== null && t.due_date !== null && openIds.has(t.parent_task_id),
-        )
-        .map((t) => ({
-          id: t.id,
-          parent_task_id: t.parent_task_id as string,
-          due_date: t.due_date as string,
-          due_time: t.due_time,
-          not_before: t.not_before,
-          duration_min: t.duration_min,
-          estimated_minutes: t.estimated_minutes,
-          energy_cost: t.energy_cost,
-          created_at: t.created_at,
-        })),
-      intervalsByDay,
-      energyByDay: loggedEnergy != null ? new Map([[todayIso, loggedEnergy]]) : undefined,
-    })
-      .filter((p) => p.dateKey === todayIso)
-      .map((p) => p.taskId),
-  );
-
   return {
     ...scheduleSnapshot({
       events,
@@ -856,10 +780,19 @@ export async function getScheduleSnapshot(userId: string) {
       limit: 6,
       timeZone,
     }),
-    energyBudget: energyBudget(
+    // Today's remaining energy budget (the one allowed aggregate), planned
+    // over these three days' free time — see todayEnergyBudget.
+    energyBudget: todayEnergyBudget({
+      today: todayIso,
       loggedEnergy,
-      tasksCountedToday(openTasks, todayIso, plannedToday),
-    ),
+      tasks: (tasksRes.data ?? []) as BudgetTaskRow[],
+      events,
+      now,
+      wakeStartHour: prefs.wakeStartHour,
+      wakeEndHour: prefs.wakeEndHour,
+      timeZone,
+      days: SCHEDULE_SNAPSHOT_DAYS,
+    }),
   };
 }
 
