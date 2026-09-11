@@ -259,10 +259,11 @@ export function planSubtasks(input: {
       return a.id.localeCompare(b.id);
     });
 
-  // One mutable pool per day, carved as children land (same shape as the
-  // untimed-occurrence planner above).
-  const pools = new Map<string, { start: number; end: number }[]>();
-  const poolFor = (dateKey: string) => {
+  // One mutable pool per day, carved as children land and given back when a
+  // child moves (same shape as the untimed-occurrence planner above).
+  type Span = { start: number; end: number };
+  const pools = new Map<string, Span[]>();
+  const poolFor = (dateKey: string): Span[] | null => {
     let pool = pools.get(dateKey);
     if (!pool) {
       const ivs = intervalsByDay.get(dateKey);
@@ -286,41 +287,11 @@ export function planSubtasks(input: {
     }
     return null;
   };
-
-  const placed: PlannedSubtask[] = [];
-  for (const child of ordered) {
-    const minutes = child.duration_min ?? child.estimated_minutes ?? DEFAULT_MINUTES;
-    const first =
-      child.not_before && child.not_before > today ? child.not_before : today;
-    const windowDays = dayKeysBetween(first, child.due_date);
-
-    // Latest-first, then the energy preference re-ranks only among days
-    // where the child actually fits.
-    let best: { dateKey: string; rank: number } | null = null;
-    for (let i = windowDays.length - 1; i >= 0; i--) {
-      const dateKey = windowDays[i];
-      if (!tryFit(dateKey, minutes)) continue;
-      const rank = energyRank(child.energy_cost, energyByDay.get(dateKey));
-      if (!best || rank > best.rank) best = { dateKey, rank };
-      if (best.rank === 2) break;
-    }
-
-    if (!best) {
-      placed.push({
-        taskId: child.id,
-        parentId: child.parent_task_id,
-        dateKey: child.due_date,
-        start: null,
-        end: null,
-        minutes,
-        fitted: false,
-      });
-      continue;
-    }
-
-    const fit = tryFit(best.dateKey, minutes)!;
-    const pool = poolFor(best.dateKey)!;
-    const replacement: { start: number; end: number }[] = [];
+  const carve = (dateKey: string, minutes: number): Span | null => {
+    const fit = tryFit(dateKey, minutes);
+    if (!fit) return null;
+    const pool = poolFor(dateKey)!;
+    const replacement: Span[] = [];
     if (fit.alignedStart > fit.span.start) {
       replacement.push({ start: fit.span.start, end: fit.alignedStart });
     }
@@ -328,16 +299,81 @@ export function planSubtasks(input: {
       replacement.push({ start: fit.alignedEnd, end: fit.span.end });
     }
     pool.splice(fit.index, 1, ...replacement);
-    placed.push({
-      taskId: child.id,
-      parentId: child.parent_task_id,
-      dateKey: best.dateKey,
-      start: toClock(fit.alignedStart),
-      end: toClock(fit.alignedEnd),
-      minutes,
-      fitted: true,
-    });
+    return { start: fit.alignedStart, end: fit.alignedEnd };
+  };
+  const release = (dateKey: string, span: Span) => {
+    const pool = poolFor(dateKey)!;
+    pool.push({ ...span });
+    pool.sort((a, b) => a.start - b.start);
+    // Re-merge touching spans so a later child can use the whole stretch.
+    for (let i = 0; i + 1 < pool.length; ) {
+      if (pool[i].end >= pool[i + 1].start) {
+        pool[i].end = Math.max(pool[i].end, pool[i + 1].end);
+        pool.splice(i + 1, 1);
+      } else i++;
+    }
+  };
+  const windowOf = (child: SubtaskPlanChild): string[] => {
+    const first =
+      child.not_before && child.not_before > today ? child.not_before : today;
+    return dayKeysBetween(first, child.due_date);
+  };
+  const minutesOf = (child: SubtaskPlanChild) =>
+    child.duration_min ?? child.estimated_minutes ?? DEFAULT_MINUTES;
+
+  // Pass 1 — feasibility: latest day of the window that fits, energy-blind,
+  // so a deadline is never lost to a preference. A child that fits nowhere
+  // takes its window's last day untimed.
+  type Placement = { child: SubtaskPlanChild; dateKey: string; span: Span | null };
+  const placements: Placement[] = [];
+  for (const child of ordered) {
+    const minutes = minutesOf(child);
+    const days = windowOf(child);
+    let placed: Placement | null = null;
+    for (let i = days.length - 1; i >= 0; i--) {
+      const span = carve(days[i], minutes);
+      if (span) {
+        placed = { child, dateKey: days[i], span };
+        break;
+      }
+    }
+    placements.push(placed ?? { child, dateKey: child.due_date, span: null });
   }
 
-  return placed;
+  // Pass 2 — energy: a fitted child whose day is not a preferred match moves
+  // to the latest day of its window that fits in the REMAINING free time and
+  // ranks better. Only leftover space is used, so nothing placed in pass 1
+  // can be displaced: the preference stays soft by construction.
+  for (const p of placements) {
+    if (!p.span) continue;
+    const current = energyRank(p.child.energy_cost, energyByDay.get(p.dateKey));
+    if (current === 2) continue;
+    const minutes = minutesOf(p.child);
+    const days = windowOf(p.child);
+    let best: { dateKey: string; rank: number } | null = null;
+    for (let i = days.length - 1; i >= 0; i--) {
+      const dateKey = days[i];
+      if (dateKey === p.dateKey) continue;
+      const rank = energyRank(p.child.energy_cost, energyByDay.get(dateKey));
+      if (rank <= current) continue;
+      if (!tryFit(dateKey, minutes)) continue;
+      if (!best || rank > best.rank) best = { dateKey, rank };
+      if (best.rank === 2) break;
+    }
+    if (!best) continue;
+    release(p.dateKey, p.span);
+    const span = carve(best.dateKey, minutes)!;
+    p.dateKey = best.dateKey;
+    p.span = span;
+  }
+
+  return placements.map((p) => ({
+    taskId: p.child.id,
+    parentId: p.child.parent_task_id,
+    dateKey: p.dateKey,
+    start: p.span ? toClock(p.span.start) : null,
+    end: p.span ? toClock(p.span.end) : null,
+    minutes: minutesOf(p.child),
+    fitted: p.span !== null,
+  }));
 }

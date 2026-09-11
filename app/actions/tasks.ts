@@ -288,14 +288,28 @@ export async function updateTask(input: {
     input.dueTime !== undefined ||
     input.durationMin !== undefined;
 
-  // A subtask's window must stay well-formed (tasks_not_before_within_window):
-  // pulling its due date in front of its not_before pulls not_before along.
-  if (typeof updates.due_date === "string" && updates.not_before === undefined) {
+  // Windows stay well-formed when a due date moves earlier: a subtask's own
+  // not_before follows it (tasks_not_before_within_window), and a parent's
+  // children are pulled in behind the new deadline.
+  if (typeof updates.due_date === "string") {
+    const due = updates.due_date;
+    if (updates.not_before === undefined) {
+      await supabase
+        .from("tasks")
+        .update({ not_before: due })
+        .eq("id", input.id)
+        .gt("not_before", due);
+    }
     await supabase
       .from("tasks")
-      .update({ not_before: updates.due_date })
-      .eq("id", input.id)
-      .gt("not_before", updates.due_date);
+      .update({ not_before: due })
+      .eq("parent_task_id", input.id)
+      .gt("not_before", due);
+    await supabase
+      .from("tasks")
+      .update({ due_date: due })
+      .eq("parent_task_id", input.id)
+      .gt("due_date", due);
   }
 
   const { data: updated, error } = await supabase

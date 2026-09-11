@@ -55,6 +55,7 @@ import {
   freeIntervalsForDay,
   scheduleSnapshot,
   type FreeGap,
+  type ScheduleEvent,
 } from "./lib/snapshots/schedule";
 import {
   addDaysKey,
@@ -68,6 +69,29 @@ import type { UsageRule } from "./_components/inventory-projection";
 // How far ahead the dashboard plans decomposed children (bounded further by
 // the days its calendar fetch actually covers).
 const PLAN_HORIZON_DAYS = 30;
+
+// Time-blocked tasks as busy spans, in the user's zone (the week view's
+// busyFromDayItems does the same from CalendarItems).
+function timedTaskBusyEvents(
+  tasks: { title: string; due_date: string | null; due_time: string | null; duration_min: number | null; estimated_minutes: number | null }[],
+  timeZone: string | null,
+): ScheduleEvent[] {
+  const out: ScheduleEvent[] = [];
+  for (const t of tasks) {
+    if (!t.due_date || !t.due_time) continue;
+    const [h, m] = t.due_time.split(":").map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
+    const startMs = zonedWallTimeToUtcMs(t.due_date, h, m, timeZone);
+    const endMs = startMs + (t.duration_min ?? t.estimated_minutes ?? 30) * 60_000;
+    out.push({
+      summary: t.title,
+      start: new Date(startMs).toISOString(),
+      end: new Date(endMs).toISOString(),
+      allDay: false,
+    });
+  }
+  return out;
+}
 
 const getStreamData = cache(
   async (
@@ -304,10 +328,13 @@ const getStreamData = cache(
         .sort()[0];
       const horizonDays: string[] = [];
       for (let d = today; d <= horizonEnd; d = addDaysKey(d, 1)) horizonDays.push(d);
+      // Every real commitment blocks the planner: Google events, timed
+      // recurring occurrences and slots, and time-blocked tasks (due_time).
       const horizonBusy = [
         ...dash.events,
         ...occurrenceBusyEvents(recurringTasks, horizonDays, slotKeys, timeZone),
         ...slotBusyEvents(recurringSlots, recurringTasks, timeZone),
+        ...timedTaskBusyEvents(tasks, timeZone),
       ];
       const intervalsByDay = new Map(
         horizonDays.map((dateKey) => [

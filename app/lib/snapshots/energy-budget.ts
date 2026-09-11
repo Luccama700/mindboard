@@ -41,7 +41,9 @@ export function energyBudget(
 // Which open tasks count as "today's" for the budget: top-level tasks due on
 // or before today (the NOW board) — except a parent whose open children stand
 // in for it — plus children planned for today or already at/past their
-// window end. `plannedToday` holds child ids the planner put on today.
+// window end. `plannedToday` holds child ids the planner put on today. A
+// child whose parent is not among the open tasks is hidden everywhere else,
+// so it does not count here either.
 export function tasksCountedToday<
   T extends {
     id: string;
@@ -50,11 +52,15 @@ export function tasksCountedToday<
     energy_cost: number | null;
   },
 >(tasks: T[], today: string, plannedToday: ReadonlySet<string>): T[] {
+  const openIds = new Set(tasks.map((t) => t.id));
   const parentsWithOpenChildren = new Set(
-    tasks.filter((t) => t.parent_task_id).map((t) => t.parent_task_id as string),
+    tasks
+      .filter((t) => t.parent_task_id && openIds.has(t.parent_task_id))
+      .map((t) => t.parent_task_id as string),
   );
   return tasks.filter((t) => {
     if (t.parent_task_id) {
+      if (!openIds.has(t.parent_task_id)) return false;
       return plannedToday.has(t.id) || (t.due_date !== null && t.due_date <= today);
     }
     if (parentsWithOpenChildren.has(t.id)) return false;

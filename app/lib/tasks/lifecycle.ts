@@ -9,48 +9,64 @@ import { addDaysKey } from "@/app/_components/finance-projection";
 //   done     the last open child completes the parent; completing the parent
 //            completes every open child. Reopening a child reopens a resolved
 //            parent (its "n of m" would otherwise lie).
-//   missed   only a parent can go missed (its children follow). A child that
-//            is skipped SLIDES instead: not_before moves to tomorrow, clamped
-//            to its due_date, and the planner re-places it. Status untouched.
+//   missed   ONLY a parent ever carries 'missed'. Its children are left as
+//            they are: every read hides the children of a non-open parent, and
+//            reopening the parent brings them straight back. A child that is
+//            skipped SLIDES instead: not_before moves to tomorrow, clamped to
+//            its due_date, and the planner re-places it. Status untouched.
 //
 // Every query pins user_id: the callers on the service client rely on it.
+// Every statement's error is surfaced — a failed sibling count must never read
+// as "no siblings", and a failed child write must never report a clean parent.
+// The steps are not one transaction (Supabase JS has none); the parent write
+// is guarded on its own status so a raced completion is a no-op, not a
+// double-apply.
 
 const OPEN = ["todo", "doing"] as const;
 
 type Row = {
   id: string;
+  title: string;
   status: "todo" | "doing" | "done" | "missed";
   parent_task_id: string | null;
   due_date: string | null;
   not_before: string | null;
 };
 
+type Outcome<T> = { ok: true; value: T } | { ok: false; error: string };
+
 async function loadTask(
   supabase: SupabaseClient,
   userId: string,
   taskId: string,
-): Promise<Row | null> {
-  const { data } = await supabase
+): Promise<Outcome<Row>> {
+  const { data, error } = await supabase
     .from("tasks")
-    .select("id, status, parent_task_id, due_date, not_before")
+    .select("id, title, status, parent_task_id, due_date, not_before")
     .eq("id", taskId)
     .eq("user_id", userId)
     .maybeSingle();
-  return (data as Row | null) ?? null;
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: "task not found" };
+  return { ok: true, value: data as Row };
 }
 
 async function openChildCount(
   supabase: SupabaseClient,
   userId: string,
   parentId: string,
-): Promise<number> {
-  const { count } = await supabase
+): Promise<Outcome<number>> {
+  const { count, error } = await supabase
     .from("tasks")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
     .eq("parent_task_id", parentId)
     .in("status", [...OPEN]);
-  return count ?? 0;
+  if (error) return { ok: false, error: error.message };
+  if (count === null || count === undefined) {
+    return { ok: false, error: "could not count open subtasks" };
+  }
+  return { ok: true, value: count };
 }
 
 export type CompleteOutcome = {
@@ -64,9 +80,10 @@ export async function completeTaskCascade(
   userId: string,
   taskId: string,
   now: Date = new Date(),
-): Promise<{ ok: true; value: CompleteOutcome } | { ok: false; error: string }> {
-  const task = await loadTask(supabase, userId, taskId);
-  if (!task) return { ok: false, error: "task not found" };
+): Promise<Outcome<CompleteOutcome>> {
+  const loaded = await loadTask(supabase, userId, taskId);
+  if (!loaded.ok) return loaded;
+  const task = loaded.value;
   const stamp = { status: "done", completed_at: now.toISOString(), missed_at: null };
 
   const { error } = await supabase
@@ -79,24 +96,28 @@ export async function completeTaskCascade(
   let parentCompleted = false;
   let childrenCompleted = 0;
   if (task.parent_task_id) {
-    if ((await openChildCount(supabase, userId, task.parent_task_id)) === 0) {
-      const { data } = await supabase
+    const open = await openChildCount(supabase, userId, task.parent_task_id);
+    if (!open.ok) return open;
+    if (open.value === 0) {
+      const { data, error: parentError } = await supabase
         .from("tasks")
         .update(stamp)
         .eq("id", task.parent_task_id)
         .eq("user_id", userId)
         .in("status", [...OPEN])
         .select("id");
+      if (parentError) return { ok: false, error: parentError.message };
       parentCompleted = (data ?? []).length > 0;
     }
   } else {
-    const { data } = await supabase
+    const { data, error: childError } = await supabase
       .from("tasks")
       .update(stamp)
       .eq("user_id", userId)
       .eq("parent_task_id", taskId)
       .in("status", [...OPEN])
       .select("id");
+    if (childError) return { ok: false, error: childError.message };
     childrenCompleted = (data ?? []).length;
   }
   return {
@@ -105,14 +126,16 @@ export async function completeTaskCascade(
   };
 }
 
-// Back to the open list. A child coming back reopens its resolved parent.
+// Back to the open list. A child coming back reopens its resolved parent; a
+// parent coming back simply makes its (untouched) children visible again.
 export async function reopenTaskCascade(
   supabase: SupabaseClient,
   userId: string,
   taskId: string,
-): Promise<{ ok: true; value: { parentReopened: boolean } } | { ok: false; error: string }> {
-  const task = await loadTask(supabase, userId, taskId);
-  if (!task) return { ok: false, error: "task not found" };
+): Promise<Outcome<{ task: Row; parentReopened: boolean }>> {
+  const loaded = await loadTask(supabase, userId, taskId);
+  if (!loaded.ok) return loaded;
+  const task = loaded.value;
   const reset = { status: "todo", missed_at: null, completed_at: null };
 
   const { error } = await supabase
@@ -124,16 +147,17 @@ export async function reopenTaskCascade(
 
   let parentReopened = false;
   if (task.parent_task_id) {
-    const { data } = await supabase
+    const { data, error: parentError } = await supabase
       .from("tasks")
       .update(reset)
       .eq("id", task.parent_task_id)
       .eq("user_id", userId)
       .in("status", ["done", "missed"])
       .select("id");
+    if (parentError) return { ok: false, error: parentError.message };
     parentReopened = (data ?? []).length > 0;
   }
-  return { ok: true, value: { parentReopened } };
+  return { ok: true, value: { task: { ...task, status: "todo" }, parentReopened } };
 }
 
 // The day a skipped child may next be planned: tomorrow, but never past its
@@ -150,20 +174,21 @@ export function slideTarget(
 }
 
 export type MissOutcome =
-  | { kind: "missed"; task: Row; childrenMissed: number }
+  | { kind: "missed"; task: Row }
   | { kind: "slid"; task: Row; notBefore: string | null };
 
-// Missing a parent is the accountability record (children follow). A child
-// never goes missed: it slides within its window.
+// Missing a parent is the accountability record; its children are left alone
+// (hidden with it, back with it). A child never goes missed: it slides.
 export async function missTaskCascade(
   supabase: SupabaseClient,
   userId: string,
   taskId: string,
   today: string,
   now: Date = new Date(),
-): Promise<{ ok: true; value: MissOutcome } | { ok: false; error: string }> {
-  const task = await loadTask(supabase, userId, taskId);
-  if (!task) return { ok: false, error: "task not found" };
+): Promise<Outcome<MissOutcome>> {
+  const loaded = await loadTask(supabase, userId, taskId);
+  if (!loaded.ok) return loaded;
+  const task = loaded.value;
   if (task.status === "done" || task.status === "missed") {
     return { ok: false, error: `already ${task.status}` };
   }
@@ -180,30 +205,25 @@ export async function missTaskCascade(
     }
     return {
       ok: true,
-      value: { kind: "slid", task: { ...task, not_before: notBefore ?? task.not_before }, notBefore },
+      value: {
+        kind: "slid",
+        task: { ...task, not_before: notBefore ?? task.not_before },
+        notBefore,
+      },
     };
   }
 
-  const stamp = { status: "missed", missed_at: now.toISOString() };
-  const { error } = await supabase
+  // Guarded on still-open so a completion that raced in wins, not this.
+  const { data, error } = await supabase
     .from("tasks")
-    .update(stamp)
+    .update({ status: "missed", missed_at: now.toISOString() })
     .eq("id", taskId)
-    .eq("user_id", userId);
-  if (error) return { ok: false, error: error.message };
-  const { data } = await supabase
-    .from("tasks")
-    .update(stamp)
     .eq("user_id", userId)
-    .eq("parent_task_id", taskId)
     .in("status", [...OPEN])
     .select("id");
-  return {
-    ok: true,
-    value: {
-      kind: "missed",
-      task: { ...task, status: "missed" },
-      childrenMissed: (data ?? []).length,
-    },
-  };
+  if (error) return { ok: false, error: error.message };
+  if ((data ?? []).length === 0) {
+    return { ok: false, error: "task was resolved meanwhile" };
+  }
+  return { ok: true, value: { kind: "missed", task: { ...task, status: "missed" } } };
 }

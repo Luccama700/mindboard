@@ -509,8 +509,10 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
       bucket = "upcoming";
       if (dayForBucket <= soonLimit) dueSoon++;
     }
-    // Bound the list: overdue, undated, or dued within the horizon.
-    if (t.due_date && t.due_date > horizonEnd) continue;
+    // Bound the list: overdue, undated, or due within the horizon — a child by
+    // the day it is planned for, since that is when it shows up.
+    const boundDay = isChild ? plannedDate : t.due_date;
+    if (boundDay && boundDay > horizonEnd) continue;
     const open = openChildCount.get(t.id) ?? 0;
     const done = doneChildrenByParent?.get(t.id) ?? 0;
     taskItems.push({

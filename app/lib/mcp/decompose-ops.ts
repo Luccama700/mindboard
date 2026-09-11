@@ -33,9 +33,20 @@ export type DecompositionParent = {
   dueDate: string; // the window end every child must respect
 };
 
+// Strict: a real integer, never a coerced boolean/string or a truncated
+// fraction — the receipt must show exactly what the model (or client) said.
 function positiveInt(value: unknown): number | null {
-  const n = Math.trunc(Number(value));
-  return Number.isFinite(n) && n > 0 ? n : null;
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+// YYYY-MM-DD that names a day that exists (no 2026-02-30).
+export function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== "string" || !ISO_DATE.test(value)) return false;
+  const [y, m, d] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return (
+    date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d
+  );
 }
 
 export function validateDecomposition(
@@ -77,8 +88,8 @@ export function validateDecomposition(
       return { ok: false, error: `step ${n}: energyCost must be 1-5` };
     }
     for (const key of ["notBefore", "dueDate"] as const) {
-      if (typeof c[key] !== "string" || !ISO_DATE.test(c[key] as string)) {
-        return { ok: false, error: `step ${n}: ${key} must be YYYY-MM-DD` };
+      if (!isCalendarDate(c[key])) {
+        return { ok: false, error: `step ${n}: ${key} must be a real YYYY-MM-DD date` };
       }
     }
     // Clamp an edge that overshoots into the parent's window; a window that

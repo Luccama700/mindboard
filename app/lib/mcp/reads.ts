@@ -13,6 +13,7 @@ import {
   freeGaps,
   freeIntervalsForDay,
   scheduleSnapshot,
+  type ScheduleEvent,
 } from "@/app/lib/snapshots/schedule";
 import { listEvents, type CalendarEvent } from "@/utils/google/calendar";
 import { addDaysKey } from "@/app/_components/finance-projection";
@@ -751,7 +752,9 @@ export async function getScheduleSnapshot(userId: string) {
     }),
     supabase
       .from("tasks")
-      .select("id, due_date, parent_task_id, not_before, duration_min, estimated_minutes, energy_cost, created_at")
+      .select(
+        "id, title, due_date, due_time, parent_task_id, not_before, duration_min, estimated_minutes, energy_cost, created_at",
+      )
       .eq("user_id", ownerId)
       .in("status", ["todo", "doing"]),
     supabase
@@ -767,7 +770,9 @@ export async function getScheduleSnapshot(userId: string) {
   // the tasks on today's board.
   const openTasks = (tasksRes.data ?? []) as {
     id: string;
+    title: string;
     due_date: string | null;
+    due_time: string | null;
     parent_task_id: string | null;
     not_before: string | null;
     duration_min: number | null;
@@ -776,6 +781,21 @@ export async function getScheduleSnapshot(userId: string) {
     created_at: string;
   }[];
   const openIds = new Set(openTasks.map((t) => t.id));
+  // Time-blocked tasks are commitments too (the dashboard counts them).
+  const busy: ScheduleEvent[] = [...events];
+  for (const t of openTasks) {
+    if (!t.due_date || !t.due_time) continue;
+    const [h, m] = t.due_time.split(":").map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
+    const startMs = zonedWallTimeToUtcMs(t.due_date, h, m, timeZone);
+    const endMs = startMs + (t.duration_min ?? t.estimated_minutes ?? 30) * 60_000;
+    busy.push({
+      summary: t.title,
+      start: new Date(startMs).toISOString(),
+      end: new Date(endMs).toISOString(),
+      allDay: false,
+    });
+  }
   const dayKeys = Array.from({ length: SCHEDULE_SNAPSHOT_DAYS }, (_, i) =>
     addDaysKey(todayIso, i),
   );
@@ -783,7 +803,7 @@ export async function getScheduleSnapshot(userId: string) {
     dayKeys.map((dateKey) => [
       dateKey,
       freeIntervalsForDay({
-        events,
+        events: busy,
         dateKey,
         now,
         wakeStartHour: prefs.wakeStartHour,

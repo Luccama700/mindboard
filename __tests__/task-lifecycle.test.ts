@@ -44,7 +44,7 @@ const USER = "u1";
 describe("completeTaskCascade", () => {
   test("completing the last open child completes the parent", async () => {
     const { client, calls } = fakeSupabase([
-      { data: { id: "c2", status: "todo", parent_task_id: "p", due_date: "2026-09-20", not_before: null } },
+      { data: { id: "c2", title: "t", status: "todo", parent_task_id: "p", due_date: "2026-09-20", not_before: null } },
       { error: null }, // child → done
       { count: 0 }, // no open siblings
       { data: [{ id: "p" }] }, // parent → done
@@ -67,7 +67,7 @@ describe("completeTaskCascade", () => {
 
   test("completing a child with siblings left leaves the parent alone", async () => {
     const { client, calls } = fakeSupabase([
-      { data: { id: "c1", status: "todo", parent_task_id: "p", due_date: "2026-09-18", not_before: null } },
+      { data: { id: "c1", title: "t", status: "todo", parent_task_id: "p", due_date: "2026-09-18", not_before: null } },
       { error: null },
       { count: 2 },
     ]);
@@ -78,7 +78,7 @@ describe("completeTaskCascade", () => {
 
   test("completing the parent completes every open child", async () => {
     const { client, calls } = fakeSupabase([
-      { data: { id: "p", status: "todo", parent_task_id: null, due_date: "2026-09-24", not_before: null } },
+      { data: { id: "p", title: "t", status: "todo", parent_task_id: null, due_date: "2026-09-24", not_before: null } },
       { error: null },
       { data: [{ id: "c1" }, { id: "c3" }] },
     ]);
@@ -101,19 +101,19 @@ describe("completeTaskCascade", () => {
 describe("reopenTaskCascade", () => {
   test("reopening a child reopens a resolved parent", async () => {
     const { client, calls } = fakeSupabase([
-      { data: { id: "c1", status: "done", parent_task_id: "p", due_date: "2026-09-18", not_before: null } },
+      { data: { id: "c1", title: "t", status: "done", parent_task_id: "p", due_date: "2026-09-18", not_before: null } },
       { error: null },
       { data: [{ id: "p" }] },
     ]);
     const r = await reopenTaskCascade(client, USER, "c1");
-    expect(r).toEqual({ ok: true, value: { parentReopened: true } });
+    expect(r).toMatchObject({ ok: true, value: { parentReopened: true } });
     expect(op(calls[1], "update")).toEqual([{ status: "todo", missed_at: null, completed_at: null }]);
     expect(calls[2].ops).toContainEqual(["in", ["status", ["done", "missed"]]]);
   });
 
   test("reopening a top-level task touches nothing else", async () => {
     const { client, calls } = fakeSupabase([
-      { data: { id: "p", status: "done", parent_task_id: null, due_date: null, not_before: null } },
+      { data: { id: "p", title: "t", status: "done", parent_task_id: null, due_date: null, not_before: null } },
       { error: null },
     ]);
     await reopenTaskCascade(client, USER, "p");
@@ -141,7 +141,7 @@ describe("slideTarget", () => {
 describe("missTaskCascade", () => {
   test("a skipped child slides its not_before instead of going missed", async () => {
     const { client, calls } = fakeSupabase([
-      { data: { id: "c1", status: "todo", parent_task_id: "p", due_date: "2026-09-20", not_before: "2026-09-14" } },
+      { data: { id: "c1", title: "t", status: "todo", parent_task_id: "p", due_date: "2026-09-20", not_before: "2026-09-14" } },
       { error: null },
     ]);
     const r = await missTaskCascade(client, USER, "c1", "2026-09-15", NOW);
@@ -152,32 +152,86 @@ describe("missTaskCascade", () => {
 
   test("a child on its last window day stays put and is still not missed", async () => {
     const { client, calls } = fakeSupabase([
-      { data: { id: "c1", status: "todo", parent_task_id: "p", due_date: "2026-09-15", not_before: "2026-09-15" } },
+      { data: { id: "c1", title: "t", status: "todo", parent_task_id: "p", due_date: "2026-09-15", not_before: "2026-09-15" } },
     ]);
     const r = await missTaskCascade(client, USER, "c1", "2026-09-15", NOW);
     expect(r).toMatchObject({ ok: true, value: { kind: "slid", notBefore: null } });
     expect(calls).toHaveLength(1);
   });
 
-  test("missing a parent marks it and its open children missed", async () => {
+  test("missing a parent marks only the parent; children are left untouched", async () => {
     const { client, calls } = fakeSupabase([
-      { data: { id: "p", status: "todo", parent_task_id: null, due_date: "2026-09-10", not_before: null } },
-      { error: null },
-      { data: [{ id: "c1" }] },
+      { data: { id: "p", title: "t", status: "todo", parent_task_id: null, due_date: "2026-09-10", not_before: null } },
+      { data: [{ id: "p" }] },
     ]);
     const r = await missTaskCascade(client, USER, "p", "2026-09-15", NOW);
-    expect(r).toMatchObject({ ok: true, value: { kind: "missed", childrenMissed: 1 } });
+    expect(r).toMatchObject({ ok: true, value: { kind: "missed" } });
+    expect(calls).toHaveLength(2);
     expect(op(calls[1], "update")).toEqual([{ status: "missed", missed_at: NOW.toISOString() }]);
-    expect(calls[2].ops).toContainEqual(["eq", ["parent_task_id", "p"]]);
+    // Guarded on still-open, so a completion that raced in wins.
+    expect(calls[1].ops).toContainEqual(["in", ["status", ["todo", "doing"]]]);
+    const childWrites = calls.filter((c) =>
+      c.ops.some(([m, a]) => m === "eq" && a[0] === "parent_task_id"),
+    );
+    expect(childWrites).toEqual([]);
+  });
+
+  test("a parent resolved meanwhile is reported, not silently re-stamped", async () => {
+    const { client } = fakeSupabase([
+      { data: { id: "p", title: "t", status: "todo", parent_task_id: null, due_date: "2026-09-10", not_before: null } },
+      { data: [] },
+    ]);
+    await expect(missTaskCascade(client, USER, "p", "2026-09-15", NOW)).resolves.toEqual({
+      ok: false,
+      error: "task was resolved meanwhile",
+    });
   });
 
   test("refuses a resolved task", async () => {
     const { client } = fakeSupabase([
-      { data: { id: "p", status: "done", parent_task_id: null, due_date: null, not_before: null } },
+      { data: { id: "p", title: "t", status: "done", parent_task_id: null, due_date: null, not_before: null } },
     ]);
     await expect(missTaskCascade(client, USER, "p", "2026-09-15", NOW)).resolves.toEqual({
       ok: false,
       error: "already done",
+    });
+  });
+});
+
+describe("cascade errors are surfaced, never read as success", () => {
+  test("a failed sibling count must not be interpreted as zero siblings", async () => {
+    const { client, calls } = fakeSupabase([
+      { data: { id: "c", title: "t", status: "todo", parent_task_id: "p", due_date: "2026-09-15", not_before: null } },
+      { error: null },
+      { count: null, error: { message: "count unavailable" } },
+      { data: [{ id: "p" }] },
+    ]);
+    const r = await completeTaskCascade(client, USER, "c", NOW);
+    expect(r).toEqual({ ok: false, error: "count unavailable" });
+    expect(calls).toHaveLength(3);
+  });
+
+  test("a failed child cascade must not report a clean parent completion", async () => {
+    const { client } = fakeSupabase([
+      { data: { id: "p", title: "t", status: "todo", parent_task_id: null, due_date: "2026-09-15", not_before: null } },
+      { error: null },
+      { data: null, error: { message: "child update failed" } },
+    ]);
+    await expect(completeTaskCascade(client, USER, "p", NOW)).resolves.toEqual({
+      ok: false,
+      error: "child update failed",
+    });
+  });
+
+  test("a failed parent reopen is surfaced", async () => {
+    const { client } = fakeSupabase([
+      { data: { id: "c1", title: "t", status: "done", parent_task_id: "p", due_date: "2026-09-18", not_before: null } },
+      { error: null },
+      { data: null, error: { message: "parent reopen failed" } },
+    ]);
+    await expect(reopenTaskCascade(client, USER, "c1")).resolves.toEqual({
+      ok: false,
+      error: "parent reopen failed",
     });
   });
 });

@@ -86,9 +86,17 @@ describe("validateDecomposition", () => {
     expect(bad({ energyCost: 6 })).toBe(false);
     expect(bad({ notBefore: "next week" as unknown as string })).toBe(false);
     expect(bad({ dueDate: "" })).toBe(false);
-    // trims and truncates numbers sanely
-    const r = validateDecomposition([ok, { ...ok, title: "  Trim me ", estimatedMinutes: 45.9 }], PARENT, TODAY);
-    expect(r).toMatchObject({ ok: true, value: [ok, { title: "Trim me", estimatedMinutes: 45 }] });
+    // strict numbers: no coercion, no truncation — the receipt shows exactly
+    // what was proposed
+    expect(bad({ estimatedMinutes: 45.9 })).toBe(false);
+    expect(bad({ energyCost: 4.9 })).toBe(false);
+    expect(bad({ estimatedMinutes: "30" as unknown as number })).toBe(false);
+    expect(bad({ energyCost: true as unknown as number })).toBe(false);
+    // real calendar dates only
+    expect(bad({ dueDate: "2026-02-30" })).toBe(false);
+    expect(bad({ notBefore: "2026-13-01" })).toBe(false);
+    const r = validateDecomposition([ok, { ...ok, title: "  Trim me " }], PARENT, TODAY);
+    expect(r).toMatchObject({ ok: true, value: [ok, { title: "Trim me" }] });
   });
 });
 

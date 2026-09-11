@@ -209,10 +209,15 @@ export function TasksClient({
     });
   }
 
-  // `today` arrives as a prop — see the Dock's.
-  const active = tasks.filter(
-    (t) => t.status !== "done" && t.status !== "missed",
-  );
+  // `today` arrives as a prop — see the Dock's. A child whose parent is on
+  // this page and resolved is hidden with it (reopening the parent brings it
+  // back), matching the stream's read-side rule.
+  const statusById = new Map(tasks.map((t) => [t.id, t.status]));
+  const active = tasks.filter((t) => {
+    if (t.status === "done" || t.status === "missed") return false;
+    const parentStatus = t.parent_task_id ? statusById.get(t.parent_task_id) : undefined;
+    return parentStatus !== "done" && parentStatus !== "missed";
+  });
   const done = tasks.filter((t) => t.status === "done");
 
   // Decomposition read-side, from the rows on this page: a parent's "n of m"

@@ -208,3 +208,47 @@ describe("planSubtasks — energy as a soft preference", () => {
     expect(planned[0].dateKey).toBe("2026-09-17");
   });
 });
+
+describe("planSubtasks — the preference never costs a deadline", () => {
+  test("a flexible heavy child does not take an urgent child's only gap today", () => {
+    const tomorrow = "2026-09-16";
+    const make = (id: string, due_date: string) =>
+      child({ id, due_date, not_before: TODAY, estimated_minutes: 60, energy_cost: 4 });
+    const planned = byId(
+      planSubtasks({
+        today: TODAY,
+        children: [make("flexible", tomorrow), make("urgent", TODAY)],
+        intervalsByDay: new Map([
+          [TODAY, [iv(540, 600)]],
+          [tomorrow, [iv(540, 600)]],
+        ]),
+        energyByDay: new Map([[TODAY, 5]]),
+      }),
+    );
+    expect(planned.get("urgent")).toMatchObject({ dateKey: TODAY, fitted: true });
+    expect(planned.get("flexible")).toMatchObject({ dateKey: tomorrow, fitted: true });
+  });
+
+  test("a child that moved for energy gives its old gap back", () => {
+    // Pass 1 (energy-blind): heavy takes the 17th, later fits only today.
+    // Pass 2: heavy would prefer today (logged 5) but that gap is taken, so
+    // it stays — nothing placed in pass 1 is ever displaced.
+    const planned = byId(
+      planSubtasks({
+        today: TODAY,
+        children: [
+          child({ id: "heavy", energy_cost: 5, due_date: "2026-09-17", estimated_minutes: 60 }),
+          child({ id: "later", energy_cost: 3, due_date: "2026-09-17", estimated_minutes: 60 }),
+        ],
+        intervalsByDay: new Map([
+          [TODAY, [iv(540, 600)]],
+          ["2026-09-16", []],
+          ["2026-09-17", [iv(540, 600)]],
+        ]),
+        energyByDay: new Map([[TODAY, 5]]),
+      }),
+    );
+    expect(planned.get("heavy")).toMatchObject({ dateKey: "2026-09-17", fitted: true });
+    expect(planned.get("later")).toMatchObject({ dateKey: TODAY, fitted: true });
+  });
+});

@@ -181,16 +181,22 @@ describe("task actions", () => {
     const mainUpdate = vi.fn(() => ({ eq: mainEq }));
     mocks.from
       .mockReturnValueOnce({ update: clampUpdate })
+      .mockReturnValueOnce({ update: clampUpdate })
+      .mockReturnValueOnce({ update: clampUpdate })
       .mockReturnValueOnce({ update: mainUpdate });
 
     await expect(updateTask({ id: "c1", dueDate: "2026-09-18" })).resolves.toEqual({
       error: null,
     });
 
-    // The guard runs first and only touches a not_before past the new date.
+    // The guards run first: the task's own not_before, then its children's
+    // not_before and due_date, each only where they lie past the new date.
     expect(clampUpdate).toHaveBeenCalledWith({ not_before: "2026-09-18" });
+    expect(clampUpdate).toHaveBeenCalledWith({ due_date: "2026-09-18" });
     expect(clampEq).toHaveBeenCalledWith("id", "c1");
+    expect(clampEq).toHaveBeenCalledWith("parent_task_id", "c1");
     expect(gt).toHaveBeenCalledWith("not_before", "2026-09-18");
+    expect(gt).toHaveBeenCalledWith("due_date", "2026-09-18");
     expect(mainUpdate).toHaveBeenCalledWith({ due_date: "2026-09-18" });
   });
 

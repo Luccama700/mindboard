@@ -16,15 +16,28 @@
 --                   the planner picks the day inside it at read time and never
 --                   writes it back. A skipped child slides this forward.
 
+-- (user_id, id) is unique by construction (id is the PK); naming it lets the
+-- parent link be a COMPOSITE foreign key, so a child can only ever point at a
+-- task of the same user — RLS scopes rows, not the ids a row may reference.
+alter table public.tasks
+  add constraint tasks_user_id_id_key unique (user_id, id);
+
 alter table public.tasks
   add column energy_cost    smallint check (energy_cost between 1 and 5),
   add column energy_source  text check (energy_source in ('ai', 'user')),
-  add column parent_task_id uuid references public.tasks (id) on delete cascade,
+  add column parent_task_id uuid,
   add column not_before     date;
 
 alter table public.tasks
+  add constraint tasks_parent_same_user_fkey
+  foreign key (user_id, parent_task_id)
+  references public.tasks (user_id, id)
+  on delete cascade;
+
+-- A window needs its end: not_before without a due_date is meaningless.
+alter table public.tasks
   add constraint tasks_not_before_within_window
-  check (not_before is null or due_date is null or not_before <= due_date);
+  check (not_before is null or (due_date is not null and not_before <= due_date));
 
 create index tasks_parent_idx
   on public.tasks (parent_task_id)

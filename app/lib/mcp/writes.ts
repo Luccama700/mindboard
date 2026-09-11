@@ -794,12 +794,13 @@ async function executeCreateTask(
     return { ok: false, error: "group not found" };
   }
   // Depth one: a subtask's parent must be an open top-level task of the
-  // same user; the child inherits its group.
+  // same user with a due date; the child inherits its group and its own
+  // window [notBefore, dueDate] must sit inside the parent's.
   let groupId = v.groupId;
   if (v.parentTaskId) {
     const { data: parent } = await supabase
       .from("tasks")
-      .select("id, group_id, parent_task_id, status")
+      .select("id, group_id, parent_task_id, status, due_date")
       .eq("id", v.parentTaskId)
       .eq("user_id", ownerId)
       .maybeSingle();
@@ -807,11 +808,17 @@ async function executeCreateTask(
       group_id: string | null;
       parent_task_id: string | null;
       status: string;
+      due_date: string | null;
     } | null;
     if (!p) return { ok: false, error: "parent task not found" };
     if (p.parent_task_id) return { ok: false, error: "a subtask cannot have subtasks" };
     if (p.status === "done" || p.status === "missed") {
       return { ok: false, error: `parent task is already ${p.status}` };
+    }
+    if (!p.due_date) return { ok: false, error: "the parent task needs a due date first" };
+    if (!v.dueDate) return { ok: false, error: "a subtask needs a dueDate (its window end)" };
+    if (v.dueDate > p.due_date) {
+      return { ok: false, error: `a subtask cannot be due after its parent (${p.due_date})` };
     }
     groupId = p.group_id;
   }
@@ -932,7 +939,7 @@ async function executeCompleteTask(
   return {
     ok: true,
     value: {
-      task: { id: r.value.task.id, status: "done" },
+      task: { id: r.value.task.id, title: r.value.task.title, status: "done" },
       ...(r.value.parentCompleted ? { parentCompleted: true } : {}),
       ...(r.value.childrenCompleted > 0
         ? { childrenCompleted: r.value.childrenCompleted }
@@ -957,7 +964,7 @@ async function executeMissTask(
     return {
       ok: true,
       value: {
-        task: { id: r.value.task.id, status: r.value.task.status },
+        task: { id: r.value.task.id, title: r.value.task.title, status: r.value.task.status },
         slid: true,
         notBefore: r.value.notBefore,
       },
@@ -965,10 +972,7 @@ async function executeMissTask(
   }
   return {
     ok: true,
-    value: {
-      task: { id: r.value.task.id, status: "missed" },
-      ...(r.value.childrenMissed > 0 ? { childrenMissed: r.value.childrenMissed } : {}),
-    },
+    value: { task: { id: r.value.task.id, title: r.value.task.title, status: "missed" } },
   };
 }
 
@@ -1866,15 +1870,31 @@ async function executeUpdateTask(
     return { ok: false, error: "nothing to change" };
   }
 
-  // A subtask's window must stay well-formed (tasks_not_before_within_window):
-  // pulling its due date in front of its not_before pulls not_before along.
-  if (typeof updates.due_date === "string" && updates.not_before === undefined) {
+  // Windows stay well-formed when a due date moves earlier: a subtask's own
+  // not_before follows it (tasks_not_before_within_window), and a parent's
+  // children are pulled in behind the new deadline.
+  if (typeof updates.due_date === "string") {
+    const due = updates.due_date;
+    if (updates.not_before === undefined) {
+      await supabase
+        .from("tasks")
+        .update({ not_before: due })
+        .eq("id", v.taskId)
+        .eq("user_id", ownerId)
+        .gt("not_before", due);
+    }
     await supabase
       .from("tasks")
-      .update({ not_before: updates.due_date })
-      .eq("id", v.taskId)
+      .update({ not_before: due })
+      .eq("parent_task_id", v.taskId)
       .eq("user_id", ownerId)
-      .gt("not_before", updates.due_date);
+      .gt("not_before", due);
+    await supabase
+      .from("tasks")
+      .update({ due_date: due })
+      .eq("parent_task_id", v.taskId)
+      .eq("user_id", ownerId)
+      .gt("due_date", due);
   }
 
   const { data: updated, error } = await supabase

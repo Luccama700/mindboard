@@ -58,7 +58,9 @@ export function EnergyControl({
 }: {
   cost: number | null;
   source: EnergySource;
-  // Tapping a dot sets that level; tapping the current level clears it.
+  // Tapping a dot sets that level. Tapping the CURRENT level adopts a
+  // suggestion as yours (outlined → filled) or, if it already is yours,
+  // clears it.
   onChange: (next: number | null) => void;
 }) {
   return (
@@ -76,7 +78,9 @@ export function EnergyControl({
             role="radio"
             aria-checked={cost === level}
             aria-label={`energy ${level} of 5`}
-            onClick={() => onChange(cost === level ? null : level)}
+            onClick={() =>
+              onChange(cost === level && source === "user" ? null : level)
+            }
             className="inline-flex items-center justify-center min-h-11 min-w-9 press"
           >
             <span

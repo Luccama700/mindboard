@@ -74,12 +74,13 @@ describe("energy on the task row", () => {
     // …and one tap on a dot writes that level.
     fireEvent.click(screen.getByRole("radio", { name: "energy 2 of 5" }));
     expect(onUpdate).toHaveBeenCalledWith("t1", { energyCost: 2 });
-    // Tapping the current level clears it.
+    // Tapping the suggested level ADOPTS it as the user's own (outlined → filled).
     fireEvent.click(screen.getByRole("radio", { name: "energy 4 of 5" }));
-    expect(onUpdate).toHaveBeenCalledWith("t1", { energyCost: null });
+    expect(onUpdate).toHaveBeenCalledWith("t1", { energyCost: 4 });
   });
 
   test("a user-set value reads as yours", () => {
+    const onUpdate = vi.fn();
     render(
       <TaskRow
         task={task({ energy_source: "user", energy_cost: 5 })}
@@ -87,12 +88,15 @@ describe("energy on the task row", () => {
         groups={[]}
         onToggle={() => {}}
         onDelete={() => {}}
-        onUpdate={() => {}}
+        onUpdate={onUpdate}
         open
       />,
     );
     expect(screen.getByText("yours")).toBeTruthy();
     expect(screen.getAllByLabelText("energy 5 of 5").length).toBeGreaterThan(0);
+    // Only a value that is already yours clears on a second tap.
+    fireEvent.click(screen.getByRole("radio", { name: "energy 5 of 5" }));
+    expect(onUpdate).toHaveBeenCalledWith("t1", { energyCost: null });
   });
 });
 

@@ -224,12 +224,20 @@ export async function executeDecomposeTask(
   const loaded = await loadParent(supabase, ownerId, parentTaskId);
   if (!loaded.ok) return loaded;
   const parent = loaded.value;
+  const dueDate = parent.due_date as string;
   // The window was validated at propose time; a day may have passed since, so
-  // clamp again against today rather than failing a confirm the user just tapped.
+  // clamp again against today rather than failing a confirm the user just
+  // tapped — unless the deadline itself has passed, which needs a fresh look.
+  if (dueDate < today) {
+    return {
+      ok: false,
+      error: `"${parent.title}" was due ${dueDate} — move its due date and break it down again`,
+    };
+  }
   const validated = validateDecomposition(
     input.children,
-    { id: parent.id, title: parent.title, dueDate: parent.due_date as string },
-    today <= (parent.due_date as string) ? today : (parent.due_date as string),
+    { id: parent.id, title: parent.title, dueDate },
+    today,
   );
   if (!validated.ok) return validated;
 

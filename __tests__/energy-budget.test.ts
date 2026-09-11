@@ -73,3 +73,16 @@ describe("tasksCountedToday", () => {
     expect(counted).toEqual(["planned", "atEnd"]);
   });
 });
+
+describe("tasksCountedToday hides what the stream hides", () => {
+  test("a child whose parent is not among the open tasks does not consume budget", () => {
+    const today = "2026-09-15";
+    const counted = tasksCountedToday(
+      [{ id: "orphan", parent_task_id: "resolved-parent", due_date: today, energy_cost: 5 }],
+      today,
+      new Set(),
+    );
+    expect(counted).toEqual([]);
+    expect(energyBudget(3, counted)?.remaining).toBe(12);
+  });
+});

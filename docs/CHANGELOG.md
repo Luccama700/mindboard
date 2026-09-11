@@ -20,7 +20,8 @@ decomposition" section of `AGENTS.md`.
   `executeCreateTask`; SQL-guarded on `energy_source IS NULL`. Edits write
   `'user'`.
 - **Lifecycle** `app/lib/tasks/lifecycle.ts`: completion cascades both ways,
-  reopen reopens the parent, a skipped child slides its `not_before`
+  reopen reopens the parent, a missed parent leaves its children untouched
+  (hidden with it), a skipped child slides its `not_before`
   (`markTaskMissed`, `miss_task`, stream snooze, watch defer) instead of going
   missed.
 - **Planner** `planSubtasks` in `app/lib/snapshots/gap-plan.ts` (advisory,
