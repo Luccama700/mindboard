@@ -23,6 +23,17 @@ export function roundCents(value: number): number | null {
   return Math.round(value * 100) / 100;
 }
 
+// 1..5 or null. Energy is informational (a second axis beside minutes) and a
+// planning input — never a score, so the validator is the only place that
+// knows the range.
+export function validateEnergyCost(raw: unknown): Result<number | null> {
+  if (raw === null) return { ok: true, value: null };
+  if (!Number.isInteger(raw) || (raw as number) < 1 || (raw as number) > 5) {
+    return { ok: false, error: "energyCost must be a whole number 1-5 (or null)" };
+  }
+  return { ok: true, value: raw as number };
+}
+
 export type CreateTaskInput = {
   title: string;
   groupId: string | null;
@@ -30,6 +41,9 @@ export type CreateTaskInput = {
   notes: string | null;
   priority: Priority;
   estimatedMinutes?: number | null;
+  energyCost?: number | null;
+  parentTaskId?: string | null;
+  notBefore?: string | null;
 };
 
 export function validateCreateTask(raw: {
@@ -39,6 +53,9 @@ export function validateCreateTask(raw: {
   notes?: unknown;
   priority?: unknown;
   estimatedMinutes?: unknown;
+  energyCost?: unknown;
+  parentTaskId?: unknown;
+  notBefore?: unknown;
 }): Result<CreateTaskInput> {
   const title = typeof raw.title === "string" ? raw.title.trim() : "";
   if (!title) return { ok: false, error: "title is required" };
@@ -63,16 +80,47 @@ export function validateCreateTask(raw: {
     }
     estimatedMinutes = raw.estimatedMinutes as number | null;
   }
+  let energyCost: number | null | undefined;
+  if (raw.energyCost !== undefined) {
+    const e = validateEnergyCost(raw.energyCost);
+    if (!e.ok) return e;
+    energyCost = e.value;
+  }
+  if (raw.parentTaskId != null && typeof raw.parentTaskId !== "string") {
+    return { ok: false, error: "parentTaskId must be a string or null" };
+  }
+  if (
+    raw.notBefore != null &&
+    !(typeof raw.notBefore === "string" && ISO_DATE.test(raw.notBefore))
+  ) {
+    return { ok: false, error: "notBefore must be YYYY-MM-DD" };
+  }
+  const dueDate = (raw.dueDate as string | null) ?? null;
+  const notBefore = (raw.notBefore as string | null) ?? null;
+  if (notBefore && !dueDate) {
+    return { ok: false, error: "notBefore needs a dueDate to bound the window" };
+  }
+  if (notBefore && !raw.parentTaskId) {
+    return { ok: false, error: "notBefore is a subtask's window start — pass parentTaskId" };
+  }
+  if (notBefore && dueDate && notBefore > dueDate) {
+    return { ok: false, error: "notBefore must be on or before dueDate" };
+  }
 
   return {
     ok: true,
     value: {
       title,
       groupId: (raw.groupId as string | null) ?? null,
-      dueDate: (raw.dueDate as string | null) ?? null,
+      dueDate,
       notes: typeof raw.notes === "string" ? raw.notes.trim() || null : null,
       priority,
       ...(estimatedMinutes !== undefined ? { estimatedMinutes } : {}),
+      ...(energyCost !== undefined ? { energyCost } : {}),
+      ...(raw.parentTaskId !== undefined
+        ? { parentTaskId: (raw.parentTaskId as string | null) ?? null }
+        : {}),
+      ...(raw.notBefore !== undefined ? { notBefore } : {}),
     },
   };
 }
@@ -83,7 +131,9 @@ export function summarizeCreateTask(
 ): string {
   const where = value.groupId ? `group "${groupName ?? value.groupId}"` : "inbox";
   const due = value.dueDate ? `, due ${value.dueDate}` : "";
-  return `Create task "${value.title}" in ${where}${due}.`;
+  const energy = value.energyCost ? `, energy ${value.energyCost}/5` : "";
+  const parent = value.parentTaskId ? " as a subtask" : "";
+  return `Create task "${value.title}"${parent} in ${where}${due}${energy}.`;
 }
 
 export type CreateRecurringTaskInput = TaskRecurrence & {
@@ -267,6 +317,8 @@ export type UpdateTaskInput = {
   priority?: Priority;
   pushToCalendar?: boolean;
   aiState?: AiState | null;
+  energyCost?: number | null;
+  notBefore?: string | null;
 };
 
 // Overnight-agent lifecycle states (docs/overnight-agent-plan.md).
@@ -358,6 +410,23 @@ export function validateUpdateTask(raw: Record<string, unknown>): Result<UpdateT
     }
     out.aiState = raw.aiState as AiState | null;
   }
+  if (raw.energyCost !== undefined) {
+    const e = validateEnergyCost(raw.energyCost);
+    if (!e.ok) return e;
+    out.energyCost = e.value;
+  }
+  if (raw.notBefore !== undefined) {
+    if (
+      raw.notBefore !== null &&
+      !(typeof raw.notBefore === "string" && ISO_DATE.test(raw.notBefore))
+    ) {
+      return { ok: false, error: "notBefore must be YYYY-MM-DD or null" };
+    }
+    out.notBefore = raw.notBefore as string | null;
+    if (out.notBefore && out.dueDate && out.notBefore > out.dueDate) {
+      return { ok: false, error: "notBefore must be on or before dueDate" };
+    }
+  }
 
   if (Object.keys(out).length === 1) {
     return { ok: false, error: "nothing to change" };
@@ -398,6 +467,12 @@ export function summarizeUpdateTask(
   if (value.pushToCalendar) bits.push("push to Google Calendar");
   if (value.aiState !== undefined) {
     bits.push(value.aiState === null ? "clear the AI state" : `AI state → ${value.aiState}`);
+  }
+  if (value.energyCost !== undefined) {
+    bits.push(value.energyCost === null ? "clear energy" : `energy ${value.energyCost}/5`);
+  }
+  if (value.notBefore !== undefined) {
+    bits.push(value.notBefore === null ? "clear not-before" : `not before ${value.notBefore}`);
   }
   return `Update task "${currentTitle}": ${bits.join(", ")}.`;
 }

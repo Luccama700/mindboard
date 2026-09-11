@@ -30,6 +30,10 @@ function task(over: Partial<TaskWithGroup>): TaskWithGroup {
     created_at: "2026-07-01T00:00:00Z",
     completed_at: null,
     missed_at: null,
+    energy_cost: null,
+    energy_source: null,
+    parent_task_id: null,
+    not_before: null,
     group_name: null,
     group_color: null,
     ...over,
@@ -362,5 +366,66 @@ describe("planningSnapshot with approved slots", () => {
     expect(plain).toMatchObject({ dueTime: "20:00", slotted: false });
     const untimed = occ.find((o) => o.ruleId === "r2" && o.date === "2026-07-08");
     expect(untimed).toMatchObject({ dueTime: null, slotted: false });
+  });
+});
+
+describe("decomposition + energy in the planning read", () => {
+  test("children carry a planned day inside their window; the parent carries progress", () => {
+    const input = baseInput();
+    input.tasks = [
+      task({ id: "essay", title: "essay", due_date: "2026-07-10", estimated_minutes: 240 }),
+      task({
+        id: "c1",
+        title: "quotes",
+        parent_task_id: "essay",
+        not_before: "2026-07-08",
+        due_date: "2026-07-09",
+        estimated_minutes: 30,
+        energy_cost: 2,
+      }),
+    ];
+    input.doneChildrenByParent = new Map([["essay", 1]]);
+    const s = planningSnapshot(input);
+    const byId = new Map(s.tasks.items.map((t) => [t.id, t]));
+    expect(byId.get("essay")).toMatchObject({
+      progress: { done: 1, total: 2 },
+      parentTaskId: null,
+      plannedDate: null,
+    });
+    // Latest day of the window with free time: the 9th (conference is
+    // all-day, which never blocks time).
+    expect(byId.get("c1")).toMatchObject({
+      parentTaskId: "essay",
+      notBefore: "2026-07-08",
+      dueDate: "2026-07-09",
+      plannedDate: "2026-07-09",
+      plannedStart: "08:00",
+      bucket: "upcoming",
+      energyCost: 2,
+    });
+    expect(s.tasks.summary.dueSoon).toBe(2);
+  });
+
+  test("energy budget is today-only and derived from today's logged energy", () => {
+    const input = baseInput();
+    input.tasks = [
+      task({ id: "a", due_date: "2026-07-08", energy_cost: 4 }),
+      task({ id: "b", due_date: "2026-07-08", energy_cost: null }),
+      task({ id: "later", due_date: "2026-07-09", energy_cost: 5 }),
+    ];
+    input.checkins = [
+      { date: "2026-07-07", mood: 3, energy: 5, sleepHours: 8 },
+      { date: "2026-07-08", mood: 3, energy: 3, sleepHours: 7 },
+    ];
+    expect(planningSnapshot(input).tasks.energyBudget).toEqual({
+      loggedEnergy: 3,
+      budget: 12,
+      scheduled: 4,
+      remaining: 8,
+      unrated: 1,
+    });
+
+    input.checkins = [{ date: "2026-07-07", mood: 3, energy: 5, sleepHours: 8 }];
+    expect(planningSnapshot(input).tasks.energyBudget).toBeNull();
   });
 });

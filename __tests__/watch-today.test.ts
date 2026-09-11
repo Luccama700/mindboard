@@ -223,3 +223,32 @@ describe("composeWatchToday", () => {
     expect(out.counts.dueToday).toBe(25);
   });
 });
+
+describe("energy + decomposition on the wrist", () => {
+  test("rows carry energy and a parent's progress; existing fields are untouched", () => {
+    const out = composeWatchToday(
+      base({
+        tasks: [
+          task("essay", TODAY, { energy_cost: 4 }),
+          task("quotes", "2026-09-06", { parent_task_id: "essay", energy_cost: 2 }),
+          task("plain", TODAY),
+        ],
+        childrenByParent: new Map([["essay", { done: 1, total: 3 }]]),
+      }),
+    );
+    const essay = out.dueToday.find((r) => r.id === "essay")!;
+    expect(essay).toMatchObject({
+      id: "essay",
+      due: TODAY,
+      time: null,
+      priority: "med",
+      energy: 4,
+      progress: { done: 1, total: 3 },
+    });
+    const plain = out.dueToday.find((r) => r.id === "plain")!;
+    expect(plain).toMatchObject({ energy: null, progress: null });
+    // A subtask is bucketed by its window end like any dated task.
+    const quotes = out.upcomingTasks.find((r) => r.id === "quotes")!;
+    expect(quotes).toMatchObject({ energy: 2, progress: null });
+  });
+});

@@ -27,6 +27,12 @@ import {
   zonedIso,
   zonedWallTimeToUtcMs,
 } from "@/app/lib/snapshots/zoned-time";
+import { planSubtasks } from "@/app/lib/snapshots/gap-plan";
+import {
+  energyBudget,
+  tasksCountedToday,
+  type EnergyBudget,
+} from "@/app/lib/snapshots/energy-budget";
 import type { ForecastDay } from "@/app/lib/finance/forecast";
 import type { PeopleVitals } from "@/app/lib/snapshots/people";
 import type { TaskWithGroup } from "@/app/_components/types";
@@ -100,6 +106,9 @@ export type PlanningInput = {
     gcal_event_id?: string | null; // promoted: the real event replaces the routine
   }[];
   tasks: TaskWithGroup[]; // every open task
+  // Done children per open parent (the task list carries open rows only), so
+  // a decomposed parent can report "n of m". Default: nobody has children.
+  doneChildrenByParent?: ReadonlyMap<string, number>;
 
   accounts: PlanningAccount[];
   recurringExpenses: PlanningBillRule[];
@@ -147,8 +156,23 @@ export type PlanningTask = {
   priority: "low" | "med" | "high";
   group: string | null;
   durationMin: number | null;
+  estimatedMinutes: number | null;
   scheduled: boolean; // has an explicit time slot
   bucket: "overdue" | "today" | "upcoming" | "undated";
+  // Energy is informational — a planning input, never a score. `energySource`
+  // says whether the user tapped it ('user') or it is the AI default ('ai').
+  energyCost: number | null;
+  energySource: "ai" | "user" | null;
+  // Decomposition (depth one). For a child, dueDate is its window END and
+  // plannedDate is the day the planner suggests inside [notBefore, dueDate];
+  // `bucket` follows plannedDate for children. For a parent with children,
+  // `progress` is the done/total count — the parent is owed, its children are
+  // what each day shows.
+  parentTaskId: string | null;
+  notBefore: string | null;
+  plannedDate: string | null;
+  plannedStart: string | null; // "HH:MM" when a free interval fit
+  progress: { done: number; total: number } | null;
 };
 
 export type PlanningOccurrence = {
@@ -196,6 +220,9 @@ export type PlanningSnapshot = {
     summary: { overdue: number; dueToday: number; dueSoon: number };
     items: PlanningTask[];
     recurringOccurrences: PlanningOccurrence[];
+    // Today only, and only when today has a daily log with an energy value:
+    // the remaining room for heavy work while planning. Never for past days.
+    energyBudget: EnergyBudget | null;
   };
   schedule: {
     nextEvent: { summary: string; start: string } | null;
@@ -264,6 +291,7 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
     usagesByItem,
     checkins,
     goals,
+    doneChildrenByParent,
   } = input;
 
   const nowMs = now.getTime();
@@ -291,6 +319,8 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
   // Today's free hours count every source that blocks time (events, time-blocked
   // tasks, timed habits) — captured from the day loop below.
   let freeMinutesToday = 0;
+  // Per-day free intervals, kept for the subtask planner after the loop.
+  const freeByDay = new Map<string, ReturnType<typeof freeIntervalsForDay>>();
 
   const days: PlanningDay[] = dayKeys.map((dateKey) => {
     const date = parseKey(dateKey);
@@ -366,6 +396,7 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
       wakeEndHour,
       timeZone,
     });
+    freeByDay.set(dateKey, free);
 
     const wakeStartMs = zonedWallTimeToUtcMs(dateKey, wakeStartHour, 0, timeZone);
     const wakeEndMs = zonedWallTimeToUtcMs(dateKey, wakeEndHour, 0, timeZone);
@@ -417,26 +448,76 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
   const freeHoursToday = round1(freeMinutesToday / 60);
 
   // ---- tasks ----
+  // Decomposed children: planned onto a day inside their window (advisory,
+  // never written), energy-aware via the logged check-ins (today's, in
+  // practice). Their parent reads as progress.
+  const openById = new Map(openTasks.map((t) => [t.id, t]));
+  const energyByDay = new Map<string, number>();
+  for (const c of checkins) if (c.energy != null) energyByDay.set(c.date, c.energy);
+  const planned = new Map(
+    planSubtasks({
+      today,
+      children: openTasks
+        .filter(
+          (t) =>
+            t.parent_task_id !== null &&
+            t.due_date !== null &&
+            openById.has(t.parent_task_id),
+        )
+        .map((t) => ({
+          id: t.id,
+          parent_task_id: t.parent_task_id as string,
+          due_date: t.due_date as string,
+          due_time: t.due_time,
+          not_before: t.not_before,
+          duration_min: t.duration_min,
+          estimated_minutes: t.estimated_minutes,
+          energy_cost: t.energy_cost,
+          created_at: t.created_at,
+        })),
+      intervalsByDay: freeByDay,
+      energyByDay,
+    }).map((p) => [p.taskId, p]),
+  );
+  const openChildCount = new Map<string, number>();
+  for (const t of openTasks) {
+    if (t.parent_task_id && openById.has(t.parent_task_id)) {
+      openChildCount.set(t.parent_task_id, (openChildCount.get(t.parent_task_id) ?? 0) + 1);
+    }
+  }
+
   let overdue = 0;
   let dueToday = 0;
   let dueSoon = 0;
   const soonLimit = addDaysKey(today, 7);
   const taskItems: PlanningTask[] = [];
   for (const t of openTasks) {
+    const isChild = t.parent_task_id !== null;
+    // Hidden with its parent everywhere else; hidden here too.
+    if (isChild && !openById.has(t.parent_task_id as string)) continue;
+    const placement = planned.get(t.id);
+    const plannedDate = isChild ? (placement?.dateKey ?? t.due_date) : null;
+    // A child is bucketed by the day it is planned for; its due_date is only
+    // "overdue" once the window has closed.
+    const dayForBucket = isChild && t.due_date && t.due_date >= today ? plannedDate : t.due_date;
     let bucket: PlanningTask["bucket"];
-    if (!t.due_date) bucket = "undated";
-    else if (t.due_date < today) {
+    if (!dayForBucket) bucket = "undated";
+    else if (dayForBucket < today) {
       bucket = "overdue";
       overdue++;
-    } else if (t.due_date === today) {
+    } else if (dayForBucket === today) {
       bucket = "today";
       dueToday++;
     } else {
       bucket = "upcoming";
-      if (t.due_date <= soonLimit) dueSoon++;
+      if (dayForBucket <= soonLimit) dueSoon++;
     }
-    // Bound the list: overdue, undated, or dued within the horizon.
-    if (t.due_date && t.due_date > horizonEnd) continue;
+    // Bound the list: overdue, undated, or due within the horizon — a child by
+    // the day it is planned for, since that is when it shows up.
+    const boundDay = isChild ? plannedDate : t.due_date;
+    if (boundDay && boundDay > horizonEnd) continue;
+    const open = openChildCount.get(t.id) ?? 0;
+    const done = doneChildrenByParent?.get(t.id) ?? 0;
     taskItems.push({
       id: t.id,
       title: t.title,
@@ -445,10 +526,26 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
       priority: t.priority,
       group: t.group_name,
       durationMin: t.duration_min,
+      estimatedMinutes: t.estimated_minutes,
       scheduled: t.due_time !== null,
       bucket,
+      energyCost: t.energy_cost,
+      energySource: t.energy_source,
+      parentTaskId: t.parent_task_id,
+      notBefore: t.not_before,
+      plannedDate,
+      plannedStart: placement?.start ?? null,
+      progress: open + done > 0 ? { done, total: open + done } : null,
     });
   }
+
+  const plannedToday = new Set(
+    [...planned.values()].filter((p) => p.dateKey === today).map((p) => p.taskId),
+  );
+  const todayEnergy = energyBudget(
+    checkins.find((c) => c.date === today)?.energy ?? null,
+    tasksCountedToday(openTasks, today, plannedToday),
+  );
 
   const recurringOccurrences: PlanningOccurrence[] = [];
   for (const dateKey of dayKeys) {
@@ -546,6 +643,7 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
       summary: { overdue, dueToday, dueSoon },
       items: taskItems,
       recurringOccurrences,
+      energyBudget: todayEnergy,
     },
     schedule: {
       nextEvent,

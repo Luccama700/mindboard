@@ -16,6 +16,7 @@ import { financeSnapshot } from "@/app/lib/snapshots/finance";
 import { inventorySnapshot } from "@/app/lib/snapshots/inventory";
 import { tasksSnapshot } from "@/app/lib/snapshots/tasks";
 import { freeGaps, scheduleSnapshot } from "@/app/lib/snapshots/schedule";
+import { todayEnergyBudget } from "@/app/lib/snapshots/energy-budget";
 import { buildPlanningSnapshot } from "@/app/lib/snapshots/planning-read";
 import { recordProposal } from "@/app/lib/mcp/audit";
 import {
@@ -52,6 +53,7 @@ import {
   listCoursesFor,
 } from "@/app/lib/mcp/courses";
 import { proposeGenerateAudioOverviewFor } from "@/app/lib/learn/episodes";
+import { proposeDecomposeTaskFor } from "@/app/lib/tasks/decompose";
 import {
   summarizeCreateTask,
   summarizeLogSpend,
@@ -69,7 +71,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "get_snapshot",
     description:
-      "Read the live cross-domain snapshot: finance (net worth, today delta, next bill), tasks (overdue/due today/due soon counts), inventory (low/out), schedule (next event, free hours today), and the next free time gaps. Call this first in almost every conversation. For planning across days, pass horizonDays (1–60) or verbose:true to expand into a full horizon read: per-day timed events, time-blocks and recurring occurrences with free gaps + free-hours-before-5pm and committed load; every open task with due time/duration and scheduled flag; upcoming bills and projected net worth per day; inventory run-out estimates; and your recent check-in trend and active goals. Times are in your local timezone with explicit ISO offsets. Omit both for the lean default.",
+      "Read the live cross-domain snapshot: finance (net worth, today delta, next bill), tasks (overdue/due today/due soon counts), inventory (low/out), schedule (next event, free hours today), the next free time gaps, and energyBudget — today's remaining energy room from the check-in (null without one; informational, planning only). Call this first in almost every conversation. For planning across days, pass horizonDays (1–60) or verbose:true to expand into a full horizon read: per-day timed events, time-blocks and recurring occurrences with free gaps + free-hours-before-5pm and committed load; every open task with due time/duration and scheduled flag; upcoming bills and projected net worth per day; inventory run-out estimates; and your recent check-in trend and active goals. Times are in your local timezone with explicit ISO offsets. Omit both for the lean default.",
     input_schema: {
       type: "object",
       properties: {
@@ -90,7 +92,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "list_tasks",
     description:
-      "List open tasks with ids, titles, due dates/times, priority, and group. Use ids for propose_complete_task / propose_schedule_task.",
+      "List open tasks with ids, titles, due dates/times, priority, group, estimatedMinutes, energyCost (1-5, informational — how draining, not how long), and parentTaskId/notBefore for subtasks (a subtask's dueDate is its window end). Use ids for propose_complete_task / propose_schedule_task / propose_decompose_task.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -149,8 +151,45 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
           minimum: 1,
           description: "expected effort in minutes",
         },
+        energyCost: {
+          type: "integer",
+          minimum: 1,
+          maximum: 5,
+          description:
+            "how draining, 1-5 — informational, separate from minutes. Omit for Mindboard's default; the user can override with one tap.",
+        },
       },
       required: ["title"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_decompose_task",
+    description:
+      "OPT-IN: propose breaking one big task (it needs a due date) into 2-6 subtasks, each with minutes, an energy cost and a window of days inside the parent's window; Mindboard plans them backwards from the deadline into free days and the parent shows 'n of m done'. Returns a proposal the user must confirm — nothing is created until then. Only for genuinely multi-step work; never for errands. To propose different steps than the model's, pass an explicit `children` list.",
+    input_schema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        children: {
+          type: "array",
+          minItems: 2,
+          maxItems: 6,
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              estimatedMinutes: { type: "integer", minimum: 1 },
+              energyCost: { type: "integer", minimum: 1, maximum: 5 },
+              notBefore: { type: "string", description: "YYYY-MM-DD" },
+              dueDate: { type: "string", description: "YYYY-MM-DD" },
+            },
+            required: ["title", "estimatedMinutes", "energyCost", "notBefore", "dueDate"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["taskId"],
       additionalProperties: false,
     },
   },
@@ -833,7 +872,7 @@ export async function runAssistantTool(
           });
           return { type: "result", content: snapshot };
         }
-        const [dash, tasks, accounts, recurring, items, usages, todayChanges, prefs] =
+        const [dash, tasks, accounts, recurring, items, usages, todayChanges, prefs, logRes] =
           await Promise.all([
             getDashboardData(userId, today.slice(0, 7)),
             getOpenTasks(userId),
@@ -843,6 +882,7 @@ export async function runAssistantTool(
             getInventoryUsages(userId),
             getBalanceChangesOn(userId, today),
             getUserPreferences(userId),
+            supabase.from("daily_logs").select("energy").eq("log_date", today).maybeSingle(),
           ]);
         // The wake-window/free-time math must run in the user's zone — the
         // process clock is UTC on Vercel. `prefs.timezone` is already loaded, so
@@ -876,6 +916,19 @@ export async function runAssistantTool(
               limit: 6,
               timeZone,
             }),
+            // Today's remaining energy room (null without a check-in). The
+            // month's events cover the 3-day plan: the 42-day grid always runs
+            // at least 5 days past month end.
+            energyBudget: todayEnergyBudget({
+              today,
+              loggedEnergy: (logRes.data as { energy: number | null } | null)?.energy ?? null,
+              tasks,
+              events: dash.events,
+              now,
+              wakeStartHour: prefs.wake_start_hour,
+              wakeEndHour: prefs.wake_end_hour,
+              timeZone,
+            }),
           },
         };
       }
@@ -891,6 +944,10 @@ export async function runAssistantTool(
             priority: t.priority,
             group: t.group_name,
             estimatedMinutes: t.estimated_minutes,
+            energyCost: t.energy_cost,
+            energySource: t.energy_source,
+            parentTaskId: t.parent_task_id,
+            notBefore: t.not_before,
           })),
         };
       }
@@ -1004,6 +1061,17 @@ export async function runAssistantTool(
           { source: "assistant", conversationId },
         );
         return { type: "proposal", proposalId, preview: summary };
+      }
+      case "propose_decompose_task": {
+        const r = await proposeDecomposeTaskFor(
+          supabase,
+          userId,
+          input as { taskId?: unknown; children?: unknown },
+          today,
+          { source: "assistant", conversationId },
+        );
+        if (!r.ok) return { type: "error", error: r.error };
+        return { type: "proposal", proposalId: r.value.proposalId, preview: r.value.preview };
       }
       case "propose_complete_task": {
         const taskId = input.taskId;

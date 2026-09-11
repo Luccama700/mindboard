@@ -19,6 +19,8 @@ type UpdatePatch = {
   groupId?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
+  energyCost?: number | null;
+  notBefore?: string | null;
 };
 
 type OptimisticAction =
@@ -37,6 +39,10 @@ function applyPatch(task: Task, patch: UpdatePatch): Task {
   if (patch.groupId !== undefined) next = { ...next, group_id: patch.groupId };
   if (patch.notes !== undefined) next = { ...next, notes: patch.notes };
   if (patch.priority !== undefined) next = { ...next, priority: patch.priority };
+  // A tap on the dots is the user's value from that moment on — a clear too.
+  if (patch.energyCost !== undefined)
+    next = { ...next, energy_cost: patch.energyCost, energy_source: "user" };
+  if (patch.notBefore !== undefined) next = { ...next, not_before: patch.notBefore };
   return next;
 }
 
@@ -199,11 +205,29 @@ export function TasksClient({
     });
   }
 
-  // `today` arrives as a prop — see the Dock's.
-  const active = tasks.filter(
-    (t) => t.status !== "done" && t.status !== "missed",
-  );
+  // `today` arrives as a prop — see the Dock's. The page already dropped the
+  // children of a non-open parent (their parent may not be among these rows);
+  // this only keeps an optimistic parent completion consistent until refresh.
+  const statusById = new Map(tasks.map((t) => [t.id, t.status]));
+  const active = tasks.filter((t) => {
+    if (t.status === "done" || t.status === "missed") return false;
+    const parentStatus = t.parent_task_id ? statusById.get(t.parent_task_id) : undefined;
+    return parentStatus !== "done" && parentStatus !== "missed";
+  });
   const done = tasks.filter((t) => t.status === "done");
+
+  // Decomposition read-side, from the rows on this page: a parent's "n of m"
+  // and a child's parent title (the page lists every status of a group, so
+  // done children are here too).
+  const titleById = new Map(tasks.map((t) => [t.id, t.title]));
+  const progressById = new Map<string, { done: number; total: number }>();
+  for (const t of tasks) {
+    if (!t.parent_task_id) continue;
+    const cur = progressById.get(t.parent_task_id) ?? { done: 0, total: 0 };
+    cur.total++;
+    if (t.status === "done") cur.done++;
+    progressById.set(t.parent_task_id, cur);
+  }
   const showAutoSort =
     filter === null && groups.length > 0 && (active.length > 0 || !!sortNote);
 
@@ -245,6 +269,8 @@ export function TasksClient({
             onDelete={onDelete}
             onUpdate={onUpdate}
             onMiss={onMiss}
+            progress={progressById.get(t.id) ?? null}
+            parentTitle={t.parent_task_id ? (titleById.get(t.parent_task_id) ?? null) : null}
             variant={
               t.due_date && t.due_date < today && t.status === "todo"
                 ? "overdue"

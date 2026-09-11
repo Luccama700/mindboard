@@ -49,12 +49,13 @@ import {
   taskRuleLandsOn,
 } from "./lib/recurrence";
 import { financeSnapshot } from "./lib/snapshots/finance";
-import { planUntimedOccurrences } from "./lib/snapshots/gap-plan";
+import { planSubtasks, planUntimedOccurrences } from "./lib/snapshots/gap-plan";
 import {
   freeGaps,
   freeIntervalsForDay,
   scheduleSnapshot,
   type FreeGap,
+  type ScheduleEvent,
 } from "./lib/snapshots/schedule";
 import {
   addDaysKey,
@@ -64,6 +65,33 @@ import {
 } from "./lib/snapshots/stream";
 import { zonedWallTimeToUtcMs } from "./lib/snapshots/zoned-time";
 import type { UsageRule } from "./_components/inventory-projection";
+
+// How far ahead the dashboard plans decomposed children (bounded further by
+// the days its calendar fetch actually covers).
+const PLAN_HORIZON_DAYS = 30;
+
+// Time-blocked tasks as busy spans, in the user's zone (the week view's
+// busyFromDayItems does the same from CalendarItems).
+function timedTaskBusyEvents(
+  tasks: { title: string; due_date: string | null; due_time: string | null; duration_min: number | null; estimated_minutes: number | null }[],
+  timeZone: string | null,
+): ScheduleEvent[] {
+  const out: ScheduleEvent[] = [];
+  for (const t of tasks) {
+    if (!t.due_date || !t.due_time) continue;
+    const [h, m] = t.due_time.split(":").map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) continue;
+    const startMs = zonedWallTimeToUtcMs(t.due_date, h, m, timeZone);
+    const endMs = startMs + (t.duration_min ?? t.estimated_minutes ?? 30) * 60_000;
+    out.push({
+      summary: t.title,
+      start: new Date(startMs).toISOString(),
+      end: new Date(endMs).toISOString(),
+      allDay: false,
+    });
+  }
+  return out;
+}
 
 const getStreamData = cache(
   async (
@@ -124,7 +152,7 @@ const getStreamData = cache(
       getActiveRecurringExpenses(userId),
       getActiveRecurringTasks(userId),
       getRecurringCompletions(userId, today, today),
-      getRecurringSlots(userId, today, addDaysKey(today, 1)),
+      getRecurringSlots(userId, today, addDaysKey(today, PLAN_HORIZON_DAYS)),
       getInventoryItems(userId),
       getInventoryUsages(userId),
       getBalanceChangesOn(userId, today),
@@ -143,7 +171,7 @@ const getStreamData = cache(
         .eq("status", "active"),
       supabase
         .from("daily_logs")
-        .select("mood")
+        .select("mood, energy")
         .eq("log_date", today)
         .maybeSingle(),
       supabase
@@ -269,7 +297,92 @@ const getStreamData = cache(
       usagesByItem[usage.inventory_item_id] = list;
     }
 
-    const log = logResult.data as { mood: number | null } | null;
+    const log = logResult.data as
+      | { mood: number | null; energy: number | null }
+      | null;
+
+    // Decomposed tasks: plan every open child onto a day inside its window,
+    // over the days the dashboard's busy data covers. Advisory and read-time —
+    // nothing here is written back (see planSubtasks).
+    const openTaskIds = new Set(tasks.map((t) => t.id));
+    const openChildren = tasks
+      .filter(
+        (t) =>
+          t.parent_task_id !== null &&
+          t.due_date !== null &&
+          openTaskIds.has(t.parent_task_id),
+      )
+      .map((t) => ({
+        id: t.id,
+        parent_task_id: t.parent_task_id as string,
+        due_date: t.due_date as string,
+        due_time: t.due_time,
+        not_before: t.not_before,
+        duration_min: t.duration_min,
+        estimated_minutes: t.estimated_minutes,
+        energy_cost: t.energy_cost,
+        created_at: t.created_at,
+      }));
+    const plannedSubtasks = new Map<string, { dateKey: string; start: string | null }>();
+    const doneChildrenByParent = new Map<string, number>();
+    // Done children of EVERY open top-level task (not just those with open
+    // children): a reopened parent whose steps are all done still reads
+    // "3 of 3", not nothing.
+    const topLevelIds = tasks.filter((t) => t.parent_task_id === null).map((t) => t.id);
+    if (topLevelIds.length > 0) {
+      const { data: doneRows } = await supabase
+        .from("tasks")
+        .select("parent_task_id")
+        .eq("status", "done")
+        .in("parent_task_id", topLevelIds);
+      for (const row of (doneRows ?? []) as { parent_task_id: string }[]) {
+        doneChildrenByParent.set(
+          row.parent_task_id,
+          (doneChildrenByParent.get(row.parent_task_id) ?? 0) + 1,
+        );
+      }
+    }
+    if (openChildren.length > 0) {
+      const lastCovered = addDaysKey(dash.range.endDate, -1);
+      const farthest = openChildren.reduce(
+        (max, c) => (c.due_date > max ? c.due_date : max),
+        today,
+      );
+      const horizonEnd = [farthest, lastCovered, addDaysKey(today, PLAN_HORIZON_DAYS)]
+        .sort()[0];
+      const horizonDays: string[] = [];
+      for (let d = today; d <= horizonEnd; d = addDaysKey(d, 1)) horizonDays.push(d);
+      // Every real commitment blocks the planner: Google events, timed
+      // recurring occurrences and slots, and time-blocked tasks (due_time).
+      const horizonBusy = [
+        ...dash.events,
+        ...occurrenceBusyEvents(recurringTasks, horizonDays, slotKeys, timeZone),
+        ...slotBusyEvents(recurringSlots, recurringTasks, timeZone),
+        ...timedTaskBusyEvents(tasks, timeZone),
+      ];
+      const intervalsByDay = new Map(
+        horizonDays.map((dateKey) => [
+          dateKey,
+          freeIntervalsForDay({
+            events: horizonBusy,
+            dateKey,
+            now,
+            wakeStartHour: prefs.wake_start_hour,
+            wakeEndHour: prefs.wake_end_hour,
+            timeZone,
+          }),
+        ]),
+      );
+      for (const p of planSubtasks({
+        today,
+        children: openChildren,
+        intervalsByDay,
+        energyByDay:
+          log?.energy != null ? new Map([[today, log.energy]]) : undefined,
+      })) {
+        plannedSubtasks.set(p.taskId, { dateKey: p.dateKey, start: p.start });
+      }
+    }
 
     // The dashboard never pays for the vault corpus, so the stream row
     // carries no open-loop text — the person page has it (§10 M3).
@@ -332,6 +445,8 @@ const getStreamData = cache(
       todayDelta: finance.todayDelta,
       currency: finance.currency,
       maxTasks: prefs.stream_max_tasks,
+      plannedSubtasks,
+      doneChildrenByParent,
     });
 
     return {

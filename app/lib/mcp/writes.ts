@@ -7,6 +7,9 @@ import {
   lookupPricesByRefs,
 } from "@/app/lib/shopping/price-lookup";
 import { todayKey } from "./config";
+import { assignEnergyIfUnset } from "@/app/lib/tasks/energy";
+import { completeTaskCascade, missTaskCascade } from "@/app/lib/tasks/lifecycle";
+import { executeDecomposeTask } from "@/app/lib/tasks/decompose";
 import {
   summarizeCreateRecurringTask,
   summarizeCreateTask,
@@ -790,6 +793,35 @@ async function executeCreateTask(
   if (v.groupId && !(await ownsRow(supabase, "groups", v.groupId, ownerId))) {
     return { ok: false, error: "group not found" };
   }
+  // Depth one: a subtask's parent must be an open top-level task of the
+  // same user with a due date; the child inherits its group and its own
+  // window [notBefore, dueDate] must sit inside the parent's.
+  let groupId = v.groupId;
+  if (v.parentTaskId) {
+    const { data: parent } = await supabase
+      .from("tasks")
+      .select("id, group_id, parent_task_id, status, due_date")
+      .eq("id", v.parentTaskId)
+      .eq("user_id", ownerId)
+      .maybeSingle();
+    const p = parent as {
+      group_id: string | null;
+      parent_task_id: string | null;
+      status: string;
+      due_date: string | null;
+    } | null;
+    if (!p) return { ok: false, error: "parent task not found" };
+    if (p.parent_task_id) return { ok: false, error: "a subtask cannot have subtasks" };
+    if (p.status === "done" || p.status === "missed") {
+      return { ok: false, error: `parent task is already ${p.status}` };
+    }
+    if (!p.due_date) return { ok: false, error: "the parent task needs a due date first" };
+    if (!v.dueDate) return { ok: false, error: "a subtask needs a dueDate (its window end)" };
+    if (v.dueDate > p.due_date) {
+      return { ok: false, error: `a subtask cannot be due after its parent (${p.due_date})` };
+    }
+    groupId = p.group_id;
+  }
 
   // dueTime rides alongside the validated core (the assistant proposes it);
   // a time only sticks when the task has a date to live on.
@@ -802,17 +834,37 @@ async function executeCreateTask(
     .from("tasks")
     .insert({
       user_id: ownerId,
-      group_id: v.groupId,
+      group_id: groupId,
       title: v.title,
       due_date: v.dueDate,
       due_time: v.dueDate ? dueTime : null,
       notes: v.notes,
       priority: v.priority,
       ...(v.estimatedMinutes != null ? { estimated_minutes: v.estimatedMinutes } : {}),
+      // A cost supplied by a chat client is the model's guess, not a tap: it
+      // reads as 'ai' (outlined dots) until the user touches it.
+      ...(v.energyCost != null ? { energy_cost: v.energyCost, energy_source: "ai" } : {}),
+      ...(v.parentTaskId ? { parent_task_id: v.parentTaskId } : {}),
+      ...(v.notBefore ? { not_before: v.notBefore } : {}),
     })
-    .select("id, title, due_date, due_time, status, priority, group_id")
+    .select("id, title, due_date, due_time, status, priority, group_id, energy_cost, parent_task_id, not_before")
     .single();
   if (error || !data) return { ok: false, error: error?.message ?? "insert failed" };
+
+  if (v.energyCost == null) {
+    const taskId = (data as { id: string }).id;
+    try {
+      after(async () => {
+        try {
+          await assignEnergyIfUnset(supabase, ownerId, taskId);
+        } catch {
+          // best-effort: the cost simply stays unset
+        }
+      });
+    } catch {
+      // no request scope (tests): skip the default
+    }
+  }
   return { ok: true, value: { task: data } };
 }
 
@@ -882,16 +934,18 @@ async function executeCompleteTask(
   const taskId = input.taskId;
   if (typeof taskId !== "string") return { ok: false, error: "taskId is required" };
 
-  const { data, error } = await supabase
-    .from("tasks")
-    .update({ status: "done", completed_at: new Date().toISOString() })
-    .eq("id", taskId)
-    .eq("user_id", ownerId)
-    .select("id, title, status")
-    .maybeSingle();
-  if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: "task not found" };
-  return { ok: true, value: { task: data } };
+  const r = await completeTaskCascade(supabase, ownerId, taskId);
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    value: {
+      task: { id: r.value.task.id, title: r.value.task.title, status: "done" },
+      ...(r.value.parentCompleted ? { parentCompleted: true } : {}),
+      ...(r.value.childrenCompleted > 0
+        ? { childrenCompleted: r.value.childrenCompleted }
+        : {}),
+    },
+  };
 }
 
 async function executeMissTask(
@@ -902,16 +956,24 @@ async function executeMissTask(
   const taskId = input.taskId;
   if (typeof taskId !== "string") return { ok: false, error: "taskId is required" };
 
-  const { data, error } = await supabase
-    .from("tasks")
-    .update({ status: "missed", missed_at: new Date().toISOString() })
-    .eq("id", taskId)
-    .eq("user_id", ownerId)
-    .select("id, title, status")
-    .maybeSingle();
-  if (error) return { ok: false, error: error.message };
-  if (!data) return { ok: false, error: "task not found" };
-  return { ok: true, value: { task: data } };
+  const today = await todayKey(supabase, ownerId);
+  const r = await missTaskCascade(supabase, ownerId, taskId, today);
+  if (!r.ok) return r;
+  if (r.value.kind === "slid") {
+    // A subtask never goes missed — it slid inside its window instead.
+    return {
+      ok: true,
+      value: {
+        task: { id: r.value.task.id, title: r.value.task.title, status: r.value.task.status },
+        slid: true,
+        notBefore: r.value.notBefore,
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: { task: { id: r.value.task.id, title: r.value.task.title, status: "missed" } },
+  };
 }
 
 async function executeLogSpend(
@@ -1785,8 +1847,9 @@ async function executeUpdateTask(
   if (v.title !== undefined) updates.title = v.title;
   if (v.dueDate !== undefined) {
     updates.due_date = v.dueDate;
-    // A task without a date cannot hold a time-block.
+    // A task without a date cannot hold a time-block, nor a window start.
     if (v.dueDate === null && v.dueTime === undefined) updates.due_time = null;
+    if (v.dueDate === null && v.notBefore === undefined) updates.not_before = null;
   }
   if (v.dueTime !== undefined) {
     updates.due_time = v.dueTime ? `${v.dueTime}:00` : null;
@@ -1797,9 +1860,77 @@ async function executeUpdateTask(
   if (v.notes !== undefined) updates.notes = v.notes;
   if (v.priority !== undefined) updates.priority = v.priority;
   if (v.aiState !== undefined) updates.ai_state = v.aiState;
+  // An explicit edit is the user's call (relayed by the client): 'user' —
+  // a clear included, so an in-flight AI rating cannot refill it.
+  if (v.energyCost !== undefined) {
+    updates.energy_cost = v.energyCost;
+    updates.energy_source = "user";
+  }
+  if (v.notBefore !== undefined) updates.not_before = v.notBefore;
 
   if (Object.keys(updates).length === 0 && !v.pushToCalendar) {
     return { ok: false, error: "nothing to change" };
+  }
+
+  // Windows stay well-formed when a due date moves: a subtask cannot be due
+  // after its parent, a parent with steps keeps its deadline, a subtask's own
+  // not_before follows an earlier due date (tasks_not_before_within_window),
+  // and a parent's children are pulled in behind a new earlier deadline.
+  if (v.dueDate !== undefined) {
+    const { data: row } = await supabase
+      .from("tasks")
+      .select("parent_task_id")
+      .eq("id", v.taskId)
+      .eq("user_id", ownerId)
+      .maybeSingle();
+    const parentId = (row as { parent_task_id: string | null } | null)?.parent_task_id ?? null;
+    if (parentId && v.dueDate) {
+      const { data: parent } = await supabase
+        .from("tasks")
+        .select("due_date")
+        .eq("id", parentId)
+        .eq("user_id", ownerId)
+        .maybeSingle();
+      const parentDue = (parent as { due_date: string | null } | null)?.due_date ?? null;
+      if (parentDue && v.dueDate > parentDue) {
+        return { ok: false, error: `a subtask cannot be due after its parent (${parentDue})` };
+      }
+    }
+    if (v.dueDate === null) {
+      const { count } = await supabase
+        .from("tasks")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", ownerId)
+        .eq("parent_task_id", v.taskId);
+      if ((count ?? 0) > 0) {
+        return { ok: false, error: "a task with subtasks keeps its due date (they are planned from it)" };
+      }
+    } else {
+      const due = v.dueDate;
+      if (v.notBefore === undefined) {
+        const own = await supabase
+          .from("tasks")
+          .update({ not_before: due })
+          .eq("id", v.taskId)
+          .eq("user_id", ownerId)
+          .gt("not_before", due);
+        if (own.error) return { ok: false, error: own.error.message };
+      }
+      const kidsStart = await supabase
+        .from("tasks")
+        .update({ not_before: due })
+        .eq("parent_task_id", v.taskId)
+        .eq("user_id", ownerId)
+        .gt("not_before", due);
+      if (kidsStart.error) return { ok: false, error: kidsStart.error.message };
+      const kidsEnd = await supabase
+        .from("tasks")
+        .update({ due_date: due })
+        .eq("parent_task_id", v.taskId)
+        .eq("user_id", ownerId)
+        .gt("due_date", due);
+      if (kidsEnd.error) return { ok: false, error: kidsEnd.error.message };
+    }
   }
 
   const { data: updated, error } = await supabase
@@ -3087,6 +3218,9 @@ export const EXECUTORS: Record<
   create_task: executeCreateTask,
   update_task: executeUpdateTask,
   delete_task: executeDeleteTask,
+  // Children windows are re-clamped against the user's day at confirm time.
+  decompose_task: async (supabase, ownerId, input) =>
+    executeDecomposeTask(supabase, ownerId, input, await todayKey(supabase, ownerId)),
   create_recurring_task: executeCreateRecurringTask,
   update_recurring_task: executeUpdateRecurringTask,
   archive_recurring_task: executeArchiveRecurringTask,

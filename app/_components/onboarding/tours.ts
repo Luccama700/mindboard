@@ -285,6 +285,14 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
       body: "rename, recolor, or link a group to one of your google calendars — its events then show up next to its tasks, same color, one timeline.",
     },
     {
+      title: "energy, not just time",
+      body: "tap any task: five dots say how draining it is, apart from how long. i suggest one (outlined); one tap makes it yours (filled). it's only ever a planning hint — nothing adds it up.",
+    },
+    {
+      title: "✂ break down",
+      body: "a big task with a due date can be split into steps, each with its own window of days. you approve the steps; they land in your day stream early, working back from the deadline, and the task itself shows '2 of 5 done'.",
+    },
+    {
       title: "capture from anywhere",
       body: "you never need this page to add a task — the bottom bar works everywhere. this is just where the lists live.",
     },

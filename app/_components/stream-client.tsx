@@ -35,6 +35,7 @@ import {
 import { DispatchSheet } from "./dispatch-sheet";
 import { AI_BADGE } from "./task-row";
 import { RecurringEditPanel } from "./recurring-edit-panel";
+import { EnergyDots } from "./energy-dots";
 import { MindspaceBar } from "./mindspace-bar";
 import type { MindshareBar } from "@/app/lib/mindspace/share-bar";
 import type { Task } from "./types";
@@ -194,7 +195,9 @@ function CardRow({
         done
       </button>,
     );
-    if (isOverdueTask) {
+    // A subtask never goes missed — it slides inside its window — so the
+    // accountability control only appears on top-level tasks.
+    if (isOverdueTask && !cardTask?.parent_task_id) {
       actions.push(
         <button
           key="incomplete"
@@ -459,6 +462,16 @@ function CardRow({
   const aiBadgeNode = aiBadge ? (
     <span className={`text-meta shrink-0 ${aiBadge.tone}`}>{aiBadge.label}</span>
   ) : null;
+  // Energy as dots beside the meta: outlined = the AI default, filled = the
+  // user's own value. One task's cost, never a total.
+  const energyNode =
+    cardTask && cardTask.energy_cost != null ? (
+      <EnergyDots
+        cost={cardTask.energy_cost}
+        source={cardTask.energy_source}
+        className="shrink-0"
+      />
+    ) : null;
 
   const restMax =
     isFocus || editOpen || titleOpen ? "max-h-[40rem]" : "max-h-40";
@@ -528,11 +541,12 @@ function CardRow({
                 {card.fact}
               </button>
             </p>
-            {(focusEstimate || focusLate || aiBadgeNode) && (
+            {(focusEstimate || focusLate || aiBadgeNode || energyNode) && (
               <p className="text-meta text-muted mt-1 flex items-center gap-1.5">
                 {focusEstimate && <span>{focusEstimate}</span>}
                 {focusEstimate && focusLate && <span aria-hidden>·</span>}
                 {focusLate}
+                {energyNode}
                 {aiBadgeNode}
               </p>
             )}
@@ -578,6 +592,7 @@ function CardRow({
               {card.meta && (
                 <span className="text-meta text-muted shrink-0">{card.meta}</span>
               )}
+              {energyNode}
               {aiBadgeNode}
             </p>
             {rtaskRule && editOpen && (
@@ -811,6 +826,13 @@ export function StreamClient({
       const task = card.entity.task;
       resolve(section, card.id);
       startTransition(async () => {
+        // A subtask keeps its window (due_date is its end); snoozing moves the
+        // earliest day the planner may use, clamped to that end.
+        if (task.parent_task_id && task.due_date) {
+          const notBefore = dateKey < task.due_date ? dateKey : task.due_date;
+          await updateTask({ id: task.id, notBefore });
+          return;
+        }
         await updateTask({ id: task.id, dueDate: dateKey, dueTime: null });
       });
     };

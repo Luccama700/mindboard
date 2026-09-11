@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-09-10-energy-breakdown",
+    date: "2026-09-10",
+    title: "how draining, not just how long — and big tasks start early",
+    items: [
+      "every task now carries an energy cost, five dots next to the estimate. a 90-minute commute is cheap; a 15-minute call to a bureaucracy is expensive. i suggest one when you capture (outlined dots); tap a dot in the editor to make it yours (filled). it's information for planning, never a score — nothing adds it up.",
+      "open a big task and tap ✂ break down: i propose 2–6 steps, each with its own minutes, energy, and a window of days. you approve or skip — nothing is created until you say so. the steps then show up in your stream on the days they fit, working backwards from the deadline, and the original task stays put showing '2 of 5 done'. finish the last step and it finishes itself.",
+      "skipping a step doesn't mark it missed — it just moves to the next day it can happen. only the whole task can be missed.",
+      "if you've logged today's energy, a heavy step prefers a day you had the juice for, and a light one is happy to fill a low day. through the assistant or mcp, get_snapshot now says how much energy room today has left.",
+    ],
+  },
+  {
     id: "2026-09-09-top-chrome",
     date: "2026-09-09",
     title: "nothing hides under the top edge anymore",

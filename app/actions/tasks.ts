@@ -1,8 +1,17 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
+import { assignEnergyIfUnset } from "@/app/lib/tasks/energy";
+import {
+  completeTaskCascade,
+  missTaskCascade,
+  reopenTaskCascade,
+} from "@/app/lib/tasks/lifecycle";
+import { proposeDecomposeTaskFor } from "@/app/lib/tasks/decompose";
+import type { ProposedChild } from "@/app/lib/mcp/decompose-ops";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { queueFollowupFromWatch } from "@/app/lib/watch/followup";
@@ -12,6 +21,11 @@ import { safeTimeZone, todayISO } from "@/app/_components/date-utils";
 import { TASK_COLUMNS } from "@/app/_components/types";
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function validEnergy(value: number | null): boolean {
+  return value === null || (Number.isInteger(value) && value >= 1 && value <= 5);
+}
 
 function normalizeTime(value: string): string {
   // "HH:MM" | "HH:MM:SS" -> "HH:MM:SS"
@@ -67,9 +81,13 @@ export async function createTask(input: {
   notes?: string | null;
   priority?: "low" | "med" | "high";
   estimatedMinutes?: number | null;
+  energyCost?: number | null;
 }) {
   const title = input.title?.trim();
   if (!title) return { error: "title required" };
+  if (input.energyCost !== undefined && !validEnergy(input.energyCost)) {
+    return { error: "energy must be 1-5" };
+  }
   const notes = input.notes?.trim() || null;
   const dueTime = input.dueTime ?? null;
   if (dueTime !== null && !TIME_RE.test(dueTime)) {
@@ -102,11 +120,27 @@ export async function createTask(input: {
       ...(input.estimatedMinutes !== undefined
         ? { estimated_minutes: input.estimatedMinutes }
         : {}),
+      ...(input.energyCost != null
+        ? { energy_cost: input.energyCost, energy_source: "user" }
+        : {}),
     })
     .select(TASK_COLUMNS)
     .single();
 
   if (error) return { error: error.message };
+
+  // The AI energy default lands after the response so capture never waits on
+  // a model; the update is SQL-guarded on energy_source IS NULL.
+  if (input.energyCost == null) {
+    after(async () => {
+      try {
+        const { assigned } = await assignEnergyIfUnset(supabase, user.id, data.id);
+        if (assigned !== null) revalidatePath("/", "layout");
+      } catch {
+        // best-effort: the cost simply stays unset
+      }
+    });
+  }
 
   revalidatePath("/", "layout");
   return { error: null, task: data };
@@ -119,15 +153,15 @@ export async function toggleTaskStatus(id: string, currentStatus: string) {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
+  // Parent/child cascades (last child done → parent done; parent done → all
+  // children done; a child reopened → parent reopened) live in one place so
+  // the MCP/watch executors agree with this tap.
   const nextStatus = currentStatus === "done" ? "todo" : "done";
-  const completed_at = nextStatus === "done" ? new Date().toISOString() : null;
-
-  const { error } = await supabase
-    .from("tasks")
-    .update({ status: nextStatus, completed_at })
-    .eq("id", id);
-
-  if (error) return { error: error.message };
+  const result =
+    nextStatus === "done"
+      ? await completeTaskCascade(supabase, user.id, id)
+      : await reopenTaskCascade(supabase, user.id, id);
+  if (!result.ok) return { error: result.error };
 
   revalidatePath("/", "layout");
   return { error: null, nextStatus };
@@ -135,6 +169,9 @@ export async function toggleTaskStatus(id: string, currentStatus: string) {
 
 // "missed" is a manual, accountability-focused terminal state for overdue tasks
 // (like done, but negative). No-op-with-error if the task is already resolved.
+// A subtask never goes missed: it slides forward inside its window instead
+// (`slidTo` carries the new not-before day, null when it was already on its
+// last day), and only its parent can carry the missed record.
 export async function markTaskMissed(id: string) {
   const supabase = await createClient();
   const {
@@ -142,26 +179,17 @@ export async function markTaskMissed(id: string) {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const { data: task, error: loadError } = await supabase
-    .from("tasks")
-    .select("status")
-    .eq("id", id)
-    .maybeSingle();
-  if (loadError) return { error: loadError.message };
-  if (!task) return { error: "task not found" };
-  if (task.status === "done" || task.status === "missed") {
-    return { error: `already ${task.status}` };
-  }
-
-  const { error } = await supabase
-    .from("tasks")
-    .update({ status: "missed", missed_at: new Date().toISOString() })
-    .eq("id", id);
-
-  if (error) return { error: error.message };
+  // The slide writes a date column, so it must be the user's day.
+  const prefs = await getUserPreferences(user.id);
+  const today = todayISO(safeTimeZone(prefs.timezone));
+  const result = await missTaskCascade(supabase, user.id, id, today);
+  if (!result.ok) return { error: result.error };
 
   revalidatePath("/", "layout");
-  return { error: null };
+  return {
+    error: null,
+    slidTo: result.value.kind === "slid" ? result.value.notBefore : undefined,
+  };
 }
 
 // Return a done/missed task to the open list.
@@ -172,15 +200,65 @@ export async function reopenTask(id: string) {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const { error } = await supabase
-    .from("tasks")
-    .update({ status: "todo", missed_at: null, completed_at: null })
-    .eq("id", id);
-
-  if (error) return { error: error.message };
+  const result = await reopenTaskCascade(supabase, user.id, id);
+  if (!result.ok) return { error: result.error };
 
   revalidatePath("/", "layout");
   return { error: null };
+}
+
+async function guardWindow(
+  supabase: SupabaseClient,
+  taskId: string,
+  dueDate: string | null,
+  notBefore: string | null | undefined,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("tasks")
+    .select("parent_task_id")
+    .eq("id", taskId)
+    .maybeSingle();
+  const parentId = (data as { parent_task_id: string | null } | null)?.parent_task_id ?? null;
+  if (parentId && dueDate) {
+    const { data: parent } = await supabase
+      .from("tasks")
+      .select("due_date")
+      .eq("id", parentId)
+      .maybeSingle();
+    const parentDue = (parent as { due_date: string | null } | null)?.due_date ?? null;
+    if (parentDue && dueDate > parentDue) {
+      return `a step cannot be due after its task (${parentDue})`;
+    }
+  }
+  if (dueDate === null) {
+    const { count } = await supabase
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("parent_task_id", taskId);
+    if ((count ?? 0) > 0) return "a task with steps keeps its due date — the steps are planned from it";
+    return null;
+  }
+  if (notBefore === undefined) {
+    const own = await supabase
+      .from("tasks")
+      .update({ not_before: dueDate })
+      .eq("id", taskId)
+      .gt("not_before", dueDate);
+    if (own.error) return own.error.message;
+  }
+  const kidsStart = await supabase
+    .from("tasks")
+    .update({ not_before: dueDate })
+    .eq("parent_task_id", taskId)
+    .gt("not_before", dueDate);
+  if (kidsStart.error) return kidsStart.error.message;
+  const kidsEnd = await supabase
+    .from("tasks")
+    .update({ due_date: dueDate })
+    .eq("parent_task_id", taskId)
+    .gt("due_date", dueDate);
+  if (kidsEnd.error) return kidsEnd.error.message;
+  return null;
 }
 
 export async function updateTask(input: {
@@ -193,6 +271,8 @@ export async function updateTask(input: {
   groupId?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
+  energyCost?: number | null;
+  notBefore?: string | null;
 }) {
   const supabase = await createClient();
   const {
@@ -209,9 +289,13 @@ export async function updateTask(input: {
   }
   if (input.dueDate !== undefined) {
     updates.due_date = input.dueDate;
-    // A task without a date cannot hold a time-block.
+    // A task without a date cannot hold a time-block, nor a window start
+    // (tasks_not_before_within_window).
     if (input.dueDate === null && input.dueTime === undefined) {
       updates.due_time = null;
+    }
+    if (input.dueDate === null && input.notBefore === undefined) {
+      updates.not_before = null;
     }
   }
   if (input.dueTime !== undefined) {
@@ -241,6 +325,20 @@ export async function updateTask(input: {
   if (input.groupId !== undefined) updates.group_id = input.groupId;
   if (input.notes !== undefined) updates.notes = input.notes?.trim() || null;
   if (input.priority !== undefined) updates.priority = input.priority;
+  // Any edit from the user marks the value as theirs — a clear included, so
+  // an AI rating still in flight (it only fills a null source) cannot put a
+  // value back the user just removed.
+  if (input.energyCost !== undefined) {
+    if (!validEnergy(input.energyCost)) return { error: "energy must be 1-5" };
+    updates.energy_cost = input.energyCost;
+    updates.energy_source = "user";
+  }
+  if (input.notBefore !== undefined) {
+    if (input.notBefore !== null && !DATE_RE.test(input.notBefore)) {
+      return { error: "invalid not-before date" };
+    }
+    updates.not_before = input.notBefore;
+  }
 
   if (Object.keys(updates).length === 0) return { error: null };
 
@@ -248,6 +346,16 @@ export async function updateTask(input: {
     input.dueDate !== undefined ||
     input.dueTime !== undefined ||
     input.durationMin !== undefined;
+
+  // Windows stay well-formed when a due date moves: a subtask cannot be due
+  // after its parent, a parent with steps cannot lose its deadline, a
+  // subtask's own not_before follows an earlier due date
+  // (tasks_not_before_within_window), and a parent's children are pulled in
+  // behind a new earlier deadline.
+  if (input.dueDate !== undefined) {
+    const guard = await guardWindow(supabase, input.id, input.dueDate, input.notBefore);
+    if (guard) return { error: guard };
+  }
 
   const { data: updated, error } = await supabase
     .from("tasks")
@@ -543,4 +651,51 @@ export async function deleteTask(id: string) {
 
   revalidatePath("/", "layout");
   return { error: null };
+}
+
+// "Break down": propose 2-6 subtasks for one task. Nothing is written — the
+// returned proposal renders in a ProposalCard and confirmProposal (the same
+// rail the assistant's writes use) creates the children on the user's tap.
+export async function proposeBreakdown(taskId: string): Promise<{
+  error: string | null;
+  proposalId?: string;
+  preview?: string;
+  children?: ProposedChild[];
+}> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const prefs = await getUserPreferences(user.id);
+  const today = todayISO(safeTimeZone(prefs.timezone));
+  const r = await proposeDecomposeTaskFor(
+    supabase,
+    user.id,
+    { taskId },
+    today,
+    { source: "assistant" },
+  );
+  if (!r.ok) return { error: r.error };
+  return {
+    error: null,
+    proposalId: r.value.proposalId,
+    preview: r.value.preview,
+    children: r.value.children,
+  };
+}
+
+// The ProposalCard's two buttons for a breakdown. Dynamic import: the
+// assistant actions module imports this one, so a static import would be a
+// cycle; the confirm rail itself (claim → EXECUTORS.decompose_task → finalize)
+// is exactly the assistant's.
+export async function confirmBreakdown(proposalId: string) {
+  const { confirmProposal } = await import("@/app/actions/assistant");
+  return confirmProposal(proposalId);
+}
+
+export async function cancelBreakdown(proposalId: string) {
+  const { cancelProposal } = await import("@/app/actions/assistant");
+  return cancelProposal(proposalId);
 }

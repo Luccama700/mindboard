@@ -192,6 +192,53 @@ describe("validateCreateTask", () => {
   });
 });
 
+describe("validateCreateTask energy + subtask fields", () => {
+  test("energyCost is 1-5 or null", () => {
+    expect(validateCreateTask({ title: "x", energyCost: 3 })).toMatchObject({
+      ok: true,
+      value: { energyCost: 3 },
+    });
+    expect(validateCreateTask({ title: "x", energyCost: null })).toMatchObject({
+      ok: true,
+      value: { energyCost: null },
+    });
+    expect(validateCreateTask({ title: "x", energyCost: 0 }).ok).toBe(false);
+    expect(validateCreateTask({ title: "x", energyCost: 6 }).ok).toBe(false);
+    expect(validateCreateTask({ title: "x", energyCost: 2.5 }).ok).toBe(false);
+    expect(validateCreateTask({ title: "x", energyCost: "high" }).ok).toBe(false);
+  });
+
+  test("omitted energyCost stays absent so the AI default can fill it", () => {
+    const r = validateCreateTask({ title: "x" });
+    expect(r.ok && "energyCost" in r.value).toBe(false);
+  });
+
+  test("notBefore must sit inside the window and needs a dueDate", () => {
+    expect(
+      validateCreateTask({ title: "x", dueDate: "2026-09-24", notBefore: "2026-09-20", parentTaskId: "p" }).ok,
+    ).toBe(true);
+    // a window start only makes sense on a subtask
+    expect(
+      validateCreateTask({ title: "x", dueDate: "2026-09-24", notBefore: "2026-09-20" }).ok,
+    ).toBe(false);
+    expect(
+      validateCreateTask({ title: "x", dueDate: "2026-09-24", notBefore: "2026-09-25" }).ok,
+    ).toBe(false);
+    expect(validateCreateTask({ title: "x", notBefore: "2026-09-20" }).ok).toBe(false);
+    expect(
+      validateCreateTask({ title: "x", dueDate: "2026-09-24", notBefore: "next week" }).ok,
+    ).toBe(false);
+  });
+
+  test("parentTaskId is a string or null", () => {
+    expect(validateCreateTask({ title: "x", parentTaskId: "p1" })).toMatchObject({
+      ok: true,
+      value: { parentTaskId: "p1" },
+    });
+    expect(validateCreateTask({ title: "x", parentTaskId: 7 }).ok).toBe(false);
+  });
+});
+
 describe("summarizeCreateTask", () => {
   test("names the inbox when no group", () => {
     const r = validateCreateTask({ title: "walk" });
@@ -255,6 +302,37 @@ describe("summarizeLogSpend", () => {
     expect(
       summarizeLogSpend(r.value, { accountName: "Checking", currency: "USD", categoryName: null }),
     ).toBe('Log $12.00 spent from "Checking".');
+  });
+});
+
+describe("validateUpdateTask energy + notBefore", () => {
+  test("energyCost validates like create; null clears", async () => {
+    const { validateUpdateTask } = await import("@/app/lib/mcp/validate");
+    expect(validateUpdateTask({ taskId: "t1", energyCost: 5 })).toMatchObject({
+      ok: true,
+      value: { energyCost: 5 },
+    });
+    expect(validateUpdateTask({ taskId: "t1", energyCost: null })).toMatchObject({
+      ok: true,
+      value: { energyCost: null },
+    });
+    expect(validateUpdateTask({ taskId: "t1", energyCost: 9 }).ok).toBe(false);
+  });
+
+  test("notBefore cannot pass a dueDate given in the same edit", async () => {
+    const { validateUpdateTask, summarizeUpdateTask } = await import(
+      "@/app/lib/mcp/validate"
+    );
+    expect(
+      validateUpdateTask({ taskId: "t1", dueDate: "2026-09-20", notBefore: "2026-09-21" }).ok,
+    ).toBe(false);
+    const r = validateUpdateTask({ taskId: "t1", notBefore: "2026-09-18", energyCost: 2 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(summarizeUpdateTask(r.value, "essay", null)).toBe(
+        'Update task "essay": energy 2/5, not before 2026-09-18.',
+      );
+    }
   });
 });
 

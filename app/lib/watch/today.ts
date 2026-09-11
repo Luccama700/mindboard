@@ -32,6 +32,11 @@ export type WatchTaskRow = {
   group: string | null;
   groupColor: string | null; // #rrggbb, the same group color the app renders
   notes: string | null;
+  // Additive (older watch builds ignore them): energy cost 1..5 — informational,
+  // never summed — and a decomposed parent's done/total. A subtask's `due` is
+  // its window end; it is bucketed by that day like any other task here.
+  energy: number | null;
+  progress: { done: number; total: number } | null;
 };
 
 export type WatchRoutineRow = {
@@ -99,7 +104,12 @@ export type WatchRoutineRule = TaskRecurrence & {
 export type WatchTaskInput = Pick<
   TaskWithGroup,
   "id" | "title" | "due_date" | "due_time" | "status" | "priority" | "notes" | "created_at"
-> & { group_name: string | null; group_color: string | null };
+> & {
+  group_name: string | null;
+  group_color: string | null;
+  energy_cost?: number | null;
+  parent_task_id?: string | null;
+};
 
 export type WatchTodayInput = {
   // Open (todo/doing), dated tasks with due_date <= today + WATCH_UPCOMING_DAYS.
@@ -114,6 +124,8 @@ export type WatchTodayInput = {
   wakeStartHour: number;
   wakeEndHour: number;
   followups?: { pending: number; failed: number };
+  // Done/total per parent task id, across every child status.
+  childrenByParent?: ReadonlyMap<string, { done: number; total: number }>;
   today: string;
   now: Date;
   timeZone: string | null;
@@ -129,7 +141,10 @@ function clipNotes(notes: string | null | undefined): string | null {
   return trimmed.length > WATCH_NOTES_MAX ? `${trimmed.slice(0, WATCH_NOTES_MAX - 1)}…` : trimmed;
 }
 
-function toRow(task: WatchTaskInput): WatchTaskRow {
+function toRow(
+  task: WatchTaskInput,
+  childrenByParent?: ReadonlyMap<string, { done: number; total: number }>,
+): WatchTaskRow {
   return {
     id: task.id,
     title: task.title,
@@ -139,6 +154,8 @@ function toRow(task: WatchTaskInput): WatchTaskRow {
     group: task.group_name,
     groupColor: task.group_color,
     notes: clipNotes(task.notes),
+    energy: task.energy_cost ?? null,
+    progress: childrenByParent?.get(task.id) ?? null,
   };
 }
 
@@ -256,12 +273,14 @@ export function composeWatchToday(input: WatchTodayInput): WatchToday {
       today,
       followups: input.followups ?? { pending: 0, failed: 0 },
     },
-    overdue: overdue.slice(0, WATCH_SECTION_LIMIT).map(toRow),
-    dueToday: dueToday.slice(0, WATCH_SECTION_LIMIT).map(toRow),
+    overdue: overdue.slice(0, WATCH_SECTION_LIMIT).map((t) => toRow(t, input.childrenByParent)),
+    dueToday: dueToday.slice(0, WATCH_SECTION_LIMIT).map((t) => toRow(t, input.childrenByParent)),
     events: todayEvents.slice(0, WATCH_SECTION_LIMIT).map(toEventRow),
     routines: routines.slice(0, WATCH_SECTION_LIMIT),
     upcomingEvents: upcomingEvents.slice(0, WATCH_SECTION_LIMIT).map(toEventRow),
-    upcomingTasks: upcomingTasks.slice(0, WATCH_SECTION_LIMIT).map(toRow),
+    upcomingTasks: upcomingTasks
+      .slice(0, WATCH_SECTION_LIMIT)
+      .map((t) => toRow(t, input.childrenByParent)),
     nextEvent: schedule?.nextEvent
       ? { title: schedule.nextEvent.summary, start: schedule.nextEvent.start }
       : null,

@@ -75,6 +75,29 @@ export default async function TasksPage({
       todayKey(supabase, user.id),
     ]);
 
+  // Children of a non-open parent are hidden everywhere. The page excludes
+  // missed rows, so a missed parent is not in `tasks`; ask for the parents'
+  // status directly (RLS-scoped) and drop the children of any that are not open.
+  const rows = (tasks ?? []) as Task[];
+  const parentIds = [
+    ...new Set(rows.filter((t) => t.parent_task_id).map((t) => t.parent_task_id as string)),
+  ];
+  let visibleTasks = rows;
+  if (parentIds.length > 0) {
+    const { data: parents } = await supabase
+      .from("tasks")
+      .select("id, status")
+      .in("id", parentIds);
+    const statusById = new Map(
+      ((parents ?? []) as { id: string; status: string }[]).map((p) => [p.id, p.status]),
+    );
+    visibleTasks = rows.filter((t) => {
+      if (!t.parent_task_id) return true;
+      const s = statusById.get(t.parent_task_id);
+      return s === "todo" || s === "doing";
+    });
+  }
+
   const groups = (groupsResult.data ?? []) as Group[];
   const groupOptions = groups.map((g) => ({
     id: g.id,
@@ -158,7 +181,7 @@ export default async function TasksPage({
 
       <TasksClient
         key={typeof filter === "string" ? filter : "inbox"}
-        initial={(tasks ?? []) as Task[]}
+        initial={visibleTasks}
         today={today}
         filter={filter}
         groups={groupOptions}

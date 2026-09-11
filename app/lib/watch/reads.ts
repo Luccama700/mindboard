@@ -26,7 +26,7 @@ import {
 // (the watch can still show tasks).
 
 const TASK_COLUMNS =
-  "id, title, due_date, due_time, status, priority, notes, created_at, groups(name, color)";
+  "id, title, due_date, due_time, status, priority, notes, created_at, energy_cost, parent_task_id, groups(name, color)";
 const RULE_COLUMNS =
   "id, title, frequency, weekdays, day_of_month, interval_days, start_date, due_time, groups(color)";
 
@@ -125,12 +125,59 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
       }))
     : null;
 
-  const input: WatchTodayInput = {
-    tasks: ((tasksRes.data ?? []) as unknown as TaskRow[]).map(({ groups, ...task }) => ({
+  const fetchedRows = ((tasksRes.data ?? []) as unknown as TaskRow[]).map(
+    ({ groups, ...task }) => ({
       ...task,
       group_name: firstRel(groups)?.name ?? null,
       group_color: firstRel(groups)?.color ?? null,
-    })),
+    }),
+  );
+
+  // Children of a non-open parent are hidden everywhere (a missed parent keeps
+  // its steps as they are). The parent may sit outside this fetch's date
+  // window, so its status is read directly rather than from the rows.
+  const childParentIds = [
+    ...new Set(
+      fetchedRows
+        .filter((t) => t.parent_task_id)
+        .map((t) => t.parent_task_id as string),
+    ),
+  ];
+  const openParentIds = new Set<string>();
+  if (childParentIds.length > 0) {
+    const { data: parents } = await supabase
+      .from("tasks")
+      .select("id")
+      .eq("user_id", userId)
+      .in("id", childParentIds)
+      .in("status", ["todo", "doing"]);
+    for (const p of (parents ?? []) as { id: string }[]) openParentIds.add(p.id);
+  }
+  const taskRows = fetchedRows.filter(
+    (t) => !t.parent_task_id || openParentIds.has(t.parent_task_id),
+  );
+
+  // "n of m" for the decomposed parents on the wrist: one query over their
+  // children (any status), pinned to the user like everything else here.
+  const parentIds = taskRows.filter((t) => !t.parent_task_id).map((t) => t.id);
+  const childrenByParent = new Map<string, { done: number; total: number }>();
+  if (parentIds.length > 0) {
+    const { data: childRows } = await supabase
+      .from("tasks")
+      .select("parent_task_id, status")
+      .eq("user_id", userId)
+      .in("parent_task_id", parentIds);
+    for (const row of (childRows ?? []) as { parent_task_id: string; status: string }[]) {
+      const cur = childrenByParent.get(row.parent_task_id) ?? { done: 0, total: 0 };
+      cur.total++;
+      if (row.status === "done") cur.done++;
+      childrenByParent.set(row.parent_task_id, cur);
+    }
+  }
+
+  const input: WatchTodayInput = {
+    tasks: taskRows,
+    childrenByParent,
     doneTodayCount: doneRes.count ?? 0,
     rules: ((rulesRes.data ?? []) as unknown as RuleRow[]).map(({ groups, ...rule }) => ({
       ...rule,

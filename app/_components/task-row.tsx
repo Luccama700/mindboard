@@ -2,12 +2,18 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import {
+  cancelBreakdown,
+  confirmBreakdown,
+  proposeBreakdown,
   pushTaskToCalendar,
   queueTaskFollowup,
   setTaskAiState,
 } from "@/app/actions/tasks";
+import type { ProposedChild } from "@/app/lib/mcp/decompose-ops";
 import { formatDue } from "./date-utils";
 import { DispatchSheet } from "./dispatch-sheet";
+import { EnergyControl, EnergyDots } from "./energy-dots";
+import { ProposalCard } from "./proposal-card";
 import { firstLine, latestSection } from "./notes-sections";
 import type { Task, TaskWithGroup } from "./types";
 
@@ -43,6 +49,12 @@ function formatEstimate(minutes: number): string {
 
 const ESTIMATE_CHIPS = [15, 30, 60, 120, 240] as const;
 
+// A task this long is offered a breakdown (offered, never applied): the
+// button reads "big task" instead of waiting to be found.
+const BREAKDOWN_NUDGE_MINUTES = 90;
+
+export type TaskProgress = { done: number; total: number };
+
 // Mirrors FOLLOWUP_TEXT_MAX in app/lib/watch/protocol.ts, which imports
 // node:crypto and so can't be pulled into this client bundle.
 const FOLLOWUP_MAX = 4000;
@@ -56,6 +68,8 @@ type UpdatePatch = {
   groupId?: string | null;
   notes?: string | null;
   priority?: "low" | "med" | "high";
+  energyCost?: number | null;
+  notBefore?: string | null;
 };
 
 export function TaskRow({
@@ -71,6 +85,8 @@ export function TaskRow({
   open: openProp,
   onOpenChange,
   hideNotesInPanel = false,
+  progress = null,
+  parentTitle = null,
 }: {
   task: Task | TaskWithGroup;
   // The user's day. Drives the due-date chip's active state AND the value the
@@ -87,6 +103,9 @@ export function TaskRow({
   open?: boolean;
   onOpenChange?: (next: boolean) => void;
   hideNotesInPanel?: boolean;
+  // Decomposition read-side: a parent's done/total, a child's parent title.
+  progress?: TaskProgress | null;
+  parentTitle?: string | null;
 }) {
   const [openLocal, setOpenLocal] = useState(false);
   const isControlled = openProp !== undefined;
@@ -119,9 +138,19 @@ export function TaskRow({
   const showDate = task.due_date && !isDone && !hideDate;
   const hasNotes = Boolean(task.notes?.trim());
   const hasEstimate = !isDone && task.estimated_minutes != null;
+  const hasEnergy = !isDone && task.energy_cost != null;
+  const hasProgress = !isDone && progress !== null && progress.total > 0;
+  const isChild = task.parent_task_id !== null;
   const aiBadge = task.ai_state ? AI_BADGE[task.ai_state] : null;
   const showSubtitle =
-    hasGroupInfo || showDate || hasNotes || hasEstimate || Boolean(aiBadge);
+    hasGroupInfo ||
+    showDate ||
+    hasNotes ||
+    hasEstimate ||
+    hasEnergy ||
+    hasProgress ||
+    (isChild && Boolean(parentTitle)) ||
+    Boolean(aiBadge);
 
   return (
     <div
@@ -221,6 +250,32 @@ export function TaskRow({
                 </span>
               )}
               {(hasGroupInfo || showDate || hasNotes || hasEstimate) &&
+                hasEnergy && <span className="text-line-subtle">·</span>}
+              {hasEnergy && (
+                <EnergyDots cost={task.energy_cost} source={task.energy_source} />
+              )}
+              {(hasGroupInfo || showDate || hasNotes || hasEstimate || hasEnergy) &&
+                hasProgress && <span className="text-line-subtle">·</span>}
+              {hasProgress && (
+                <span className="text-muted">
+                  {progress!.done} of {progress!.total} done
+                </span>
+              )}
+              {(hasGroupInfo || showDate || hasNotes || hasEstimate || hasEnergy) &&
+                isChild &&
+                parentTitle && <span className="text-line-subtle">·</span>}
+              {isChild && parentTitle && (
+                <span className="text-muted normal-case tracking-normal truncate">
+                  ↳ {parentTitle}
+                </span>
+              )}
+              {(hasGroupInfo ||
+                showDate ||
+                hasNotes ||
+                hasEstimate ||
+                hasEnergy ||
+                hasProgress ||
+                (isChild && parentTitle)) &&
                 aiBadge && <span className="text-line-subtle">·</span>}
               {aiBadge && <span className={aiBadge.tone}>{aiBadge.label}</span>}
             </p>
@@ -235,8 +290,11 @@ export function TaskRow({
           groups={groups}
           onDelete={onDelete}
           onUpdate={onUpdate}
-          onMiss={isOverdue ? onMiss : undefined}
+          // A subtask never goes missed — it slides inside its window — so the
+          // accountability control is only offered on top-level tasks.
+          onMiss={isOverdue && !isChild ? onMiss : undefined}
           hideNotes={hideNotesInPanel}
+          progress={progress}
         />
       )}
     </div>
@@ -251,6 +309,7 @@ function EditPanel({
   onUpdate,
   onMiss,
   hideNotes = false,
+  progress = null,
 }: {
   task: Task | TaskWithGroup;
   today: string;
@@ -259,8 +318,60 @@ function EditPanel({
   onUpdate: (id: string, patch: UpdatePatch) => void;
   onMiss?: (id: string) => void;
   hideNotes?: boolean;
+  progress?: TaskProgress | null;
 }) {
   const [titleDraft, setTitleDraft] = useState(task.title);
+  // "Break down": propose → the ProposalCard → confirm. Nothing is written
+  // until the confirm tap; skip rejects the proposal row.
+  const [breakdown, setBreakdown] = useState<{
+    proposalId: string;
+    children: ProposedChild[];
+  } | null>(null);
+  const [breakdownNote, setBreakdownNote] = useState<string | null>(null);
+  const [breakdownPending, startBreakdown] = useTransition();
+  const isChild = task.parent_task_id !== null;
+  const hasChildren = progress !== null && progress.total > 0;
+  const canBreakDown =
+    !isChild && !hasChildren && task.status !== "done" && task.status !== "missed";
+  const bigTask =
+    task.estimated_minutes != null && task.estimated_minutes >= BREAKDOWN_NUDGE_MINUTES;
+
+  function requestBreakdown() {
+    startBreakdown(async () => {
+      setBreakdownNote(null);
+      const result = await proposeBreakdown(task.id);
+      if (result.error || !result.proposalId || !result.children) {
+        setBreakdownNote(result.error ?? "could not break the task down");
+        return;
+      }
+      setBreakdown({ proposalId: result.proposalId, children: result.children });
+    });
+  }
+
+  function acceptBreakdown() {
+    if (!breakdown) return;
+    startBreakdown(async () => {
+      const result = await confirmBreakdown(breakdown.proposalId);
+      if (result.error) {
+        setBreakdownNote(result.error);
+        return;
+      }
+      setBreakdown(null);
+      setBreakdownNote(`✂ ${breakdown.children.length} steps added — they land on their planned days`);
+    });
+  }
+
+  function rejectBreakdown() {
+    if (!breakdown) return;
+    startBreakdown(async () => {
+      const result = await cancelBreakdown(breakdown.proposalId);
+      if (result.error) {
+        setBreakdownNote(result.error);
+        return;
+      }
+      setBreakdown(null);
+    });
+  }
   const [notesDraft, setNotesDraft] = useState(task.notes ?? "");
   const [pushState, setPushState] = useState<string | null>(null);
   const [pushing, startPush] = useTransition();
@@ -567,6 +678,101 @@ function EditPanel({
         })}
       </div>
 
+      <div className="flex items-center flex-wrap gap-2">
+        <label className="text-[10px] tracking-widest uppercase text-muted">
+          energy
+        </label>
+        <EnergyControl
+          cost={task.energy_cost}
+          source={task.energy_source}
+          onChange={(next) => onUpdate(task.id, { energyCost: next })}
+        />
+      </div>
+
+      {isChild && task.due_date && (
+        <div className="flex items-center flex-wrap gap-2">
+          <label className="text-[10px] tracking-widest uppercase text-muted">
+            window
+          </label>
+          <span className="text-[10px] tracking-widest uppercase text-muted">
+            not before
+          </span>
+          <input
+            type="date"
+            value={task.not_before ?? ""}
+            max={task.due_date}
+            onChange={(e) =>
+              onUpdate(task.id, { notBefore: e.target.value || null })
+            }
+            aria-label="not before"
+            className="min-h-11 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-xs px-2 py-1.5 focus:outline-none transition-colors"
+          />
+          <span className="text-[10px] tracking-widest uppercase text-muted">
+            by {formatDue(task.due_date, today)}
+          </span>
+        </div>
+      )}
+
+      {canBreakDown && (
+        <div className="space-y-2">
+          <div className="flex items-center flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={breakdownPending || breakdown !== null}
+              onClick={requestBreakdown}
+              className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors disabled:opacity-50 ${
+                bigTask
+                  ? "border-accent text-accent hover:bg-accent hover:text-accent-fg"
+                  : "border-line-strong text-muted hover:border-fg hover:text-fg"
+              }`}
+            >
+              {breakdownPending && !breakdown
+                ? "thinking…"
+                : bigTask
+                  ? "✂ break down · big task"
+                  : "✂ break down"}
+            </button>
+            {breakdownNote && (
+              <span
+                className={`text-[10px] ${
+                  breakdownNote.startsWith("✂") ? "text-accent" : "text-danger"
+                }`}
+              >
+                {breakdownNote}
+              </span>
+            )}
+          </div>
+          {breakdown && (
+            <ProposalCard
+              title={`break down · ${breakdown.children.length} steps`}
+              confirmLabel="add steps"
+              onConfirm={acceptBreakdown}
+              onSkip={rejectBreakdown}
+              pending={breakdownPending}
+            >
+              {breakdown.children.map((c, i) => (
+                <p key={i} className="text-sm text-fg flex items-baseline gap-2">
+                  <span className="text-muted">{i + 1}.</span>
+                  <span className="min-w-0 flex-1">
+                    {c.title}
+                    <span className="block text-[10px] tracking-widest uppercase text-muted mt-0.5">
+                      {c.estimatedMinutes < 60
+                        ? `${c.estimatedMinutes}m`
+                        : `${Math.round((c.estimatedMinutes / 60) * 10) / 10}h`}
+                      {" · "}
+                      {formatDue(c.notBefore, today)}
+                      {c.notBefore !== c.dueDate ? ` → ${formatDue(c.dueDate, today)}` : ""}
+                      {" · "}
+                      <EnergyDots cost={c.energyCost} source="ai" />
+                    </span>
+                  </span>
+                </p>
+              ))}
+            </ProposalCard>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <label className="text-[10px] tracking-widest uppercase text-muted">
           group
@@ -791,7 +997,7 @@ function EditPanel({
           onClick={() => onDelete(task.id)}
           className="inline-flex items-center min-h-11 text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors px-3"
         >
-          delete
+          {hasChildren ? `delete + ${progress!.total} steps` : "delete"}
         </button>
       </div>
     </div>

@@ -52,6 +52,10 @@ type RawTask = {
   created_at: string;
   completed_at: string | null;
   missed_at: string | null;
+  energy_cost: number | null;
+  energy_source: "ai" | "user" | null;
+  parent_task_id: string | null;
+  not_before: string | null;
   groups: { name: string; color: string } | { name: string; color: string }[] | null;
 };
 
@@ -186,6 +190,10 @@ function mapTasks(rawTasks: RawTask[]): TaskWithGroup[] {
       created_at: row.created_at,
       completed_at: row.completed_at,
       missed_at: row.missed_at,
+      energy_cost: row.energy_cost,
+      energy_source: row.energy_source,
+      parent_task_id: row.parent_task_id,
+      not_before: row.not_before,
       group_name: groupRecord?.name ?? null,
       group_color: groupRecord?.color ?? null,
     };
@@ -200,7 +208,7 @@ export const getOpenTasks = cache(
     const { data } = await supabase
       .from("tasks")
       .select(
-        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at, groups(name, color)",
+        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at, energy_cost, energy_source, parent_task_id, not_before, groups(name, color)",
       )
       .eq("user_id", userId)
       .in("status", ["todo", "doing"]);
@@ -235,7 +243,7 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
     supabase
       .from("tasks")
       .select(
-        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at, groups(name, color)",
+        "id, title, due_date, due_time, duration_min, status, priority, ai_state, notes, group_id, gcal_event_id, gcal_calendar_id, created_at, completed_at, estimated_minutes, missed_at, energy_cost, energy_source, parent_task_id, not_before, groups(name, color)",
       )
       .in("status", ["todo", "doing"])
       .not("due_date", "is", null),
@@ -325,5 +333,8 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
     recurringSlots: (slotsResponse.data ?? []) as RecurringSlotRow[],
     events: eventsResult.events,
     calendarStatus: eventsResult.status,
+    // The day span the events/slots above cover (end exclusive), so a caller
+    // planning across days knows which days it actually has busy data for.
+    range: { startDate, endDate },
   };
 });

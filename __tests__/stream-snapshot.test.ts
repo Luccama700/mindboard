@@ -26,6 +26,10 @@ function task(over: Partial<TaskWithGroup> & { id: string }): TaskWithGroup {
     created_at: "2026-07-01T10:00:00.000Z",
     completed_at: null,
     missed_at: null,
+    energy_cost: null,
+    energy_source: null,
+    parent_task_id: null,
+    not_before: null,
     group_name: "life",
     group_color: "#fff",
     ...over,
@@ -871,5 +875,123 @@ describe("pulse and empty state", () => {
     );
     expect(snap.now).toEqual([]);
     expect(snap.pulse.toClear).toBe(0);
+  });
+});
+
+describe("decomposed tasks in the stream", () => {
+  const parent = task({
+    id: "essay",
+    title: "Write PHIL 240 essay",
+    due_date: "2026-07-10",
+    estimated_minutes: 240,
+  });
+  const quotes = task({
+    id: "quotes",
+    title: "Pull three quotes",
+    parent_task_id: "essay",
+    not_before: "2026-07-06",
+    due_date: "2026-07-08",
+    estimated_minutes: 20,
+    energy_cost: 2,
+  });
+  const outline = task({
+    id: "outline",
+    title: "Outline argument",
+    parent_task_id: "essay",
+    not_before: "2026-07-07",
+    due_date: "2026-07-09",
+    estimated_minutes: 40,
+    energy_cost: 4,
+  });
+
+  test("the parent reads as progress; children ride their planned day", () => {
+    const snap = streamSnapshot(
+      base({
+        tasks: [parent, quotes, outline],
+        plannedSubtasks: new Map([
+          ["quotes", { dateKey: TODAY, start: "10:30" }],
+          ["outline", { dateKey: "2026-07-09", start: "14:00" }],
+        ]),
+        doneChildrenByParent: new Map([["essay", 2]]),
+      }),
+    );
+    const nowIds = snap.now.map((c) => c.id);
+    expect(nowIds).toContain("task:quotes");
+    expect(nowIds).not.toContain("task:essay");
+    const quotesCard = snap.now.find((c) => c.id === "task:quotes")!;
+    expect(quotesCard.meta).toBe("today ~10:30 · ↳ Write PHIL 240 essay · ~20m");
+    expect(quotesCard.tier).toBeGreaterThanOrEqual(1);
+
+    const later = snap.later.map((c) => [c.id, c.meta]);
+    expect(later).toContainEqual(["task:outline", "jul 9 ~14:00 · ↳ Write PHIL 240 essay · ~40m"]);
+    expect(later).toContainEqual([
+      "task:essay",
+      "jul 10 · 2 of 4 done · life · ~4h",
+    ]);
+    const essay = snap.later.find((c) => c.id === "task:essay")!;
+    expect(essay.glyph).toBe("◐");
+  });
+
+  test("a child never surfaces on its window end as 'due'; late is still late", () => {
+    const late = task({
+      id: "late",
+      parent_task_id: "essay",
+      due_date: "2026-07-05",
+      estimated_minutes: 30,
+    });
+    const snap = streamSnapshot(
+      base({
+        tasks: [parent, late, outline],
+        plannedSubtasks: new Map([["outline", { dateKey: "2026-07-09", start: null }]]),
+      }),
+    );
+    const lateCard = snap.now.find((c) => c.id === "task:late")!;
+    expect(lateCard.meta).toMatch(/^1d late · ↳ Write PHIL 240 essay/);
+    // outline is planned for the 9th and must not also appear under the 9th
+    // as a plain due task — one card, keyed to the planned day.
+    expect(snap.later.filter((c) => c.id === "task:outline")).toHaveLength(1);
+    expect(snap.later.find((c) => c.id === "task:outline")!.meta).toBe(
+      "jul 9 · ↳ Write PHIL 240 essay · ~40m",
+    );
+  });
+
+  test("without a placement a child falls back to its window end", () => {
+    const snap = streamSnapshot(base({ tasks: [parent, quotes] }));
+    expect(snap.now.map((c) => c.id)).not.toContain("task:quotes");
+    expect(snap.later.find((c) => c.id === "task:quotes")!.meta).toBe(
+      "jul 8 · ↳ Write PHIL 240 essay · ~20m",
+    );
+  });
+
+  test("a child whose parent is not open is hidden", () => {
+    const snap = streamSnapshot(
+      base({
+        tasks: [quotes],
+        plannedSubtasks: new Map([["quotes", { dateKey: TODAY, start: "10:30" }]]),
+      }),
+    );
+    expect(snap.now.map((c) => c.id)).not.toContain("task:quotes");
+    expect(snap.later.map((c) => c.id)).not.toContain("task:quotes");
+  });
+
+  test("a parent due today sits on the board with its progress, not its children's", () => {
+    const dueToday = { ...parent, due_date: TODAY };
+    const child = { ...quotes, due_date: TODAY };
+    const snap = streamSnapshot(
+      base({
+        tasks: [dueToday, child],
+        doneChildrenByParent: new Map([["essay", 1]]),
+      }),
+    );
+    const essay = snap.now.find((c) => c.id === "task:essay")!;
+    expect(essay.meta).toBe("today · 1 of 2 done · life · ~4h");
+    expect(snap.now.map((c) => c.id)).toContain("task:quotes");
+  });
+
+  test("progress only appears on tasks that actually have children", () => {
+    const snap = streamSnapshot(base({ tasks: [parent] }));
+    const essay = snap.later.find((c) => c.id === "task:essay")!;
+    expect(essay.meta).toBe("jul 10 · life · ~4h");
+    expect(essay.glyph).toBe("○");
   });
 });

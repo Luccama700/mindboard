@@ -4,6 +4,22 @@ const mocks = vi.hoisted(() => ({
   authGetUser: vi.fn(),
   from: vi.fn(),
   revalidatePath: vi.fn(),
+  after: vi.fn(),
+  assignEnergyIfUnset: vi.fn(async () => ({ assigned: null })),
+  completeTaskCascade: vi.fn(),
+  reopenTaskCascade: vi.fn(),
+  missTaskCascade: vi.fn(),
+}));
+
+vi.mock("@/app/lib/tasks/lifecycle", () => ({
+  completeTaskCascade: mocks.completeTaskCascade,
+  reopenTaskCascade: mocks.reopenTaskCascade,
+  missTaskCascade: mocks.missTaskCascade,
+}));
+
+vi.mock("next/server", () => ({ after: mocks.after }));
+vi.mock("@/app/lib/tasks/energy", () => ({
+  assignEnergyIfUnset: mocks.assignEnergyIfUnset,
 }));
 
 vi.mock("@/utils/supabase/server", () => ({
@@ -98,6 +114,128 @@ describe("task actions", () => {
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
+  test("createTask without an energy cost schedules the AI default after the response", async () => {
+    const single = vi.fn(async () => ({ data: { id: "task-9" }, error: null }));
+    const select = vi.fn(() => ({ single }));
+    const insert = vi.fn(() => ({ select }));
+    mocks.from.mockReturnValue({ insert });
+
+    await createTask({ title: "call the bank", groupId: null, dueDate: null });
+
+    expect((insert.mock.calls[0] as unknown[])[0]).not.toHaveProperty("energy_cost");
+    expect(mocks.after).toHaveBeenCalledTimes(1);
+    // Run the deferred callback: it rates exactly this task for this user.
+    await (mocks.after.mock.calls[0][0] as () => Promise<void>)();
+    expect(mocks.assignEnergyIfUnset).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      "task-9",
+    );
+  });
+
+  test("createTask with a user-picked energy cost stores it as 'user' and skips the AI", async () => {
+    const single = vi.fn(async () => ({ data: { id: "task-10" }, error: null }));
+    const select = vi.fn(() => ({ single }));
+    const insert = vi.fn(() => ({ select }));
+    mocks.from.mockReturnValue({ insert });
+
+    await createTask({ title: "x", groupId: null, dueDate: null, energyCost: 4 });
+
+    expect((insert.mock.calls[0] as unknown[])[0]).toMatchObject({
+      energy_cost: 4,
+      energy_source: "user",
+    });
+    expect(mocks.after).not.toHaveBeenCalled();
+    await expect(
+      createTask({ title: "x", groupId: null, dueDate: null, energyCost: 7 }),
+    ).resolves.toEqual({ error: "energy must be 1-5" });
+  });
+
+  test("updateTask energy edits flip the source to 'user'; null clears both", async () => {
+    const single = vi.fn(async () => ({ data: {}, error: null }));
+    const select = vi.fn(() => ({ single }));
+    const eq = vi.fn(() => ({ select }));
+    const update = vi.fn(() => ({ eq }));
+    mocks.from.mockReturnValue({ update });
+
+    await updateTask({ id: "task-1", energyCost: 2 });
+    expect(update).toHaveBeenLastCalledWith({ energy_cost: 2, energy_source: "user" });
+
+    // A clear is still the user's call: the AI default must not refill it.
+    await updateTask({ id: "task-1", energyCost: null });
+    expect(update).toHaveBeenLastCalledWith({ energy_cost: null, energy_source: "user" });
+
+    await updateTask({ id: "task-1", notBefore: "2026-09-18" });
+    expect(update).toHaveBeenLastCalledWith({ not_before: "2026-09-18" });
+    await expect(updateTask({ id: "task-1", notBefore: "soon" })).resolves.toEqual({
+      error: "invalid not-before date",
+    });
+  });
+
+  test("updateTask pulls a subtask's not_before along when the due date moves earlier", async () => {
+    const loadMaybeSingle = vi.fn(async () => ({ data: { parent_task_id: "p" }, error: null }));
+    const loadEq = vi.fn(() => ({ maybeSingle: loadMaybeSingle }));
+    const loadSelect = vi.fn(() => ({ eq: loadEq }));
+    const parentMaybeSingle = vi.fn(async () => ({ data: { due_date: "2026-09-24" }, error: null }));
+    const parentSelect = vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: parentMaybeSingle })) }));
+    const gt = vi.fn(async () => ({ error: null }));
+    const clampEq = vi.fn(() => ({ gt }));
+    const clampUpdate = vi.fn(() => ({ eq: clampEq }));
+    const single = vi.fn(async () => ({ data: {}, error: null }));
+    const select = vi.fn(() => ({ single }));
+    const mainEq = vi.fn(() => ({ select }));
+    const mainUpdate = vi.fn(() => ({ eq: mainEq }));
+    mocks.from
+      .mockReturnValueOnce({ select: loadSelect })
+      .mockReturnValueOnce({ select: parentSelect })
+      .mockReturnValueOnce({ update: clampUpdate })
+      .mockReturnValueOnce({ update: clampUpdate })
+      .mockReturnValueOnce({ update: clampUpdate })
+      .mockReturnValueOnce({ update: mainUpdate });
+
+    await expect(updateTask({ id: "c1", dueDate: "2026-09-18" })).resolves.toEqual({
+      error: null,
+    });
+
+    // The guards run first: the task's own not_before, then its children's
+    // not_before and due_date, each only where they lie past the new date.
+    expect(clampUpdate).toHaveBeenCalledWith({ not_before: "2026-09-18" });
+    expect(clampUpdate).toHaveBeenCalledWith({ due_date: "2026-09-18" });
+    expect(clampEq).toHaveBeenCalledWith("id", "c1");
+    expect(clampEq).toHaveBeenCalledWith("parent_task_id", "c1");
+    expect(gt).toHaveBeenCalledWith("not_before", "2026-09-18");
+    expect(gt).toHaveBeenCalledWith("due_date", "2026-09-18");
+    expect(mainUpdate).toHaveBeenCalledWith({ due_date: "2026-09-18" });
+  });
+
+  test("updateTask refuses a step due after its task, and a task with steps losing its date", async () => {
+    const loadMaybeSingle = vi.fn(async () => ({ data: { parent_task_id: "p" }, error: null }));
+    const loadEq = vi.fn(() => ({ maybeSingle: loadMaybeSingle }));
+    const dueMaybeSingle = vi.fn(async () => ({ data: { due_date: "2026-09-24" }, error: null }));
+    mocks.from
+      .mockReturnValueOnce({ select: vi.fn(() => ({ eq: loadEq })) })
+      .mockReturnValueOnce({
+        select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: dueMaybeSingle })) })),
+      });
+    await expect(updateTask({ id: "c1", dueDate: "2026-09-30" })).resolves.toEqual({
+      error: "a step cannot be due after its task (2026-09-24)",
+    });
+
+    const parentMaybeSingle = vi.fn(async () => ({
+      data: { parent_task_id: null },
+      error: null,
+    }));
+    const countEq = vi.fn(async () => ({ count: 3, error: null }));
+    mocks.from
+      .mockReturnValueOnce({
+        select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: parentMaybeSingle })) })),
+      })
+      .mockReturnValueOnce({ select: vi.fn(() => ({ eq: countEq })) });
+    await expect(updateTask({ id: "p", dueDate: null })).resolves.toEqual({
+      error: "a task with steps keeps its due date — the steps are planned from it",
+    });
+  });
+
   test("createTask stores a normalized due time when a date is present", async () => {
     const single = vi.fn(async () => ({ data: { id: "task-2" }, error: null }));
     const select = vi.fn(() => ({ single }));
@@ -151,7 +289,15 @@ describe("task actions", () => {
     const select = vi.fn(() => ({ single }));
     const eq = vi.fn(() => ({ select }));
     const update = vi.fn(() => ({ eq }));
-    mocks.from.mockReturnValue({ update });
+    // Clearing a date first checks the row is not a step and has no steps.
+    const loadMaybeSingle = vi.fn(async () => ({ data: { parent_task_id: null }, error: null }));
+    const countEq = vi.fn(async () => ({ count: 0, error: null }));
+    mocks.from
+      .mockReturnValueOnce({
+        select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: loadMaybeSingle })) })),
+      })
+      .mockReturnValueOnce({ select: vi.fn(() => ({ eq: countEq })) })
+      .mockReturnValue({ update });
 
     await expect(
       updateTask({
@@ -165,6 +311,7 @@ describe("task actions", () => {
     expect(update).toHaveBeenCalledWith({
       due_date: null,
       due_time: null,
+      not_before: null,
       group_id: "group-2",
       notes: "remember this",
     });
@@ -172,22 +319,41 @@ describe("task actions", () => {
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
-  test("toggleTaskStatus marks done tasks with a completion timestamp", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-23T10:15:00.000Z"));
-    const eq = vi.fn(async () => ({ error: null }));
-    const update = vi.fn(() => ({ eq }));
-    mocks.from.mockReturnValue({ update });
+  test("toggleTaskStatus completes through the cascade for the current user", async () => {
+    mocks.completeTaskCascade.mockResolvedValue({
+      ok: true,
+      value: { parentCompleted: false, childrenCompleted: 0 },
+    });
 
     await expect(toggleTaskStatus("task-1", "todo")).resolves.toEqual({
       error: null,
       nextStatus: "done",
     });
 
-    expect(update).toHaveBeenCalledWith({
-      status: "done",
-      completed_at: "2026-05-23T10:15:00.000Z",
+    expect(mocks.completeTaskCascade).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      "task-1",
+    );
+    expect(mocks.reopenTaskCascade).not.toHaveBeenCalled();
+    expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+
+  test("toggleTaskStatus on a done task reopens through the cascade", async () => {
+    mocks.reopenTaskCascade.mockResolvedValue({ ok: true, value: { parentReopened: false } });
+
+    await expect(toggleTaskStatus("task-1", "done")).resolves.toEqual({
+      error: null,
+      nextStatus: "todo",
     });
+    expect(mocks.reopenTaskCascade).toHaveBeenCalledWith(expect.anything(), "user-1", "task-1");
+    expect(mocks.completeTaskCascade).not.toHaveBeenCalled();
+  });
+
+  test("toggleTaskStatus surfaces a cascade error and skips revalidation", async () => {
+    mocks.completeTaskCascade.mockResolvedValue({ ok: false, error: "task not found" });
+    await expect(toggleTaskStatus("task-1", "todo")).resolves.toEqual({ error: "task not found" });
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
   test("updateTask maps estimatedMinutes without touching schedule sync", async () => {
@@ -255,53 +421,49 @@ describe("task actions", () => {
     );
   });
 
-  test("markTaskMissed sets status and timestamp when the task is open", async () => {
+  test("markTaskMissed runs the cascade on the user's day and reports a slid subtask", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-22T10:00:00.000Z"));
-    const maybeSingle = vi.fn(async () => ({ data: { status: "todo" }, error: null }));
-    const loadEq = vi.fn(() => ({ maybeSingle }));
-    const loadSelect = vi.fn(() => ({ eq: loadEq }));
-    const updateEq = vi.fn(async () => ({ error: null }));
-    const update = vi.fn(() => ({ eq: updateEq }));
-    mocks.from
-      .mockReturnValueOnce({ select: loadSelect })
-      .mockReturnValueOnce({ update });
-
-    await expect(markTaskMissed("task-1")).resolves.toEqual({ error: null });
-
-    expect(update).toHaveBeenCalledWith({
-      status: "missed",
-      missed_at: "2026-07-22T10:00:00.000Z",
+    mocks.missTaskCascade.mockResolvedValue({
+      ok: true,
+      value: { kind: "slid", notBefore: "2026-07-23", task: {} },
     });
+
+    await expect(markTaskMissed("task-1")).resolves.toEqual({
+      error: null,
+      slidTo: "2026-07-23",
+    });
+
+    expect(mocks.missTaskCascade).toHaveBeenCalledWith(
+      expect.anything(),
+      "user-1",
+      "task-1",
+      "2026-07-22",
+    );
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
+  test("markTaskMissed on a parent reports no slide", async () => {
+    mocks.missTaskCascade.mockResolvedValue({
+      ok: true,
+      value: { kind: "missed", childrenMissed: 2, task: {} },
+    });
+    await expect(markTaskMissed("task-1")).resolves.toEqual({ error: null, slidTo: undefined });
+  });
+
   test("markTaskMissed refuses a task that is already done", async () => {
-    const maybeSingle = vi.fn(async () => ({ data: { status: "done" }, error: null }));
-    const loadEq = vi.fn(() => ({ maybeSingle }));
-    const loadSelect = vi.fn(() => ({ eq: loadEq }));
-    const update = vi.fn();
-    mocks.from.mockReturnValue({ select: loadSelect, update });
+    mocks.missTaskCascade.mockResolvedValue({ ok: false, error: "already done" });
 
     await expect(markTaskMissed("task-1")).resolves.toEqual({ error: "already done" });
-
-    expect(update).not.toHaveBeenCalled();
     expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
 
-  test("reopenTask returns a task to todo and clears both timestamps", async () => {
-    const eq = vi.fn(async () => ({ error: null }));
-    const update = vi.fn(() => ({ eq }));
-    mocks.from.mockReturnValue({ update });
+  test("reopenTask returns a task to todo through the cascade", async () => {
+    mocks.reopenTaskCascade.mockResolvedValue({ ok: true, value: { parentReopened: true } });
 
     await expect(reopenTask("task-1")).resolves.toEqual({ error: null });
 
-    expect(update).toHaveBeenCalledWith({
-      status: "todo",
-      missed_at: null,
-      completed_at: null,
-    });
-    expect(eq).toHaveBeenCalledWith("id", "task-1");
+    expect(mocks.reopenTaskCascade).toHaveBeenCalledWith(expect.anything(), "user-1", "task-1");
     expect(mocks.revalidatePath).toHaveBeenCalledWith("/", "layout");
   });
 
