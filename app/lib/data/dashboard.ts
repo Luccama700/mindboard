@@ -333,5 +333,8 @@ export const getDashboardData = cache(async (userId: string, month: string) => {
     recurringSlots: (slotsResponse.data ?? []) as RecurringSlotRow[],
     events: eventsResult.events,
     calendarStatus: eventsResult.status,
+    // The day span the events/slots above cover (end exclusive), so a caller
+    // planning across days knows which days it actually has busy data for.
+    range: { startDate, endDate },
   };
 });
