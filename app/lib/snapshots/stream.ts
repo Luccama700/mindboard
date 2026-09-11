@@ -186,6 +186,13 @@ export type StreamInput = {
   currency: string;
   // Cap for the task-bearing lists (NOW tasks, NEXT, LATER). Default 5.
   maxTasks?: number;
+  // Advisory placements from planSubtasks (child task id → the day, and
+  // quarter-hour start when one fit). A child shows on its PLANNED day, not
+  // its due_date (which is its window end); missing = falls back to due_date.
+  plannedSubtasks?: ReadonlyMap<string, { dateKey: string; start: string | null }>;
+  // Done children per open parent, so a parent can read "2 of 5" — the task
+  // list only carries open rows.
+  doneChildrenByParent?: ReadonlyMap<string, number>;
 };
 
 const SECTION_CAP = 5;
@@ -284,7 +291,13 @@ export function formatEstimate(minutes: number): string {
   return `~${label}h`;
 }
 
-function taskMeta(task: TaskWithGroup, today: string): string {
+export type TaskProgress = { done: number; total: number };
+
+function taskMeta(
+  task: TaskWithGroup,
+  today: string,
+  progress: TaskProgress | null = null,
+): string {
   const parts: string[] = [];
   if (task.due_date) {
     const late = daysLate(task.due_date, today);
@@ -298,19 +311,56 @@ function taskMeta(task: TaskWithGroup, today: string): string {
           : shortDate(task.due_date),
       );
   }
+  // A decomposed parent is the thing owed: it reads as progress, not a to-do.
+  if (progress) parts.push(`${progress.done} of ${progress.total} done`);
   if (task.priority === "high") parts.push("!!!");
   if (task.group_name) parts.push(task.group_name);
   if (task.estimated_minutes) parts.push(formatEstimate(task.estimated_minutes));
   return parts.join(" · ");
 }
 
-function taskCard(task: TaskWithGroup, today: string): StreamCard {
+function taskCard(
+  task: TaskWithGroup,
+  today: string,
+  progress: TaskProgress | null = null,
+): StreamCard {
+  return {
+    id: `task:${task.id}`,
+    domain: "task",
+    glyph: progress ? "◐" : "○",
+    fact: task.title,
+    meta: taskMeta(task, today, progress) || null,
+    entity: { kind: "task", task },
+  };
+}
+
+// A child's card: the day the planner put it on (a "~" time when one fit),
+// then the parent it belongs to. Its due_date is a window end, so it is only
+// ever shown as lateness — never as "due".
+function subtaskCard(
+  task: TaskWithGroup,
+  parentTitle: string,
+  plannedDay: string,
+  plannedStart: string | null,
+  today: string,
+): StreamCard {
+  const parts: string[] = [];
+  const late = task.due_date ? daysLate(task.due_date, today) : 0;
+  if (late > 0) parts.push(late === 1 ? "1d late" : `${late}d late`);
+  else if (plannedDay === today)
+    parts.push(plannedStart ? `today ~${plannedStart}` : "today");
+  else
+    parts.push(
+      plannedStart ? `${shortDate(plannedDay)} ~${plannedStart}` : shortDate(plannedDay),
+    );
+  parts.push(`↳ ${parentTitle}`);
+  if (task.estimated_minutes) parts.push(formatEstimate(task.estimated_minutes));
   return {
     id: `task:${task.id}`,
     domain: "task",
     glyph: "○",
     fact: task.title,
-    meta: taskMeta(task, today) || null,
+    meta: parts.join(" · "),
     entity: { kind: "task", task },
   };
 }
@@ -462,6 +512,8 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
     todayDelta,
     currency,
     maxTasks = SECTION_CAP,
+    plannedSubtasks,
+    doneChildrenByParent,
   } = input;
 
   const cap = maxTasks;
@@ -472,6 +524,36 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
   const openTasks = tasks.filter(
     (t) => t.status !== "done" && t.status !== "missed",
   );
+
+  // Decomposition: parents are owed, children are what the day shows. A child
+  // whose parent is not open is hidden (the cascade resolves it with the
+  // parent; this is the read-side guard).
+  const openById = new Map(openTasks.map((t) => [t.id, t]));
+  const openChildCount = new Map<string, number>();
+  for (const t of openTasks) {
+    if (t.parent_task_id && openById.has(t.parent_task_id)) {
+      openChildCount.set(t.parent_task_id, (openChildCount.get(t.parent_task_id) ?? 0) + 1);
+    }
+  }
+  const progressOf = (t: TaskWithGroup): TaskProgress | null => {
+    const open = openChildCount.get(t.id) ?? 0;
+    const done = doneChildrenByParent?.get(t.id) ?? 0;
+    return open + done > 0 ? { done, total: open + done } : null;
+  };
+  const topLevel = openTasks.filter((t) => !t.parent_task_id);
+  const children = openTasks.filter(
+    (t) => t.parent_task_id !== null && openById.has(t.parent_task_id),
+  );
+  const plannedDayOf = (t: TaskWithGroup): string | null =>
+    plannedSubtasks?.get(t.id)?.dateKey ?? t.due_date;
+  const childCard = (t: TaskWithGroup): StreamCard =>
+    subtaskCard(
+      t,
+      openById.get(t.parent_task_id as string)!.title,
+      plannedDayOf(t) as string,
+      plannedSubtasks?.get(t.id)?.start ?? null,
+      today,
+    );
   const timedEvents = events.filter((e) => !e.allDay && e.start && e.end);
 
   // Per-item run-out keys, computed once. Low-priority stock never enters the
@@ -528,17 +610,39 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
   // future-timed alike), ranked by urgencyScore (byPriorityThenLateness breaks
   // ties), capped at maxTasks with the surplus surfaced as nowOverflow. Each
   // card is stamped with its tier for the client's elevation treatment.
-  const nowTaskEntries = openTasks
-    .filter((t) => t.due_date !== null && t.due_date <= today)
-    .map((t) => ({ task: t, score: urgencyScore(t, today, nowClock) }))
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return byPriorityThenLateness(today)(a.task, b.task);
-    });
+  // Children join NOW on their planned day (or once late); a child planned
+  // for today scores as if due today so its tier reads like the rest of the
+  // board, without its window end ever being shown as a due date.
+  const nowTaskEntries = [
+    ...topLevel
+      .filter((t) => t.due_date !== null && t.due_date <= today)
+      .map((t) => ({
+        task: t,
+        score: urgencyScore(t, today, nowClock),
+        card: taskCard(t, today, progressOf(t)),
+      })),
+    ...children
+      .filter((t) => {
+        const day = plannedDayOf(t);
+        return day !== null && day <= today;
+      })
+      .map((t) => ({
+        task: t,
+        score: urgencyScore(
+          { ...t, due_date: t.due_date && t.due_date < today ? t.due_date : today },
+          today,
+          nowClock,
+        ),
+        card: childCard(t),
+      })),
+  ].sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return byPriorityThenLateness(today)(a.task, b.task);
+  });
   const nowTaskCards = nowTaskEntries
     .slice(0, cap)
-    .map(({ task, score }) => ({
-      ...taskCard(task, today),
+    .map(({ card, score }) => ({
+      ...card,
       tier: urgencyTier(score),
     }));
   const nowOverflow = Math.max(0, nowTaskEntries.length - cap);
@@ -691,9 +795,21 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
   const nextOverflow = Math.max(0, nextAll.length - cap);
 
   // ---- LATER: cap maxTasks, by date ---------------------------------------
-  const laterTasks = openTasks
-    .filter((t) => t.due_date && t.due_date > today && t.due_date <= soonLimit)
-    .map((t) => ({ dateKey: t.due_date!, order: 0, card: taskCard(t, today) }));
+  const laterTasks = [
+    ...topLevel
+      .filter((t) => t.due_date && t.due_date > today && t.due_date <= soonLimit)
+      .map((t) => ({
+        dateKey: t.due_date!,
+        order: 0,
+        card: taskCard(t, today, progressOf(t)),
+      })),
+    ...children
+      .filter((t) => {
+        const day = plannedDayOf(t);
+        return day !== null && day > today && day <= soonLimit;
+      })
+      .map((t) => ({ dateKey: plannedDayOf(t)!, order: 0, card: childCard(t) })),
+  ];
 
   let nextBill: { dateKey: string; card: StreamCard } | null = null;
   outer: for (let offset = 1; offset <= SOON_WINDOW_DAYS; offset++) {
