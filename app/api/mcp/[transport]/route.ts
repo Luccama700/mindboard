@@ -7,6 +7,8 @@ import {
 } from "@/app/lib/mindspace/sessions";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
+import { proposeDecomposeTaskFor } from "@/app/lib/tasks/decompose";
+import { todayKey } from "@/app/lib/mcp/config";
 import { verifyAccessToken } from "@/app/lib/mcp/oauth";
 import { looksLikePat, resolvePatUserId } from "@/app/lib/mcp/pat";
 import {
@@ -196,7 +198,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "List tasks",
         description:
-          "List tasks with their group, optionally filtered by group id and/or status. Use this to find a task's id before completing it.",
+          "List tasks with their group, optionally filtered by group id and/or status. Use this to find a task's id before completing it. Rows carry energy_cost (1-5, informational — how draining, not how long; energy_source 'ai' = default guess, 'user' = the user set it), parent_task_id/not_before for subtasks (a subtask's due_date is its window END, the planner picks the day inside [not_before, due_date]), and for a broken-down parent `children: {done, total}`.",
         inputSchema: {
           groupId: z.string().nullish(),
           status: z.enum(["todo", "doing", "done", "missed"]).optional(),
@@ -341,7 +343,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Schedule snapshot",
         description:
-          "The next timed Google Calendar event, free waking hours left today, and the next free time gaps over the coming 3 days.",
+          "The next timed Google Calendar event, free waking hours left today, the next free time gaps over the coming 3 days, and energyBudget — today's remaining energy room (budget from today's logged energy minus the energy_cost of what is on today's plate; null when today has no check-in). Informational, for planning only.",
         inputSchema: {},
       },
       (_args, extra) => guard(async () => ok(await getScheduleSnapshot(uid(extra)))),
@@ -352,7 +354,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Planning snapshot",
         description:
-          "One-call cross-domain planning read over today…+horizonDays (default 7, max 60). Per-day schedule: timed Google events, Mindboard time-blocks and recurring-task occurrences (source-tagged), free gaps, free-hours-before-5pm, and committed minutes. Plus every open task with due time/duration and a scheduled flag; upcoming recurring bills and projected end-of-day net worth per day; inventory run-out estimates; and the recent check-in trend + active goals. Times are in the user's local timezone with explicit ISO offsets. For one lean domain, use finance_snapshot / tasks_snapshot / inventory_snapshot / schedule_snapshot instead.",
+          "One-call cross-domain planning read over today…+horizonDays (default 7, max 60). Per-day schedule: timed Google events, Mindboard time-blocks and recurring-task occurrences (source-tagged), free gaps, free-hours-before-5pm, and committed minutes. Plus every open task with due time/duration, a scheduled flag, energyCost/energySource, and for broken-down tasks the parent's progress and each subtask's plannedDate inside its window; tasks.energyBudget is today's remaining energy room (today only, null without a check-in). Upcoming recurring bills and projected end-of-day net worth per day; inventory run-out estimates; and the recent check-in trend + active goals. Times are in the user's local timezone with explicit ISO offsets. For one lean domain, use finance_snapshot / tasks_snapshot / inventory_snapshot / schedule_snapshot instead.",
         inputSchema: { horizonDays: z.number().int().min(1).max(60).optional() },
       },
       (args, extra) =>
@@ -487,7 +489,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: create a task",
         description:
-          "Propose creating a task. Returns a preview + proposalId; call confirm_action to apply. Sort as you add: call list_groups and set groupId to the group that clearly fits the task's content (e.g. a course group for its assignments); only leave groupId omitted/null (inbox) when nothing fits. dueDate is YYYY-MM-DD.",
+          "Propose creating a task. Returns a preview + proposalId; call confirm_action to apply. Sort as you add: call list_groups and set groupId to the group that clearly fits the task's content (e.g. a course group for its assignments); only leave groupId omitted/null (inbox) when nothing fits. dueDate is YYYY-MM-DD. energyCost is optional and informational (1 automatic … 5 deep/dreaded effort; separate from minutes) — omit it and Mindboard assigns a default the user can override with one tap. Big multi-step tasks are NOT split automatically; offer decompose_task after creating one.",
         inputSchema: {
           title: z.string(),
           groupId: z.string().nullish(),
@@ -500,6 +502,21 @@ const mcpHandler = createMcpHandler(
             .min(1)
             .optional()
             .describe("expected effort in minutes"),
+          energyCost: z
+            .number()
+            .int()
+            .min(1)
+            .max(5)
+            .optional()
+            .describe("how draining, 1-5 (not how long). Omit for the AI default."),
+          parentTaskId: z
+            .string()
+            .nullish()
+            .describe("make this a subtask of an existing top-level task (prefer decompose_task for a whole breakdown)"),
+          notBefore: z
+            .string()
+            .nullish()
+            .describe("YYYY-MM-DD, earliest day a subtask may be planned; needs dueDate (the window end)"),
         },
       },
       (args, extra) =>
@@ -544,7 +561,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Propose: edit a task",
         description:
-          "Propose editing a task: rename, set/clear due date (null clears), set/clear a time-block (dueTime HH:MM + durationMin), move between groups (groupId null → inbox), notes, priority — and optionally push a dated+timed task out as a real Google Calendar event (pushToCalendar). Scheduling a task IS this tool (set dueDate + dueTime). Find the taskId via list_tasks. Returns a preview + proposalId; call confirm_action to apply.",
+          "Propose editing a task: rename, set/clear due date (null clears), set/clear a time-block (dueTime HH:MM + durationMin), move between groups (groupId null → inbox), notes, priority, energyCost (1-5, informational; an edit here counts as the user's own value and is never overwritten by the AI default), notBefore (a subtask's earliest planning day) — and optionally push a dated+timed task out as a real Google Calendar event (pushToCalendar). Scheduling a task IS this tool (set dueDate + dueTime). Find the taskId via list_tasks. Returns a preview + proposalId; call confirm_action to apply.",
         inputSchema: {
           taskId: z.string(),
           title: z.string().optional(),
@@ -568,11 +585,61 @@ const mcpHandler = createMcpHandler(
             .describe(
               "Overnight-agent lifecycle (see list_code_tasks); null clears it. 'approved' is user-only, set in the app.",
             ),
+          energyCost: z
+            .number()
+            .int()
+            .min(1)
+            .max(5)
+            .nullable()
+            .optional()
+            .describe("1-5, or null to clear"),
+          notBefore: z
+            .string()
+            .nullish()
+            .describe("YYYY-MM-DD or null; a subtask's earliest planning day (≤ its dueDate)"),
         },
       },
       (args, extra) =>
         guard(async () => {
           const r = await proposeUpdateTask(uid(extra), args);
+          return r.ok ? ok(r.value) : fail(r.error);
+        }),
+    );
+
+    server.registerTool(
+      "decompose_task",
+      {
+        title: "Propose: break a task into subtasks",
+        description:
+          "OPT-IN breakdown of one big task (it needs a due date) into 2-6 subtasks, each with a title, estimatedMinutes, energyCost and a window [notBefore, dueDate] inside the parent's window. Returns the proposed steps + a proposalId; NOTHING is written until confirm_action. The user may approve, reject (cancel_action), or edit: to edit, call this again with an explicit `children` list — that skips the model and proposes exactly those steps. On confirm the children are created under the parent (which keeps its own due date and estimate) and Mindboard plans them backwards from the deadline into free days; the parent then shows 'n of m done'. Do not offer this for small tasks — 'buy cat litter' does not need a plan.",
+        inputSchema: {
+          taskId: z.string().describe("a top-level task with a due date (list_tasks)"),
+          children: z
+            .array(
+              z.object({
+                title: z.string(),
+                estimatedMinutes: z.number().int().min(1),
+                energyCost: z.number().int().min(1).max(5),
+                notBefore: z.string().describe("YYYY-MM-DD"),
+                dueDate: z.string().describe("YYYY-MM-DD, ≤ the parent's due date"),
+              }),
+            )
+            .min(2)
+            .max(6)
+            .optional()
+            .describe("explicit steps (the edit path); omit to let the model propose them"),
+        },
+      },
+      (args, extra) =>
+        guard(async () => {
+          const userId = uid(extra);
+          const supabase = createServiceClient();
+          const r = await proposeDecomposeTaskFor(
+            supabase,
+            userId,
+            args,
+            await todayKey(supabase, userId),
+          );
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );

@@ -9,6 +9,7 @@ import {
 import { todayKey } from "./config";
 import { assignEnergyIfUnset } from "@/app/lib/tasks/energy";
 import { completeTaskCascade, missTaskCascade } from "@/app/lib/tasks/lifecycle";
+import { executeDecomposeTask } from "@/app/lib/tasks/decompose";
 import {
   summarizeCreateRecurringTask,
   summarizeCreateTask,
@@ -3150,6 +3151,9 @@ export const EXECUTORS: Record<
   create_task: executeCreateTask,
   update_task: executeUpdateTask,
   delete_task: executeDeleteTask,
+  // Children windows are re-clamped against the user's day at confirm time.
+  decompose_task: async (supabase, ownerId, input) =>
+    executeDecomposeTask(supabase, ownerId, input, await todayKey(supabase, ownerId)),
   create_recurring_task: executeCreateRecurringTask,
   update_recurring_task: executeUpdateRecurringTask,
   archive_recurring_task: executeArchiveRecurringTask,

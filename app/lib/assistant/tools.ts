@@ -52,6 +52,7 @@ import {
   listCoursesFor,
 } from "@/app/lib/mcp/courses";
 import { proposeGenerateAudioOverviewFor } from "@/app/lib/learn/episodes";
+import { proposeDecomposeTaskFor } from "@/app/lib/tasks/decompose";
 import {
   summarizeCreateTask,
   summarizeLogSpend,
@@ -90,7 +91,7 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
   {
     name: "list_tasks",
     description:
-      "List open tasks with ids, titles, due dates/times, priority, and group. Use ids for propose_complete_task / propose_schedule_task.",
+      "List open tasks with ids, titles, due dates/times, priority, group, estimatedMinutes, energyCost (1-5, informational — how draining, not how long), and parentTaskId/notBefore for subtasks (a subtask's dueDate is its window end). Use ids for propose_complete_task / propose_schedule_task / propose_decompose_task.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -149,8 +150,45 @@ export const ASSISTANT_TOOLS: Anthropic.Tool[] = [
           minimum: 1,
           description: "expected effort in minutes",
         },
+        energyCost: {
+          type: "integer",
+          minimum: 1,
+          maximum: 5,
+          description:
+            "how draining, 1-5 — informational, separate from minutes. Omit for Mindboard's default; the user can override with one tap.",
+        },
       },
       required: ["title"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose_decompose_task",
+    description:
+      "OPT-IN: propose breaking one big task (it needs a due date) into 2-6 subtasks, each with minutes, an energy cost and a window of days inside the parent's window; Mindboard plans them backwards from the deadline into free days and the parent shows 'n of m done'. Returns a proposal the user must confirm — nothing is created until then. Only for genuinely multi-step work; never for errands. To propose different steps than the model's, pass an explicit `children` list.",
+    input_schema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        children: {
+          type: "array",
+          minItems: 2,
+          maxItems: 6,
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              estimatedMinutes: { type: "integer", minimum: 1 },
+              energyCost: { type: "integer", minimum: 1, maximum: 5 },
+              notBefore: { type: "string", description: "YYYY-MM-DD" },
+              dueDate: { type: "string", description: "YYYY-MM-DD" },
+            },
+            required: ["title", "estimatedMinutes", "energyCost", "notBefore", "dueDate"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["taskId"],
       additionalProperties: false,
     },
   },
@@ -891,6 +929,10 @@ export async function runAssistantTool(
             priority: t.priority,
             group: t.group_name,
             estimatedMinutes: t.estimated_minutes,
+            energyCost: t.energy_cost,
+            energySource: t.energy_source,
+            parentTaskId: t.parent_task_id,
+            notBefore: t.not_before,
           })),
         };
       }
@@ -1004,6 +1046,17 @@ export async function runAssistantTool(
           { source: "assistant", conversationId },
         );
         return { type: "proposal", proposalId, preview: summary };
+      }
+      case "propose_decompose_task": {
+        const r = await proposeDecomposeTaskFor(
+          supabase,
+          userId,
+          input as { taskId?: unknown; children?: unknown },
+          today,
+          { source: "assistant", conversationId },
+        );
+        if (!r.ok) return { type: "error", error: r.error };
+        return { type: "proposal", proposalId: r.value.proposalId, preview: r.value.preview };
       }
       case "propose_complete_task": {
         const taskId = input.taskId;

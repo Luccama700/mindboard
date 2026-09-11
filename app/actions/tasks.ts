@@ -10,6 +10,8 @@ import {
   missTaskCascade,
   reopenTaskCascade,
 } from "@/app/lib/tasks/lifecycle";
+import { proposeDecomposeTaskFor } from "@/app/lib/tasks/decompose";
+import type { ProposedChild } from "@/app/lib/mcp/decompose-ops";
 import { createEvent, updateEvent } from "@/utils/google/calendar";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { queueFollowupFromWatch } from "@/app/lib/watch/followup";
@@ -580,4 +582,37 @@ export async function deleteTask(id: string) {
 
   revalidatePath("/", "layout");
   return { error: null };
+}
+
+// "Break down": propose 2-6 subtasks for one task. Nothing is written — the
+// returned proposal renders in a ProposalCard and confirmProposal (the same
+// rail the assistant's writes use) creates the children on the user's tap.
+export async function proposeBreakdown(taskId: string): Promise<{
+  error: string | null;
+  proposalId?: string;
+  preview?: string;
+  children?: ProposedChild[];
+}> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "not authenticated" };
+
+  const prefs = await getUserPreferences(user.id);
+  const today = todayISO(safeTimeZone(prefs.timezone));
+  const r = await proposeDecomposeTaskFor(
+    supabase,
+    user.id,
+    { taskId },
+    today,
+    { source: "assistant" },
+  );
+  if (!r.ok) return { error: r.error };
+  return {
+    error: null,
+    proposalId: r.value.proposalId,
+    preview: r.value.preview,
+    children: r.value.children,
+  };
 }
