@@ -171,6 +171,29 @@ describe("task actions", () => {
     });
   });
 
+  test("updateTask pulls a subtask's not_before along when the due date moves earlier", async () => {
+    const gt = vi.fn(async () => ({ error: null }));
+    const clampEq = vi.fn(() => ({ gt }));
+    const clampUpdate = vi.fn(() => ({ eq: clampEq }));
+    const single = vi.fn(async () => ({ data: {}, error: null }));
+    const select = vi.fn(() => ({ single }));
+    const mainEq = vi.fn(() => ({ select }));
+    const mainUpdate = vi.fn(() => ({ eq: mainEq }));
+    mocks.from
+      .mockReturnValueOnce({ update: clampUpdate })
+      .mockReturnValueOnce({ update: mainUpdate });
+
+    await expect(updateTask({ id: "c1", dueDate: "2026-09-18" })).resolves.toEqual({
+      error: null,
+    });
+
+    // The guard runs first and only touches a not_before past the new date.
+    expect(clampUpdate).toHaveBeenCalledWith({ not_before: "2026-09-18" });
+    expect(clampEq).toHaveBeenCalledWith("id", "c1");
+    expect(gt).toHaveBeenCalledWith("not_before", "2026-09-18");
+    expect(mainUpdate).toHaveBeenCalledWith({ due_date: "2026-09-18" });
+  });
+
   test("createTask stores a normalized due time when a date is present", async () => {
     const single = vi.fn(async () => ({ data: { id: "task-2" }, error: null }));
     const select = vi.fn(() => ({ single }));

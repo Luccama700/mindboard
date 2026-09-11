@@ -288,6 +288,16 @@ export async function updateTask(input: {
     input.dueTime !== undefined ||
     input.durationMin !== undefined;
 
+  // A subtask's window must stay well-formed (tasks_not_before_within_window):
+  // pulling its due date in front of its not_before pulls not_before along.
+  if (typeof updates.due_date === "string" && updates.not_before === undefined) {
+    await supabase
+      .from("tasks")
+      .update({ not_before: updates.due_date })
+      .eq("id", input.id)
+      .gt("not_before", updates.due_date);
+  }
+
   const { data: updated, error } = await supabase
     .from("tasks")
     .update(updates)
