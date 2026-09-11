@@ -189,6 +189,9 @@ describe("decomposition on the task row", () => {
     expect(mocks.confirmBreakdown).not.toHaveBeenCalled();
     expect(screen.getByText("Outline argument")).toBeTruthy();
 
+    // The card's buttons read "…" and are disabled until the propose
+    // transition settles; wait for the real label before tapping.
+    await waitFor(() => expect(screen.getByRole("button", { name: "add steps" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "add steps" }));
     await waitFor(() => expect(mocks.confirmBreakdown).toHaveBeenCalledWith("prop-1"));
     await waitFor(() =>
@@ -219,12 +222,14 @@ describe("decomposition on the task row", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "✂ break down" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "skip" })).toBeTruthy());
+    // "skip" is disabled while the propose transition is pending.
+    await waitFor(() =>
+      expect((screen.getByRole("button", { name: "skip" }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
     fireEvent.click(screen.getByRole("button", { name: "skip" }));
-    // Two awaited transitions under a loaded suite: give the second one room.
-    await waitFor(() => expect(mocks.cancelBreakdown).toHaveBeenCalledWith("prop-2"), {
-      timeout: 4000,
-    });
+    await waitFor(() => expect(mocks.cancelBreakdown).toHaveBeenCalledWith("prop-2"));
     expect(mocks.confirmBreakdown).not.toHaveBeenCalled();
   });
 
