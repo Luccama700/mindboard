@@ -343,7 +343,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Schedule snapshot",
         description:
-          "The next timed Google Calendar event, free waking hours left today, the next free time gaps over the coming 3 days, and energyBudget — today's remaining energy room (budget from today's logged energy minus the energy_cost of what is on today's plate; null when today has no check-in). Informational, for planning only.",
+          "The next timed Google Calendar event, free waking hours left today, the next free time gaps over the coming 3 days, and energyBudget — today's remaining energy room (budget from today's logged energy minus the energy_cost of what is on today's plate; null when today has no check-in). Informational, for planning only. Subtasks here are planned against Google events and time-blocked tasks over these 3 days only; get_snapshot also counts recurring occurrences and looks further ahead, so a step's planned day can differ between the two.",
         inputSchema: {},
       },
       (_args, extra) => guard(async () => ok(await getScheduleSnapshot(uid(extra)))),

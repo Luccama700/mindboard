@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { readProviderKey } from "@/app/lib/connections/keys";
 import { recordProposal } from "@/app/lib/mcp/audit";
 import {
+  clampChildrenToToday,
   MAX_CHILDREN,
   MIN_CHILDREN,
   renderDecompositionReceipt,
@@ -235,7 +236,7 @@ export async function executeDecomposeTask(
     };
   }
   const validated = validateDecomposition(
-    input.children,
+    clampChildrenToToday(input.children, today),
     { id: parent.id, title: parent.title, dueDate },
     today,
   );

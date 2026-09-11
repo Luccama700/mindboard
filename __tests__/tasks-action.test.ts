@@ -311,6 +311,7 @@ describe("task actions", () => {
     expect(update).toHaveBeenCalledWith({
       due_date: null,
       due_time: null,
+      not_before: null,
       group_id: "group-2",
       notes: "remember this",
     });

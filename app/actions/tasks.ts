@@ -289,9 +289,13 @@ export async function updateTask(input: {
   }
   if (input.dueDate !== undefined) {
     updates.due_date = input.dueDate;
-    // A task without a date cannot hold a time-block.
+    // A task without a date cannot hold a time-block, nor a window start
+    // (tasks_not_before_within_window).
     if (input.dueDate === null && input.dueTime === undefined) {
       updates.due_time = null;
+    }
+    if (input.dueDate === null && input.notBefore === undefined) {
+      updates.not_before = null;
     }
   }
   if (input.dueTime !== undefined) {

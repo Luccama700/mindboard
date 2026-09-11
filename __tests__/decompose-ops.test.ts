@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  clampChildrenToToday,
   MAX_CHILDREN,
   MIN_CHILDREN,
   renderDecompositionReceipt,
@@ -114,5 +115,32 @@ describe("renderDecompositionReceipt", () => {
         '≈ 2h in total. The steps land in your stream on their planned days; "Write PHIL 240 essay" stays as the thing owed and shows progress.',
       ].join("\n"),
     );
+  });
+});
+
+describe("clampChildrenToToday (confirm after a day or two)", () => {
+  test("a step whose window slipped into the past moves up to today and still validates", () => {
+    const proposedOn = "2026-09-10";
+    const confirmedOn = "2026-09-12";
+    const steps = [
+      child({ title: "Pull quotes", notBefore: "2026-09-10", dueDate: "2026-09-11" }),
+      child({ title: "Draft", notBefore: "2026-09-12", dueDate: "2026-09-20" }),
+    ];
+    expect(validateDecomposition(steps, PARENT, proposedOn).ok).toBe(true);
+    // Un-clamped, the confirm would be burned for a window that merely aged.
+    expect(validateDecomposition(steps, PARENT, confirmedOn).ok).toBe(false);
+    const r = validateDecomposition(clampChildrenToToday(steps, confirmedOn), PARENT, confirmedOn);
+    expect(r).toMatchObject({
+      ok: true,
+      value: [
+        { title: "Pull quotes", notBefore: confirmedOn, dueDate: confirmedOn },
+        { title: "Draft", notBefore: "2026-09-12", dueDate: "2026-09-20" },
+      ],
+    });
+  });
+
+  test("passes anything that is not a step list through untouched", () => {
+    expect(clampChildrenToToday("nope", "2026-09-12")).toBe("nope");
+    expect(clampChildrenToToday({ children: [null, 3] }, "2026-09-12")).toEqual([null, 3]);
   });
 });

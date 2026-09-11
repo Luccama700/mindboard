@@ -125,12 +125,36 @@ export async function getWatchToday(userId: string): Promise<WatchToday> {
       }))
     : null;
 
-  const taskRows = ((tasksRes.data ?? []) as unknown as TaskRow[]).map(
+  const fetchedRows = ((tasksRes.data ?? []) as unknown as TaskRow[]).map(
     ({ groups, ...task }) => ({
       ...task,
       group_name: firstRel(groups)?.name ?? null,
       group_color: firstRel(groups)?.color ?? null,
     }),
+  );
+
+  // Children of a non-open parent are hidden everywhere (a missed parent keeps
+  // its steps as they are). The parent may sit outside this fetch's date
+  // window, so its status is read directly rather than from the rows.
+  const childParentIds = [
+    ...new Set(
+      fetchedRows
+        .filter((t) => t.parent_task_id)
+        .map((t) => t.parent_task_id as string),
+    ),
+  ];
+  const openParentIds = new Set<string>();
+  if (childParentIds.length > 0) {
+    const { data: parents } = await supabase
+      .from("tasks")
+      .select("id")
+      .eq("user_id", userId)
+      .in("id", childParentIds)
+      .in("status", ["todo", "doing"]);
+    for (const p of (parents ?? []) as { id: string }[]) openParentIds.add(p.id);
+  }
+  const taskRows = fetchedRows.filter(
+    (t) => !t.parent_task_id || openParentIds.has(t.parent_task_id),
   );
 
   // "n of m" for the decomposed parents on the wrist: one query over their

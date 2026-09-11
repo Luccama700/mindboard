@@ -176,7 +176,7 @@ export function slideTarget(
   child: { due_date: string | null; not_before: string | null },
   today: string,
 ): string | null {
-  if (!child.due_date || child.due_date < today) return null;
+  if (!child.due_date || child.due_date <= today) return null;
   const tomorrow = addDaysKey(today, 1);
   const target = tomorrow < child.due_date ? tomorrow : child.due_date;
   if (child.not_before && child.not_before >= target) return null;

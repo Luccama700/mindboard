@@ -1847,8 +1847,9 @@ async function executeUpdateTask(
   if (v.title !== undefined) updates.title = v.title;
   if (v.dueDate !== undefined) {
     updates.due_date = v.dueDate;
-    // A task without a date cannot hold a time-block.
+    // A task without a date cannot hold a time-block, nor a window start.
     if (v.dueDate === null && v.dueTime === undefined) updates.due_time = null;
+    if (v.dueDate === null && v.notBefore === undefined) updates.not_before = null;
   }
   if (v.dueTime !== undefined) {
     updates.due_time = v.dueTime ? `${v.dueTime}:00` : null;

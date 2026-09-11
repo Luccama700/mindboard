@@ -205,9 +205,9 @@ export function TasksClient({
     });
   }
 
-  // `today` arrives as a prop — see the Dock's. A child whose parent is on
-  // this page and resolved is hidden with it (reopening the parent brings it
-  // back), matching the stream's read-side rule.
+  // `today` arrives as a prop — see the Dock's. The page already dropped the
+  // children of a non-open parent (their parent may not be among these rows);
+  // this only keeps an optimistic parent completion consistent until refresh.
   const statusById = new Map(tasks.map((t) => [t.id, t.status]));
   const active = tasks.filter((t) => {
     if (t.status === "done" || t.status === "missed") return false;

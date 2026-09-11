@@ -151,3 +151,24 @@ export function renderDecompositionReceipt(
     `≈ ${minutesLabel(total)} in total. The steps land in your stream on their planned days; "${parent.title}" stays as the thing owed and shows progress.`,
   ].join("\n");
 }
+
+// Before re-validating at confirm time: a step whose window has slipped into
+// the past since it was proposed moves up to today (a day or two passed
+// between the tap and the confirm), so the confirm the user just tapped is
+// honoured rather than burned. Titles/minutes/energy are untouched.
+export function clampChildrenToToday(raw: unknown, today: string): unknown {
+  const list = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { children?: unknown })?.children)
+      ? (raw as { children: unknown[] }).children
+      : null;
+  if (!list) return raw;
+  return list.map((c) => {
+    if (!c || typeof c !== "object") return c;
+    const child = c as Record<string, unknown>;
+    const dueDate = typeof child.dueDate === "string" && child.dueDate < today ? today : child.dueDate;
+    const notBefore =
+      typeof child.notBefore === "string" && child.notBefore < today ? today : child.notBefore;
+    return { ...child, dueDate, notBefore };
+  });
+}

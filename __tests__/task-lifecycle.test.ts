@@ -129,7 +129,9 @@ describe("slideTarget", () => {
   });
   test("clamps to the window end", () => {
     expect(slideTarget({ due_date: "2026-09-16", not_before: null }, today)).toBe("2026-09-16");
-    expect(slideTarget({ due_date: "2026-09-15", not_before: null }, today)).toBe("2026-09-15");
+  });
+  test("a child due today cannot slide anywhere: no slide, not a slide to today", () => {
+    expect(slideTarget({ due_date: "2026-09-15", not_before: null }, today)).toBeNull();
   });
   test("no slide once already at the window end, or with no window", () => {
     expect(slideTarget({ due_date: "2026-09-15", not_before: "2026-09-15" }, today)).toBeNull();
