@@ -252,3 +252,66 @@ describe("planSubtasks — the preference never costs a deadline", () => {
     expect(planned.get("later")).toMatchObject({ dateKey: TODAY, fitted: true });
   });
 });
+
+describe("planSubtasks — window-tightness order and pinned children", () => {
+  test("the child with the tighter window claims its gap first", () => {
+    const tomorrow = "2026-09-16";
+    const planned = byId(
+      planSubtasks({
+        today: TODAY,
+        children: [
+          child({ id: "flexible", due_date: tomorrow, not_before: TODAY, estimated_minutes: 60 }),
+          child({ id: "urgent", due_date: TODAY, not_before: TODAY, estimated_minutes: 90 }),
+        ],
+        intervalsByDay: new Map([
+          [TODAY, [iv(540, 630), iv(660, 720)]],
+          [tomorrow, []],
+        ]),
+      }),
+    );
+    expect(planned.get("urgent")).toMatchObject({ dateKey: TODAY, start: "09:00", end: "10:30", fitted: true });
+    expect(planned.get("flexible")).toMatchObject({ dateKey: TODAY, start: "11:00", end: "12:00", fitted: true });
+  });
+
+  test("a time-blocked child keeps its own day and time and is never re-planned", () => {
+    const planned = byId(
+      planSubtasks({
+        today: TODAY,
+        children: [
+          child({ id: "pinned", due_date: "2026-09-18", due_time: "14:00:00", estimated_minutes: 60, energy_cost: 5 }),
+          child({ id: "free", due_date: "2026-09-18", estimated_minutes: 60 }),
+        ],
+        intervalsByDay: WIDE_OPEN,
+        energyByDay: new Map([[TODAY, 5]]),
+      }),
+    );
+    expect(planned.get("pinned")).toMatchObject({ dateKey: "2026-09-18", start: "14:00", end: "15:00", fitted: true });
+    expect(planned.get("free")).toMatchObject({ dateKey: "2026-09-18", start: "09:00" });
+  });
+
+  test("energy relocation releases its old gap and never mutates the caller's inputs", () => {
+    const tomorrow = "2026-09-16";
+    const children = [
+      child({ id: "a-heavy", due_date: tomorrow, not_before: TODAY, estimated_minutes: 60, energy_cost: 5 }),
+      child({ id: "b-light", due_date: tomorrow, not_before: TODAY, estimated_minutes: 60, energy_cost: 1 }),
+    ];
+    const intervals = new Map([
+      [TODAY, [iv(540, 660)]],
+      [tomorrow, [iv(540, 600)]],
+    ]);
+    const before = JSON.stringify([...intervals]);
+    const originalChildren = JSON.stringify(children);
+    const planned = byId(
+      planSubtasks({
+        today: TODAY,
+        children,
+        intervalsByDay: intervals,
+        energyByDay: new Map([[TODAY, 5], [tomorrow, 1]]),
+      }),
+    );
+    expect(planned.get("a-heavy")).toMatchObject({ dateKey: TODAY, fitted: true });
+    expect(planned.get("b-light")).toMatchObject({ dateKey: tomorrow, fitted: true });
+    expect(JSON.stringify([...intervals])).toBe(before);
+    expect(JSON.stringify(children)).toBe(originalChildren);
+  });
+});

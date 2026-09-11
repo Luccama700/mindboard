@@ -22,10 +22,13 @@ describe("energyBudget", () => {
     expect(energyBudget(1, [{ energy_cost: 5 }, { energy_cost: 5 }])!.remaining).toBe(0);
   });
 
-  test("no log today means no budget at all", () => {
+  test("no log today means no budget at all; only a real 1-5 level counts", () => {
     expect(energyBudget(null, [{ energy_cost: 3 }])).toBeNull();
     expect(energyBudget(undefined, [])).toBeNull();
     expect(energyBudget(9, [])).toBeNull();
+    for (const level of [NaN, Infinity, -Infinity, 2.5]) {
+      expect(energyBudget(level, [{ energy_cost: 3 }])).toBeNull();
+    }
   });
 });
 

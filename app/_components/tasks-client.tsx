@@ -39,13 +39,9 @@ function applyPatch(task: Task, patch: UpdatePatch): Task {
   if (patch.groupId !== undefined) next = { ...next, group_id: patch.groupId };
   if (patch.notes !== undefined) next = { ...next, notes: patch.notes };
   if (patch.priority !== undefined) next = { ...next, priority: patch.priority };
-  // A tap on the dots is the user's value from that moment on (filled dots).
+  // A tap on the dots is the user's value from that moment on — a clear too.
   if (patch.energyCost !== undefined)
-    next = {
-      ...next,
-      energy_cost: patch.energyCost,
-      energy_source: patch.energyCost === null ? null : "user",
-    };
+    next = { ...next, energy_cost: patch.energyCost, energy_source: "user" };
   if (patch.notBefore !== undefined) next = { ...next, not_before: patch.notBefore };
   return next;
 }

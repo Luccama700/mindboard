@@ -100,6 +100,9 @@ export function validateCreateTask(raw: {
   if (notBefore && !dueDate) {
     return { ok: false, error: "notBefore needs a dueDate to bound the window" };
   }
+  if (notBefore && !raw.parentTaskId) {
+    return { ok: false, error: "notBefore is a subtask's window start — pass parentTaskId" };
+  }
   if (notBefore && dueDate && notBefore > dueDate) {
     return { ok: false, error: "notBefore must be on or before dueDate" };
   }

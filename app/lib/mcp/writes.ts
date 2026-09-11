@@ -1859,10 +1859,11 @@ async function executeUpdateTask(
   if (v.notes !== undefined) updates.notes = v.notes;
   if (v.priority !== undefined) updates.priority = v.priority;
   if (v.aiState !== undefined) updates.ai_state = v.aiState;
-  // An explicit edit is the user's call (relayed by the client): 'user'.
+  // An explicit edit is the user's call (relayed by the client): 'user' —
+  // a clear included, so an in-flight AI rating cannot refill it.
   if (v.energyCost !== undefined) {
     updates.energy_cost = v.energyCost;
-    updates.energy_source = v.energyCost === null ? null : "user";
+    updates.energy_source = "user";
   }
   if (v.notBefore !== undefined) updates.not_before = v.notBefore;
 
@@ -1870,31 +1871,65 @@ async function executeUpdateTask(
     return { ok: false, error: "nothing to change" };
   }
 
-  // Windows stay well-formed when a due date moves earlier: a subtask's own
-  // not_before follows it (tasks_not_before_within_window), and a parent's
-  // children are pulled in behind the new deadline.
-  if (typeof updates.due_date === "string") {
-    const due = updates.due_date;
-    if (updates.not_before === undefined) {
-      await supabase
+  // Windows stay well-formed when a due date moves: a subtask cannot be due
+  // after its parent, a parent with steps keeps its deadline, a subtask's own
+  // not_before follows an earlier due date (tasks_not_before_within_window),
+  // and a parent's children are pulled in behind a new earlier deadline.
+  if (v.dueDate !== undefined) {
+    const { data: row } = await supabase
+      .from("tasks")
+      .select("parent_task_id")
+      .eq("id", v.taskId)
+      .eq("user_id", ownerId)
+      .maybeSingle();
+    const parentId = (row as { parent_task_id: string | null } | null)?.parent_task_id ?? null;
+    if (parentId && v.dueDate) {
+      const { data: parent } = await supabase
+        .from("tasks")
+        .select("due_date")
+        .eq("id", parentId)
+        .eq("user_id", ownerId)
+        .maybeSingle();
+      const parentDue = (parent as { due_date: string | null } | null)?.due_date ?? null;
+      if (parentDue && v.dueDate > parentDue) {
+        return { ok: false, error: `a subtask cannot be due after its parent (${parentDue})` };
+      }
+    }
+    if (v.dueDate === null) {
+      const { count } = await supabase
+        .from("tasks")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", ownerId)
+        .eq("parent_task_id", v.taskId);
+      if ((count ?? 0) > 0) {
+        return { ok: false, error: "a task with subtasks keeps its due date (they are planned from it)" };
+      }
+    } else {
+      const due = v.dueDate;
+      if (v.notBefore === undefined) {
+        const own = await supabase
+          .from("tasks")
+          .update({ not_before: due })
+          .eq("id", v.taskId)
+          .eq("user_id", ownerId)
+          .gt("not_before", due);
+        if (own.error) return { ok: false, error: own.error.message };
+      }
+      const kidsStart = await supabase
         .from("tasks")
         .update({ not_before: due })
-        .eq("id", v.taskId)
+        .eq("parent_task_id", v.taskId)
         .eq("user_id", ownerId)
         .gt("not_before", due);
+      if (kidsStart.error) return { ok: false, error: kidsStart.error.message };
+      const kidsEnd = await supabase
+        .from("tasks")
+        .update({ due_date: due })
+        .eq("parent_task_id", v.taskId)
+        .eq("user_id", ownerId)
+        .gt("due_date", due);
+      if (kidsEnd.error) return { ok: false, error: kidsEnd.error.message };
     }
-    await supabase
-      .from("tasks")
-      .update({ not_before: due })
-      .eq("parent_task_id", v.taskId)
-      .eq("user_id", ownerId)
-      .gt("not_before", due);
-    await supabase
-      .from("tasks")
-      .update({ due_date: due })
-      .eq("parent_task_id", v.taskId)
-      .eq("user_id", ownerId)
-      .gt("due_date", due);
   }
 
   const { data: updated, error } = await supabase

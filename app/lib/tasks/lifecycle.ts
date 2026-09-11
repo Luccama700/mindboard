@@ -86,12 +86,17 @@ export async function completeTaskCascade(
   const task = loaded.value;
   const stamp = { status: "done", completed_at: now.toISOString(), missed_at: null };
 
-  const { error } = await supabase
+  // Guarded on still-open and checked for a row: a task deleted or resolved
+  // between the load and this write must not go on to touch its family.
+  const { data: done, error } = await supabase
     .from("tasks")
     .update(stamp)
     .eq("id", taskId)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .in("status", [...OPEN])
+    .select("id");
   if (error) return { ok: false, error: error.message };
+  if ((done ?? []).length === 0) return { ok: false, error: "task was resolved meanwhile" };
 
   let parentCompleted = false;
   let childrenCompleted = 0;
@@ -138,12 +143,15 @@ export async function reopenTaskCascade(
   const task = loaded.value;
   const reset = { status: "todo", missed_at: null, completed_at: null };
 
-  const { error } = await supabase
+  const { data: reopened, error } = await supabase
     .from("tasks")
     .update(reset)
     .eq("id", taskId)
-    .eq("user_id", userId);
+    .eq("user_id", userId)
+    .in("status", ["done", "missed"])
+    .select("id");
   if (error) return { ok: false, error: error.message };
+  if ((reopened ?? []).length === 0) return { ok: false, error: "task is already open" };
 
   let parentReopened = false;
   if (task.parent_task_id) {
@@ -161,12 +169,14 @@ export async function reopenTaskCascade(
 }
 
 // The day a skipped child may next be planned: tomorrow, but never past its
-// window end. A child already on its last day stays there (null = no slide).
+// window end. A child already on its last day — or whose window has already
+// closed — stays where it is (null = no slide; the parent's lateness is the
+// accountability record).
 export function slideTarget(
   child: { due_date: string | null; not_before: string | null },
   today: string,
 ): string | null {
-  if (!child.due_date) return null;
+  if (!child.due_date || child.due_date < today) return null;
   const tomorrow = addDaysKey(today, 1);
   const target = tomorrow < child.due_date ? tomorrow : child.due_date;
   if (child.not_before && child.not_before >= target) return null;
@@ -196,12 +206,17 @@ export async function missTaskCascade(
   if (task.parent_task_id) {
     const notBefore = slideTarget(task, today);
     if (notBefore !== null) {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("tasks")
         .update({ not_before: notBefore })
         .eq("id", taskId)
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .in("status", [...OPEN])
+        .select("id");
       if (error) return { ok: false, error: error.message };
+      if ((data ?? []).length === 0) {
+        return { ok: false, error: "task was resolved meanwhile" };
+      }
     }
     return {
       ok: true,

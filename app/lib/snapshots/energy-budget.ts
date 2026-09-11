@@ -21,7 +21,14 @@ export function energyBudget(
   loggedEnergy: number | null | undefined,
   tasksToday: { energy_cost: number | null }[],
 ): EnergyBudget | null {
-  if (loggedEnergy == null || loggedEnergy < 1 || loggedEnergy > 5) return null;
+  if (
+    loggedEnergy == null ||
+    !Number.isInteger(loggedEnergy) ||
+    loggedEnergy < 1 ||
+    loggedEnergy > 5
+  ) {
+    return null;
+  }
   let scheduled = 0;
   let unrated = 0;
   for (const t of tasksToday) {

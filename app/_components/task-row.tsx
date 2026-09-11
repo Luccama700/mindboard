@@ -364,7 +364,11 @@ function EditPanel({
   function rejectBreakdown() {
     if (!breakdown) return;
     startBreakdown(async () => {
-      await cancelBreakdown(breakdown.proposalId);
+      const result = await cancelBreakdown(breakdown.proposalId);
+      if (result.error) {
+        setBreakdownNote(result.error);
+        return;
+      }
       setBreakdown(null);
     });
   }

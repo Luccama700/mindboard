@@ -370,15 +370,10 @@ export async function buildPlanningSnapshot(params: {
     },
   );
 
-  // Done children of the open parents, for "n of m" (open rows alone
-  // cannot say how much of a decomposed task is already behind you).
-  const parentIds = [
-    ...new Set(
-      tasks
-        .filter((t) => t.parent_task_id !== null)
-        .map((t) => t.parent_task_id as string),
-    ),
-  ];
+  // Done children of every open top-level task, for "n of m" (open rows
+  // alone cannot say how much of a decomposed task is already behind you,
+  // and a reopened parent may have nothing but done children).
+  const parentIds = tasks.filter((t) => t.parent_task_id === null).map((t) => t.id);
   const doneChildrenByParent = new Map<string, number>();
   if (parentIds.length > 0) {
     const { data: doneRows } = await supabase

@@ -161,8 +161,9 @@ describe("task actions", () => {
     await updateTask({ id: "task-1", energyCost: 2 });
     expect(update).toHaveBeenLastCalledWith({ energy_cost: 2, energy_source: "user" });
 
+    // A clear is still the user's call: the AI default must not refill it.
     await updateTask({ id: "task-1", energyCost: null });
-    expect(update).toHaveBeenLastCalledWith({ energy_cost: null, energy_source: null });
+    expect(update).toHaveBeenLastCalledWith({ energy_cost: null, energy_source: "user" });
 
     await updateTask({ id: "task-1", notBefore: "2026-09-18" });
     expect(update).toHaveBeenLastCalledWith({ not_before: "2026-09-18" });
@@ -172,6 +173,11 @@ describe("task actions", () => {
   });
 
   test("updateTask pulls a subtask's not_before along when the due date moves earlier", async () => {
+    const loadMaybeSingle = vi.fn(async () => ({ data: { parent_task_id: "p" }, error: null }));
+    const loadEq = vi.fn(() => ({ maybeSingle: loadMaybeSingle }));
+    const loadSelect = vi.fn(() => ({ eq: loadEq }));
+    const parentMaybeSingle = vi.fn(async () => ({ data: { due_date: "2026-09-24" }, error: null }));
+    const parentSelect = vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: parentMaybeSingle })) }));
     const gt = vi.fn(async () => ({ error: null }));
     const clampEq = vi.fn(() => ({ gt }));
     const clampUpdate = vi.fn(() => ({ eq: clampEq }));
@@ -180,6 +186,8 @@ describe("task actions", () => {
     const mainEq = vi.fn(() => ({ select }));
     const mainUpdate = vi.fn(() => ({ eq: mainEq }));
     mocks.from
+      .mockReturnValueOnce({ select: loadSelect })
+      .mockReturnValueOnce({ select: parentSelect })
       .mockReturnValueOnce({ update: clampUpdate })
       .mockReturnValueOnce({ update: clampUpdate })
       .mockReturnValueOnce({ update: clampUpdate })
@@ -198,6 +206,34 @@ describe("task actions", () => {
     expect(gt).toHaveBeenCalledWith("not_before", "2026-09-18");
     expect(gt).toHaveBeenCalledWith("due_date", "2026-09-18");
     expect(mainUpdate).toHaveBeenCalledWith({ due_date: "2026-09-18" });
+  });
+
+  test("updateTask refuses a step due after its task, and a task with steps losing its date", async () => {
+    const loadMaybeSingle = vi.fn(async () => ({ data: { parent_task_id: "p" }, error: null }));
+    const loadEq = vi.fn(() => ({ maybeSingle: loadMaybeSingle }));
+    const dueMaybeSingle = vi.fn(async () => ({ data: { due_date: "2026-09-24" }, error: null }));
+    mocks.from
+      .mockReturnValueOnce({ select: vi.fn(() => ({ eq: loadEq })) })
+      .mockReturnValueOnce({
+        select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: dueMaybeSingle })) })),
+      });
+    await expect(updateTask({ id: "c1", dueDate: "2026-09-30" })).resolves.toEqual({
+      error: "a step cannot be due after its task (2026-09-24)",
+    });
+
+    const parentMaybeSingle = vi.fn(async () => ({
+      data: { parent_task_id: null },
+      error: null,
+    }));
+    const countEq = vi.fn(async () => ({ count: 3, error: null }));
+    mocks.from
+      .mockReturnValueOnce({
+        select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: parentMaybeSingle })) })),
+      })
+      .mockReturnValueOnce({ select: vi.fn(() => ({ eq: countEq })) });
+    await expect(updateTask({ id: "p", dueDate: null })).resolves.toEqual({
+      error: "a task with steps keeps its due date — the steps are planned from it",
+    });
   });
 
   test("createTask stores a normalized due time when a date is present", async () => {
@@ -253,7 +289,15 @@ describe("task actions", () => {
     const select = vi.fn(() => ({ single }));
     const eq = vi.fn(() => ({ select }));
     const update = vi.fn(() => ({ eq }));
-    mocks.from.mockReturnValue({ update });
+    // Clearing a date first checks the row is not a step and has no steps.
+    const loadMaybeSingle = vi.fn(async () => ({ data: { parent_task_id: null }, error: null }));
+    const countEq = vi.fn(async () => ({ count: 0, error: null }));
+    mocks.from
+      .mockReturnValueOnce({
+        select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: loadMaybeSingle })) })),
+      })
+      .mockReturnValueOnce({ select: vi.fn(() => ({ eq: countEq })) })
+      .mockReturnValue({ update });
 
     await expect(
       updateTask({

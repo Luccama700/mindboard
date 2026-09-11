@@ -195,6 +195,9 @@ export type SubtaskPlanChild = {
   id: string;
   parent_task_id: string;
   due_date: string;
+  // A child the user time-blocked (due_time) is already scheduled: it keeps
+  // its own day and time and is never re-planned (it is busy time instead).
+  due_time?: string | null;
   not_before: string | null;
   duration_min: number | null;
   estimated_minutes: number | null;
@@ -244,9 +247,20 @@ export function planSubtasks(input: {
   const { today, children, intervalsByDay } = input;
   const energyByDay = input.energyByDay ?? new Map<string, number>();
 
+  // Tightest window first (fewest days to choose from), then latest deadline:
+  // a child with one possible day claims its gap before a child that could
+  // go elsewhere, so a preference or a flexible sibling never costs a
+  // deadline.
+  const windowLength = (c: SubtaskPlanChild) =>
+    dayKeysBetween(
+      c.not_before && c.not_before > today ? c.not_before : today,
+      c.due_date,
+    ).length;
   const ordered = children
     .filter((c) => c.due_date >= today)
     .sort((a, b) => {
+      const w = windowLength(a) - windowLength(b);
+      if (w !== 0) return w;
       const d = b.due_date.localeCompare(a.due_date);
       if (d !== 0) return d;
       const nb = (b.not_before ?? "").localeCompare(a.not_before ?? "");
@@ -275,6 +289,9 @@ export function planSubtasks(input: {
     }
     return pool;
   };
+  // Earliest span of the day that holds the child (a morning start beats a
+  // late-evening sliver). Contention between children is handled by the
+  // ORDER below, not by hunting for the tightest gap.
   const tryFit = (dateKey: string, minutes: number) => {
     const pool = poolFor(dateKey);
     if (!pool) return null;
@@ -324,10 +341,26 @@ export function planSubtasks(input: {
   // Pass 1 — feasibility: latest day of the window that fits, energy-blind,
   // so a deadline is never lost to a preference. A child that fits nowhere
   // takes its window's last day untimed.
-  type Placement = { child: SubtaskPlanChild; dateKey: string; span: Span | null };
+  type Placement = {
+    child: SubtaskPlanChild;
+    dateKey: string;
+    span: Span | null;
+    pinned?: boolean;
+  };
   const placements: Placement[] = [];
   for (const child of ordered) {
     const minutes = minutesOf(child);
+    if (child.due_time) {
+      const [h, m] = child.due_time.split(":").map(Number);
+      const start = h * 60 + m;
+      placements.push({
+        child,
+        dateKey: child.due_date,
+        span: { start, end: start + minutes },
+        pinned: true,
+      });
+      continue;
+    }
     const days = windowOf(child);
     let placed: Placement | null = null;
     for (let i = days.length - 1; i >= 0; i--) {
@@ -345,7 +378,7 @@ export function planSubtasks(input: {
   // ranks better. Only leftover space is used, so nothing placed in pass 1
   // can be displaced: the preference stays soft by construction.
   for (const p of placements) {
-    if (!p.span) continue;
+    if (!p.span || p.pinned) continue;
     const current = energyRank(p.child.energy_cost, energyByDay.get(p.dateKey));
     if (current === 2) continue;
     const minutes = minutesOf(p.child);

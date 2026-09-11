@@ -825,6 +825,7 @@ export async function getScheduleSnapshot(userId: string) {
           id: t.id,
           parent_task_id: t.parent_task_id as string,
           due_date: t.due_date as string,
+          due_time: t.due_time,
           not_before: t.not_before,
           duration_min: t.duration_min,
           estimated_minutes: t.estimated_minutes,

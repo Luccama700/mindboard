@@ -468,6 +468,7 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
           id: t.id,
           parent_task_id: t.parent_task_id as string,
           due_date: t.due_date as string,
+          due_time: t.due_time,
           not_before: t.not_before,
           duration_min: t.duration_min,
           estimated_minutes: t.estimated_minutes,
@@ -492,6 +493,8 @@ export function planningSnapshot(input: PlanningInput): PlanningSnapshot {
   const taskItems: PlanningTask[] = [];
   for (const t of openTasks) {
     const isChild = t.parent_task_id !== null;
+    // Hidden with its parent everywhere else; hidden here too.
+    if (isChild && !openById.has(t.parent_task_id as string)) continue;
     const placement = planned.get(t.id);
     const plannedDate = isChild ? (placement?.dateKey ?? t.due_date) : null;
     // A child is bucketed by the day it is planned for; its due_date is only

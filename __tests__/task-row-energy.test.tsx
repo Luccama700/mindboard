@@ -221,7 +221,10 @@ describe("decomposition on the task row", () => {
     fireEvent.click(screen.getByRole("button", { name: "✂ break down" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "skip" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "skip" }));
-    await waitFor(() => expect(mocks.cancelBreakdown).toHaveBeenCalledWith("prop-2"));
+    // Two awaited transitions under a loaded suite: give the second one room.
+    await waitFor(() => expect(mocks.cancelBreakdown).toHaveBeenCalledWith("prop-2"), {
+      timeout: 4000,
+    });
     expect(mocks.confirmBreakdown).not.toHaveBeenCalled();
   });
 

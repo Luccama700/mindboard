@@ -215,8 +215,12 @@ describe("validateCreateTask energy + subtask fields", () => {
 
   test("notBefore must sit inside the window and needs a dueDate", () => {
     expect(
-      validateCreateTask({ title: "x", dueDate: "2026-09-24", notBefore: "2026-09-20" }).ok,
+      validateCreateTask({ title: "x", dueDate: "2026-09-24", notBefore: "2026-09-20", parentTaskId: "p" }).ok,
     ).toBe(true);
+    // a window start only makes sense on a subtask
+    expect(
+      validateCreateTask({ title: "x", dueDate: "2026-09-24", notBefore: "2026-09-20" }).ok,
+    ).toBe(false);
     expect(
       validateCreateTask({ title: "x", dueDate: "2026-09-24", notBefore: "2026-09-25" }).ok,
     ).toBe(false);

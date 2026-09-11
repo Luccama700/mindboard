@@ -304,12 +304,19 @@ const getStreamData = cache(
     // Decomposed tasks: plan every open child onto a day inside its window,
     // over the days the dashboard's busy data covers. Advisory and read-time —
     // nothing here is written back (see planSubtasks).
+    const openTaskIds = new Set(tasks.map((t) => t.id));
     const openChildren = tasks
-      .filter((t) => t.parent_task_id !== null && t.due_date !== null)
+      .filter(
+        (t) =>
+          t.parent_task_id !== null &&
+          t.due_date !== null &&
+          openTaskIds.has(t.parent_task_id),
+      )
       .map((t) => ({
         id: t.id,
         parent_task_id: t.parent_task_id as string,
         due_date: t.due_date as string,
+        due_time: t.due_time,
         not_before: t.not_before,
         duration_min: t.duration_min,
         estimated_minutes: t.estimated_minutes,
@@ -318,6 +325,23 @@ const getStreamData = cache(
       }));
     const plannedSubtasks = new Map<string, { dateKey: string; start: string | null }>();
     const doneChildrenByParent = new Map<string, number>();
+    // Done children of EVERY open top-level task (not just those with open
+    // children): a reopened parent whose steps are all done still reads
+    // "3 of 3", not nothing.
+    const topLevelIds = tasks.filter((t) => t.parent_task_id === null).map((t) => t.id);
+    if (topLevelIds.length > 0) {
+      const { data: doneRows } = await supabase
+        .from("tasks")
+        .select("parent_task_id")
+        .eq("status", "done")
+        .in("parent_task_id", topLevelIds);
+      for (const row of (doneRows ?? []) as { parent_task_id: string }[]) {
+        doneChildrenByParent.set(
+          row.parent_task_id,
+          (doneChildrenByParent.get(row.parent_task_id) ?? 0) + 1,
+        );
+      }
+    }
     if (openChildren.length > 0) {
       const lastCovered = addDaysKey(dash.range.endDate, -1);
       const farthest = openChildren.reduce(
@@ -357,18 +381,6 @@ const getStreamData = cache(
           log?.energy != null ? new Map([[today, log.energy]]) : undefined,
       })) {
         plannedSubtasks.set(p.taskId, { dateKey: p.dateKey, start: p.start });
-      }
-      const parentIds = [...new Set(openChildren.map((c) => c.parent_task_id))];
-      const { data: doneRows } = await supabase
-        .from("tasks")
-        .select("parent_task_id")
-        .eq("status", "done")
-        .in("parent_task_id", parentIds);
-      for (const row of (doneRows ?? []) as { parent_task_id: string }[]) {
-        doneChildrenByParent.set(
-          row.parent_task_id,
-          (doneChildrenByParent.get(row.parent_task_id) ?? 0) + 1,
-        );
       }
     }
 

@@ -207,6 +207,60 @@ export async function reopenTask(id: string) {
   return { error: null };
 }
 
+async function guardWindow(
+  supabase: SupabaseClient,
+  taskId: string,
+  dueDate: string | null,
+  notBefore: string | null | undefined,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("tasks")
+    .select("parent_task_id")
+    .eq("id", taskId)
+    .maybeSingle();
+  const parentId = (data as { parent_task_id: string | null } | null)?.parent_task_id ?? null;
+  if (parentId && dueDate) {
+    const { data: parent } = await supabase
+      .from("tasks")
+      .select("due_date")
+      .eq("id", parentId)
+      .maybeSingle();
+    const parentDue = (parent as { due_date: string | null } | null)?.due_date ?? null;
+    if (parentDue && dueDate > parentDue) {
+      return `a step cannot be due after its task (${parentDue})`;
+    }
+  }
+  if (dueDate === null) {
+    const { count } = await supabase
+      .from("tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("parent_task_id", taskId);
+    if ((count ?? 0) > 0) return "a task with steps keeps its due date — the steps are planned from it";
+    return null;
+  }
+  if (notBefore === undefined) {
+    const own = await supabase
+      .from("tasks")
+      .update({ not_before: dueDate })
+      .eq("id", taskId)
+      .gt("not_before", dueDate);
+    if (own.error) return own.error.message;
+  }
+  const kidsStart = await supabase
+    .from("tasks")
+    .update({ not_before: dueDate })
+    .eq("parent_task_id", taskId)
+    .gt("not_before", dueDate);
+  if (kidsStart.error) return kidsStart.error.message;
+  const kidsEnd = await supabase
+    .from("tasks")
+    .update({ due_date: dueDate })
+    .eq("parent_task_id", taskId)
+    .gt("due_date", dueDate);
+  if (kidsEnd.error) return kidsEnd.error.message;
+  return null;
+}
+
 export async function updateTask(input: {
   id: string;
   title?: string;
@@ -267,12 +321,13 @@ export async function updateTask(input: {
   if (input.groupId !== undefined) updates.group_id = input.groupId;
   if (input.notes !== undefined) updates.notes = input.notes?.trim() || null;
   if (input.priority !== undefined) updates.priority = input.priority;
-  // Any edit from the user marks the value as theirs; the AI default only ever
-  // fills a null source, so this can never be undone by a later assignment.
+  // Any edit from the user marks the value as theirs — a clear included, so
+  // an AI rating still in flight (it only fills a null source) cannot put a
+  // value back the user just removed.
   if (input.energyCost !== undefined) {
     if (!validEnergy(input.energyCost)) return { error: "energy must be 1-5" };
     updates.energy_cost = input.energyCost;
-    updates.energy_source = input.energyCost === null ? null : "user";
+    updates.energy_source = "user";
   }
   if (input.notBefore !== undefined) {
     if (input.notBefore !== null && !DATE_RE.test(input.notBefore)) {
@@ -288,28 +343,14 @@ export async function updateTask(input: {
     input.dueTime !== undefined ||
     input.durationMin !== undefined;
 
-  // Windows stay well-formed when a due date moves earlier: a subtask's own
-  // not_before follows it (tasks_not_before_within_window), and a parent's
-  // children are pulled in behind the new deadline.
-  if (typeof updates.due_date === "string") {
-    const due = updates.due_date;
-    if (updates.not_before === undefined) {
-      await supabase
-        .from("tasks")
-        .update({ not_before: due })
-        .eq("id", input.id)
-        .gt("not_before", due);
-    }
-    await supabase
-      .from("tasks")
-      .update({ not_before: due })
-      .eq("parent_task_id", input.id)
-      .gt("not_before", due);
-    await supabase
-      .from("tasks")
-      .update({ due_date: due })
-      .eq("parent_task_id", input.id)
-      .gt("due_date", due);
+  // Windows stay well-formed when a due date moves: a subtask cannot be due
+  // after its parent, a parent with steps cannot lose its deadline, a
+  // subtask's own not_before follows an earlier due date
+  // (tasks_not_before_within_window), and a parent's children are pulled in
+  // behind a new earlier deadline.
+  if (input.dueDate !== undefined) {
+    const guard = await guardWindow(supabase, input.id, input.dueDate, input.notBefore);
+    if (guard) return { error: guard };
   }
 
   const { data: updated, error } = await supabase
