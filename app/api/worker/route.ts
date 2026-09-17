@@ -2,7 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
+import {
+  ownerUserId,
+  workerAllowedUserIds,
+  workerBearerToken,
+} from "@/app/lib/mcp/config";
 import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
 import {
   createVaultBase64FileWithRetry,
@@ -50,7 +54,7 @@ type JobRow = {
 };
 
 function authorized(request: Request): boolean {
-  const expected = process.env.MCP_BEARER_TOKEN;
+  const expected = workerBearerToken();
   if (!expected) return false;
   const header = request.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";

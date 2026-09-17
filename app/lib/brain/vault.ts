@@ -5,6 +5,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/utils/supabase/server";
 import {
+  isEncryptedSecret,
+  revealSecret,
+  sealSecret,
+} from "@/app/lib/assistant/crypto";
+import {
   buildResolver,
   computeBacklinks,
   extractWikilinks,
@@ -101,7 +106,9 @@ export type VaultCredentials = { repo: string; branch: string; token: string };
 
 // The only read path for the token: RLS-scoped on the session client (/brain),
 // explicitly user-filtered on the service client (MCP capture_to_brain). The
-// token is never returned to the client and never logged.
+// token is never returned to the client and never logged. Stored AES-256-GCM
+// encrypted (the provider-key pattern); rows written before the encryption
+// change are plaintext and lazily upgraded on first read.
 export async function readVaultCredentials(
   supabase: SupabaseClient,
   userId: string,
@@ -112,10 +119,26 @@ export async function readVaultCredentials(
     .eq("user_id", userId)
     .maybeSingle();
   if (!data) return null;
+  const stored = data.github_token as string;
+  const token = revealSecret(stored);
+  // Encrypted but undecryptable (rotated secret): treat as not connected
+  // rather than sending garbage to GitHub as a bearer.
+  if (!token) return null;
+  if (!isEncryptedSecret(stored)) {
+    // Lazy upgrade: the first read after the encryption change re-writes the
+    // row encrypted. Best-effort — a failed write must not block the read.
+    const sealed = sealSecret(token);
+    if (isEncryptedSecret(sealed)) {
+      await supabase
+        .from("vault_settings")
+        .update({ github_token: sealed })
+        .eq("user_id", userId);
+    }
+  }
   return {
     repo: data.repo as string,
     branch: data.branch as string,
-    token: data.github_token as string,
+    token,
   };
 }
 

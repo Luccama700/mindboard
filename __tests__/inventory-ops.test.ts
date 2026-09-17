@@ -356,8 +356,8 @@ describe("resolveStockOps", () => {
     ]);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value[0].after).toBe(1.1);
-    expect(result.value[1].after).toBe(1.3);
+    expect(result.value[0]).toMatchObject({ kind: "adjust", after: 1.1 });
+    expect(result.value[1]).toMatchObject({ kind: "adjust", after: 1.3 });
   });
 });
 

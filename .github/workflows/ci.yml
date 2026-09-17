@@ -1,0 +1,24 @@
+# Gates every push and PR with the same checks the repo runs locally:
+# lint, tsc --noEmit, and the full vitest suite (~20s). The production build
+# stays on Vercel, which already gates deploys and holds the real env.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test

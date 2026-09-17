@@ -8,6 +8,11 @@ import {
 import { formatClockTime } from "@/app/_components/date-utils";
 
 const VANCOUVER = "America/Vancouver";
+// The DST-boundary case runs in Los Angeles, not Vancouver: tzdata 2026b
+// (Node >= 24.19) keeps America/Vancouver on UTC-7 permanently from November
+// 2026, so it has no 2026 fall-back; LA still falls back on 2026-11-01 under
+// every tzdata version. See __tests__/timezone-sweep.test.ts.
+const LOS_ANGELES = "America/Los_Angeles";
 const LONDON = "Europe/London";
 const TOKYO = "Asia/Tokyo";
 
@@ -78,10 +83,10 @@ describe("wallMinutesToIso / wallTimeToIso", () => {
   });
 
   it("survives a DST boundary day in the zone", () => {
-    // 2026-11-01: Vancouver falls back at 02:00. 09:00 PST = 17:00Z.
-    expect(wallMinutesToIso("2026-11-01", 9 * 60, VANCOUVER)).toBe(
+    // 2026-11-01: the US Pacific zone falls back at 02:00. 09:00 PST = 17:00Z.
+    expect(wallMinutesToIso("2026-11-01", 9 * 60, LOS_ANGELES)).toBe(
       "2026-11-01T17:00:00.000Z",
     );
-    expect(eventMinutes("2026-11-01T09:00:00-08:00", VANCOUVER)).toBe(9 * 60);
+    expect(eventMinutes("2026-11-01T09:00:00-08:00", LOS_ANGELES)).toBe(9 * 60);
   });
 });
