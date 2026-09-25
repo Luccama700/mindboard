@@ -2,6 +2,7 @@ import "server-only";
 import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
+import { HOME_EXECUTORS } from "@/app/lib/home/writes";
 import {
   lookupPrices,
   lookupPricesByRefs,
@@ -3107,6 +3108,7 @@ export const EXECUTORS: Record<
   set_spend_limit: executeSetSpendLimit,
   delete_spend_limit: executeDeleteSpendLimit,
   generate_audio_overview: executeGenerateAudioOverview,
+  ...HOME_EXECUTORS,
 };
 
 // ---------- confirm / cancel ----------

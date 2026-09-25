@@ -336,6 +336,10 @@ Mindboard is being evolved into an AI "second brain" / life command center. The 
 
 Decided constraints: assistant writes are **propose → confirm** (never silent), and finance is read-safe by default. The AI stack (raw Anthropic SDK vs Vercel AI SDK vs Claude Agent SDK) is intentionally not yet chosen — Phase 0/1 (the read/tool layer + the dashboard stream/command center) are stack-agnostic. The full vision, phased roadmap, and decisions are in `docs/second-brain-plan.md`. This direction is what authorizes the future notes/goals/pgvector tables noted in the Data Model scope note.
 
+## Home App Integration (separable)
+
+`app/lib/home/` exposes Lucca's household app (taiga-home.vercel.app: Taiga feedings + shared chores, its own Supabase project) as `home_*` MCP tools: `home_status`, `home_list_chores`, and the propose → confirm writes `home_complete_chore`, `home_upsert_chore`, `home_delete_chore`, `home_log_feeding`. Access is the home app's own allowlist: the caller's Mindboard email must match a household member's email, otherwise every tool errors. The tools only register when `HOME_APP_SUPABASE_URL` and `HOME_APP_SUPABASE_SERVICE_ROLE_KEY` are set. It is not part of the product: to remove it, delete `app/lib/home/`, `__tests__/home-logic.test.ts`, the `registerHomeTools(...)` call in `app/api/mcp/[transport]/route.ts`, the `...HOME_EXECUTORS` spread in `app/lib/mcp/writes.ts`, and the two env vars.
+
 ## Important Files
 
 - `proxy.ts`: Next 16 proxy/middleware equivalent for Supabase session refresh.
