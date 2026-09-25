@@ -4,9 +4,9 @@ import { createServiceClient } from "@/utils/supabase/service";
 import type { HomeMember } from "./logic";
 
 // Service-role client for the home app's own Supabase project (a separate
-// database from Mindboard's). Access control is the home app's allowlist: the
-// caller's Mindboard email must belong to a household member, the same gate
-// the home app's web sign-in applies.
+// database from Mindboard's). Access control mirrors the home app's web gate:
+// the caller's confirmed Mindboard email must be on the home app's `allowlist`
+// (its revocation list) and belong to a household profile.
 let cached: SupabaseClient | null = null;
 
 export function homeConfigured(): boolean {
@@ -35,9 +35,15 @@ export async function loadMembers(): Promise<HomeMember[]> {
 export async function resolveMember(mindboardUserId: string): Promise<{ member: HomeMember; members: HomeMember[] }> {
   const { data, error } = await createServiceClient().auth.admin.getUserById(mindboardUserId);
   const email = data?.user?.email?.toLowerCase();
-  if (error || !email) throw new Error("couldn't resolve your account email");
+  if (error || !email || !data.user.email_confirmed_at) throw new Error("couldn't resolve a confirmed account email");
+  const { data: allowed, error: allowErr } = await homeDb()
+    .from("allowlist")
+    .select("email")
+    .eq("email", email)
+    .maybeSingle();
+  if (allowErr) throw new Error(allowErr.message);
   const members = await loadMembers();
-  const member = members.find((m) => m.email === email);
+  const member = allowed ? members.find((m) => m.email === email) : undefined;
   if (!member) throw new Error("this Mindboard account isn't a member of the home app");
   return { member, members };
 }

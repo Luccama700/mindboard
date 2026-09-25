@@ -37,7 +37,7 @@ export function registerHomeTools(server: McpServer, { uid, ok, fail, guard }: D
     {
       title: "Home: today",
       description:
-        "Household home app (Lucca, Julia, Nikki, and Taiga the cat). Today's Taiga feedings (morning/evening: who fed her and when, and which slot is current) and every chore due today or overdue with who's up next.",
+        "Household home app (only for its members). Today's cat feedings (morning/evening: who fed her and when, and which slot is current) and every chore due today or overdue with who's up next.",
       inputSchema: {},
     },
     (_args, extra) => guard(async () => ok(await getHomeStatus(uid(extra)))),
@@ -107,8 +107,8 @@ export function registerHomeTools(server: McpServer, { uid, ok, fail, guard }: D
   server.registerTool(
     "home_log_feeding",
     {
-      title: "Home: log that you fed Taiga",
-      description: `Log that you just fed Taiga (the cat), in the current morning/evening slot. The preview warns if that slot was already fed. ${CONFIRM}`,
+      title: "Home: log a cat feeding",
+      description: `Log that you just fed the household cat, in the current morning/evening slot. The preview warns if that slot was already fed; confirm fails if the slot, day, or feedings changed since the proposal. ${CONFIRM}`,
       inputSchema: {},
     },
     (_args, extra) =>

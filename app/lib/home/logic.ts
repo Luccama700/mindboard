@@ -153,8 +153,16 @@ export function buildChoreRow(
   const name = (input.name ?? existing?.name ?? "").trim();
   if (!name) return { ok: false, error: "name is required for a new chore" };
   const frequency = input.frequency ?? existing?.frequency ?? "weekly";
+  if (input.intervalDays !== undefined && frequency !== "interval") {
+    return { ok: false, error: "intervalDays only applies when frequency is 'interval'" };
+  }
+  const switchingToInterval = frequency === "interval" && existing?.frequency !== "interval";
   const interval =
-    frequency === "daily" ? 1 : frequency === "weekly" ? 7 : (input.intervalDays ?? existing?.interval_days ?? 0);
+    frequency === "daily"
+      ? 1
+      : frequency === "weekly"
+        ? 7
+        : (input.intervalDays ?? (switchingToInterval ? 0 : (existing?.interval_days ?? 0)));
   if (!Number.isInteger(interval) || interval < 1 || interval > 365) {
     return { ok: false, error: "intervalDays (1-365) is required when frequency is 'interval'" };
   }
@@ -173,7 +181,10 @@ export function buildChoreRow(
     if (!r.ok) return r;
     assignedTo = r.value[0];
   }
-  if (rot.length && !rot.some((m) => m.id === assignedTo)) assignedTo = rot[0].id;
+  // Only re-pick who's up when this request touches who does it (or there's nobody up);
+  // a rename-only edit must not quietly change whose turn it is.
+  const touchesPeople = !existing || input.assignees !== undefined || input.upNext !== undefined || !assignedTo;
+  if (touchesPeople && rot.length && !rot.some((m) => m.id === assignedTo)) assignedTo = rot[0].id;
 
   const dueDate = input.dueDate ?? existing?.due_date ?? today;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return { ok: false, error: "dueDate must be YYYY-MM-DD" };

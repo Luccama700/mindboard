@@ -26,12 +26,29 @@ import {
 type Proposal = { proposalId: string; preview: string };
 
 async function loadChore(id: string): Promise<HomeChore | null> {
-  const { data } = await homeDb()
+  const { data, error } = await homeDb()
     .from("chores")
     .select("id, name, frequency, interval_days, assigned_to, assignees, due_date")
     .eq("id", id)
     .maybeSingle();
+  if (error) throw new Error(error.message);
   return (data as HomeChore | null) ?? null;
+}
+
+async function feedingState(now: Date) {
+  const db = homeDb();
+  const { data: s, error } = await db.from("household_settings").select("morning_time, evening_time").eq("id", 1).single();
+  if (error || !s) throw new Error(error?.message ?? "household settings missing");
+  const slot = feedingSlot(now, s.morning_time, s.evening_time);
+  const fedOn = vanToday(now);
+  const { data: prior, error: pErr } = await db
+    .from("feedings")
+    .select("fed_by, fed_at")
+    .eq("fed_on", fedOn)
+    .eq("slot", slot)
+    .order("fed_at", { ascending: false });
+  if (pErr) throw new Error(pErr.message);
+  return { slot, fedOn, prior: (prior ?? []) as { fed_by: string; fed_at: string }[] };
 }
 
 async function propose(userId: string, tool: string, input: Record<string, unknown>, summary: string) {
@@ -56,7 +73,9 @@ export async function proposeHomeUpsertChore(userId: string, input: ChoreUpsertI
   const row = buildChoreRow(input, existing, members, vanToday());
   if (!row.ok) return row;
   const summary = summarizeChoreRow(row.value, members, !existing);
-  return propose(userId, "home_upsert_chore", { choreId: existing?.id ?? null, row: row.value }, summary);
+  // Store the request, not the built row: confirm re-merges it onto the chore as it is
+  // then, so a completion or a housemate's edit in between isn't reverted.
+  return propose(userId, "home_upsert_chore", { input }, summary);
 }
 
 export async function proposeHomeDeleteChore(userId: string, choreId: string): Promise<Result<Proposal>> {
@@ -68,23 +87,17 @@ export async function proposeHomeDeleteChore(userId: string, choreId: string): P
 
 export async function proposeHomeLogFeeding(userId: string): Promise<Result<Proposal>> {
   const { member, members } = await resolveMember(userId);
-  const db = homeDb();
-  const now = new Date();
-  const { data: s, error } = await db.from("household_settings").select("morning_time, evening_time").eq("id", 1).single();
-  if (error || !s) return { ok: false, error: error?.message ?? "household settings missing" };
-  const slot = feedingSlot(now, s.morning_time, s.evening_time);
-  const { data: prior } = await db
-    .from("feedings")
-    .select("fed_by, fed_at")
-    .eq("fed_on", vanToday(now))
-    .eq("slot", slot)
-    .order("fed_at", { ascending: false })
-    .limit(1);
-  const already = (prior ?? [])[0] as { fed_by: string; fed_at: string } | undefined;
+  const { slot, fedOn, prior } = await feedingState(new Date());
+  const already = prior[0];
   const warn = already
     ? ` Heads up: ${members.find((m) => m.id === already.fed_by)?.name ?? "someone"} already fed her this ${slot} at ${vanTime(already.fed_at)}.`
     : "";
-  return propose(userId, "home_log_feeding", {}, `Log that ${member.name} fed Taiga (${slot}).${warn}`);
+  return propose(
+    userId,
+    "home_log_feeding",
+    { slot, fedOn, priorCount: prior.length },
+    `Log that ${member.name} fed the cat (${slot}).${warn}`,
+  );
 }
 
 // ---------- executors (run by confirm_action) ----------
@@ -112,13 +125,17 @@ const executeComplete: Executor = async (_s, ownerId, input) => {
   };
 };
 
-const executeUpsert: Executor = async (_s, ownerId, input) => {
-  await resolveMember(ownerId);
-  const row = input.row as ChoreRow;
-  const choreId = typeof input.choreId === "string" ? input.choreId : null;
+const executeUpsert: Executor = async (_s, ownerId, stored) => {
+  const { members } = await resolveMember(ownerId);
+  const input = (stored.input ?? {}) as ChoreUpsertInput;
+  const existing = input.choreId ? await loadChore(input.choreId) : null;
+  if (input.choreId && !existing) return { ok: false, error: "chore not found" };
+  const built = buildChoreRow(input, existing, members, vanToday());
+  if (!built.ok) return built;
+  const row: ChoreRow = built.value;
   const db = homeDb();
-  const { data, error } = choreId
-    ? await db.from("chores").update(row).eq("id", choreId).select("id").maybeSingle()
+  const { data, error } = existing
+    ? await db.from("chores").update(row).eq("id", existing.id).select("id").maybeSingle()
     : await db.from("chores").insert(row).select("id").single();
   if (error) return { ok: false, error: error.message };
   if (!data) return { ok: false, error: "chore not found" };
@@ -137,16 +154,21 @@ const executeDelete: Executor = async (_s, ownerId, input) => {
   return { ok: true, value: { deleted: (data[0] as { name: string }).name } };
 };
 
-const executeFeeding: Executor = async (_s, ownerId) => {
-  const { member } = await resolveMember(ownerId);
-  const db = homeDb();
+const executeFeeding: Executor = async (_s, ownerId, input) => {
+  const { member, members } = await resolveMember(ownerId);
   const now = new Date();
-  const { data: s, error: sErr } = await db.from("household_settings").select("morning_time, evening_time").eq("id", 1).single();
-  if (sErr || !s) return { ok: false, error: sErr?.message ?? "household settings missing" };
-  const slot = feedingSlot(now, s.morning_time, s.evening_time);
-  const { error } = await db
+  const { slot, fedOn, prior } = await feedingState(now);
+  // What was previewed must still hold; otherwise make the caller look again.
+  if (slot !== input.slot || fedOn !== input.fedOn) {
+    return { ok: false, error: `it's now the ${slot} slot on ${fedOn}; propose the feeding again` };
+  }
+  if (prior.length > Number(input.priorCount ?? 0)) {
+    const who = members.find((m) => m.id === prior[0].fed_by)?.name ?? "someone";
+    return { ok: false, error: `${who} logged a ${slot} feeding at ${vanTime(prior[0].fed_at)} since the proposal; propose again if you still want to log one` };
+  }
+  const { error } = await homeDb()
     .from("feedings")
-    .insert({ fed_by: member.id, fed_at: now.toISOString(), fed_on: vanToday(now), slot });
+    .insert({ fed_by: member.id, fed_at: now.toISOString(), fed_on: fedOn, slot });
   if (error) return { ok: false, error: error.message };
   return { ok: true, value: { fedBy: member.name, slot, at: vanTime(now.toISOString()) } };
 };

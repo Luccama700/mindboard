@@ -90,6 +90,19 @@ describe("buildChoreRow", () => {
     });
   });
 
+  test("intervalDays must match the frequency", () => {
+    expect(buildChoreRow({ intervalDays: 3 }, chore(), members, "2026-09-25").ok).toBe(false);
+    const weekly = chore({ frequency: "weekly", interval_days: 7 });
+    expect(buildChoreRow({ frequency: "interval" }, weekly, members, "2026-09-25").ok).toBe(false);
+    const r = buildChoreRow({ frequency: "interval", intervalDays: 3 }, weekly, members, "2026-09-25");
+    expect(r.ok && r.value.interval_days).toBe(3);
+  });
+
+  test("a rename-only edit doesn't change who's up, even if they left the rotation", () => {
+    const r = buildChoreRow({ name: "Dishes!" }, chore({ assigned_to: "n" }), members, "2026-09-25");
+    expect(r.ok && r.value.assigned_to).toBe("n");
+  });
+
   test("edits keep omitted fields; [] clears assignees back to the default rotation", () => {
     const existing = chore({ assignees: ["l"], frequency: "interval", interval_days: 4 });
     const r = buildChoreRow({ assignees: [] }, existing, members, "2026-09-26");
