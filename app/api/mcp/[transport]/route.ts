@@ -89,6 +89,7 @@ import {
   SOURCE_TITLE_MAX,
 } from "@/app/lib/mcp/course-ops";
 import { proposeGenerateAudioOverview } from "@/app/lib/learn/episodes";
+import { registerHomeTools } from "@/app/lib/home/register";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -1511,6 +1512,8 @@ const mcpHandler = createMcpHandler(
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
+
+    registerHomeTools(server, { uid, ok, fail, guard });
   },
   { serverInfo: { name: "mindboard", version: "1.0.0" } },
   { basePath: "/api/mcp", maxDuration: 300, disableSse: true, verboseLogs: false },
