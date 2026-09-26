@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
   buildChoreRow,
   describeChore,
-  feedingSlot,
+  mealLate,
+  nextMeal,
   nextUpAfter,
   resolveNames,
   rotationFor,
@@ -32,9 +33,17 @@ describe("Vancouver dates", () => {
     expect(vanToday(new Date("2026-09-25T06:30:00Z"))).toBe("2026-09-24");
   });
 
-  test("feeding slot flips halfway between the two times", () => {
-    expect(feedingSlot(new Date("2026-09-24T19:59:00Z"), "08:00:00", "18:00:00")).toBe("morning");
-    expect(feedingSlot(new Date("2026-09-24T20:00:00Z"), "08:00", "18:00")).toBe("evening");
+  test("meals go by order: first feeding is lunch, later ones dinner", () => {
+    expect(nextMeal(0)).toBe("lunch");
+    expect(nextMeal(1)).toBe("dinner");
+    expect(nextMeal(3)).toBe("dinner");
+  });
+
+  test("a meal is late only when unfed past its window, in Vancouver time", () => {
+    // 21:30 UTC = 14:30 in Vancouver (PDT)
+    expect(mealLate(new Date("2026-09-24T21:30:00Z"), "14:00:00", false)).toBe(true);
+    expect(mealLate(new Date("2026-09-24T21:30:00Z"), "14:00:00", true)).toBe(false);
+    expect(mealLate(new Date("2026-09-24T20:30:00Z"), "14:00", false)).toBe(false);
   });
 });
 

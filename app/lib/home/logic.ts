@@ -70,10 +70,14 @@ function toMinutes(t: string): number {
   return h * 60 + m;
 }
 
-/** Same rule as the home app: morning until halfway between the two feeding times. */
-export function feedingSlot(now: Date, morning: string, evening: string): "morning" | "evening" {
-  const cutoff = (toMinutes(morning) + toMinutes(evening)) / 2;
-  return vanParts(now).minutes < cutoff ? "morning" : "evening";
+/** Same rule as the home app's feedings trigger: the day's first feeding is lunch, later ones dinner. */
+export function nextMeal(feedingsToday: number): "lunch" | "dinner" {
+  return feedingsToday === 0 ? "lunch" : "dinner";
+}
+
+/** Unfed and past the end of its usual window. */
+export function mealLate(now: Date, windowEnd: string, fed: boolean): boolean {
+  return !fed && vanParts(now).minutes > toMinutes(windowEnd);
 }
 
 export function stepDays(c: Pick<HomeChore, "frequency" | "interval_days">): number {
