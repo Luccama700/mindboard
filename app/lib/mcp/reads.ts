@@ -1,6 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
+import type { AiStateFilter } from "./validate";
 import { todayKey } from "./config";
 import { formatRecurrence } from "@/app/lib/recurrence";
 import { financeSnapshot, type FinanceVitals } from "@/app/lib/snapshots/finance";
@@ -324,7 +325,7 @@ export async function listTasks(userId: string, filter: {
 // plans and, once approved, builds. Optional aiState narrows the lifecycle
 // stage ("none" = not yet touched by the agent).
 export async function listCodeTasks(userId: string, filter?: {
-  aiState?: "none" | "planned" | "approved" | "building" | "built" | "failed";
+  aiState?: AiStateFilter;
 }) {
   const { supabase, ownerId } = scoped(userId);
 
