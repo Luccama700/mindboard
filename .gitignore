@@ -64,6 +64,12 @@ worker/worker.env
 # home worker runtime logs
 worker/logs/
 
+# urc agent local secrets, folder map, session state and single-instance lock
+worker/urc.env
+worker/urc.folders.json
+worker/urc-state.json
+worker/urc-agent.pid
+
 # mindspace sync local cursor
 overnight/.mindspace-sync.json
 

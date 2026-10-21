@@ -53,7 +53,9 @@ import {
   loadProposal,
   recordProposal,
   resolveProposal,
+  type ExecutorContext,
 } from "./audit";
+import { executeSpawnUrc } from "@/app/lib/urc/jobs";
 import {
   renderStockReceipt,
   resolveStockOps,
@@ -3076,12 +3078,20 @@ async function executePeopleUpdate(
   return { ok: true, value: { applied } };
 }
 
+// The 4th argument is the confirm's own context (who confirmed, which proposal,
+// when it was proposed). Almost every executor ignores it: the stored input is
+// enough because the write is user-scoped and idempotent-ish. spawn_urc is the
+// exception — an interactive session on the PC must know the credential kind and
+// the proposal's age, and an ai_audit_log row is forgeable, so it re-derives
+// everything else from server state. Required in the type so tsc enumerates the
+// three confirm paths (MCP, in-app assistant, watch) if that ever changes.
 export const EXECUTORS: Record<
   string,
   (
     supabase: SupabaseClient,
     ownerId: string,
     input: Record<string, unknown>,
+    context: ExecutorContext,
   ) => Promise<Result<Record<string, unknown>>>
 > = {
   create_task: executeCreateTask,
@@ -3107,6 +3117,7 @@ export const EXECUTORS: Record<
   set_spend_limit: executeSetSpendLimit,
   delete_spend_limit: executeDeleteSpendLimit,
   generate_audio_overview: executeGenerateAudioOverview,
+  spawn_urc: executeSpawnUrc,
 };
 
 // ---------- confirm / cancel ----------
@@ -3114,6 +3125,10 @@ export const EXECUTORS: Record<
 export async function confirmAction(
   userId: string,
   proposalId: unknown,
+  // Namespaced by caller: `mcp:<clientId>` from the MCP server, "watch" from
+  // the watch. Executors that care which credential confirmed them read it off
+  // the ExecutorContext; see EXECUTORS above.
+  authKind: string,
 ): Promise<Result<{ preview: string; result: Record<string, unknown> }>> {
   if (typeof proposalId !== "string" || !proposalId) {
     return { ok: false, error: "proposalId is required" };
@@ -3145,7 +3160,11 @@ export async function confirmAction(
 
   let outcome: Result<Record<string, unknown>>;
   try {
-    outcome = await executor(supabase, ownerId, proposal.input);
+    outcome = await executor(supabase, ownerId, proposal.input, {
+      proposalId,
+      proposedAt: proposal.created_at,
+      authKind,
+    });
   } catch (err) {
     await finalizeClaimedProposal(supabase, ownerId, proposalId, "error", {
       error: err instanceof Error ? err.message : "executor threw",

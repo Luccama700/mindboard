@@ -81,7 +81,13 @@ export async function confirmProposal(
   try {
     outcome = isSchedule
       ? await executeScheduleTask(user.id, proposal.input)
-      : await executor!(supabase, user.id, proposal.input);
+      : // "assistant" is not an MCP credential, so an executor that gates on
+        // one (spawn_urc) refuses here by design.
+        await executor!(supabase, user.id, proposal.input, {
+          proposalId,
+          proposedAt: proposal.created_at,
+          authKind: "assistant",
+        });
   } catch (err) {
     const message = err instanceof Error ? err.message : "executor threw";
     await finalizeClaimedProposal(supabase, user.id, proposalId, "error", {
