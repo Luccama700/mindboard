@@ -20,6 +20,23 @@ export type AuditProposal = {
   input: Record<string, unknown>;
   summary: string;
   status: AuditStatus;
+  created_at: string | null;
+};
+
+// What an executor knows about the confirm that invoked it, beyond the stored
+// input. Carried because the input itself is NOT trustworthy: ai_audit_log's
+// RLS lets a signed-in user insert their own 'proposed' row, so a proposal can
+// be forged. An executor that cares who confirmed it (URC: only an OAuth/PAT
+// MCP credential may start a session on the PC) or how old the proposal is
+// (URC: five minutes) must read it from here and re-validate the rest against
+// server state.
+//
+// authKind is namespaced by the confirm path: `mcp:<clientId>` from the MCP
+// server, "assistant" from the in-app confirm rail, "watch" from the watch.
+export type ExecutorContext = {
+  proposalId: string;
+  proposedAt: string | null;
+  authKind: string;
 };
 
 export async function recordProposal(
@@ -56,7 +73,7 @@ export async function loadProposal(
 ): Promise<AuditProposal | null> {
   const { data } = await supabase
     .from("ai_audit_log")
-    .select("id, tool_name, input, summary, status")
+    .select("id, tool_name, input, summary, status, created_at")
     .eq("id", proposalId)
     .eq("user_id", ownerId)
     .eq("status", "proposed")

@@ -9,6 +9,13 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
 import { verifyAccessToken } from "@/app/lib/mcp/oauth";
 import { looksLikePat, resolvePatUserId } from "@/app/lib/mcp/pat";
+import { mcpAuthKind, urcConfigured } from "@/app/lib/urc/auth";
+import {
+  getUrcStatus,
+  listUrcSessions,
+  proposeSpawnUrc,
+  stopUrc,
+} from "@/app/lib/urc/jobs";
 import {
   getFinanceForecast,
   getFinanceSnapshot,
@@ -132,6 +139,14 @@ function uid(extra: { authInfo?: AuthInfo }): string {
     throw new Error("unauthorized: request has no resolved user identity");
   }
   return userId;
+}
+
+// Which credential this request authenticated with, namespaced so a non-MCP
+// confirm path can never be mistaken for an OAuth client. verifyToken sets
+// clientId to "static" (shared bearer), "pat", or the OAuth client id. Only the
+// URC tools read it; everything else is identical for all three.
+function authKind(extra: { authInfo?: AuthInfo }): string {
+  return mcpAuthKind(extra.authInfo?.clientId);
 }
 
 const mcpHandler = createMcpHandler(
@@ -1420,7 +1435,7 @@ const mcpHandler = createMcpHandler(
       },
       (args, extra) =>
         guard(async () => {
-          const r = await confirmAction(uid(extra), args.proposalId);
+          const r = await confirmAction(uid(extra), args.proposalId, authKind(extra));
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
@@ -1511,6 +1526,77 @@ const mcpHandler = createMcpHandler(
           return r.ok ? ok(r.value) : fail(r.error);
         }),
     );
+
+    // ---------- URC: remote-control sessions on the owner's own PC ----------
+    // Registered only when the deployment has a URC owner (URC_OWNER_USER_ID).
+    // The tool list is built without the caller in scope, so these cannot be
+    // hidden per user — every handler re-checks the caller (owner + an
+    // OAuth/PAT credential; the shared static bearer is refused).
+    if (urcConfigured()) {
+      server.registerTool(
+        "spawn_urc",
+        {
+          title: "Propose: start a Claude Code session on the PC",
+          description:
+            "Propose starting a Claude Code remote-control session on Lucca's own Windows PC, in one of the folders his PC has registered. Returns a preview (device, folder, the literal command, permission mode) + proposalId; call confirm_action to apply, then get_urc_status for the private link that opens the session. The session starts idle with no prompt; it only does what Lucca types into it from his own claude.ai account. Needs the PC's URC agent to be running.",
+          inputSchema: {
+            folder: z
+              .string()
+              .describe("A folder key the PC reported — see list_urc_sessions."),
+          },
+        },
+        (args, extra) =>
+          guard(async () => {
+            const r = await proposeSpawnUrc(uid(extra), authKind(extra), args);
+            return r.ok ? ok(r.value) : fail(r.error);
+          }),
+      );
+
+      server.registerTool(
+        "get_urc_status",
+        {
+          title: "Status of one PC session",
+          description:
+            "One URC session's status (queued / claimed / running / stopping / stopped / failed / expired), its folder, when it was created and started, and any error. While it is running this also returns session_url — the private claude.ai link that opens the session on Lucca's PC. Treat that link as private: anyone who opens it drives a live Claude Code session on his machine.",
+          inputSchema: { jobId: z.string().uuid() },
+        },
+        (args, extra) =>
+          guard(async () => {
+            const r = await getUrcStatus(uid(extra), authKind(extra), args);
+            return r.ok ? ok(r.value) : fail(r.error);
+          }),
+      );
+
+      server.registerTool(
+        "list_urc_sessions",
+        {
+          title: "Recent PC sessions",
+          description:
+            "Lucca's URC sessions from the last 24 hours (max 20) plus whether his PC is online and which folder keys it offers. Deliberately carries no session links — ask get_urc_status for the one session you need (least exposure).",
+          inputSchema: {},
+        },
+        (_args, extra) =>
+          guard(async () => {
+            const r = await listUrcSessions(uid(extra), authKind(extra));
+            return r.ok ? ok(r.value) : fail(r.error);
+          }),
+      );
+
+      server.registerTool(
+        "stop_urc",
+        {
+          title: "Stop a PC session",
+          description:
+            "Ask the PC to close one URC session (it ends the terminal window within a few seconds). Applies immediately — no confirm step, because stopping is the safe direction. A session that never started is simply dropped.",
+          inputSchema: { jobId: z.string().uuid() },
+        },
+        (args, extra) =>
+          guard(async () => {
+            const r = await stopUrc(uid(extra), authKind(extra), args);
+            return r.ok ? ok(r.value) : fail(r.error);
+          }),
+      );
+    }
   },
   { serverInfo: { name: "mindboard", version: "1.0.0" } },
   { basePath: "/api/mcp", maxDuration: 300, disableSse: true, verboseLogs: false },

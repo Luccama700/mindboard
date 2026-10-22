@@ -160,7 +160,7 @@ async function runThroughConfirm(
     const settled = await settleExisting(supabase, userId, existing);
     if (settled) return settled;
   }
-  const confirmed = await confirmAction(userId, proposalId);
+  const confirmed = await confirmAction(userId, proposalId, "watch");
   if (!confirmed.ok) {
     return { ok: false, status: failureStatus(confirmed.error), error: confirmed.error };
   }

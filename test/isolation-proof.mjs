@@ -117,6 +117,99 @@ try {
   const { data: aSettings } = await a.client.from("user_settings").select("user_id");
   check("A's user_settings view is limited to A", (aSettings ?? []).every((r) => r.user_id === a.id));
 
+  // ---- URC (migration 0054): service-role-only tables + read-own log ----
+  // urc_devices/urc_jobs have RLS enabled with NO policies, so a session
+  // client reaches nothing at all — not even its own rows. urc_log is
+  // select-own and append-only to clients.
+  console.log("\n== urc path: service-role-only tables ==");
+  const { error: urcProbe } = await admin.from("urc_devices").select("id").limit(1);
+  if (urcProbe) {
+    console.log(`  SKIP  urc checks — urc tables not present yet (${urcProbe.message})`);
+    console.log("        apply supabase/migrations/0054_urc.sql first");
+  } else {
+    const { data: deviceA, error: deviceErr } = await admin
+      .from("urc_devices")
+      .insert({
+        user_id: a.id,
+        name: "isolation-proof-a",
+        token_hash: createHash("sha256").update(randomBytes(32)).digest("hex"),
+        folder_keys: ["proof"],
+      })
+      .select("id")
+      .single();
+    if (deviceErr) throw new Error(`seed urc device: ${deviceErr.message}`);
+
+    const { data: jobA, error: jobErr } = await admin
+      .from("urc_jobs")
+      .insert({
+        user_id: a.id,
+        device_id: deviceA.id,
+        folder_key: "proof",
+        confirmed_auth: "pat",
+      })
+      .select("id")
+      .single();
+    if (jobErr) throw new Error(`seed urc job: ${jobErr.message}`);
+
+    const { error: logErr } = await admin.from("urc_log").insert({
+      user_id: a.id,
+      job_id: jobA.id,
+      event: "spawn_confirmed",
+      folder_key: "proof",
+      confirmed_auth: "pat",
+    });
+    if (logErr) throw new Error(`seed urc log: ${logErr.message}`);
+
+    const { data: bDevices } = await b.client.from("urc_devices").select("id, token_hash");
+    check("B cannot read urc_devices at all (no policy)", (bDevices ?? []).length === 0);
+
+    const { data: aDevices } = await a.client.from("urc_devices").select("id");
+    check("not even the device's own user can read urc_devices", (aDevices ?? []).length === 0);
+
+    const { data: bJobs } = await b.client.from("urc_jobs").select("id, session_url");
+    check("B cannot read urc_jobs at all (no policy)", (bJobs ?? []).length === 0);
+
+    const { data: aJobs } = await a.client.from("urc_jobs").select("id");
+    check("not even the job's own user can read urc_jobs", (aJobs ?? []).length === 0);
+
+    const { data: bQueues, error: bQueueErr } = await b.client
+      .from("urc_jobs")
+      .insert({ user_id: b.id, device_id: deviceA.id, folder_key: "proof", confirmed_auth: "pat" })
+      .select("id");
+    check("B cannot queue a urc job", Boolean(bQueueErr) || (bQueues ?? []).length === 0);
+
+    const { data: bHijack } = await b.client
+      .from("urc_jobs")
+      .update({ session_url: "https://claude.ai/code/session_hijacked" })
+      .eq("id", jobA.id)
+      .select("id");
+    check("B updating A's urc job affects 0 rows", (bHijack ?? []).length === 0);
+
+    const { data: bReadsLog } = await b.client.from("urc_log").select("id, user_id");
+    check("B's urc_log view is empty (A's rows are invisible)", (bReadsLog ?? []).length === 0);
+
+    const { data: aReadsLog } = await a.client.from("urc_log").select("id, user_id");
+    check(
+      "A can read A's own urc_log rows",
+      (aReadsLog ?? []).length === 1 && aReadsLog.every((r) => r.user_id === a.id),
+    );
+
+    const { data: bWritesLog, error: bWriteLogErr } = await b.client
+      .from("urc_log")
+      .insert({ user_id: b.id, event: "started" })
+      .select("id");
+    check(
+      "urc_log is append-only to clients (B's insert is rejected)",
+      Boolean(bWriteLogErr) || (bWritesLog ?? []).length === 0,
+    );
+
+    const { error: bClaimErr } = await b.client.rpc("claim_urc_job", { p_device: deviceA.id });
+    check("B cannot call claim_urc_job", Boolean(bClaimErr), "the RPC answered a session client");
+
+    const { error: aClaimErr } = await a.client.rpc("claim_urc_job", { p_device: deviceA.id });
+    check("not even the device's own user can call claim_urc_job", Boolean(aClaimErr));
+  }
+
   if (MCP_URL) {
     console.log("\n== mcp path: per-user tokens against " + MCP_URL + " ==");
     const patA = patFor();
@@ -166,6 +259,80 @@ try {
       badRejected = true;
     }
     check("an invalid PAT is rejected outright", badRejected);
+
+    // ---- URC tools over MCP: owner-only, and never the static bearer ----
+    const toolNames = new Set((await mcpB.listTools()).tools.map((t) => t.name));
+    if (!toolNames.has("spawn_urc")) {
+      console.log("  SKIP  urc tool checks — spawn_urc is not registered (URC_OWNER_USER_ID unset)");
+    } else {
+      const bSpawns = await mcpB.callTool({
+        name: "spawn_urc",
+        arguments: { folder: "proof" },
+      });
+      check("B's PAT is refused by spawn_urc", bSpawns.isError === true);
+
+      const bLists = await mcpB.callTool({ name: "list_urc_sessions", arguments: {} });
+      check("B's PAT is refused by list_urc_sessions", bLists.isError === true);
+
+      if (env.MCP_BEARER_TOKEN) {
+        // The static bearer maps to the owner, so this is the check that URC's
+        // credential gate is real and not just an ownership check: every URC
+        // tool, AND confirm_action on a URC proposal, must refuse it.
+        const mcpStatic = await mcpClient(env.MCP_BEARER_TOKEN);
+        const someJobId = "00000000-0000-4000-8000-000000000000";
+        const staticCalls = [
+          ["spawn_urc", { folder: "proof" }],
+          ["list_urc_sessions", {}],
+          ["get_urc_status", { jobId: someJobId }],
+          ["stop_urc", { jobId: someJobId }],
+        ];
+        for (const [name, args] of staticCalls) {
+          const result = await mcpStatic.callTool({ name, arguments: args });
+          check(`the static bearer is refused by ${name} even as the owner`, result.isError === true);
+        }
+
+        // A spawn_urc proposal the owner could legitimately have made: planted
+        // directly (service role) because the static bearer cannot propose one.
+        if (env.MINDBOARD_OWNER_USER_ID) {
+          const { data: planted, error: plantErr } = await admin
+            .from("ai_audit_log")
+            .insert({
+              user_id: env.MINDBOARD_OWNER_USER_ID,
+              source: "mcp",
+              status: "proposed",
+              tool_name: "spawn_urc",
+              input: { folder: "proof" },
+              summary: "isolation-proof: static bearer must not confirm this",
+            })
+            .select("id")
+            .single();
+          if (plantErr) {
+            check("could plant a spawn_urc proposal for the confirm check", false, plantErr.message);
+          } else {
+            const staticConfirm = await mcpStatic.callTool({
+              name: "confirm_action",
+              arguments: { proposalId: planted.id },
+            });
+            check(
+              "the static bearer is refused by confirm_action on a URC proposal",
+              staticConfirm.isError === true,
+            );
+            const { data: after } = await admin
+              .from("ai_audit_log")
+              .select("status")
+              .eq("id", planted.id)
+              .maybeSingle();
+            check(
+              "the refused confirm started no session",
+              after?.status !== "executed",
+              `proposal ended as ${after?.status}`,
+            );
+            await admin.from("ai_audit_log").delete().eq("id", planted.id);
+          }
+        }
+        await mcpStatic.close();
+      }
+    }
 
     if (env.MCP_BEARER_TOKEN && env.MINDBOARD_OWNER_USER_ID) {
       const mcpOwner = await mcpClient(env.MCP_BEARER_TOKEN);
