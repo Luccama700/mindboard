@@ -1,5 +1,5 @@
 -- ============================================================================
--- NOT APPLIED — Lucca applies manually.
+-- Applied to production 2026-10-22 (Supabase MCP apply_migration "0054_urc").
 -- ============================================================================
 -- URC ("remote control"): starting a Claude Code remote-control session on the
 -- home PC from a claude.ai chat, through the MCP server. The server never
