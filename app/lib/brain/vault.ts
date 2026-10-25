@@ -229,7 +229,7 @@ export const getVaultCorpus = cache(
       const outgoing = [
         ...new Set(
           extractWikilinks(body)
-            .map((target) => resolve(target))
+            .map((target) => resolve(target, path))
             .filter((resolved): resolved is string => resolved !== null),
         ),
       ];

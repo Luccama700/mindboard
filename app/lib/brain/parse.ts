@@ -5,8 +5,18 @@ export type ParsedFrontmatter = {
   body: string;
 };
 
-export type WikilinkResolver = (target: string) => string | null;
+// sourcePath is the note the link was written in. Obsidian breaks an ambiguous
+// basename towards the linking note's own folder, so the resolver cannot answer
+// without it — see buildResolver.
+export type WikilinkResolver = (
+  target: string,
+  sourcePath: string,
+) => string | null;
 
+// Diary sits above Archive and ahead of the unlisted folders: a bare
+// [[2026-10-09]] written from People/ or Areas/ means the diary entry, not that
+// day's Daily Brief or Canvas report (both of which would otherwise win the
+// alphabetical tie among unlisted folders).
 const FOLDER_PRIORITY = [
   "",
   "People",
@@ -14,8 +24,25 @@ const FOLDER_PRIORITY = [
   "Areas",
   "Topics",
   "Journal",
+  "Diary",
   "Archive",
 ];
+
+// Tolerates the trailing \r of a CRLF vault checkout, since the frontmatter
+// block is split on \n alone.
+const YAML_LIST_ITEM_RE = /^\s*-\s+(.*?)\s*$/;
+
+function unquote(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    // A YAML double-quoted scalar, which is what every vault writer emits:
+    // \\ and \" come back out as the characters they stand for.
+    return value.slice(1, -1).replace(/\\(["\\])/g, "$1");
+  }
+  if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
 
 export function parseFrontmatter(raw: string): ParsedFrontmatter {
   const lines = raw.split("\n");
@@ -29,16 +56,26 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
   }
   if (end === -1) return { frontmatter: {}, body: raw };
   const frontmatter: NoteFrontmatter = {};
-  for (const line of lines.slice(1, end)) {
+  const block = lines.slice(1, end);
+  for (let i = 0; i < block.length; i++) {
+    const line = block[i];
     const sep = line.indexOf(":");
     if (sep === -1) continue;
     const key = line.slice(0, sep).trim();
-    let value = line.slice(sep + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
-      (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
-    ) {
-      value = value.slice(1, -1);
+    let value = unquote(line.slice(sep + 1).trim());
+    if (!value) {
+      // Fold a YAML block sequence (`aliases:` then `  - Foo`) into the inline
+      // `[Foo, Bar]` spelling, so a consumer such as noteLabel sees one shape
+      // for both. The flat Record<string, string> shape is deliberate: this
+      // parser only ever has to answer "what does this key say".
+      const items: string[] = [];
+      while (i + 1 < block.length) {
+        const item = block[i + 1].match(YAML_LIST_ITEM_RE);
+        if (!item) break;
+        items.push(unquote(item[1].trim()));
+        i++;
+      }
+      if (items.length > 0) value = `[${items.join(", ")}]`;
     }
     if (key) frontmatter[key] = value;
   }
@@ -53,6 +90,56 @@ export function noteTitle(path: string): string {
 export function noteFolder(path: string): string {
   const idx = path.indexOf("/");
   return idx === -1 ? "" : path.slice(0, idx);
+}
+
+// The note's full parent directory, not just its top-level folder: the vault
+// nests (`Courses/Canvas Reports/`), and sibling-first resolution has to mean
+// "the same directory", not "somewhere under Courses/".
+function noteDir(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx === -1 ? "" : path.slice(0, idx);
+}
+
+// The graph/UI label for a note: a frontmatter `title`, else the first
+// `aliases` entry, else the filename. Reel notes are filed under the Instagram
+// handle they came from ("Video by bilawal.ai"), so the filename is the worst
+// of the three whenever the note carries anything better.
+export function noteLabel(
+  frontmatter: NoteFrontmatter,
+  fallback: string,
+): string {
+  const title = frontmatter.title?.trim();
+  if (title) return title;
+  return firstAlias(frontmatter.aliases) ?? fallback;
+}
+
+function firstAlias(raw: string | undefined): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  const inner = (
+    value.startsWith("[") && value.endsWith("]")
+      ? value.slice(1, -1)
+      : value
+  ).trim();
+  if (!inner) return null;
+  const quote = inner[0];
+  if (quote === '"' || quote === "'") {
+    // Read to the closing quote rather than to the first comma: an alias is
+    // allowed to contain one ("Emma, in her own words").
+    let out = "";
+    for (let i = 1; i < inner.length; i++) {
+      if (quote === '"' && inner[i] === "\\" && i + 1 < inner.length) {
+        out += inner[i + 1];
+        i++;
+        continue;
+      }
+      if (inner[i] === quote) break;
+      out += inner[i];
+    }
+    return out.trim() || null;
+  }
+  const first = (inner.split(",")[0] ?? "").trim();
+  return first || null;
 }
 
 export function noteHref(path: string): string {
@@ -76,7 +163,7 @@ export function buildResolver(paths: string[]): WikilinkResolver {
     if (bucket) bucket.push(path);
     else byBasename.set(base, [path]);
   }
-  return (target: string) => {
+  return (target: string, sourcePath: string) => {
     const cleaned = target.trim();
     if (!cleaned) return null;
     const pathHit = byPath.get(cleaned.toLowerCase());
@@ -84,8 +171,17 @@ export function buildResolver(paths: string[]): WikilinkResolver {
     const candidates = byBasename.get(cleaned.toLowerCase());
     if (!candidates || candidates.length === 0) return null;
     if (candidates.length === 1) return candidates[0];
-    const exact = candidates.filter((p) => noteTitle(p) === cleaned);
-    const pool = exact.length > 0 ? exact : candidates;
+    // Obsidian's rule, and the only one that reads the vault correctly: the
+    // date-named notes repeat across folders (Diary/2026-08-27.md,
+    // Daily Briefs/2026-08-27.md, Courses/Canvas Reports/2026-08-27.md), and
+    // Diary/Diary.md's `[[2026-08-27]]` means its own sibling. Sibling first,
+    // then the historical folder-priority/alphabetical tiebreak for links that
+    // have no same-folder candidate.
+    const sourceDir = noteDir(sourcePath);
+    const siblings = candidates.filter((p) => noteDir(p) === sourceDir);
+    const scoped = siblings.length > 0 ? siblings : candidates;
+    const exact = scoped.filter((p) => noteTitle(p) === cleaned);
+    const pool = exact.length > 0 ? exact : scoped;
     return [...pool].sort((a, b) => {
       const fa = FOLDER_PRIORITY.indexOf(noteFolder(a));
       const fb = FOLDER_PRIORITY.indexOf(noteFolder(b));
@@ -130,11 +226,12 @@ function walkEligible(
 export function rewriteWikilinks(
   markdown: string,
   resolve: WikilinkResolver,
+  sourcePath: string,
 ): string {
   return walkEligible(markdown, (slice) =>
     slice.replace(WIKILINK_RE, (_full, target: string, _heading, alias?: string) => {
       const label = (alias ?? "").trim() || target.trim();
-      const path = resolve(target);
+      const path = resolve(target, sourcePath);
       if (!path) return `[${label}](#unresolved)`;
       return `[${label}](${noteHref(path)})`;
     }),

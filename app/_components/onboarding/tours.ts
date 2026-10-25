@@ -298,7 +298,7 @@ export const TOURS: Record<Exclude<TourKey, "intro">, TourStep[]> = {
     {
       anchor: "brain-graph-link",
       title: "the constellation",
-      body: "the graph view draws every note and every link between them. your mind, from above.",
+      body: "the graph view draws your notes and the links between them — your mind, from above. it opens on the brain itself; the chips along the top switch the reference piles (papers, briefs, canvas) back on, and archive ◇ walks the archive map.",
     },
     {
       title: "drop thoughts from anywhere",

@@ -68,6 +68,26 @@ describe("NoteView", () => {
     );
   });
 
+  test("resolves an ambiguous wikilink to the rendered note's own folder", () => {
+    const hub = makeNote({
+      path: "Diary/Diary.md",
+      folder: "Diary",
+      body: "- [[2026-08-27]]",
+    });
+    const entry = makeNote({ path: "Diary/2026-08-27.md", folder: "Diary" });
+    const report = makeNote({
+      path: "Courses/Canvas Reports/2026-08-27.md",
+      folder: "Courses",
+    });
+    render(
+      <NoteView note={hub} corpus={makeCorpus([hub, entry, report])} />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "2026-08-27" }).getAttribute("href"),
+    ).toBe("/brain/note/Diary/2026-08-27");
+  });
+
   test("renders callout blockquotes with the marker stripped", () => {
     const note = makeNote({
       path: "Home.md",

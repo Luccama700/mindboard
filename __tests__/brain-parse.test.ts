@@ -8,6 +8,7 @@ import {
   extractWikilinks,
   noteFolder,
   noteHref,
+  noteLabel,
   noteTitle,
   parseCalloutMarker,
   parseFrontmatter,
@@ -48,6 +49,77 @@ describe("parseFrontmatter", () => {
       source: "https://example.com/a",
     });
   });
+
+  test("folds a YAML block sequence into the inline spelling", () => {
+    const raw = '---\naliases:\n  - Dragon Hatchling\n  - "BDH"\ntype: reel\n---\nbody';
+    expect(parseFrontmatter(raw).frontmatter).toEqual({
+      aliases: "[Dragon Hatchling, BDH]",
+      type: "reel",
+    });
+  });
+
+  test("unescapes a double-quoted scalar the way the writers escape it", () => {
+    const raw = [
+      "---",
+      'author: "Ray \\"Ray\\" Fu"',
+      'path: "C:\\\\vault"',
+      "---",
+      "body",
+    ].join("\n");
+    expect(parseFrontmatter(raw).frontmatter).toEqual({
+      author: 'Ray "Ray" Fu',
+      path: "C:\\vault",
+    });
+  });
+
+  test("folds a block sequence out of a CRLF checkout", () => {
+    const raw =
+      "---\r\naliases:\r\n  - Dragon Hatchling\r\n  - BDH\r\n---\r\nbody";
+    expect(parseFrontmatter(raw).frontmatter.aliases).toBe(
+      "[Dragon Hatchling, BDH]",
+    );
+  });
+
+  test("leaves an inline sequence and a key with no value alone", () => {
+    const raw = "---\naliases: [A, B]\nprocessed:\n---\nbody";
+    expect(parseFrontmatter(raw).frontmatter).toEqual({
+      aliases: "[A, B]",
+      processed: "",
+    });
+  });
+});
+
+describe("noteLabel", () => {
+  test("prefers a frontmatter title", () => {
+    expect(
+      noteLabel({ title: "The Dragon Hatchling", aliases: "[BDH]" }, "Video by x"),
+    ).toBe("The Dragon Hatchling");
+  });
+
+  test("falls back to the first alias, in either spelling", () => {
+    expect(noteLabel({ aliases: "[BDH, Hatchling]" }, "Video by x")).toBe("BDH");
+    expect(noteLabel({ aliases: "Hatchling" }, "Video by x")).toBe("Hatchling");
+    expect(noteLabel({ aliases: '["Quoted alias"]' }, "Video by x")).toBe(
+      "Quoted alias",
+    );
+  });
+
+  test("does not split an alias on a comma inside quotes", () => {
+    expect(
+      noteLabel({ aliases: '["Emma, in her own words", "Emma"]' }, "x"),
+    ).toBe("Emma, in her own words");
+    expect(noteLabel({ aliases: '"Ray \\"Ray\\" Fu"' }, "x")).toBe(
+      'Ray "Ray" Fu',
+    );
+  });
+
+  test("falls back to the filename when both are missing or blank", () => {
+    expect(noteLabel({}, "Video by bilawal.ai")).toBe("Video by bilawal.ai");
+    expect(noteLabel({ title: "  ", aliases: "" }, "Video by x")).toBe(
+      "Video by x",
+    );
+    expect(noteLabel({ aliases: "[]" }, "Video by x")).toBe("Video by x");
+  });
 });
 
 describe("noteHref / noteTitle / noteFolder", () => {
@@ -80,36 +152,108 @@ describe("buildResolver", () => {
   ]);
 
   test("resolves by basename", () => {
-    expect(resolve("CLAUDE")).toBe("CLAUDE.md");
-    expect(resolve("2026-07-01 Setup and first interview")).toBe(
+    expect(resolve("CLAUDE", "Home.md")).toBe("CLAUDE.md");
+    expect(resolve("2026-07-01 Setup and first interview", "Home.md")).toBe(
       "Journal/2026-07-01 Setup and first interview.md",
     );
   });
 
   test("is case-insensitive", () => {
-    expect(resolve("claude")).toBe("CLAUDE.md");
-    expect(resolve("home")).toBe("Home.md");
+    expect(resolve("claude", "Home.md")).toBe("CLAUDE.md");
+    expect(resolve("home", "Home.md")).toBe("Home.md");
   });
 
   test("accepts full-path targets", () => {
-    expect(resolve("Archive/Welcome")).toBe("Archive/Welcome.md");
+    expect(resolve("Archive/Welcome", "Home.md")).toBe("Archive/Welcome.md");
   });
 
   test("returns null on a miss", () => {
-    expect(resolve("Nonexistent")).toBeNull();
-    expect(resolve("")).toBeNull();
+    expect(resolve("Nonexistent", "Home.md")).toBeNull();
+    expect(resolve("", "Home.md")).toBeNull();
   });
 
   test("duplicate basenames prefer folder priority (root before Archive)", () => {
     const dup = buildResolver(["Welcome.md", "Archive/Welcome.md"]);
-    expect(dup("Welcome")).toBe("Welcome.md");
+    expect(dup("Welcome", "Journal/A day.md")).toBe("Welcome.md");
     const dup2 = buildResolver(["Archive/Plan.md", "Projects/Plan.md"]);
-    expect(dup2("Plan")).toBe("Projects/Plan.md");
+    expect(dup2("Plan", "Home.md")).toBe("Projects/Plan.md");
   });
 
   test("duplicate basenames prefer exact-case match", () => {
     const dup = buildResolver(["Topics/claude.md", "People/CLAUDE.md"]);
-    expect(dup("CLAUDE")).toBe("People/CLAUDE.md");
+    expect(dup("CLAUDE", "Home.md")).toBe("People/CLAUDE.md");
+  });
+
+  // The vault repeats date basenames across folders, so this is the rule that
+  // decides whether Diary/Diary.md's [[2026-08-27]] means its own sibling.
+  const dated = [
+    "Courses/Canvas Reports/2026-08-27.md",
+    "Daily Briefs/2026-08-27.md",
+    "Diary/2026-08-27.md",
+  ];
+
+  test("duplicate basenames prefer the linking note's own folder", () => {
+    const resolveDated = buildResolver(dated);
+    expect(resolveDated("2026-08-27", "Diary/Diary.md")).toBe(
+      "Diary/2026-08-27.md",
+    );
+    expect(resolveDated("2026-08-27", "Daily Briefs/latest.md")).toBe(
+      "Daily Briefs/2026-08-27.md",
+    );
+    expect(
+      resolveDated("2026-08-27", "Courses/Canvas Reports/latest.md"),
+    ).toBe("Courses/Canvas Reports/2026-08-27.md");
+  });
+
+  test("the same folder means the same directory, not the same top level", () => {
+    const nested = buildResolver([
+      "Courses/Canvas Reports/2026-08-27.md",
+      "Courses/CPSC 330/2026-08-27.md",
+    ]);
+    expect(nested("2026-08-27", "Courses/CPSC 330/CPSC 330.md")).toBe(
+      "Courses/CPSC 330/2026-08-27.md",
+    );
+  });
+
+  test("a sibling outranks a higher-priority folder", () => {
+    const dup = buildResolver(["People/Maya Chen.md", "Archive/Maya Chen.md"]);
+    expect(dup("Maya Chen", "Archive/An old note.md")).toBe(
+      "Archive/Maya Chen.md",
+    );
+  });
+
+  test("exact-case preference still applies inside the sibling pool", () => {
+    const dup = buildResolver([
+      "Diary/claude.md",
+      "Diary/CLAUDE.md",
+      "People/CLAUDE.md",
+    ]);
+    expect(dup("CLAUDE", "Diary/Diary.md")).toBe("Diary/CLAUDE.md");
+  });
+
+  // People/… and Areas/… both write bare date links meaning the diary entry,
+  // so with no sibling to prefer, Diary has to outrank the operational piles.
+  test("with no sibling candidate a bare date means the diary entry", () => {
+    const resolveDated = buildResolver(dated);
+    expect(resolveDated("2026-08-27", "Home.md")).toBe("Diary/2026-08-27.md");
+    expect(resolveDated("2026-08-27", "People/Emma.md")).toBe(
+      "Diary/2026-08-27.md",
+    );
+    expect(resolveDated("2026-08-27", "Areas/Therapy.md")).toBe(
+      "Diary/2026-08-27.md",
+    );
+  });
+
+  test("the unlisted folders still break alphabetically behind the listed ones", () => {
+    const resolveDated = buildResolver([
+      "Courses/Canvas Reports/2026-08-27.md",
+      "Daily Briefs/2026-08-27.md",
+    ]);
+    expect(resolveDated("2026-08-27", "Home.md")).toBe(
+      "Courses/Canvas Reports/2026-08-27.md",
+    );
+    const dup = buildResolver(["Archive/Plan.md", "Diary/Plan.md"]);
+    expect(dup("Plan", "Home.md")).toBe("Diary/Plan.md");
   });
 });
 
@@ -121,53 +265,73 @@ describe("rewriteWikilinks", () => {
   ]);
 
   test("rewrites a plain wikilink", () => {
-    expect(rewriteWikilinks("See [[CLAUDE]].", resolve)).toBe(
+    expect(rewriteWikilinks("See [[CLAUDE]].", resolve, "Home.md")).toBe(
       "See [CLAUDE](/brain/note/CLAUDE).",
     );
   });
 
   test("rewrites an aliased wikilink", () => {
-    expect(rewriteWikilinks("[[CLAUDE|the rules]]", resolve)).toBe(
+    expect(rewriteWikilinks("[[CLAUDE|the rules]]", resolve, "Home.md")).toBe(
       "[the rules](/brain/note/CLAUDE)",
     );
   });
 
   test("drops heading anchors but keeps the link", () => {
-    expect(rewriteWikilinks("[[Home#Sessions]]", resolve)).toBe(
+    expect(rewriteWikilinks("[[Home#Sessions]]", resolve, "Home.md")).toBe(
       "[Home](/brain/note/Home)",
     );
   });
 
   test("percent-encodes targets with spaces", () => {
     expect(
-      rewriteWikilinks("[[2026-07-01 Setup and first interview]]", resolve),
+      rewriteWikilinks("[[2026-07-01 Setup and first interview]]", resolve, "Home.md"),
     ).toBe(
       "[2026-07-01 Setup and first interview](/brain/note/Journal/2026-07-01%20Setup%20and%20first%20interview)",
     );
   });
 
   test("marks unresolved wikilinks", () => {
-    expect(rewriteWikilinks("[[Missing note]]", resolve)).toBe(
+    expect(rewriteWikilinks("[[Missing note]]", resolve, "Home.md")).toBe(
       "[Missing note](#unresolved)",
     );
   });
 
   test("leaves wikilinks inside code fences untouched", () => {
     const md = "before\n```\n[[CLAUDE]]\n```\nafter [[CLAUDE]]";
-    expect(rewriteWikilinks(md, resolve)).toBe(
+    expect(rewriteWikilinks(md, resolve, "Home.md")).toBe(
       "before\n```\n[[CLAUDE]]\n```\nafter [CLAUDE](/brain/note/CLAUDE)",
     );
   });
 
   test("leaves wikilinks inside inline code untouched", () => {
-    expect(rewriteWikilinks("use `[[CLAUDE]]` to link [[Home]]", resolve)).toBe(
+    expect(rewriteWikilinks("use `[[CLAUDE]]` to link [[Home]]", resolve, "Home.md")).toBe(
       "use `[[CLAUDE]]` to link [Home](/brain/note/Home)",
     );
   });
 
   test("rewrites multiple wikilinks on one line", () => {
-    expect(rewriteWikilinks("[[Home]] and [[CLAUDE]]", resolve)).toBe(
+    expect(rewriteWikilinks("[[Home]] and [[CLAUDE]]", resolve, "Home.md")).toBe(
       "[Home](/brain/note/Home) and [CLAUDE](/brain/note/CLAUDE)",
+    );
+  });
+
+  test("breaks an ambiguous target towards the source note's folder", () => {
+    const dated = buildResolver([
+      "Diary/Diary.md",
+      "Diary/2026-08-27.md",
+      "Daily Briefs/2026-08-27.md",
+      "Courses/Canvas Reports/2026-08-27.md",
+    ]);
+    expect(rewriteWikilinks("[[2026-08-27]]", dated, "Diary/Diary.md")).toBe(
+      "[2026-08-27](/brain/note/Diary/2026-08-27)",
+    );
+    // a sibling still outranks Diary's folder priority
+    expect(
+      rewriteWikilinks("[[2026-08-27]]", dated, "Daily Briefs/latest.md"),
+    ).toBe("[2026-08-27](/brain/note/Daily%20Briefs/2026-08-27)");
+    // and with no sibling at all, the diary entry is what a bare date means
+    expect(rewriteWikilinks("[[2026-08-27]]", dated, "Home.md")).toBe(
+      "[2026-08-27](/brain/note/Diary/2026-08-27)",
     );
   });
 });
