@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-10-25-graph-lenses",
+    date: "2026-10-25",
+    title: "the graph, one lens at a time",
+    items: [
+      "the graph's chips now come from your own folders instead of a fixed six — diary, reels, courses, the archive map, all of them, each with its count. papers, briefs, canvas reports, inbox and templates start folded away so it opens on the brain and not the filing; tap a chip to bring one back and this phone remembers.",
+      "archive ◇ walks the archive map outwards: the hub, its categories, then the archived notes and reels underneath them. everything you ever filed away, as a picture.",
+      "every note page has a graph ◇ link that drops you into the graph centred on that note, two hops out. the pill up top says what you're looking at and clears it.",
+      "links like [[2026-10-09]] now resolve the way obsidian does — to the note next door. diary entries stopped showing up as islands.",
+    ],
+  },
+  {
     id: "2026-09-09-top-chrome",
     date: "2026-09-09",
     title: "nothing hides under the top edge anymore",

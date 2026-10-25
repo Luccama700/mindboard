@@ -66,14 +66,20 @@ export default async function BrainNotePage(props: {
       ) : note && corpus ? (
         <>
           <NoteView note={note} corpus={corpus} />
-          <p className="mt-10 border-t border-hairline pt-4">
+          <div className="mt-10 border-t border-hairline pt-4 flex items-center gap-6">
+            <Link
+              href={`/brain/graph?focus=${encodeURIComponent(note.path)}&depth=2`}
+              className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11 inline-flex items-center"
+            >
+              graph ◇
+            </Link>
             <Link
               href={`/plan?q=${encodeURIComponent(copilotPrompt(note.title, note.body))}`}
               className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11 inline-flex items-center"
             >
               send to copilot ◇
             </Link>
-          </p>
+          </div>
         </>
       ) : null}
     </main>

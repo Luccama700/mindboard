@@ -156,7 +156,7 @@ export function NoteView({
   note: VaultNote;
   corpus: VaultCorpus;
 }) {
-  const markdown = rewriteWikilinks(note.body, corpus.resolve);
+  const markdown = rewriteWikilinks(note.body, corpus.resolve, note.path);
   const metaEntries = [
     ...FRONTMATTER_KEYS.filter((key) => note.frontmatter[key]).map(
       (key) => [key, note.frontmatter[key]] as const,
