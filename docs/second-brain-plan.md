@@ -219,7 +219,7 @@ a read tool without the service key returns a clean guarded tool-error, not a cr
 
 **Owner-gated (not automatable this session):**
 - Add `SUPABASE_SERVICE_ROLE_KEY` to `.env.local` + Vercel. `MINDBOARD_OWNER_USER_ID`
-  (`8fd62772-a371-4d26-8a93-678b88c2b879`) and a generated `MCP_BEARER_TOKEN` were added to
+  (the owner's Supabase user id) and a generated `MCP_BEARER_TOKEN` were added to
   `.env.local`; set both in Vercel too.
 - Deploy; add `https://<domain>/api/mcp/mcp` on claude.ai as a custom connector with the bearer
   token; run create_task → confirm and confirm an `ai_audit_log` row lands (the kickoff's done-criteria).

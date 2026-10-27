@@ -48,7 +48,7 @@ describe("mcp personal access tokens", () => {
 });
 
 describe("worker allowlist", () => {
-  const OWNER = "8fd62772-a371-4d26-8a93-678b88c2b879";
+  const OWNER = "00000000-0000-4000-8000-0000000000a1";
   const originalOwner = process.env.MINDBOARD_OWNER_USER_ID;
   const originalAllowed = process.env.WORKER_ALLOWED_USER_IDS;
 

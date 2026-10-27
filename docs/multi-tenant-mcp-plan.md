@@ -11,8 +11,7 @@ Date: 2026-07-10. Prod project: `kdsunzpcjfzkidejtnyp` (verified read-only).
 ### 1.1 Where the owner check lives
 
 One env var is the root of all single-tenancy: `MINDBOARD_OWNER_USER_ID`
-(= `8fd62772-a371-4d26-8a93-678b88c2b879`, verified in prod `auth.users` as
-luccama700@gmail.com), read by `ownerUserId()` in `app/lib/mcp/config.ts:6`.
+(= the owner's Supabase user id, set in Vercel), read by `ownerUserId()` in `app/lib/mcp/config.ts:6`.
 It is enforced in three places:
 
 1. **OAuth authorize gate** — `app/api/mcp/oauth/authorize/route.ts:60`:
