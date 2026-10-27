@@ -1,4 +1,5 @@
 import "server-only";
+import { userTimeZone } from "@/app/lib/mcp/config";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createServiceClient } from "@/utils/supabase/service";
@@ -13,7 +14,7 @@ import {
   courseSourcePath,
   validateBeginUpload,
   validatePart,
-  vancouverStamp,
+  zonedStamp,
   type SourcePart,
 } from "./course-ops";
 import type { Result } from "./validate";
@@ -311,7 +312,7 @@ export async function finalizeSourceFor(
   const credentials = await readVaultCredentials(supabase, userId);
   if (!credentials) return { ok: false, error: VAULT_NOT_CONFIGURED_MESSAGE };
 
-  const stamp = vancouverStamp(new Date());
+  const stamp = zonedStamp(new Date(), await userTimeZone(supabase, userId));
   const document = buildSourceDocument({
     courseName,
     title: source.title,

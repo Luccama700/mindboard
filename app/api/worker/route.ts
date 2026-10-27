@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId, todayKey, workerAllowedUserIds } from "@/app/lib/mcp/config";
+import { ownerUserId, todayKey, userTimeZone, workerAllowedUserIds } from "@/app/lib/mcp/config";
 import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
 import {
   createVaultBase64FileWithRetry,
@@ -21,7 +21,7 @@ import {
 import {
   buildSourceDocument,
   courseSourcePath,
-  vancouverStamp,
+  zonedStamp,
 } from "@/app/lib/mcp/course-ops";
 import { scriptToVibeVoiceText } from "@/app/lib/learn/podcast-script";
 import {
@@ -161,7 +161,7 @@ async function failJob(job: JobRow, message: string, permanent = false) {
           buildReelFailureDocument({
             url: String(job.payload.url ?? ""),
             error: message,
-            stampIso: vancouverStamp(new Date()).created,
+            stampIso: zonedStamp(new Date(), await userTimeZone(supabase, job.user_id)).created,
           }),
           `Reel failed: ${shortcode}`,
         );
@@ -407,7 +407,7 @@ async function completeOcr(
     kind: source.kind,
     pageCount: pageCount ?? source.page_count,
     markdown,
-    stamp: vancouverStamp(new Date()),
+    stamp: zonedStamp(new Date(), await userTimeZone(supabase, job.user_id)),
     via: "home worker",
   });
 
@@ -543,7 +543,7 @@ async function completeReel(
     transcript,
     frames,
     thumbnailEmbed,
-    stampIso: vancouverStamp(new Date()).created,
+    stampIso: zonedStamp(new Date(), await userTimeZone(supabase, job.user_id)).created,
     via: "home worker",
   });
 

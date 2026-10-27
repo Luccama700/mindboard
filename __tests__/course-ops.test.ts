@@ -5,7 +5,7 @@ import {
   courseSourcePath,
   validateBeginUpload,
   validatePart,
-  vancouverStamp,
+  zonedStamp,
   SOURCE_MAX_PARTS,
   SOURCE_PART_MAX_CHARS,
 } from "@/app/lib/mcp/course-ops";
@@ -152,7 +152,7 @@ describe("buildSourceDocument", () => {
       kind: "pdf",
       pageCount: 12,
       markdown: "<!-- p.1 -->\nBody text",
-      stamp: vancouverStamp(new Date("2026-07-08T20:00:00Z")),
+      stamp: zonedStamp(new Date("2026-07-08T20:00:00Z"), "America/Vancouver"),
       via: "MCP",
     });
     expect(doc).toContain("type: course-source");
@@ -171,7 +171,7 @@ describe("buildSourceDocument", () => {
       kind: "markdown",
       pageCount: null,
       markdown: "x",
-      stamp: vancouverStamp(new Date("2026-07-08T20:00:00Z")),
+      stamp: zonedStamp(new Date("2026-07-08T20:00:00Z"), "America/Vancouver"),
       via: "assistant",
     });
     expect(doc).not.toContain("pages:");
@@ -184,7 +184,7 @@ describe("buildSourceDocument", () => {
       kind: "markdown",
       pageCount: null,
       markdown: "x",
-      stamp: vancouverStamp(new Date("2026-07-08T20:00:00Z")),
+      stamp: zonedStamp(new Date("2026-07-08T20:00:00Z"), "America/Vancouver"),
       via: "assistant",
     });
     expect(doc).toContain('course: "C:\\\\Users\\\\me"');

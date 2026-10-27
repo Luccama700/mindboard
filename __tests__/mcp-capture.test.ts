@@ -9,7 +9,7 @@ import {
   runCapture,
   sanitizeCaptureTitle,
   validateCapture,
-  vancouverStamp,
+  zonedStamp,
   type CaptureStamp,
   type VaultWriteCredentials,
 } from "@/app/lib/mcp/capture";
@@ -161,9 +161,9 @@ describe("sanitizeCaptureTitle", () => {
   });
 });
 
-describe("vancouverStamp", () => {
+describe("zonedStamp", () => {
   test("summer (PDT) crossing the UTC date line", () => {
-    expect(vancouverStamp(PDT_NOW)).toEqual({
+    expect(zonedStamp(PDT_NOW, "America/Vancouver")).toEqual({
       dateKey: "2026-07-06",
       timeKey: "1930",
       created: "2026-07-06 19:30",
@@ -171,7 +171,7 @@ describe("vancouverStamp", () => {
   });
 
   test("winter (PST)", () => {
-    expect(vancouverStamp(new Date("2026-01-15T01:05:00Z"))).toEqual({
+    expect(zonedStamp(new Date("2026-01-15T01:05:00Z"), "America/Vancouver")).toEqual({
       dateKey: "2026-01-14",
       timeKey: "1705",
       created: "2026-01-14 17:05",
@@ -179,9 +179,18 @@ describe("vancouverStamp", () => {
   });
 
   test("midnight renders as 00, not 24", () => {
-    expect(vancouverStamp(new Date("2026-07-06T07:00:00Z")).timeKey).toBe(
+    expect(zonedStamp(new Date("2026-07-06T07:00:00Z"), "America/Vancouver").timeKey).toBe(
       "0000",
     );
+  });
+
+  test("stamps in each tenant's own zone, and UTC when none is stored", () => {
+    expect(zonedStamp(PDT_NOW, "Asia/Tokyo").dateKey).toBe("2026-07-07");
+    expect(zonedStamp(PDT_NOW, null)).toEqual({
+      dateKey: "2026-07-07",
+      timeKey: "0230",
+      created: "2026-07-07 02:30",
+    });
   });
 });
 
@@ -245,7 +254,7 @@ describe("buildCaptureDocument", () => {
 
 describe("runCapture", () => {
   test("returns the not-configured message when the vault is not connected", async () => {
-    const result = await runCapture(null, GOOD_INPUT, PDT_NOW);
+    const result = await runCapture(null, GOOD_INPUT, PDT_NOW, "America/Vancouver");
     expect(result).toEqual({ ok: false, error: VAULT_NOT_CONFIGURED_MESSAGE });
   });
 
@@ -255,7 +264,7 @@ describe("runCapture", () => {
       CREDENTIALS,
       { ...GOOD_INPUT, topics: ["career"] },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
 
     expect(result).toEqual({
@@ -291,7 +300,7 @@ describe("runCapture", () => {
 
   test("retries with the next suffix when the path already exists", async () => {
     const { calls, fetchImpl } = fakeFetch([422, 422, 201]);
-    const result = await runCapture(CREDENTIALS, GOOD_INPUT, PDT_NOW, fetchImpl);
+    const result = await runCapture(CREDENTIALS, GOOD_INPUT, PDT_NOW, "America/Vancouver", fetchImpl);
 
     expect(result.ok && result.value.path).toBe(
       "Inbox/2026-07-06 1930 Career planning chat -3.md",
@@ -309,7 +318,7 @@ describe("runCapture", () => {
 
   test("gives up after too many collisions", async () => {
     const { calls, fetchImpl } = fakeFetch([422]);
-    const result = await runCapture(CREDENTIALS, GOOD_INPUT, PDT_NOW, fetchImpl);
+    const result = await runCapture(CREDENTIALS, GOOD_INPUT, PDT_NOW, "America/Vancouver", fetchImpl);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain("too many collisions");
     expect(calls).toHaveLength(CAPTURE_MAX_ATTEMPTS);
@@ -322,7 +331,7 @@ describe("runCapture", () => {
     [500, "vault write failed (500)"],
   ])("maps GitHub %d to a clear error", async (status, error) => {
     const { fetchImpl } = fakeFetch([status]);
-    const result = await runCapture(CREDENTIALS, GOOD_INPUT, PDT_NOW, fetchImpl);
+    const result = await runCapture(CREDENTIALS, GOOD_INPUT, PDT_NOW, "America/Vancouver", fetchImpl);
     expect(result).toEqual({ ok: false, error });
   });
 
@@ -332,7 +341,7 @@ describe("runCapture", () => {
       CREDENTIALS,
       { ...GOOD_INPUT, title: "../escape" },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
     expect(result).toEqual({
       ok: false,

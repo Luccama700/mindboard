@@ -107,9 +107,12 @@ export type CaptureStamp = {
   created: string; // YYYY-MM-DD HH:mm
 };
 
-export function vancouverStamp(now: Date): CaptureStamp {
+// Stamp in the note owner's own zone (user_settings.timezone, resolved by
+// userTimeZone). null = no stored zone, which stamps in UTC rather than in
+// whichever zone the deployment's owner happens to live in.
+export function zonedStamp(now: Date, timeZone: string | null): CaptureStamp {
   const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Vancouver",
+    timeZone: timeZone ?? "UTC",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -254,9 +257,10 @@ async function createCaptureFile(
   input: CaptureInput,
   safeTitle: string,
   now: Date,
+  timeZone: string | null,
   fetchImpl: typeof fetch,
 ): Promise<Result<CaptureOutcome>> {
-  const stamp = vancouverStamp(now);
+  const stamp = zonedStamp(now, timeZone);
   const written = await createVaultFileWithRetry(
     credentials,
     (attempt) => captureFilePath(stamp, safeTitle, attempt),
@@ -278,6 +282,7 @@ export async function runCapture(
   credentials: VaultWriteCredentials | null,
   raw: unknown,
   now: Date,
+  timeZone: string | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Result<CaptureOutcome>> {
   if (!credentials) return { ok: false, error: VAULT_NOT_CONFIGURED_MESSAGE };
@@ -288,5 +293,5 @@ export async function runCapture(
   const safeTitle = sanitizeCaptureTitle(parsed.value.title);
   if (!safeTitle.ok) return safeTitle;
 
-  return createCaptureFile(credentials, parsed.value, safeTitle.value, now, fetchImpl);
+  return createCaptureFile(credentials, parsed.value, safeTitle.value, now, timeZone, fetchImpl);
 }

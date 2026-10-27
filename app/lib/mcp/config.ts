@@ -65,11 +65,19 @@ export async function todayKey(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<string> {
+  return todayISO(await userTimeZone(supabase, userId));
+}
+
+// The user's stored IANA zone, validated; null when unset or invalid.
+export async function userTimeZone(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<string | null> {
   const { data } = await supabase
     .from("user_settings")
     .select("timezone")
     .eq("user_id", userId)
     .maybeSingle();
   const timezone = (data as { timezone: string | null } | null)?.timezone ?? null;
-  return todayISO(safeTimeZone(timezone));
+  return safeTimeZone(timezone);
 }

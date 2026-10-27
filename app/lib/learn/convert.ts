@@ -1,4 +1,5 @@
 import "server-only";
+import { userTimeZone } from "@/app/lib/mcp/config";
 import Anthropic from "@anthropic-ai/sdk";
 import { PDFDocument } from "pdf-lib";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -12,7 +13,7 @@ import {
 import {
   buildSourceDocument,
   courseSourcePath,
-  vancouverStamp,
+  zonedStamp,
 } from "@/app/lib/mcp/course-ops";
 import type { Result } from "@/app/lib/mcp/validate";
 import { SOURCE_COLUMNS, type CourseSource } from "@/app/_components/learn-types";
@@ -223,7 +224,7 @@ export async function runPdfConversion(input: {
   }
 
   const stitched = stitchConverted(converted);
-  const stamp = vancouverStamp(new Date());
+  const stamp = zonedStamp(new Date(), await userTimeZone(supabase, userId));
   const document = buildSourceDocument({
     courseName,
     title: source.title,

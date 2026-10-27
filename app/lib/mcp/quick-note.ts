@@ -13,7 +13,7 @@ import {
   createVaultBase64FileWithRetry,
   createVaultFileWithRetry,
   sanitizeCaptureTitle,
-  vancouverStamp,
+  zonedStamp,
   yamlQuote,
   type CaptureStamp,
   type VaultWriteCredentials,
@@ -291,9 +291,10 @@ export async function createQuickNote(
   credentials: VaultWriteCredentials,
   input: QuickNoteInput,
   now: Date,
+  timeZone: string | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Result<QuickNoteOutcome>> {
-  const stamp = vancouverStamp(now);
+  const stamp = zonedStamp(now, timeZone);
 
   let attachment: { path: string; fileName: string } | null = null;
   if (input.file) {
