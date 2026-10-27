@@ -74,11 +74,11 @@ copy exits with "another urc-agent is already running (pid N)" and a lock left
 behind by a crash is cleared automatically. Two agents would double every limit
 and, worse, neither one's kill switch would know the other's PIDs.
 
-**Credentials, a note.** URC accepts an OAuth connection or an `mbp_` PAT, and
-the PAT that already sits in `overnight\.env` would work. Prefer a *separate*
-PAT (or plain OAuth from claude.ai) for chat-driven URC: that way revoking the
-one a chat uses doesn't break the overnight runs, and anything that reads the
-overnight PAT off disk can't start a session with it.
+**Credentials, a note.** URC accepts only an OAuth connection (claude.ai).
+Personal access tokens are refused: a user has exactly one PAT, and the
+owner's sits in `overnight\.env` on this PC, next to agents that run shell
+commands, so anything that read it off disk could otherwise start a session.
+The shared static bearer is refused too.
 
 ## The kill switch
 
