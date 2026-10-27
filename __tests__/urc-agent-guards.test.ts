@@ -366,12 +366,12 @@ describe("trust lookup in ~/.claude.json", () => {
 describe("local rate limits", () => {
   const now = Date.parse("2026-10-21T18:00:00.000Z");
 
-  test("two live sessions block a third", () => {
-    expect(spawnAllowed({ state: { spawns: [] }, nowMs: now, liveCount: 2 })).toEqual({
+  test("four live sessions block a fifth", () => {
+    expect(spawnAllowed({ state: { spawns: [] }, nowMs: now, liveCount: 4 })).toEqual({
       ok: false,
-      error: "2 local sessions are already live",
+      error: "4 local sessions are already live",
     });
-    expect(spawnAllowed({ state: { spawns: [] }, nowMs: now, liveCount: 1 }).ok).toBe(true);
+    expect(spawnAllowed({ state: { spawns: [] }, nowMs: now, liveCount: 3 }).ok).toBe(true);
   });
 
   test("five spawns within the hour block the sixth", () => {
@@ -688,5 +688,31 @@ describe("log redaction", () => {
   test("short or missing secrets are left alone", () => {
     expect(redact("plain text", [])).toBe("plain text");
     expect(redact("abc", ["abc"])).toBe("abc");
+  });
+});
+
+
+describe("chat-chosen session name on the PC", () => {
+  test("a valid label gives <label>-<6 hex>", () => {
+    expect(sessionNameFor(JOB_ID, "fix-tests")).toBe("fix-tests-aabbcc");
+  });
+
+  test("no label keeps the default", () => {
+    expect(sessionNameFor(JOB_ID)).toBe("urc-aabbccdd");
+    expect(sessionNameFor(JOB_ID, null)).toBe("urc-aabbccdd");
+  });
+
+  test("a label the PC doesn't accept falls back to the default and never reaches argv", () => {
+    for (const bad of ["Fix", "a b", "x'; calc", "-lead", "trail-", "a".repeat(25), "Ã©", "$(whoami)", ""]) {
+      expect(sessionNameFor(JOB_ID, bad)).toBe("urc-aabbccdd");
+    }
+  });
+
+  test("decideSpawn uses the label for the name, and drops a hostile one", () => {
+    const plan = decideSpawn({ id: JOB_ID, label: "fix-tests" }, { bypass: false });
+    expect(plan.sessionName).toBe("fix-tests-aabbcc");
+    expect(plan.args.slice(0, 4)).toEqual(["--remote-control", "fix-tests-aabbcc", "--name", "fix-tests-aabbcc"]);
+    const hostile = decideSpawn({ id: JOB_ID, label: 'x"; calc' }, { bypass: false });
+    expect(hostile.sessionName).toBe("urc-aabbccdd");
   });
 });

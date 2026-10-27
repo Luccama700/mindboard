@@ -1543,6 +1543,13 @@ const mcpHandler = createMcpHandler(
             folder: z
               .string()
               .describe("A folder key the PC reported — see list_urc_sessions."),
+            name: z
+              .string()
+              .max(80)
+              .optional()
+              .describe(
+                "Optional short name for the session, shown in the Remote Control picker as <name>-<id>. Lowercased; anything but a-z, 0-9 becomes a hyphen; max 24 chars. Omit for the default urc-<id>.",
+              ),
           },
         },
         (args, extra) =>

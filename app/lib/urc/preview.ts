@@ -7,9 +7,9 @@
 export const URC_MODEL = "claude-opus-5-5";
 export const URC_SESSION_PREFIX = "urc-";
 
-// At most two sessions alive at once, and at most five spawns an hour. Both are
+// At most four sessions alive at once, and at most five spawns an hour. Both are
 // re-checked at confirm time from server state, not trusted from the proposal.
-export const URC_MAX_LIVE_SESSIONS = 2;
+export const URC_MAX_LIVE_SESSIONS = 4;
 export const URC_MAX_SPAWNS_PER_HOUR = 5;
 // What the PC may be asked to act on: a stop request is only meaningful for a
 // job that has reached the device.
@@ -54,11 +54,45 @@ export function isUuid(value: unknown): value is string {
   );
 }
 
-// urc-<first 8 hex of the job id>. Short enough to read in the Remote Control
-// picker, and unique in practice for the handful of sessions URC allows.
-export function urcSessionName(jobId: string): string {
-  const hex = jobId.replace(/-/g, "").slice(0, 8).toLowerCase();
-  return `${URC_SESSION_PREFIX}${hex}`;
+// A name the chat may give a session: lowercase letters, digits and single
+// hyphens, 1-24 characters, no leading/trailing hyphen. It ends up on the PC's
+// command line (--remote-control / --name), so it is a strict allowlist, never
+// an escaped free-form string. worker/urc-guards.mjs holds the same pattern and
+// re-checks it, because the PC does not trust the server either.
+export const URC_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/;
+export const URC_LABEL_MAX = 24;
+
+// "Fix the tests!" -> "fix-the-tests". Absent/blank -> null (default name).
+export function normalizeUrcLabel(
+  raw: unknown,
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true, value: null };
+  if (typeof raw !== "string") return { ok: false, error: "name must be a string" };
+  if (!raw.trim()) return { ok: true, value: null };
+  const label = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, URC_LABEL_MAX)
+    .replace(/-+$/, "");
+  if (!label || !URC_LABEL_PATTERN.test(label)) {
+    return { ok: false, error: "name needs at least one letter or digit (a-z, 0-9, hyphens)" };
+  }
+  return { ok: true, value: label };
+}
+
+// Default: urc-<first 8 hex of the job id>. With a chat-chosen name:
+// <name>-<first 6 hex>, so two sessions with the same name never collide and
+// the PC's kill guard (which matches the name on the process command line)
+// can't confuse one with an unrelated session. An invalid stored label falls
+// back to the default rather than reaching the command line.
+export function urcSessionName(jobId: string, label?: string | null): string {
+  const hex = jobId.replace(/-/g, "").toLowerCase();
+  if (typeof label === "string" && URC_LABEL_PATTERN.test(label)) {
+    return `${label}-${hex.slice(0, 6)}`;
+  }
+  return `${URC_SESSION_PREFIX}${hex.slice(0, 8)}`;
 }
 
 export function isValidSessionUrl(value: unknown): value is string {
@@ -102,16 +136,20 @@ export type SpawnPreviewInput = {
   // the server never sends a path back to the PC.
   folderLabel: string | null;
   bypass: boolean;
+  // The normalized chat-chosen name, or null for the default.
+  label?: string | null;
 };
 
-// The job id does not exist yet at propose time, so the command carries the
-// literal `urc-<id>` placeholder; the confirm result and the started report
-// carry the real name.
+// The job id does not exist yet at propose time, so the name carries a literal
+// `<id>` placeholder; the confirm result and the started report carry the real
+// name.
 export function renderSpawnPreview(input: SpawnPreviewInput): string {
+  const name = input.label ? `${input.label}-<id>` : `${URC_SESSION_PREFIX}<id>`;
   const lines = [
     `Start a Claude Code remote-control session on ${input.deviceName}.`,
+    `Session name: ${name}`,
     `Folder: ${input.folderKey}${input.folderLabel ? ` (${input.folderLabel})` : ""}`,
-    `Command: ${urcCommandLine(`${URC_SESSION_PREFIX}<id>`, input.bypass)}`,
+    `Command: ${urcCommandLine(name, input.bypass)}`,
     "No starting prompt (v1)",
     urcPermissionsLine(input.bypass),
   ];

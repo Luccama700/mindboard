@@ -7,6 +7,7 @@ import { urcAuth } from "./auth";
 import {
   isDeviceOnline,
   isUuid,
+  normalizeUrcLabel,
   renderSpawnPreview,
   URC_CLOCK_SKEW_MS,
   URC_CONCURRENCY_STATUSES,
@@ -33,7 +34,7 @@ const DEVICE_COLUMNS =
   "id, user_id, name, folder_keys, folder_labels, bypass_permissions, last_seen";
 
 const JOB_COLUMNS =
-  "id, user_id, device_id, folder_key, status, session_url, error, bypass_permissions, created_at, expires_at, claimed_at, started_at, stop_requested_at, stopped_at";
+  "id, user_id, device_id, folder_key, label, status, session_url, error, bypass_permissions, created_at, expires_at, claimed_at, started_at, stop_requested_at, stopped_at";
 
 export type UrcDeviceRow = {
   id: string;
@@ -50,6 +51,8 @@ export type UrcJobRow = {
   user_id: string;
   device_id: string;
   folder_key: string;
+  // Chat-chosen session name (normalized), or null for the default urc-<id>.
+  label?: string | null;
   status: string;
   session_url: string | null;
   error: string | null;
@@ -284,6 +287,8 @@ export async function proposeSpawnUrc(
 
   const folder = parseFolder(raw);
   if (!folder.ok) return folder;
+  const label = normalizeUrcLabel((raw as Record<string, unknown> | null)?.name);
+  if (!label.ok) return label;
 
   const supabase = createServiceClient();
   const resolved = await resolveSpawn(supabase, userId, folder.value, Date.now());
@@ -294,13 +299,14 @@ export async function proposeSpawnUrc(
     folderKey: folder.value,
     folderLabel: resolved.value.folderLabel,
     bypass: resolved.value.device.bypass_permissions === true,
+    label: label.value,
   });
 
   const proposalId = await recordProposal(
     supabase,
     userId,
     "spawn_urc",
-    { folder: folder.value, deviceId: resolved.value.device.id },
+    { folder: folder.value, deviceId: resolved.value.device.id, name: label.value },
     preview,
   );
   return { ok: true, value: { proposalId, preview } };
@@ -334,6 +340,10 @@ export async function executeSpawnUrc(
 
   const folder = parseFolder(input);
   if (!folder.ok) return folder;
+  // Re-normalized from the stored input like the folder: the proposal row is
+  // forgeable, so the name is held to the same allowlist again here.
+  const label = normalizeUrcLabel(input.name);
+  if (!label.ok) return label;
 
   const resolved = await resolveSpawn(supabase, ownerId, folder.value, nowMs);
   if (!resolved.ok) return resolved;
@@ -344,6 +354,7 @@ export async function executeSpawnUrc(
       user_id: ownerId,
       device_id: resolved.value.device.id,
       folder_key: folder.value,
+      label: label.value,
       status: "queued",
       audit_id: context?.proposalId ?? null,
       confirmed_auth: auth.value.confirmedAuth,
@@ -374,7 +385,7 @@ export async function executeSpawnUrc(
     ok: true,
     value: {
       jobId,
-      sessionName: urcSessionName(jobId),
+      sessionName: urcSessionName(jobId, label.value),
       folder: folder.value,
       status: "queued",
       message: "queued on your PC — check get_urc_status in a few seconds",
@@ -428,7 +439,7 @@ export async function getUrcStatus(
     ok: true,
     value: {
       jobId: job.id,
-      sessionName: urcSessionName(job.id),
+      sessionName: urcSessionName(job.id, job.label),
       status,
       folder: job.folder_key,
       createdAt: job.created_at,
@@ -481,7 +492,7 @@ export async function listUrcSessions(
       })),
       sessions: ((jobs.data ?? []) as UrcJobRow[]).map((job) => ({
         jobId: job.id,
-        sessionName: urcSessionName(job.id),
+        sessionName: urcSessionName(job.id, job.label),
         status: job.status,
         folder: job.folder_key,
         createdAt: job.created_at,

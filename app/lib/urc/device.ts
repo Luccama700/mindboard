@@ -178,7 +178,14 @@ export async function deviceClaim(
   return {
     ok: true,
     value: {
-      job: { id: job.id, user_id: job.user_id, folder_key: job.folder_key },
+      // label: the chat-chosen session name. The PC re-checks it against its own
+      // allowlist and falls back to the default name if it doesn't pass.
+      job: {
+        id: job.id,
+        user_id: job.user_id,
+        folder_key: job.folder_key,
+        label: job.label ?? null,
+      },
     },
   };
 }
