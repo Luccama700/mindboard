@@ -12,6 +12,7 @@ import { ReplayToursButton } from "@/app/_components/onboarding/replay-tours-but
 import { SettingsSections } from "@/app/_components/settings-panel";
 import { SectionRuler } from "@/app/_components/ui";
 import { VaultSettingsForm } from "@/app/brain/_components/vault-settings-form";
+import { isDeploymentOwner } from "@/app/lib/account/delete";
 import { decryptSecret } from "@/app/lib/assistant/crypto";
 import {
   KEY_COLUMNS,
@@ -25,6 +26,7 @@ import { ConnectedApps } from "./connected-apps";
 import { McpConnectionCard } from "./mcp-connection-card";
 import { AgentModelsForm } from "./agent-models-form";
 import { PreferencesForm } from "./preferences-form";
+import { YourData } from "./your-data";
 
 // Key saves make one live verification call to the provider.
 export const maxDuration = 30;
@@ -241,6 +243,11 @@ export default async function SettingsPage() {
             sign out
           </button>
         </form>
+      </section>
+
+      <section className="space-y-4">
+        <SectionRuler label="your data" />
+        <YourData isOwner={isDeploymentOwner(user.id, process.env)} />
       </section>
     </main>
   );
