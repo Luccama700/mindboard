@@ -3,6 +3,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
 import { createServiceClient } from "@/utils/supabase/service";
 import { providerErrorMessage } from "@/app/lib/provider-error";
+import { backfillEncryptedColumns } from "@/app/lib/secrets/backfill";
+import {
+  encryptGoogleToken,
+  GOOGLE_TOKENS_TABLE,
+  readGoogleToken,
+} from "@/utils/google/tokens";
 
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
@@ -135,38 +141,87 @@ export class GoogleCalendarConnectionError extends Error {
   }
 }
 
-// Load the token row on the session client first (the dashboard path, RLS
-// scoped). In session-less contexts (the MCP server) that read comes back
-// empty, so fall back to the service client — still explicitly user-filtered,
-// matching the app/lib/mcp/* scoping invariant.
-async function loadTokenRow(
-  userId: string,
-): Promise<{ row: TokenRow; client: SupabaseClient }> {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("google_tokens")
-    .select("access_token, refresh_token, expires_at, scopes")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (data) return { row: data as TokenRow, client: supabase };
+type LoadedTokens = {
+  row: TokenRow;
+  legacy: boolean;
+  client: SupabaseClient;
+};
+
+// Decrypt the row, or report it as a legacy plaintext one. Ciphertext that
+// will not open is a broken connection, never a token to try against Google.
+function openTokenRow(userId: string, stored: TokenRow): Omit<LoadedTokens, "client"> {
+  let access: { value: string; legacy: boolean };
+  let refresh: { value: string; legacy: boolean };
+  try {
+    access = readGoogleToken(userId, "access_token", stored.access_token);
+    refresh = readGoogleToken(userId, "refresh_token", stored.refresh_token);
+  } catch {
+    throw new GoogleCalendarConnectionError();
+  }
+  return {
+    row: {
+      ...stored,
+      access_token: access.value,
+      refresh_token: refresh.value,
+    },
+    legacy: access.legacy || refresh.legacy,
+  };
+}
+
+// Load the token row on the SERVICE client when one is configured: migration
+// 0058 revokes the anon/authenticated SELECT on the token columns, so after it
+// lands the cookie client cannot read them at all. The service client bypasses
+// RLS, hence the explicit user_id filter — the app/lib/mcp/* scoping
+// invariant. It is also authoritative: if it finds no row, none exists.
+//
+// The cookie-client path stays only as a fallback for a deployment with no
+// service-role key, where it keeps working until 0058 is applied.
+async function loadTokenRow(userId: string): Promise<LoadedTokens> {
+  const columns = "access_token, refresh_token, expires_at, scopes";
 
   if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
     const service = createServiceClient();
-    const { data: serviceData } = await service
-      .from("google_tokens")
-      .select("access_token, refresh_token, expires_at, scopes")
+    const { data } = await service
+      .from(GOOGLE_TOKENS_TABLE)
+      .select(columns)
       .eq("user_id", userId)
       .maybeSingle();
-    if (serviceData) return { row: serviceData as TokenRow, client: service };
+    if (!data) throw new GoogleCalendarConnectionError();
+    return { ...openTokenRow(userId, data as TokenRow), client: service };
   }
 
-  throw new GoogleCalendarConnectionError();
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from(GOOGLE_TOKENS_TABLE)
+    .select(columns)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (!data) throw new GoogleCalendarConnectionError();
+  return { ...openTokenRow(userId, data as TokenRow), client: supabase };
 }
 
 async function getValidAccessToken(userId: string): Promise<string> {
-  const { row, client: supabase } = await loadTokenRow(userId);
+  const { row, legacy, client: supabase } = await loadTokenRow(userId);
   const expiresAt = new Date(row.expires_at).getTime();
   if (expiresAt - Date.now() > TOKEN_REFRESH_MARGIN_MS) {
+    // Lazy migration, scheduled HERE rather than in loadTokenRow: on the
+    // refresh path below the update already writes ciphertext, and a backfill
+    // racing it would put the stale access token back under a fresh
+    // expires_at — a 401 the user would read as "reconnect Google".
+    if (legacy) {
+      backfillEncryptedColumns(supabase, GOOGLE_TOKENS_TABLE, userId, () => ({
+        access_token: encryptGoogleToken(
+          userId,
+          "access_token",
+          row.access_token,
+        ),
+        refresh_token: encryptGoogleToken(
+          userId,
+          "refresh_token",
+          row.refresh_token,
+        ),
+      }));
+    }
     return row.access_token;
   }
 
@@ -207,10 +262,18 @@ async function getValidAccessToken(userId: string): Promise<string> {
   const nextScopes = refreshed.scope ?? row.scopes;
 
   const { error: updateError } = await supabase
-    .from("google_tokens")
+    .from(GOOGLE_TOKENS_TABLE)
     .update({
-      access_token: refreshed.access_token,
-      refresh_token: nextRefreshToken,
+      access_token: encryptGoogleToken(
+        userId,
+        "access_token",
+        refreshed.access_token,
+      ),
+      refresh_token: encryptGoogleToken(
+        userId,
+        "refresh_token",
+        nextRefreshToken,
+      ),
       expires_at: nextExpiresAt,
       scopes: nextScopes,
       updated_at: new Date().toISOString(),
