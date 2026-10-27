@@ -12,6 +12,7 @@ import {
   issueCode,
   issueConsentTicket,
   issueRefreshToken,
+  mcpResourceUrl,
   parseClientId,
   verifyConsentTicket,
   protectedResourceMetadata,
@@ -72,6 +73,7 @@ const db = vi.hoisted(() => {
         op.filters.push(["lt", column, value]);
         return chain;
       },
+      limit: () => chain,
       order: () => chain,
       single: () => {
         op.terminal = "single";
@@ -199,15 +201,52 @@ describe("authorization code", () => {
 });
 
 describe("access / refresh tokens", () => {
+  const audience = mcpResourceUrl("https://x");
+
   test("access token round-trips", () => {
     const t = issueAccessToken({ ownerId: "o1", clientId: "c1", origin: "https://x" });
-    expect(verifyAccessToken(t)).toEqual({ ownerId: "o1", clientId: "c1" });
+    expect(verifyAccessToken(t, audience)).toEqual({ ownerId: "o1", clientId: "c1" });
     expect(verifyRefreshToken(t)).toBeNull();
   });
-  test("refresh token round-trips", () => {
-    const t = issueRefreshToken({ ownerId: "o1", clientId: "c1" });
-    expect(verifyRefreshToken(t)).toEqual({ ownerId: "o1", clientId: "c1" });
-    expect(verifyAccessToken(t)).toBeNull();
+
+  // A Vercel preview shares MCP_OAUTH_SECRET with production, so the signature
+  // alone cannot say which deployment a token was minted for.
+  test("rejects an access token minted for another origin", () => {
+    const t = issueAccessToken({
+      ownerId: "o1",
+      clientId: "c1",
+      origin: "https://mindboard.example",
+    });
+    expect(verifyAccessToken(t, mcpResourceUrl("https://preview.example"))).toBeNull();
+    expect(verifyAccessToken(t, mcpResourceUrl("https://mindboard.example"))).toEqual({
+      ownerId: "o1",
+      clientId: "c1",
+    });
+  });
+
+  test("refresh token carries its family and chain position", () => {
+    const t = issueRefreshToken({
+      ownerId: "o1",
+      clientId: "c1",
+      grant: { id: "grant-1", jti: "jti-1" },
+    });
+    expect(verifyRefreshToken(t)).toEqual({
+      ownerId: "o1",
+      clientId: "c1",
+      grantId: "grant-1",
+      jti: "jti-1",
+    });
+    expect(verifyAccessToken(t, audience)).toBeNull();
+  });
+
+  test("a familyless (pre-0059) refresh token still parses, with nulls", () => {
+    const t = issueRefreshToken({ ownerId: "o1", clientId: "c1", grant: null });
+    expect(verifyRefreshToken(t)).toEqual({
+      ownerId: "o1",
+      clientId: "c1",
+      grantId: null,
+      jti: null,
+    });
   });
 });
 
@@ -354,7 +393,7 @@ describe("token endpoint — authorization codes are single-use", () => {
   });
 
   test("a first exchange records the code hash and returns tokens", async () => {
-    db.state.respond = () => ({});
+    db.state.respond = (op) => (op.table === "oauth_grants" ? { data: { id: "grant-1" } } : {});
     const result = await postToken(exchangeBody(freshCode()));
 
     expect(result.status).toBe(200);
@@ -379,7 +418,7 @@ describe("token endpoint — authorization codes are single-use", () => {
   });
 
   test("a wrong verifier is rejected without spending the code", async () => {
-    db.state.respond = () => ({});
+    db.state.respond = (op) => (op.table === "oauth_grants" ? { data: { id: "grant-1" } } : {});
     const result = await postToken({
       ...exchangeBody(freshCode()),
       code_verifier: "w".repeat(64),
@@ -401,13 +440,231 @@ describe("token endpoint — authorization codes are single-use", () => {
 
   // Cutover: the code deploys before migration 0059 is applied, so a missing
   // table must not lock every claude.ai connector out.
-  test("a missing table fails OPEN and warns once", async () => {
+  test("a missing used-codes table fails OPEN and warns once", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     db.state.respond = (op) =>
-      op.verb === "insert" ? { error: { code: "42P01" } } : {};
+      op.table === "oauth_used_codes" && op.verb === "insert"
+        ? { error: { code: "42P01" } }
+        : op.table === "oauth_grants"
+          ? { data: { id: "grant-1" } }
+          : {};
 
     expect((await postToken(exchangeBody(freshCode()))).status).toBe(200);
     expect((await postToken(exchangeBody(freshCode()))).status).toBe(200);
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  // PostgREST normally answers an unknown table out of its schema cache.
+  test("PGRST205 counts as a missing table too", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    db.state.respond = (op) =>
+      op.table === "oauth_used_codes" && op.verb === "insert"
+        ? { error: { code: "PGRST205" } }
+        : op.table === "oauth_grants"
+          ? { data: { id: "grant-1" } }
+          : {};
+
+    expect((await postToken(exchangeBody(freshCode()))).status).toBe(200);
+  });
+});
+
+describe("token endpoint — refresh families rotate and can be revoked", () => {
+  const GRANT_ID = "11111111-2222-3333-4444-555555555555";
+
+  function refreshFor(jti: string | null, clientId = "client-1"): string {
+    return issueRefreshToken({
+      ownerId: "owner-1",
+      clientId,
+      grant: jti === null ? null : { id: GRANT_ID, jti },
+    });
+  }
+
+  async function postRefresh(
+    refreshToken: string,
+    clientId: string | null = "client-1",
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    return postToken({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      ...(clientId === null ? {} : { client_id: clientId }),
+    });
+  }
+
+  // A live grant whose chain currently sits at `jti`.
+  function liveGrant(jti: string, clientId = "client-1") {
+    return {
+      id: GRANT_ID,
+      client_id: clientId,
+      revoked_at: null,
+      current_refresh_jti: jti,
+    };
+  }
+
+  beforeEach(() => {
+    db.reset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("a code exchange opens a family and the refresh token names it", async () => {
+    db.state.respond = (op) => (op.table === "oauth_grants" ? { data: { id: GRANT_ID } } : {});
+    const result = await postToken(exchangeBody(freshCode()));
+
+    const parsed = verifyRefreshToken(String(result.body.refresh_token));
+    expect(parsed?.grantId).toBe(GRANT_ID);
+    expect(typeof parsed?.jti).toBe("string");
+
+    const insert = db.state.calls.find((c) => c.table === "oauth_grants");
+    expect(insert?.payload?.user_id).toBe("owner-1");
+    expect(insert?.payload?.current_refresh_jti).toBe(parsed?.jti);
+  });
+
+  test("a refresh rotates the chain forward", async () => {
+    db.state.respond = (op) => {
+      if (op.terminal === "maybeSingle") return { data: liveGrant("jti-1") };
+      if (op.verb === "update") return { data: [{ id: GRANT_ID }] };
+      return {};
+    };
+
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(200);
+
+    const next = verifyRefreshToken(String(result.body.refresh_token));
+    expect(next?.grantId).toBe(GRANT_ID);
+    expect(next?.jti).not.toBe("jti-1");
+
+    // The rotation is a compare-and-swap on the jti that was just read.
+    const update = db.state.calls.find((c) => c.verb === "update");
+    expect(update?.payload?.current_refresh_jti).toBe(next?.jti);
+    expect(update?.filters).toContainEqual(["eq", "current_refresh_jti", "jti-1"]);
+    expect(update?.filters).toContainEqual(["eq", "user_id", "owner-1"]);
+  });
+
+  test("a superseded refresh token revokes the whole family", async () => {
+    db.state.respond = (op) => {
+      if (op.terminal === "maybeSingle") return { data: liveGrant("jti-2") };
+      return {};
+    };
+
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe("invalid_grant");
+    expect(String(result.body.error_description)).toContain("revoked");
+
+    const revoke = db.state.calls.find((c) => c.verb === "update");
+    expect(typeof revoke?.payload?.revoked_at).toBe("string");
+    expect(revoke?.filters).toContainEqual(["eq", "user_id", "owner-1"]);
+    // No successor was minted.
+    expect(result.body.refresh_token).toBeUndefined();
+  });
+
+  // Answering "revoked" while the revoke itself failed would be a lie the
+  // caller acts on.
+  test("a failed family revoke reports server_error, not reuse", async () => {
+    db.state.respond = (op) =>
+      op.terminal === "maybeSingle"
+        ? { data: liveGrant("jti-2") }
+        : op.verb === "update"
+          ? { error: { code: "08006" } }
+          : {};
+
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(500);
+    expect(result.body.error).toBe("server_error");
+  });
+
+  test("a revoked grant refuses the refresh", async () => {
+    db.state.respond = (op) =>
+      op.terminal === "maybeSingle"
+        ? { data: { ...liveGrant("jti-1"), revoked_at: "2026-10-27T00:00:00.000Z" } }
+        : {};
+
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe("invalid_grant");
+  });
+
+  test("the client_id must match the grant row, not just the token", async () => {
+    db.state.respond = (op) =>
+      op.terminal === "maybeSingle" ? { data: liveGrant("jti-1", "some-other-client") } : {};
+
+    // The token says client-1 and so does the request, but the family was
+    // opened by a different registered client.
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(400);
+    expect(result.body.error_description).toBe("client mismatch");
+  });
+
+  test("client_id is required on refresh", async () => {
+    db.state.respond = () => ({});
+    const result = await postRefresh(refreshFor("jti-1"), null);
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe("invalid_request");
+    expect(db.state.calls).toHaveLength(0);
+  });
+
+  test("a client_id that disagrees with the token is refused", async () => {
+    db.state.respond = () => ({});
+    const result = await postRefresh(refreshFor("jti-1"), "someone-else");
+    expect(result.status).toBe(400);
+    expect(result.body.error_description).toBe("client mismatch");
+  });
+
+  // Losing the compare-and-swap is a concurrent refresh, not an attack, so it
+  // must not take the family down with it.
+  test("losing the rotation race is invalid_grant but revokes nothing", async () => {
+    db.state.respond = (op) => {
+      if (op.terminal === "maybeSingle") return { data: liveGrant("jti-1") };
+      if (op.verb === "update") return { data: [] };
+      return {};
+    };
+
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(400);
+    expect(result.body.error_description).toBe("refresh token already rotated");
+    expect(
+      db.state.calls.filter((c) => c.verb === "update" && "revoked_at" in (c.payload ?? {})),
+    ).toHaveLength(0);
+  });
+
+  test("a pre-0059 familyless refresh token is refused once the table exists", async () => {
+    db.state.respond = () => ({});
+    const result = await postRefresh(refreshFor(null));
+    expect(result.status).toBe(400);
+    expect(result.body.error_description).toBe("re-authorization required");
+    // Even the availability probe carries the explicit user_id filter every
+    // service-client read in this app does.
+    expect(db.state.calls[0]?.filters).toContainEqual(["eq", "user_id", "owner-1"]);
+  });
+
+  test("…but is honoured while the table is still missing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    db.state.respond = () => ({ error: { code: "42P01" } });
+
+    const result = await postRefresh(refreshFor(null));
+    expect(result.status).toBe(200);
+    expect(verifyRefreshToken(String(result.body.refresh_token))?.grantId).toBeNull();
+  });
+
+  // Rolled back below 0059 with family-bearing tokens already out there: keep
+  // the SAME jti so the chain still lines up when the table returns.
+  test("a familied token survives a missing table with its jti unchanged", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    db.state.respond = () => ({ error: { code: "42P01" } });
+
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(200);
+    expect(verifyRefreshToken(String(result.body.refresh_token))).toMatchObject({
+      grantId: GRANT_ID,
+      jti: "jti-1",
+    });
+  });
+
+  test("a database fault on refresh fails CLOSED", async () => {
+    db.state.respond = () => ({ error: { code: "08006" } });
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(500);
+    expect(result.body.error).toBe("server_error");
   });
 });

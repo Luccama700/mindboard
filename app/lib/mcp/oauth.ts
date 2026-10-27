@@ -229,6 +229,13 @@ export function hashCode(code: string): string {
 
 // ---------- access / refresh tokens ----------
 
+// The resource an access token is minted FOR. The protected-resource metadata
+// advertises this exact string, so a client that discovered the server at one
+// origin presents its token back at the same one.
+export function mcpResourceUrl(origin: string): string {
+  return `${origin}${RESOURCE_PATH}`;
+}
+
 export function issueAccessToken(input: {
   ownerId: string;
   clientId: string;
@@ -238,29 +245,63 @@ export function issueAccessToken(input: {
     typ: "access",
     sub: input.ownerId,
     client_id: input.clientId,
-    aud: `${input.origin}${RESOURCE_PATH}`,
+    aud: mcpResourceUrl(input.origin),
     scope: SCOPE,
     exp: nowSec() + ACCESS_TTL,
   });
 }
 
-export function verifyAccessToken(token: string): { ownerId: string; clientId: string } | null {
-  const p = verifyToken<{ sub: string; client_id: string }>(token, "access");
-  return p ? { ownerId: p.sub, clientId: p.client_id } : null;
+// expectedAudience is REQUIRED, so the compiler enumerates every verifier and
+// none can quietly skip the check. Without it a deployment that shares
+// MCP_OAUTH_SECRET — any Vercel preview — accepted production tokens, because
+// aud was minted and then never read (audit M2).
+export function verifyAccessToken(
+  token: string,
+  expectedAudience: string,
+): { ownerId: string; clientId: string } | null {
+  const p = verifyToken<{ sub: string; client_id: string; aud?: string }>(token, "access");
+  if (!p) return null;
+  if (p.aud !== expectedAudience) return null;
+  return { ownerId: p.sub, clientId: p.client_id };
 }
 
-export function issueRefreshToken(input: { ownerId: string; clientId: string }): string {
+// A refresh token names its family (gid -> oauth_grants.id) and its position
+// in that family's chain (jti). Only the jti the grant row currently holds is
+// live, so presenting an older one proves the family leaked. `grant: null`
+// issues the legacy, familyless shape, used only while migration 0059 is
+// unapplied.
+export function issueRefreshToken(input: {
+  ownerId: string;
+  clientId: string;
+  grant: { id: string; jti: string } | null;
+}): string {
   return signToken({
     typ: "refresh",
     sub: input.ownerId,
     client_id: input.clientId,
+    ...(input.grant ? { gid: input.grant.id, jti: input.grant.jti } : {}),
     exp: nowSec() + REFRESH_TTL,
   });
 }
 
-export function verifyRefreshToken(token: string): { ownerId: string; clientId: string } | null {
-  const p = verifyToken<{ sub: string; client_id: string }>(token, "refresh");
-  return p ? { ownerId: p.sub, clientId: p.client_id } : null;
+export function verifyRefreshToken(token: string): {
+  ownerId: string;
+  clientId: string;
+  grantId: string | null;
+  jti: string | null;
+} | null {
+  const p = verifyToken<{ sub: string; client_id: string; gid?: string; jti?: string }>(
+    token,
+    "refresh",
+  );
+  return p
+    ? {
+        ownerId: p.sub,
+        clientId: p.client_id,
+        grantId: typeof p.gid === "string" ? p.gid : null,
+        jti: typeof p.jti === "string" ? p.jti : null,
+      }
+    : null;
 }
 
 // ---------- discovery metadata ----------

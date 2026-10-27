@@ -3,11 +3,18 @@ import {
   ACCESS_TTL_SECONDS,
   issueAccessToken,
   issueRefreshToken,
+  parseClientId,
   verifyCode,
   verifyPkceS256,
   verifyRefreshToken,
 } from "@/app/lib/mcp/oauth";
-import { consumeAuthorizationCode } from "@/app/lib/mcp/oauth-store";
+import {
+  consumeAuthorizationCode,
+  createGrant,
+  legacyRefreshAllowed,
+  rotateRefreshToken,
+  type GrantHandle,
+} from "@/app/lib/mcp/oauth-store";
 
 // OAuth token endpoint. Exchanges an authorization code (with PKCE) or a refresh
 // token for an access token. Public client (no client secret).
@@ -18,6 +25,13 @@ import { consumeAuthorizationCode } from "@/app/lib/mcp/oauth-store";
 // and unexpired; only a row can prove it has not been spent, and without that
 // row the same code + verifier minted an unlimited number of independent
 // 30-day refresh families for the whole 60s TTL (audit M1).
+//
+// Refresh tokens ROTATE (audit M2): each exchange opens one oauth_grants
+// family, every refresh mints the next link in its chain, and presenting a
+// superseded link revokes the whole family. Access tokens stay stateless and
+// short-lived, so revoking a grant stops refreshes immediately while an
+// access token already in a client's hands keeps working for up to its 1-hour
+// exp — the deliberate trade for not querying the database on every MCP call.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,14 +60,23 @@ async function readParams(request: Request): Promise<Record<string, string>> {
   return out;
 }
 
-function tokenResponse(ownerId: string, clientId: string, origin: string) {
+function tokenResponse(
+  ownerId: string,
+  clientId: string,
+  origin: string,
+  grant: GrantHandle | null,
+) {
   return {
     access_token: issueAccessToken({ ownerId, clientId, origin }),
     token_type: "Bearer",
     expires_in: ACCESS_TTL_SECONDS,
-    refresh_token: issueRefreshToken({ ownerId, clientId }),
+    refresh_token: issueRefreshToken({ ownerId, clientId, grant }),
     scope: "mcp",
   };
+}
+
+function invalidGrant(description: string): Response {
+  return json({ error: "invalid_grant", error_description: description }, 400);
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -84,16 +107,71 @@ export async function POST(request: Request): Promise<Response> {
     }
     if (spent.status === "error") return json({ error: "server_error" }, 500);
 
-    return json(tokenResponse(parsed.ownerId, parsed.clientId, origin), 200);
+    const opened = await createGrant({
+      userId: parsed.ownerId,
+      clientId: parsed.clientId,
+      clientName: parseClientId(parsed.clientId)?.clientName ?? null,
+    });
+    if (opened.status === "error") return json({ error: "server_error" }, 500);
+
+    return json(
+      tokenResponse(
+        parsed.ownerId,
+        parsed.clientId,
+        origin,
+        opened.status === "ok" ? opened.grant : null,
+      ),
+      200,
+    );
   }
 
   if (grantType === "refresh_token") {
     const { refresh_token: refreshToken, client_id: clientId } = params;
-    if (!refreshToken) return json({ error: "invalid_request" }, 400);
+    // client_id is REQUIRED here. It used to be optional, which meant a leaked
+    // refresh token alone was a complete credential.
+    if (!refreshToken || !clientId) return json({ error: "invalid_request" }, 400);
     const parsed = verifyRefreshToken(refreshToken);
-    if (!parsed) return json({ error: "invalid_grant", error_description: "bad or expired refresh token" }, 400);
-    if (clientId && parsed.clientId !== clientId) return json({ error: "invalid_grant", error_description: "client mismatch" }, 400);
-    return json(tokenResponse(parsed.ownerId, parsed.clientId, origin), 200);
+    if (!parsed) return invalidGrant("bad or expired refresh token");
+    if (parsed.clientId !== clientId) return invalidGrant("client mismatch");
+
+    if (!parsed.grantId || !parsed.jti) {
+      const legacy = await legacyRefreshAllowed(parsed.ownerId);
+      if (legacy === "error") return json({ error: "server_error" }, 500);
+      if (legacy === "deny") return invalidGrant("re-authorization required");
+      return json(tokenResponse(parsed.ownerId, parsed.clientId, origin, null), 200);
+    }
+
+    const rotated = await rotateRefreshToken({
+      grantId: parsed.grantId,
+      userId: parsed.ownerId,
+      clientId,
+      jti: parsed.jti,
+    });
+
+    switch (rotated.status) {
+      case "ok":
+        return json(tokenResponse(parsed.ownerId, parsed.clientId, origin, rotated.grant), 200);
+      // Table missing (pre-0059): re-issue the SAME gid and jti rather than a
+      // fresh one, so the chain still lines up with the row once it exists.
+      case "unprotected":
+        return json(
+          tokenResponse(parsed.ownerId, parsed.clientId, origin, {
+            id: parsed.grantId,
+            jti: parsed.jti,
+          }),
+          200,
+        );
+      case "reuse":
+        return invalidGrant("refresh token reused — this connection has been revoked");
+      case "revoked":
+        return invalidGrant("this connection has been revoked");
+      case "client_mismatch":
+        return invalidGrant("client mismatch");
+      case "raced":
+        return invalidGrant("refresh token already rotated");
+      default:
+        return json({ error: "server_error" }, 500);
+    }
   }
 
   return json({ error: "unsupported_grant_type" }, 400);

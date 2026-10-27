@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { createMcpHandler, withMcpAuth } from "mcp-handler";
+import { createMcpHandler, getPublicOrigin, withMcpAuth } from "mcp-handler";
 import { createServiceClient } from "@/utils/supabase/service";
 import {
   ingestExternalSessions,
@@ -7,7 +7,7 @@ import {
 } from "@/app/lib/mindspace/sessions";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
-import { verifyAccessToken } from "@/app/lib/mcp/oauth";
+import { mcpResourceUrl, verifyAccessToken } from "@/app/lib/mcp/oauth";
 import { looksLikePat, resolvePatUserId, staticBearerEnabled } from "@/app/lib/mcp/pat";
 import { mcpAuthKind, urcConfigured } from "@/app/lib/urc/auth";
 import {
@@ -1628,7 +1628,7 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-async function verifyToken(_req: Request, bearer?: string) {
+async function verifyToken(req: Request, bearer?: string) {
   if (!bearer) return undefined;
 
   const staticToken = process.env.MCP_BEARER_TOKEN;
@@ -1653,7 +1653,10 @@ async function verifyToken(_req: Request, bearer?: string) {
     return { token: bearer, clientId: "pat", scopes: ["mcp"], extra: { userId } };
   }
 
-  const parsed = verifyAccessToken(bearer);
+  // The audience is this deployment's own MCP resource URL. Without it any
+  // environment sharing MCP_OAUTH_SECRET — every Vercel preview — accepted
+  // production access tokens (audit M2).
+  const parsed = verifyAccessToken(bearer, mcpResourceUrl(getPublicOrigin(req)));
   if (parsed) {
     return {
       token: bearer,
