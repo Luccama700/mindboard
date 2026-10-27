@@ -296,6 +296,25 @@ describe("validateUpdateTask", () => {
     expect(validateUpdateTask({ taskId: "t1", aiState: "approved" }).ok).toBe(false);
     expect(validateUpdateTask({ taskId: "t1", aiState: "shipped" }).ok).toBe(false);
   });
+
+  test("the 'approved' refusal tells the client where the user grants it", async () => {
+    const { validateUpdateTask } = await import("@/app/lib/mcp/validate");
+    const refused = validateUpdateTask({ taskId: "t1", aiState: "approved" });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error).toContain("/approvals");
+      expect(refused.error).toContain("approve");
+    }
+  });
+
+  test("every aiState the overnight harness writes is accepted", async () => {
+    const { validateUpdateTask } = await import("@/app/lib/mcp/validate");
+    // overnight/run.mjs advances tasks through exactly these; 'approved' is the
+    // one it only ever READS (overnight/lib.mjs picks the build queue off it).
+    for (const state of ["planned", "building", "built", "failed", "declined", null]) {
+      expect(validateUpdateTask({ taskId: "t1", aiState: state }).ok).toBe(true);
+    }
+  });
 });
 
 describe("validateManageGroup", () => {

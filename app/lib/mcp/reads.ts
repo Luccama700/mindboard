@@ -324,7 +324,7 @@ export async function listTasks(userId: string, filter: {
 // plans and, once approved, builds. Optional aiState narrows the lifecycle
 // stage ("none" = not yet touched by the agent).
 export async function listCodeTasks(userId: string, filter?: {
-  aiState?: "none" | "planned" | "approved" | "building" | "built" | "failed";
+  aiState?: "none" | "planned" | "approved" | "building" | "built" | "failed" | "declined";
 }) {
   const { supabase, ownerId } = scoped(userId);
 
