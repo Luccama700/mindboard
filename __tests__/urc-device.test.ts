@@ -236,6 +236,7 @@ describe("claim", () => {
       id: JOB,
       user_id: OWNER,
       folder_key: "mindboard",
+      label: null,
     });
     expect(db.tables.urc_jobs[0].status).toBe("claimed");
   });

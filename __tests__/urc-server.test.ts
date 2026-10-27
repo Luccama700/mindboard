@@ -162,7 +162,7 @@ describe("proposeSpawnUrc", () => {
     const row = db.tables.ai_audit_log[0];
     expect(row.tool_name).toBe("spawn_urc");
     expect(row.status).toBe("proposed");
-    expect(row.input).toEqual({ folder: "mindboard", deviceId: DEVICE });
+    expect(row.input).toEqual({ folder: "mindboard", deviceId: DEVICE, name: null });
 
     expect(result.value.preview).toContain("home-pc");
     expect(result.value.preview).toContain(
@@ -233,17 +233,32 @@ describe("proposeSpawnUrc", () => {
     });
   });
 
-  test("two live sessions block a third", async () => {
+  test("four live sessions block a fifth", async () => {
     install({
       urc_jobs: [
         job({ id: "a", status: "running", started_at: NOW.toISOString() }),
         job({ id: "b", status: "stopping" }),
+        job({ id: "c", status: "claimed", claimed_at: NOW.toISOString() }),
+        job({ id: "d", status: "running", started_at: NOW.toISOString() }),
       ],
     });
     const result = await proposeSpawnUrc(OWNER, OAUTH, { folder: "mindboard" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toMatch(/2 sessions are already live/);
+    expect(result.error).toMatch(/4 sessions are already live/);
+  });
+
+  test("three live sessions still allow a fourth", async () => {
+    install({
+      urc_jobs: [
+        job({ id: "a", status: "running", started_at: NOW.toISOString() }),
+        job({ id: "b", status: "running", started_at: NOW.toISOString() }),
+        job({ id: "c", status: "running", started_at: NOW.toISOString() }),
+      ],
+    });
+    await expect(
+      proposeSpawnUrc(OWNER, OAUTH, { folder: "mindboard" }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   test("finished sessions do not count against the live limit", async () => {
@@ -260,14 +275,14 @@ describe("proposeSpawnUrc", () => {
   });
 
   // A queued job is a session about to open, so it holds a slot.
-  test("queued sessions count against the two-session limit", async () => {
+  test("queued sessions count against the live-session limit", async () => {
     install({
-      urc_jobs: [job({ id: "q1", status: "queued" }), job({ id: "q2", status: "queued" })],
+      urc_jobs: ["q1", "q2", "q3", "q4"].map((id) => job({ id, status: "queued" })),
     });
     const result = await proposeSpawnUrc(OWNER, OAUTH, { folder: "mindboard" });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toMatch(/2 sessions are already live/);
+    expect(result.error).toMatch(/4 sessions are already live/);
   });
 
   // Only the PC can move a claimed job on, so a crash mid-spawn would hold a
@@ -535,13 +550,15 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
     const db = install({
       urc_jobs: [
         job({ id: "a", status: "running" }),
-        job({ id: "b", status: "claimed" }),
+        job({ id: "b", status: "running" }),
+        job({ id: "c", status: "running" }),
+        job({ id: "d", status: "claimed" }),
       ],
       ai_audit_log: [proposal()],
     });
     const result = await confirmAction(OWNER, proposal().id, PAT);
     expect(result.ok).toBe(false);
-    expect(db.tables.urc_jobs).toHaveLength(2);
+    expect(db.tables.urc_jobs).toHaveLength(4);
   });
 });
 
@@ -701,5 +718,74 @@ describe("stopUrc", () => {
       error: "session not found",
     });
     expect(db.tables.urc_jobs[0].status).toBe("running");
+  });
+});
+
+
+describe("chat-chosen session name", () => {
+  test("propose normalizes the name and shows it in the preview", async () => {
+    const db = install();
+    const result = await proposeSpawnUrc(OWNER, OAUTH, { folder: "mindboard", name: "  Fix the Tests!! " });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(db.tables.ai_audit_log[0].input).toEqual({
+      folder: "mindboard",
+      deviceId: DEVICE,
+      name: "fix-the-tests",
+    });
+    expect(result.value.preview).toContain("Session name: fix-the-tests-<id>");
+    expect(result.value.preview).toContain(
+      "claude --remote-control fix-the-tests-<id> --name fix-the-tests-<id>",
+    );
+  });
+
+  test("a name with nothing usable in it is refused", async () => {
+    install();
+    const result = await proposeSpawnUrc(OWNER, OAUTH, { folder: "mindboard", name: "!!! ;;; '" });
+    expect(result.ok).toBe(false);
+  });
+
+  test("shell metacharacters never survive into the name", async () => {
+    const db = install();
+    const result = await proposeSpawnUrc(OWNER, OAUTH, {
+      folder: "mindboard",
+      name: "x'; del /s /q; $(calc) `whoami` & echo",
+    });
+    expect(result.ok).toBe(true);
+    const name = (db.tables.ai_audit_log[0].input as { name: string }).name;
+    expect(name).toMatch(/^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/);
+  });
+
+  test("confirm stores the label and returns <name>-<6 hex>", async () => {
+    const db = install({
+      ai_audit_log: [proposal({ input: { folder: "mindboard", deviceId: DEVICE, name: "fix-tests" } })],
+    });
+    const result = await confirmAction(OWNER, proposal().id, PAT);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const queued = db.tables.urc_jobs[0];
+    expect(queued.label).toBe("fix-tests");
+    const hex = String(queued.id).replace(/-/g, "").slice(0, 6);
+    expect(JSON.stringify(result)).toContain(`"sessionName":"fix-tests-${hex}"`);
+  });
+
+  test("a forged proposal with a hostile name is re-normalized at confirm", async () => {
+    const db = install({
+      ai_audit_log: [proposal({ input: { folder: "mindboard", deviceId: DEVICE, name: "a'b; rm -rf" } })],
+    });
+    const result = await confirmAction(OWNER, proposal().id, PAT);
+    expect(result.ok).toBe(true);
+    expect(db.tables.urc_jobs[0].label).toBe("a-b-rm-rf");
+  });
+
+  test("status and list report the named session", async () => {
+    install({ urc_jobs: [job({ label: "fix-tests" })] });
+    const status = await getUrcStatus(OWNER, OAUTH, { jobId: job().id });
+    expect(status.ok && status.value.sessionName).toBe("fix-tests-444444");
+    const list = await listUrcSessions(OWNER, OAUTH);
+    expect(list.ok).toBe(true);
+    if (!list.ok) return;
+    const sessions = list.value.sessions as { sessionName: string }[];
+    expect(sessions[0].sessionName).toBe("fix-tests-444444");
   });
 });

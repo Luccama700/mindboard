@@ -12,7 +12,7 @@ export const URC_MODEL = "claude-opus-5-5";
 export const URC_SESSION_PREFIX = "urc-";
 export const URC_CLAUDE_EXE = "$env:USERPROFILE\\.local\\bin\\claude.exe";
 
-export const URC_MAX_LIVE_SESSIONS = 2;
+export const URC_MAX_LIVE_SESSIONS = 4;
 export const URC_MAX_SPAWNS_PER_HOUR = 5;
 export const URC_SPAWNS_WINDOW_MS = 60 * 60_000;
 
@@ -99,8 +99,18 @@ export function parseFolders(text) {
   return { folders, problems };
 }
 
-export function sessionNameFor(jobId) {
-  return `${URC_SESSION_PREFIX}${String(jobId).replace(/-/g, "").slice(0, 8).toLowerCase()}`;
+// Same rule as app/lib/urc/preview.ts URC_LABEL_PATTERN. The PC re-checks the
+// chat-chosen name itself: it ends up in argv and the bootstrap, and the server
+// is not trusted to have checked it. Anything that doesn't match is dropped and
+// the default name is used, so a bad name can't fail (or reach) a launch.
+export const LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,22}[a-z0-9])?$/;
+
+export function sessionNameFor(jobId, label) {
+  const hex = String(jobId).replace(/-/g, "").toLowerCase();
+  if (typeof label === "string" && LABEL_PATTERN.test(label)) {
+    return `${label}-${hex.slice(0, 6)}`;
+  }
+  return `${URC_SESSION_PREFIX}${hex.slice(0, 8)}`;
 }
 
 export function sessionUrlFor(bridgeSessionId) {
@@ -126,7 +136,7 @@ export function buildSpawnArgs({ sessionName, bypass }) {
 // The whole spawn decision, taking the job AND the local config, so a test can
 // hand it a hostile job payload and assert argv is unchanged.
 export function decideSpawn(job, config) {
-  const sessionName = sessionNameFor(job.id);
+  const sessionName = sessionNameFor(job.id, job.label);
   const bypass = config.bypass === true;
   return {
     sessionName,
@@ -359,7 +369,7 @@ export function checkJob({
       error: `the folder for "${key}" is not trusted in Claude Code yet - open claude there once and accept the trust prompt`,
     };
   }
-  return { ok: true, folder, sessionName: sessionNameFor(job.id) };
+  return { ok: true, folder, sessionName: sessionNameFor(job.id, job.label) };
 }
 
 export function recentSpawns(spawns, nowMs) {

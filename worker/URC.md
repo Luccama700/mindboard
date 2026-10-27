@@ -149,7 +149,7 @@ doesn't nag him", not "an autonomous agent is loose on the PC".
 5. `stop_urc { jobId }` — closes the window within a few seconds. No confirm
    step; stopping is the safe direction.
 
-Limits: 2 live sessions, 5 spawns an hour — enforced on the server **and**
+Limits: 4 live sessions, 5 spawns an hour — enforced on the server **and**
 locally by the agent (`worker/urc-state.json`).
 
 ## How to test
