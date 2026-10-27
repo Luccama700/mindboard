@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 // Minimal, stateless OAuth 2.1 primitives for the MCP authorization server.
 // Every artifact (client_id, auth code, access/refresh token) is a signed token
@@ -63,6 +63,13 @@ export function verifyToken<T extends Record<string, unknown>>(
   if (payload.typ !== expectedTyp) return null;
   if (typeof payload.exp === "number" && payload.exp < now) return null;
   return payload as T;
+}
+
+// A token-unique id. Two codes (or two refresh tokens) issued in the same
+// second for the same user, client, redirect and challenge would otherwise be
+// byte-identical, and the single-use store keys on the code's hash.
+export function newJti(): string {
+  return randomBytes(16).toString("base64url");
 }
 
 // ---------- PKCE (S256 only) ----------
@@ -182,6 +189,7 @@ export function issueCode(input: {
     client_id: input.clientId,
     redirect_uri: input.redirectUri,
     cc: input.codeChallenge,
+    jti: newJti(),
     exp: nowSec() + CODE_TTL,
   });
 }
@@ -191,16 +199,32 @@ export function verifyCode(code: string): {
   clientId: string;
   redirectUri: string;
   codeChallenge: string;
+  expiresAt: number;
 } | null {
   const p = verifyToken<{
     sub: string;
     client_id: string;
     redirect_uri: string;
     cc: string;
+    exp?: number;
   }>(code, "code");
   return p
-    ? { ownerId: p.sub, clientId: p.client_id, redirectUri: p.redirect_uri, codeChallenge: p.cc }
+    ? {
+        ownerId: p.sub,
+        clientId: p.client_id,
+        redirectUri: p.redirect_uri,
+        codeChallenge: p.cc,
+        // Pre-jti codes have no exp only in theory (issueCode has always set
+        // one); fall back to the TTL so the spent-code row still expires.
+        expiresAt: typeof p.exp === "number" ? p.exp : nowSec() + CODE_TTL,
+      }
     : null;
+}
+
+// Identity of a code in the single-use store. Hashed rather than stored raw so
+// a leaked oauth_used_codes dump is not a list of usable (if expired) codes.
+export function hashCode(code: string): string {
+  return createHash("sha256").update(code).digest("hex");
 }
 
 // ---------- access / refresh tokens ----------

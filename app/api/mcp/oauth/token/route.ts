@@ -7,10 +7,17 @@ import {
   verifyPkceS256,
   verifyRefreshToken,
 } from "@/app/lib/mcp/oauth";
+import { consumeAuthorizationCode } from "@/app/lib/mcp/oauth-store";
 
 // OAuth token endpoint. Exchanges an authorization code (with PKCE) or a refresh
-// token for an access token. Public client (no client secret). Stateless: the
-// code/refresh token carry their own verified state.
+// token for an access token. Public client (no client secret).
+//
+// The tokens still carry their own signed state, but an authorization code is
+// now ALSO single-use: its hash is recorded in oauth_used_codes (migration
+// 0059) and a second exchange fails. A signature can prove a code is authentic
+// and unexpired; only a row can prove it has not been spent, and without that
+// row the same code + verifier minted an unlimited number of independent
+// 30-day refresh families for the whole 60s TTL (audit M1).
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,6 +75,15 @@ export async function POST(request: Request): Promise<Response> {
     if (parsed.clientId !== clientId) return json({ error: "invalid_grant", error_description: "client mismatch" }, 400);
     if (parsed.redirectUri !== redirectUri) return json({ error: "invalid_grant", error_description: "redirect_uri mismatch" }, 400);
     if (!verifyPkceS256(verifier, parsed.codeChallenge)) return json({ error: "invalid_grant", error_description: "PKCE verification failed" }, 400);
+
+    // Spend the code only once every other check has passed, so a probe with a
+    // wrong verifier cannot burn a code the real client is about to exchange.
+    const spent = await consumeAuthorizationCode(code, parsed.expiresAt);
+    if (spent.status === "replay") {
+      return json({ error: "invalid_grant", error_description: "code already used" }, 400);
+    }
+    if (spent.status === "error") return json({ error: "server_error" }, 500);
+
     return json(tokenResponse(parsed.ownerId, parsed.clientId, origin), 200);
   }
 

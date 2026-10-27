@@ -1,5 +1,8 @@
+// @vitest-environment node
+// The route-level cases below construct real Request/Response objects and
+// import a Route Handler; jsdom's fetch primitives are not the ones Next uses.
 import { createHash } from "node:crypto";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   authorizationServerMetadata,
   isAllowedRedirect,
@@ -19,6 +22,95 @@ import {
   verifyRefreshToken,
   verifyToken,
 } from "@/app/lib/mcp/oauth";
+
+// A chainable PostgREST stub. Each test scripts `db.state.respond`, which sees
+// the whole call (table, verb, payload, filters) and returns { data, error }.
+// Defined inside vi.hoisted because the vi.mock factory below runs during
+// module instantiation, before this file's own body evaluates.
+const db = vi.hoisted(() => {
+  type Op = {
+    table: string;
+    verb: "select" | "insert" | "update" | "delete";
+    payload?: Record<string, unknown>;
+    filters: [string, string, unknown][];
+    terminal?: "single" | "maybeSingle";
+  };
+  type Reply = { data?: unknown; error?: unknown };
+
+  const state: { respond: (op: Op) => Reply; calls: Op[] } = {
+    respond: () => ({}),
+    calls: [],
+  };
+
+  function from(table: string) {
+    const op: Op = { table, verb: "select", filters: [] };
+    const chain = {
+      select: () => chain,
+      insert: (payload: Record<string, unknown>) => {
+        op.verb = "insert";
+        op.payload = payload;
+        return chain;
+      },
+      update: (payload: Record<string, unknown>) => {
+        op.verb = "update";
+        op.payload = payload;
+        return chain;
+      },
+      delete: () => {
+        op.verb = "delete";
+        return chain;
+      },
+      eq: (column: string, value: unknown) => {
+        op.filters.push(["eq", column, value]);
+        return chain;
+      },
+      is: (column: string, value: unknown) => {
+        op.filters.push(["is", column, value]);
+        return chain;
+      },
+      lt: (column: string, value: unknown) => {
+        op.filters.push(["lt", column, value]);
+        return chain;
+      },
+      order: () => chain,
+      single: () => {
+        op.terminal = "single";
+        return chain;
+      },
+      maybeSingle: () => {
+        op.terminal = "maybeSingle";
+        return chain;
+      },
+      then: (
+        onFulfilled: (value: { data: unknown; error: unknown }) => unknown,
+        onRejected?: (reason: unknown) => unknown,
+      ) =>
+        Promise.resolve()
+          .then(() => {
+            state.calls.push(op);
+            const reply = state.respond(op);
+            return { data: reply.data ?? null, error: reply.error ?? null };
+          })
+          .then(onFulfilled, onRejected),
+    };
+    return chain;
+  }
+
+  return { state, from, reset: () => {
+    state.respond = () => ({});
+    state.calls = [];
+  } };
+});
+
+vi.mock("@/utils/supabase/service", () => ({
+  createServiceClient: () => ({ from: db.from }),
+}));
+
+// The real export pulls Next server internals in; the route only needs it to
+// name the origin the request arrived on.
+vi.mock("mcp-handler", () => ({
+  getPublicOrigin: (request: Request) => new URL(request.url).origin,
+}));
 
 beforeAll(() => {
   process.env.MCP_OAUTH_SECRET =
@@ -77,12 +169,27 @@ describe("authorization code", () => {
       redirectUri: "https://claude.ai/cb",
       codeChallenge: "chal",
     });
-    expect(verifyCode(code)).toEqual({
+    expect(verifyCode(code)).toMatchObject({
       ownerId: "owner-1",
       clientId: "client-1",
       redirectUri: "https://claude.ai/cb",
       codeChallenge: "chal",
     });
+    expect(typeof verifyCode(code)?.expiresAt).toBe("number");
+  });
+
+  // Without the jti, two authorizations for the same user/client/redirect/
+  // challenge in the same second would be byte-identical — and the second
+  // one's spent-code row would collide with the first's, locking out a
+  // legitimate exchange.
+  test("two codes for the same grant are distinct", () => {
+    const grant = {
+      ownerId: "owner-1",
+      clientId: "client-1",
+      redirectUri: "https://claude.ai/cb",
+      codeChallenge: "chal",
+    };
+    expect(issueCode(grant)).not.toBe(issueCode(grant));
   });
 
   test("an access token is not accepted as a code (typ isolation)", () => {
@@ -200,5 +307,107 @@ describe("discovery metadata", () => {
     expect(m.registration_endpoint).toBe(`${origin}/api/mcp/oauth/register`);
     expect(m.code_challenge_methods_supported).toEqual(["S256"]);
     expect(m.grant_types_supported).toContain("authorization_code");
+  });
+});
+
+// ---------- token endpoint, against the stubbed store ----------
+
+const TOKEN_ORIGIN = "https://mindboard.example";
+const VERIFIER = "v".repeat(64);
+const CHALLENGE = createHash("sha256").update(VERIFIER).digest("base64url");
+const REDIRECT = "https://claude.ai/cb";
+
+async function postToken(
+  body: Record<string, string>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const { POST } = await import("@/app/api/mcp/oauth/token/route");
+  const response = await POST(
+    new Request(`${TOKEN_ORIGIN}/api/mcp/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+  return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+}
+
+function freshCode(clientId = "client-1", ownerId = "owner-1"): string {
+  return issueCode({ ownerId, clientId, redirectUri: REDIRECT, codeChallenge: CHALLENGE });
+}
+
+function exchangeBody(code: string, clientId = "client-1"): Record<string, string> {
+  return {
+    grant_type: "authorization_code",
+    code,
+    client_id: clientId,
+    redirect_uri: REDIRECT,
+    code_verifier: VERIFIER,
+  };
+}
+
+describe("token endpoint — authorization codes are single-use", () => {
+  beforeEach(() => {
+    db.reset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("a first exchange records the code hash and returns tokens", async () => {
+    db.state.respond = () => ({});
+    const result = await postToken(exchangeBody(freshCode()));
+
+    expect(result.status).toBe(200);
+    expect(typeof result.body.access_token).toBe("string");
+    expect(typeof result.body.refresh_token).toBe("string");
+
+    const insert = db.state.calls.find((c) => c.verb === "insert");
+    expect(insert?.table).toBe("oauth_used_codes");
+    expect(typeof insert?.payload?.code_hash).toBe("string");
+    // Opportunistic GC of expired rows rides along with the exchange.
+    expect(db.state.calls.some((c) => c.verb === "delete")).toBe(true);
+  });
+
+  test("a replayed code is invalid_grant (the unique violation)", async () => {
+    db.state.respond = (op) =>
+      op.verb === "insert" ? { error: { code: "23505" } } : {};
+
+    const result = await postToken(exchangeBody(freshCode()));
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe("invalid_grant");
+    expect(result.body.error_description).toBe("code already used");
+  });
+
+  test("a wrong verifier is rejected without spending the code", async () => {
+    db.state.respond = () => ({});
+    const result = await postToken({
+      ...exchangeBody(freshCode()),
+      code_verifier: "w".repeat(64),
+    });
+
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe("invalid_grant");
+    expect(db.state.calls).toHaveLength(0);
+  });
+
+  test("a database fault fails CLOSED", async () => {
+    db.state.respond = (op) =>
+      op.verb === "insert" ? { error: { code: "08006" } } : {};
+
+    const result = await postToken(exchangeBody(freshCode()));
+    expect(result.status).toBe(500);
+    expect(result.body.error).toBe("server_error");
+  });
+
+  // Cutover: the code deploys before migration 0059 is applied, so a missing
+  // table must not lock every claude.ai connector out.
+  test("a missing table fails OPEN and warns once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    db.state.respond = (op) =>
+      op.verb === "insert" ? { error: { code: "42P01" } } : {};
+
+    expect((await postToken(exchangeBody(freshCode()))).status).toBe(200);
+    expect((await postToken(exchangeBody(freshCode()))).status).toBe(200);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });
