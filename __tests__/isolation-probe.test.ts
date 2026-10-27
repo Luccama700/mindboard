@@ -3,7 +3,14 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { leakNeedles, scanForLeak, stringLeaves } from "../test/isolation/harness.mjs";
+import {
+  assertSafeTarget,
+  leakNeedles,
+  probeEnv,
+  PRODUCTION_PROJECT_REF,
+  scanForLeak,
+  stringLeaves,
+} from "../test/isolation/harness.mjs";
 import { diffSnapshots, OWNED_TABLES } from "../test/isolation/seed.mjs";
 import { reportCoverage } from "../test/isolation/mcp-probe.mjs";
 import {
@@ -40,6 +47,97 @@ function stubReporter() {
     },
   };
 }
+
+// The probe writes to whatever project it is pointed at: two real auth users
+// and ~45 seeded tables. The rail that stops that being production is the one
+// piece of this whole net that MUST be tested in CI, because by the time it
+// matters it is too late to test it by hand.
+describe("safety rail", () => {
+  const LOCAL = "http://127.0.0.1:54321";
+  const BRANCH = "https://abcdefghijklmnopqrst.supabase.co";
+  const PROD = `https://${PRODUCTION_PROJECT_REF}.supabase.co`;
+
+  it("refuses the production project, whatever the target says", () => {
+    for (const target of ["local", "branch", "anything", undefined]) {
+      expect(() => assertSafeTarget(PROD, target, {})).toThrow(/production project/i);
+    }
+  });
+
+  it("refuses the production ref even dressed up as a local URL", () => {
+    // A tunnel, a hosts entry, a proxy: the ref is the thing that identifies
+    // the database, not the scheme or the port.
+    expect(() =>
+      assertSafeTarget(`http://localhost:54321/${PRODUCTION_PROJECT_REF}`, "local", {}),
+    ).toThrow(/production project/i);
+  });
+
+  it("refuses to guess the target", () => {
+    for (const target of [undefined, "", "prod", "production", "LOCAL", true]) {
+      expect(() => assertSafeTarget(LOCAL, target as never, {})).toThrow(
+        /MINDBOARD_PROBE_TARGET/,
+      );
+    }
+  });
+
+  it("checks the host against the word", () => {
+    // "local" pointed at a hosted project is the mistake that matters: it is
+    // not production, so the ref check passes, and it is still someone's
+    // real data.
+    expect(() => assertSafeTarget(BRANCH, "local", {})).toThrow(/not a local address/);
+    expect(() => assertSafeTarget(LOCAL, "branch", {})).toThrow(/not a Supabase-hosted/);
+  });
+
+  it("accepts a local stack and a Supabase branch", () => {
+    expect(assertSafeTarget(LOCAL, "local", {})).toEqual({ target: "local", host: "127.0.0.1" });
+    expect(assertSafeTarget("http://localhost:54321", "local", {})).toMatchObject({
+      target: "local",
+    });
+    // supabase start inside Docker on a LAN address.
+    expect(assertSafeTarget("http://192.168.1.40:54321", "local", {})).toMatchObject({
+      target: "local",
+    });
+    expect(assertSafeTarget(BRANCH, "branch", {})).toMatchObject({ target: "branch" });
+  });
+
+  it("takes extra forbidden refs from the environment, and cannot be made to drop the built-in one", () => {
+    const env = { MINDBOARD_PROBE_FORBIDDEN_REFS: "zzzzzzzzzzzzzzzzzzzz, qqqqqqqqqqqqqqqqqqqq" };
+    expect(() =>
+      assertSafeTarget("https://zzzzzzzzzzzzzzzzzzzz.supabase.co", "branch", env),
+    ).toThrow(/production project/i);
+    expect(() => assertSafeTarget(PROD, "branch", { MINDBOARD_PROBE_FORBIDDEN_REFS: "" })).toThrow(
+      /production project/i,
+    );
+  });
+
+  it("rejects a missing or malformed URL rather than passing it through", () => {
+    expect(() => assertSafeTarget("", "local", {})).toThrow(/no Supabase URL/);
+    expect(() => assertSafeTarget("not-a-url", "local", {})).toThrow(/not a URL/);
+  });
+
+  it("reads config from the environment and never from .env.local", () => {
+    const src = read("test/isolation-proof.mjs");
+    // The specific construct, not the word: the header explains WHY it does
+    // not read that file, and a test that bans the word would ban the
+    // explanation along with the defect.
+    expect(src, "the runner must not default to the checkout's env file").not.toMatch(
+      /["'`][.\/]*\.env\.local["'`]/,
+    );
+    expect(src, "loadEnv is the file reader; the runner takes process env").not.toContain(
+      "loadEnv(",
+    );
+    expect(src).toContain("probeEnv()");
+    expect(src).toContain("assertSafeTarget(");
+    // An explicit process variable must win over a loaded file, so a one-off
+    // override needs no edit.
+    expect(probeEnv({ FOO: "bar" }).FOO).toBe("bar");
+    expect(probeEnv({ FOO: "" }).FOO).toBeUndefined();
+  });
+
+  it("is wired to an npm script", () => {
+    const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
+    expect(pkg.scripts["test:isolation"]).toBe("node test/isolation-proof.mjs");
+  });
+});
 
 describe("leak scanner", () => {
   const b = {

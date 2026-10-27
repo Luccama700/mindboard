@@ -21,30 +21,44 @@
 //
 // Both tenants are deleted in a `finally`, and the deletion is verified.
 //
-// Usage:  node test/isolation-proof.mjs            # RLS checks only
-//         MCP_URL=http://localhost:3000/api/mcp/mcp node test/isolation-proof.mjs
+// Usage:  npm run test:isolation
 //
-// !! THIS WRITES TO WHATEVER SUPABASE PROJECT .env.local POINTS AT. A local
-// !! dev server is NOT a local database. On a normal Mindboard checkout
-// !! .env.local holds the single LIVE project, so running this against
-// !! localhost still creates two real auth users and seeds ~45 tables in
-// !! production. Everything is deleted in the `finally` and the deletion is
-// !! verified — but an interrupted or crashed run is a real possibility, which
-// !! is why teardown is registered before anything else can throw and
-// !! SIGINT/SIGTERM are handled. Point NEXT_PUBLIC_SUPABASE_URL and
-// !! SUPABASE_SERVICE_ROLE_KEY at a local stack or a Supabase branch.
+// !! THIS WRITES TO WHATEVER SUPABASE PROJECT IT IS POINTED AT. It creates two
+// !! real auth users and seeds ~45 tables. A local dev SERVER is not a local
+// !! DATABASE: pointing MCP_URL at localhost while the Supabase URL is the
+// !! hosted project still writes to the hosted project.
 //
-// Reads NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY and
-// SUPABASE_SERVICE_ROLE_KEY from .env.local. Never prints real user data — only
-// ids and marker strings it created itself, and pass/fail lines. Tokens, PATs,
-// service-role keys and Authorization headers are never printed.
+// Two rails, both enforced before the first auth user is created
+// (assertSafeTarget in ./isolation/harness.mjs, unit-tested in
+// __tests__/isolation-probe.test.ts):
+//   - it REFUSES outright if the Supabase URL names the production project;
+//   - it REQUIRES MINDBOARD_PROBE_TARGET=local|branch, and checks the host
+//     against the word.
+//
+// Config comes from the process environment, never from ../.env.local — on a
+// normal checkout that file is production. MINDBOARD_PROBE_ENV may name a file
+// to load instead. test/isolation/README.md has the full recipe, the env list,
+// and what this does and does not prove.
+//
+// Everything is deleted in the `finally` and the deletion is verified, but an
+// interrupted run is still possible, which is why teardown is registered
+// before anything else can throw and SIGINT/SIGTERM are handled.
+//
+// Never prints real user data — only ids and marker strings it created itself,
+// and pass/fail lines. Tokens, PATs, service-role keys and Authorization
+// headers are never printed.
 
 import { createHash, randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-import { createReporter, loadEnv, toolJson } from "./isolation/harness.mjs";
+import {
+  assertSafeTarget,
+  createReporter,
+  probeEnv,
+  toolJson,
+} from "./isolation/harness.mjs";
 import {
   diffSnapshots,
   seedTenant,
@@ -59,14 +73,28 @@ import {
 } from "./isolation/forged-proposal.mjs";
 import { makeSessionClient, runOauthProbe } from "./isolation/oauth-probe.mjs";
 
-const env = loadEnv(new URL("../.env.local", import.meta.url));
+const env = probeEnv();
 
 const SUPABASE_URL = env.NEXT_PUBLIC_SUPABASE_URL;
 const ANON = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const SERVICE = env.SUPABASE_SERVICE_ROLE_KEY;
-const MCP_URL = process.env.MCP_URL ?? null;
+const MCP_URL = env.MCP_URL ?? null;
 if (!SUPABASE_URL || !ANON || !SERVICE) {
-  console.error("missing supabase env in .env.local");
+  console.error(
+    "missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY / SUPABASE_SERVICE_ROLE_KEY.",
+  );
+  console.error("See test/isolation/README.md.");
+  process.exit(1);
+}
+
+// The rail. Refuses the production project, and refuses to guess which
+// database this is. Before the first auth user exists, on purpose.
+let safeTarget;
+try {
+  safeTarget = assertSafeTarget(SUPABASE_URL, env.MINDBOARD_PROBE_TARGET, env);
+} catch (e) {
+  console.error(`! REFUSING TO RUN — ${e instanceof Error ? e.message : e}`);
+  console.error("  See test/isolation/README.md.");
   process.exit(1);
 }
 
@@ -164,6 +192,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 try {
   reporter.section("setup: two throwaway tenants");
+  reporter.info(`target: ${safeTarget.target} (${safeTarget.host})`);
   a = await makeUser("a");
   b = await makeUser("b");
   reporter.info(`user A ${a.id}`);

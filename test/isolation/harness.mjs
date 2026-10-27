@@ -17,6 +17,95 @@ export function loadEnv(envUrl) {
   return env;
 }
 
+// Config comes from the PROCESS environment. The probe deliberately does NOT
+// fall back to ../.env.local: on a normal Mindboard checkout that file holds
+// the single live project, so a default that reads it is a default that writes
+// to production. MINDBOARD_PROBE_ENV may name a file to load instead, so a
+// local-stack config can live in one place without exporting four variables.
+export function probeEnv(overrides = process.env) {
+  const fromFile = overrides.MINDBOARD_PROBE_ENV
+    ? loadEnv(new URL(`file:///${String(overrides.MINDBOARD_PROBE_ENV).replace(/\\/g, "/")}`))
+    : {};
+  // Explicit process env wins over the file, so a one-off override needs no edit.
+  const merged = { ...fromFile };
+  for (const key of Object.keys(overrides)) {
+    if (overrides[key] !== undefined && overrides[key] !== "") merged[key] = overrides[key];
+  }
+  return merged;
+}
+
+// The production project ref. It is NOT a secret — it is the host in
+// NEXT_PUBLIC_SUPABASE_URL, which ships in every browser's JS bundle, and it
+// already appears in five committed docs. It is hardcoded on purpose: a rail
+// that has to be configured before it protects you is not a rail.
+// MINDBOARD_PROBE_FORBIDDEN_REFS can add more (comma-separated); nothing can
+// remove this one.
+export const PRODUCTION_PROJECT_REF = "kdsunzpcjfzkidejtnyp";
+
+export const PROBE_TARGETS = ["local", "branch"];
+
+// The safety rail, called before the probe creates its first auth user.
+//
+// Two separate refusals, because they catch different mistakes:
+//   - the ref check catches "I pointed it at prod", the one unrecoverable one.
+//     The probe creates real users and seeds ~45 tables; it deletes them in a
+//     `finally`, but a crash mid-run leaves them behind.
+//   - the target check catches "I did not think about which database this is".
+//     Requiring the word makes the choice deliberate, and the host is then
+//     checked AGAINST that word — so `local` pointed at a hosted project is
+//     refused even though it is not production.
+export function assertSafeTarget(supabaseUrl, target, env = process.env) {
+  const url = String(supabaseUrl ?? "");
+  if (!url) throw new Error("no Supabase URL to check");
+
+  const extra = String(env.MINDBOARD_PROBE_FORBIDDEN_REFS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const ref of [PRODUCTION_PROJECT_REF, ...extra]) {
+    if (url.includes(ref)) {
+      throw new Error(
+        `the target Supabase URL names the production project (${ref}). ` +
+          "This probe creates real auth users and writes to ~45 tables. " +
+          "Point it at a local stack (supabase start) or a Supabase branch.",
+      );
+    }
+  }
+
+  if (!PROBE_TARGETS.includes(target)) {
+    throw new Error(
+      `MINDBOARD_PROBE_TARGET must be one of ${PROBE_TARGETS.join(" | ")} ` +
+        `(got ${target === undefined ? "nothing" : JSON.stringify(target)}). ` +
+        "Naming the target is how you confirm you know which database this writes to.",
+    );
+  }
+
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    throw new Error(`the target Supabase URL is not a URL: ${url}`);
+  }
+
+  if (target === "local") {
+    const loopback = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+    const privateRange =
+      /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+    if (!loopback && !privateRange) {
+      throw new Error(
+        `MINDBOARD_PROBE_TARGET=local but ${host} is not a local address. ` +
+          "Use target=branch for a hosted project.",
+      );
+    }
+  } else if (!/\.supabase\.(co|in)$/.test(host)) {
+    throw new Error(
+      `MINDBOARD_PROBE_TARGET=branch but ${host} is not a Supabase-hosted project.`,
+    );
+  }
+
+  return { target, host };
+}
+
 export function createReporter() {
   const state = { passes: 0, failures: 0, notes: [] };
 
