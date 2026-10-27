@@ -54,7 +54,7 @@ function job(over: Partial<Row> = {}): Row {
     session_url: null,
     error: null,
     audit_id: null,
-    confirmed_auth: "pat",
+    confirmed_auth: "oauth:client-abc",
     created_at: new Date(NOW.getTime() - 10_000).toISOString(),
     expires_at: new Date(NOW.getTime() + 110_000).toISOString(),
     claimed_at: null,
@@ -603,6 +603,23 @@ describe("getUrcStatus", () => {
     expect(result.value.status).toBe("running");
     expect(result.value.sessionUrl).toBe("https://claude.ai/code/session_abc123");
     expect(result.value.folder).toBe("mindboard");
+  });
+
+  test("another OAuth client of the same account gets the status, not the link", async () => {
+    install({
+      urc_jobs: [
+        job({
+          status: "running",
+          started_at: NOW.toISOString(),
+          session_url: "https://claude.ai/code/session_abc123",
+        }),
+      ],
+    });
+    const result = await getUrcStatus(OWNER, "mcp:some-other-client", { jobId: job().id });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.status).toBe("running");
+    expect(result.value.sessionUrl).toBeNull();
   });
 
   test("a stopped session's link is withheld", async () => {

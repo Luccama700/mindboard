@@ -66,8 +66,11 @@ one of them is not enough.
    put a shortcut to `worker\urc-agent-hidden.vbs` in `shell:startup` for a
    windowless start at logon (same pattern as the home worker).
 
-Logs land in `worker\logs\urc-agent.log` (and stdout in `urc-agent.out`). The
-device token is never logged; the session link is.
+Logs land in `worker\logs\urc-agent.log` (and stdout in `urc-agent.out`).
+Neither the device token nor the session link is logged. The link is held in
+`urc-state.json` only until the server has acknowledged it, and the server
+clears it once the session stops or fails. Older logs written before this
+change may still contain links, so delete them.
 
 **One agent per PC.** Startup takes a lock at `worker\urc-agent.pid`; a second
 copy exits with "another urc-agent is already running (pid N)" and a lock left
