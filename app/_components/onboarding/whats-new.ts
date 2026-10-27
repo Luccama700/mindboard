@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-10-27-approvals",
+    date: "2026-10-27",
+    title: "the risky changes now wait for your tap",
+    items: [
+      "everything i've proposed and you haven't answered yet lives at /approvals — from this app, from the watch, from any chat you've connected me to. nothing on that page has happened yet.",
+      "a chat client used to be able to approve its own write. it can't any more: deleting a task, correcting the ledger, archiving an account or a person, changing settings, spending credits on an audio overview, or sending a plan to the pc all come here instead and wait for you. the small additive stuff — logging a spend, adding a task, restocking the shelf — still confirms right there in the chat.",
+      "this matters because i read things other people wrote: your briefs are built from email and whatsapp, reels come with someone else's transcript. if one of those ever tries to talk me into something, it now has to get past you.",
+      "the proposal count on the day stream points here.",
+    ],
+  },
+  {
     id: "2026-10-27-your-data",
     date: "2026-10-27",
     title: "your data, on your terms",

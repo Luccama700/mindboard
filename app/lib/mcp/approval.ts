@@ -107,6 +107,31 @@ export function requiresAppApproval(toolName: string, input: unknown): boolean {
   }
 }
 
+// Which surface a pending proposal came from, derived from the stored row.
+// `source` only distinguishes the in-app copilot from everything external; the
+// watch records source 'mcp' (it is an external client of the same class) and
+// is told apart by the idempotency key it alone writes into the input
+// (app/lib/watch/writes.ts).
+export type ProposalChannel = "copilot" | "watch" | "chat" | "unknown";
+
+export function proposalChannel(source: unknown, input: unknown): ProposalChannel {
+  if (source === "assistant") return "copilot";
+  if (source !== "mcp") return "unknown";
+  const key =
+    typeof input === "object" && input !== null
+      ? (input as { idempotencyKey?: unknown }).idempotencyKey
+      : undefined;
+  return typeof key === "string" && key ? "watch" : "chat";
+}
+
+// Proposals the in-app confirm rail cannot execute: spawn_urc's executor takes
+// its credential from the ExecutorContext and refuses anything that is not an
+// `mcp:` one (app/lib/urc/auth.ts), so approving it from a browser session
+// would only ever produce an error. The approvals inbox offers reject only.
+export function confirmableInApp(toolName: string): boolean {
+  return toolName !== "spawn_urc";
+}
+
 // What the MCP confirm_action hands back when the gate fires. The proposal row
 // is left untouched at 'proposed' so the user can approve the very same one.
 export function appApprovalMessage(toolName: string): string {

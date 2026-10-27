@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   APP_APPROVAL_PATH,
   appApprovalMessage,
+  confirmableInApp,
+  proposalChannel,
   requiresAppApproval,
 } from "@/app/lib/mcp/approval";
 import { resolveFinanceOps } from "@/app/lib/mcp/finance-ops";
@@ -250,6 +252,40 @@ describe("update_stock — quantity work stays chat-confirmable", () => {
       requiresAppApproval("update_stock", { operations: [{ kind: "delete", itemId: "i-eggs" }] }),
     ).toBe(true);
   });
+});
+
+describe("proposalChannel — what the approvals inbox labels a row", () => {
+  it("reads the in-app copilot off source", () => {
+    expect(proposalChannel("assistant", { taskId: "t-1" })).toBe("copilot");
+  });
+
+  it("tells the watch from a chat client by its idempotency key", () => {
+    // The watch records source 'mcp' like any external client; the key is the
+    // only thing that distinguishes it (app/lib/watch/writes.ts).
+    expect(proposalChannel("mcp", { taskId: "t-1", idempotencyKey: "abc" })).toBe("watch");
+    expect(proposalChannel("mcp", { taskId: "t-1" })).toBe("chat");
+    expect(proposalChannel("mcp", { taskId: "t-1", idempotencyKey: "" })).toBe("chat");
+    expect(proposalChannel("mcp", { taskId: "t-1", idempotencyKey: 7 })).toBe("chat");
+  });
+
+  it("never throws on a missing or odd row", () => {
+    expect(proposalChannel("mcp", null)).toBe("chat");
+    expect(proposalChannel(null, null)).toBe("unknown");
+    expect(proposalChannel("something-new", {})).toBe("unknown");
+  });
+});
+
+describe("confirmableInApp", () => {
+  it("excludes spawn_urc, whose executor demands an mcp: credential", () => {
+    expect(confirmableInApp("spawn_urc")).toBe(false);
+  });
+
+  it.each(["delete_task", "update_finance", "create_task", "update_settings"])(
+    "allows %s",
+    (tool) => {
+      expect(confirmableInApp(tool)).toBe(true);
+    },
+  );
 });
 
 describe("appApprovalMessage", () => {
