@@ -343,7 +343,8 @@ async function completeFollowup(
       ...(update.due_date ? { due_date: update.due_date } : {}),
       ...(update.priority ? { priority: update.priority } : {}),
     };
-    if (update.notes_append) {
+    // A retried complete must not append the same section twice.
+    if (update.notes_append && !(original.notes ?? "").includes(update.notes_append)) {
       const today = await todayKey(supabase, job.user_id);
       patch.notes = appendSection(original.notes, `Follow-up — ${today}`, update.notes_append);
     }

@@ -577,6 +577,15 @@ The server creates that one follow-up task in the same group and with the same d
 """
 
 
+_FENCE_TAG = re.compile(r"<\s*/?\s*(task|instruction)\s*>", re.IGNORECASE)
+
+
+def defang_fences(text: str) -> str:
+    """Neutralise the prompt's own fence tags inside untrusted text, so a note
+    containing "</task>" can't close the data block and speak as instructions."""
+    return _FENCE_TAG.sub(lambda m: f"[{m.group(1).lower()}]", text)
+
+
 def handle_followup(claim: dict, workdir: Path) -> dict:
     followup = claim["followup"]
     due = followup.get("due_date") or "none"
@@ -584,12 +593,12 @@ def handle_followup(claim: dict, workdir: Path) -> dict:
         due += f" {str(followup['due_time'])[:5]}"
     prompt = FOLLOWUP_PROMPT.format(
         source=followup.get("source") or "mindboard app",
-        title=followup.get("title", ""),
-        group=followup.get("group_name") or "inbox",
+        title=defang_fences(str(followup.get("title", ""))),
+        group=defang_fences(str(followup.get("group_name") or "inbox")),
         due=due,
         priority=followup.get("priority") or "med",
-        notes=(followup.get("notes") or "(none)").strip(),
-        instruction=(followup.get("instruction") or "").strip(),
+        notes=defang_fences((followup.get("notes") or "(none)").strip()),
+        instruction=defang_fences((followup.get("instruction") or "").strip()),
     )
     args = [
         resolve_executable(CLAUDE_CMD), "-p",
