@@ -113,6 +113,26 @@ export function sessionNameFor(jobId, label) {
   return `${URC_SESSION_PREFIX}${hex.slice(0, 8)}`;
 }
 
+// The process query used to verify tracked sessions. It searches for each
+// tracked session's exact name. (It used to search for "urc-", which a
+// chat-named session like fix-tests-41c72e doesn't contain, so a live named
+// session was read as gone, reported stopped, and orphaned.) Names are
+// embedded in a PowerShell -like pattern, so only names matching the strict
+// session-name charset are used; null when none qualify.
+const SESSION_NAME_SAFE = /^[a-z0-9][a-z0-9-]{0,40}$/;
+export function processQueryFor(sessions) {
+  const names = [...new Set((sessions || []).map((s) => s && s.sessionName))].filter(
+    (name) => typeof name === "string" && SESSION_NAME_SAFE.test(name),
+  );
+  if (names.length === 0) return null;
+  const match = names.map((name) => `$_.CommandLine -like '*${name}*'`).join(" -or ");
+  return (
+    `Get-CimInstance Win32_Process | Where-Object { ($_.CommandLine) -and (${match}) -and ` +
+    `$_.CommandLine -notlike '*Get-CimInstance*' } | ` +
+    `ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }`
+  );
+}
+
 export function sessionUrlFor(bridgeSessionId) {
   return `https://claude.ai/code/${bridgeSessionId}`;
 }
