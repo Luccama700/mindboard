@@ -84,11 +84,17 @@ export function sanitizeCaptureTitle(title: string): Result<string> {
   }
   const cleaned = title
     .replace(/[\\/]/g, " ")
+    // NTFS rejects these in file names, so a committed note carrying one breaks
+    // the Windows clone of the vault (and reel/capture titles are attacker-chosen).
+    .replace(/[:*?"<>|]/g, " ")
     .replace(/[\x00-\x1f\x7f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     // A leading dot would make the note a hidden file the vault reader skips.
-    .replace(/^\.+/, "");
+    .replace(/^\.+/, "")
+    // Windows silently drops trailing dots and spaces, so two notes could map
+    // to one file on disk.
+    .replace(/[.\s]+$/, "");
   if (!cleaned) {
     return { ok: false, error: "title has no filename-safe characters" };
   }

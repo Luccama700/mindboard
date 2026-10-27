@@ -109,7 +109,18 @@ describe("sanitizeCaptureTitle", () => {
   test("strips path separators and collapses whitespace", () => {
     expect(sanitizeCaptureTitle("notes / re:  q3\\plan")).toEqual({
       ok: true,
-      value: "notes re: q3 plan",
+      value: "notes re q3 plan",
+    });
+  });
+
+  test("drops every NTFS-illegal character and trailing dots", () => {
+    expect(sanitizeCaptureTitle('a:b*c?d"e<f>g|h')).toEqual({
+      ok: true,
+      value: "a b c d e f g h",
+    });
+    expect(sanitizeCaptureTitle("wait for it... ")).toEqual({
+      ok: true,
+      value: "wait for it",
     });
   });
 
