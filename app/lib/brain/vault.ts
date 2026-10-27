@@ -148,7 +148,7 @@ export async function readVaultCredentials(
   if (!isEncryptedSecret(stored)) {
     backfillEncryptedColumns(client, VAULT_SETTINGS_TABLE, userId, () => ({
       github_token: encryptSecret(stored, vaultTokenScope(userId)),
-    }));
+    }), { github_token: stored });
     return { repo, branch, token: stored };
   }
 

@@ -220,7 +220,7 @@ async function getValidAccessToken(userId: string): Promise<string> {
           "refresh_token",
           row.refresh_token,
         ),
-      }));
+      }), { access_token: row.access_token, expires_at: row.expires_at });
     }
     return row.access_token;
   }

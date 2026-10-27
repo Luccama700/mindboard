@@ -14,15 +14,25 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 // so that encryption failing (an unconfigured ASSISTANT_KEY_SECRET) cannot
 // take down the read it was opportunistically attached to. Nothing here logs,
 // because everything it handles is a secret.
+//
+// `expected` is a compare-and-swap guard: the stored values that were read.
+// The update only lands while the row still holds them, so a concurrent write
+// (a token refresh between this read and the deferred re-write) is never
+// overwritten with the stale value.
 export function backfillEncryptedColumns(
   supabase: SupabaseClient,
   table: string,
   userId: string,
   values: () => Record<string, string>,
+  expected: Record<string, string> = {},
 ): void {
   const run = async (): Promise<void> => {
     try {
-      await supabase.from(table).update(values()).eq("user_id", userId);
+      let query = supabase.from(table).update(values()).eq("user_id", userId);
+      for (const [column, value] of Object.entries(expected)) {
+        query = query.eq(column, value);
+      }
+      await query;
     } catch {
       // Deliberately silent: an opportunistic re-write must never surface.
     }
