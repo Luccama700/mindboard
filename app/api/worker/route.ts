@@ -93,10 +93,14 @@ function groupName(rel: GroupRel): string | null {
   return row?.name ?? null;
 }
 
+// One worker_status row per tenant the worker actually serves, not just the
+// owner: /settings reads the caller's own row, so an allowlisted user used to
+// see "offline" and a stuck queue while their jobs were being drained.
 async function markSeen(info: Record<string, unknown> = {}) {
   const supabase = createServiceClient();
+  const lastSeenAt = new Date().toISOString();
   await supabase.from("worker_status").upsert(
-    { user_id: ownerUserId(), last_seen_at: new Date().toISOString(), info },
+    workerAllowedUserIds().map((userId) => ({ user_id: userId, last_seen_at: lastSeenAt, info })),
     { onConflict: "user_id" },
   );
 }
