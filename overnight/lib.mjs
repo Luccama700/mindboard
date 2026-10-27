@@ -410,3 +410,23 @@ export function declineNote(reason) {
   const line = clip((reason ?? "").trim() || "not something I can take on from here", 300);
   return `${line}\n\n*✦ follow up or ✦ do it if you want the PC to try anyway.*`;
 }
+
+// Retention for the PC's own copy of the night's output (audit finding M9).
+// overnight/logs/ holds the run logs plus the result-*.md / dispatch-*.md
+// deliverable copies, all of it personal and none of it reachable by the
+// app's prune. Entries are { name, isFile, mtimeMs }; anything whose mtime is
+// unreadable is left alone, because "I could not stat it" is not "it is old".
+export const LOG_RETENTION_DAYS = 30;
+
+export function staleLogFiles(entries, nowMs, maxAgeDays = LOG_RETENTION_DAYS) {
+  const cutoff = nowMs - maxAgeDays * 24 * 60 * 60 * 1000;
+  return (entries ?? [])
+    .filter(
+      (entry) =>
+        entry &&
+        entry.isFile === true &&
+        Number.isFinite(entry.mtimeMs) &&
+        entry.mtimeMs < cutoff,
+    )
+    .map((entry) => entry.name);
+}

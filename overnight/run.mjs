@@ -25,7 +25,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import lockfile from "proper-lockfile";
@@ -59,6 +61,7 @@ import {
   planPrompt,
   previewUrl,
   quoteArg,
+  staleLogFiles,
   triagePrompt,
 } from "./lib.mjs";
 
@@ -140,6 +143,37 @@ const today = new Date().toISOString().slice(0, 10);
 const logDir = join(HERE, "logs");
 mkdirSync(logDir, { recursive: true });
 const logFile = join(logDir, `${today}.log`);
+
+// Retention (audit finding M9): this folder keeps every run log and every
+// result-*.md / dispatch-*.md deliverable copy forever, and the app's prune
+// cannot see it. Best-effort by design — a cleanup that throws must never be
+// the reason a night's run does not happen.
+function pruneOldLogs() {
+  try {
+    const entries = [];
+    for (const entry of readdirSync(logDir, { withFileTypes: true })) {
+      try {
+        entries.push({
+          name: entry.name,
+          isFile: entry.isFile(),
+          mtimeMs: statSync(join(logDir, entry.name)).mtimeMs,
+        });
+      } catch {
+        // unreadable entry: leave it alone
+      }
+    }
+    for (const name of staleLogFiles(entries, Date.now())) {
+      try {
+        rmSync(join(logDir, name), { force: true });
+      } catch {
+        // locked or already gone: the next run tries again
+      }
+    }
+  } catch {
+    // the folder itself is unreadable; nothing to prune
+  }
+}
+pruneOldLogs();
 
 function log(message) {
   const line = `[${new Date().toISOString()}] ${message}`;

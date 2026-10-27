@@ -212,3 +212,33 @@ This is the configured setup on the current PC. Components:
 - TTS: receives the episode's speaker-tagged script, renders with VibeVoice,
   PUTs the wav straight to storage via a signed upload URL (never through
   the app), then reports the duration.
+
+## Logs — rotate them yourself
+
+`worker/logs/` is **not** rotated by anything. `run-worker.cmd` and
+`run-urc-agent.cmd` append to `worker.out` / `urc-agent.out` with a shell
+`>>` redirect, so the files grow forever and the worker process has no say
+in it — changing `worker.py` would not help, and the redirect holds the
+handle open while the worker runs. These logs carry reel transcripts, task
+notes and course text, so they are the one copy of your data that neither the
+app's nightly prune (`supabase/migrations/0061_retention_prune.sql`) nor
+`overnight/run.mjs`'s 30-day cleanup can reach.
+
+Roll them by hand, or on a monthly Task Scheduler job, with the worker
+**stopped** (otherwise the move fails on the open handle):
+
+```powershell
+$logs = Join-Path $PSScriptRoot 'logs'   # or the full path to worker\logs
+$stamp = Get-Date -Format 'yyyyMMdd'
+foreach ($name in 'worker.out', 'urc-agent.out') {
+  $live = Join-Path $logs $name
+  if (Test-Path $live) { Move-Item $live (Join-Path $logs "$name.$stamp") }
+}
+Get-ChildItem $logs -File |
+  Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
+  Remove-Item
+```
+
+The `.cmd` launchers recreate `worker.out` / `urc-agent.out` on the next
+start; the dated copies age out on the same 30-day window the overnight
+harness uses.

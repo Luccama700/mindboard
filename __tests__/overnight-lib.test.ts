@@ -26,7 +26,9 @@ import {
   reviewPrompt,
   shouldDrainDispatches,
   slugify,
+  staleLogFiles,
   triagePrompt,
+  LOG_RETENTION_DAYS,
 } from "../overnight/lib.mjs";
 
 describe("slugify / branchNameFor", () => {
@@ -455,4 +457,62 @@ test("declineNote: reason first, then the follow-up nudge; empty reason gets a d
   expect(note).toContain("✦ follow up or ✦ do it");
   expect(declineNote("").startsWith("not something I can take on from here")).toBe(true);
   expect(declineNote(" ".repeat(5) + "x".repeat(400)).length).toBeLessThan(400);
+});
+
+describe("staleLogFiles", () => {
+  const now = Date.parse("2026-10-27T04:00:00Z");
+  const daysAgo = (n: number) => now - n * 24 * 60 * 60 * 1000;
+
+  test("keeps the default retention at 30 days", () => {
+    expect(LOG_RETENTION_DAYS).toBe(30);
+  });
+
+  test("names only the files past the cutoff", () => {
+    const names = staleLogFiles(
+      [
+        { name: "2026-10-27.log", isFile: true, mtimeMs: now },
+        { name: "2026-10-01.log", isFile: true, mtimeMs: daysAgo(26) },
+        { name: "2026-09-01.log", isFile: true, mtimeMs: daysAgo(56) },
+        { name: "result-abc-2026-08-01.md", isFile: true, mtimeMs: daysAgo(87) },
+      ],
+      now,
+    );
+    expect(names).toEqual(["2026-09-01.log", "result-abc-2026-08-01.md"]);
+  });
+
+  test("a file exactly at the cutoff survives", () => {
+    const entries = [{ name: "edge.log", isFile: true, mtimeMs: daysAgo(30) }];
+    expect(staleLogFiles(entries, now)).toEqual([]);
+    expect(staleLogFiles(entries, now + 1)).toEqual(["edge.log"]);
+  });
+
+  test("never names a directory", () => {
+    expect(
+      staleLogFiles([{ name: "nested", isFile: false, mtimeMs: daysAgo(400) }], now),
+    ).toEqual([]);
+  });
+
+  test("an unreadable mtime is left alone, not assumed old", () => {
+    expect(
+      staleLogFiles(
+        [
+          { name: "nan.log", isFile: true, mtimeMs: Number.NaN },
+          { name: "missing.log", isFile: true, mtimeMs: undefined },
+          null,
+        ],
+        now,
+      ),
+    ).toEqual([]);
+  });
+
+  test("an empty or absent folder listing is fine", () => {
+    expect(staleLogFiles([], now)).toEqual([]);
+    expect(staleLogFiles(undefined, now)).toEqual([]);
+  });
+
+  test("the window is configurable", () => {
+    const entries = [{ name: "a.log", isFile: true, mtimeMs: daysAgo(10) }];
+    expect(staleLogFiles(entries, now, 7)).toEqual(["a.log"]);
+    expect(staleLogFiles(entries, now, 90)).toEqual([]);
+  });
 });
