@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/utils/supabase/server";
 import { createServiceClient } from "@/utils/supabase/service";
+import { providerErrorMessage } from "@/app/lib/provider-error";
 
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 
@@ -362,10 +363,8 @@ export async function createEvent(
     );
   }
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(
-      `event create failed: ${response.status} ${text || response.statusText}`,
-    );
+    const detail = providerErrorMessage(await response.text().catch(() => ""));
+    throw new Error(`event create failed: ${response.status}${detail ? ` ${detail}` : ""}`);
   }
   const payload = (await response.json()) as { id?: string };
   if (!payload.id) throw new Error("event create returned no id");
@@ -408,8 +407,8 @@ export async function updateEvent(
     );
   }
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`event update failed: ${response.status} ${text || response.statusText}`);
+    const detail = providerErrorMessage(await response.text().catch(() => ""));
+    throw new Error(`event update failed: ${response.status}${detail ? ` ${detail}` : ""}`);
   }
 }
 

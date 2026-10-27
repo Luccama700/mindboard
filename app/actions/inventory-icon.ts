@@ -2,6 +2,7 @@
 
 import { createClient } from "@/utils/supabase/server";
 import { readProviderKey } from "@/app/lib/connections/keys";
+import { providerErrorMessage } from "@/app/lib/provider-error";
 
 const BUCKET = "inventory-icons";
 
@@ -16,10 +17,8 @@ function buildPrompt(raw: string): string {
 // this file reports through the typed { error } contract, so these must too:
 // a throw escapes the server action and the client's error branch never runs.
 async function readErrorBody(res: Response, provider: string): Promise<string> {
-  const detail = await res.text().catch(() => "");
-  return detail
-    ? `${provider} ${res.status}: ${detail.slice(0, 300)}`
-    : `${provider} ${res.status}`;
+  const detail = providerErrorMessage(await res.text().catch(() => ""));
+  return detail ? `${provider} ${res.status}: ${detail}` : `${provider} ${res.status}`;
 }
 
 async function generateWithOpenAI(

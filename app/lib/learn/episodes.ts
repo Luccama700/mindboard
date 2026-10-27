@@ -15,6 +15,7 @@ import {
 } from "@/app/_components/learn-types";
 import { loadConvertedSources, loadSourceDocuments } from "./context";
 import { pcmDurationSeconds, pcmToWav } from "./audio";
+import { providerErrorMessage } from "@/app/lib/provider-error";
 import {
   FLAVOR_SPECS,
   GEMINI_VOICES,
@@ -195,11 +196,11 @@ async function renderWithGemini(
   // the caller has already marked the episode row non-terminal, so an escaping
   // error would strand it there forever instead of failing it.
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = providerErrorMessage(await response.text().catch(() => ""));
     return {
       ok: false,
       error: detail
-        ? `gemini tts ${response.status}: ${detail.slice(0, 300)}`
+        ? `gemini tts ${response.status}: ${detail}`
         : `gemini tts ${response.status}`,
     };
   }
