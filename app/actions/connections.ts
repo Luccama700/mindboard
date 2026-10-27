@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
 import { encryptSecret } from "@/app/lib/assistant/crypto";
-import { KEY_COLUMNS, type KeyProvider } from "@/app/lib/connections/keys";
+import {
+  KEY_COLUMNS,
+  providerKeyScope,
+  type KeyProvider,
+} from "@/app/lib/connections/keys";
 
 // Unified save/clear for every provider API key. Keys are validated by shape,
 // verified with one cheap live call, encrypted, and upserted into
@@ -74,7 +78,7 @@ export async function saveProviderKey(input: {
 
   let encrypted: string;
   try {
-    encrypted = encryptSecret(key);
+    encrypted = encryptSecret(key, providerKeyScope(user.id, provider));
   } catch {
     return {
       error: "server key storage is not configured (ASSISTANT_KEY_SECRET)",

@@ -13,7 +13,11 @@ import { SettingsSections } from "@/app/_components/settings-panel";
 import { SectionRuler } from "@/app/_components/ui";
 import { VaultSettingsForm } from "@/app/brain/_components/vault-settings-form";
 import { decryptSecret } from "@/app/lib/assistant/crypto";
-import { KEY_COLUMNS, keyHint } from "@/app/lib/connections/keys";
+import {
+  KEY_COLUMNS,
+  keyHint,
+  providerKeyScope,
+} from "@/app/lib/connections/keys";
 import type { KeyProvider } from "@/app/lib/connections/types";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { getVaultSettings } from "@/app/lib/brain/vault";
@@ -24,10 +28,14 @@ import { PreferencesForm } from "./preferences-form";
 // Key saves make one live verification call to the provider.
 export const maxDuration = 30;
 
-function hintFor(encrypted: string | null | undefined): string | null {
+function hintFor(
+  encrypted: string | null | undefined,
+  userId: string,
+  provider: KeyProvider,
+): string | null {
   if (!encrypted) return null;
   try {
-    return keyHint(decryptSecret(encrypted));
+    return keyHint(decryptSecret(encrypted, providerKeyScope(userId, provider)));
   } catch {
     return null;
   }
@@ -160,7 +168,11 @@ export default async function SettingsPage() {
             powers={card.powers}
             placeholder={card.placeholder}
             connected={Boolean(row?.[KEY_COLUMNS[card.provider]])}
-            hint={hintFor(row?.[KEY_COLUMNS[card.provider]])}
+            hint={hintFor(
+              row?.[KEY_COLUMNS[card.provider]],
+              user.id,
+              card.provider,
+            )}
           />
         ))}
 
