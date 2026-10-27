@@ -7,7 +7,7 @@ import {
   ACCOUNT_DELETE_PHRASE,
   matchesDeletePhrase,
 } from "@/app/lib/account/delete";
-import { Button, INPUT_CLASS } from "@/app/_components/ui";
+import { Button, INPUT_CLASS, buttonClass } from "@/app/_components/ui";
 
 // settings → your data (audit finding M9). One panel for the two things a
 // tenant can do with everything mindboard holds about them: take a copy, or
@@ -23,6 +23,18 @@ export function YourData({ isOwner }: { isOwner: boolean }) {
 
   return (
     <div className="glass-panel p-3 space-y-3">
+      <p className="text-meta text-muted leading-relaxed">
+        take a copy of everything mindboard holds for you as one json file —
+        every table, read through your own session. api keys, oauth tokens and
+        session urls are stripped; uploaded files and your vault repo are not
+        in it.
+      </p>
+      <a href="/api/account/export" download className={buttonClass()}>
+        download my data
+      </a>
+
+      <hr className="border-t border-hairline" />
+
       <p className="text-meta text-muted leading-relaxed">
         deleting removes every row mindboard holds for you — tasks, finance,
         inventory, people, courses, notes, assistant history — and every file
