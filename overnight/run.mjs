@@ -841,6 +841,26 @@ const DISPATCH_DISALLOWED_TOOLS = [
   "Bash(git merge*)",
   "Bash(git rebase*)",
   "Bash(git reset --hard*)",
+  // Second-shell and network spellings that walk around every pattern above
+  // (audit 2026-10-26 H3): a nested shell re-parses the command where these
+  // rules can't see it, and the raw HTTP clients are how a read secret would
+  // leave the machine. Research goes through WebFetch/WebSearch instead.
+  "Bash(cmd*)",
+  "Bash(powershell*)",
+  "Bash(pwsh*)",
+  "Bash(bash -c*)",
+  "Bash(sh -c*)",
+  "Bash(curl*)",
+  "Bash(wget*)",
+  "Bash(Invoke-WebRequest*)",
+  "Bash(Invoke-RestMethod*)",
+  "Bash(iwr*)",
+  "Bash(irm*)",
+  "Bash(gh *)",
+  "Read(**/.env*)",
+  "Read(**/*.env)",
+  "Read(**/.claude.json)",
+  "Read(**/.ssh/**)",
 ].join(",");
 
 const DISPATCH_TOOL_PROFILE = {
