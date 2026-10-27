@@ -794,7 +794,6 @@ async function proposeScheduleTask(
   const push = input.pushToCalendar === true;
   const summary = `Schedule "${(task as { title: string }).title}" on ${dueDate} at ${dueTime} for ${durationMin}min${push ? " and push it to Google Calendar" : ""}.`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "schedule_task",
     { taskId, dueDate, dueTime, durationMin, pushToCalendar: push },
@@ -996,7 +995,6 @@ export async function runAssistantTool(
           summarizeCreateTask(parsed.value, groupName) +
           (dueTime ? ` at ${dueTime}` : "");
         const proposalId = await recordProposal(
-          supabase,
           userId,
           "create_task",
           stored,
@@ -1023,7 +1021,6 @@ export async function runAssistantTool(
         }
         const summary = `Mark task "${task.title}" as done.`;
         const proposalId = await recordProposal(
-          supabase,
           userId,
           "complete_task",
           { taskId },
@@ -1053,7 +1050,6 @@ export async function runAssistantTool(
         }
         const summary = `Mark task "${task.title}" as missed.`;
         const proposalId = await recordProposal(
-          supabase,
           userId,
           "miss_task",
           { taskId },
@@ -1316,7 +1312,6 @@ export async function runAssistantTool(
             categoryName,
           }) + warningBlock;
         const proposalId = await recordProposal(
-          supabase,
           userId,
           "log_spend",
           parsed.value as unknown as Record<string, unknown>,

@@ -470,7 +470,6 @@ export async function proposeGenerateAudioOverviewFor(
     : "all converted sources";
   const summary = `Generate a ${parsed.value.flavor} audio overview of ${resolved.value.name} (${scope}, ${parsed.value.engine} voices).`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "generate_audio_overview",
     parsed.value as unknown as Record<string, unknown>,

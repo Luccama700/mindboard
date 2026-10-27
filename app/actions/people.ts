@@ -855,10 +855,12 @@ export async function confirmPeopleProposal(proposalId: string): Promise<{
 }> {
   if (!proposalId) return { error: "proposal required" };
 
-  const { supabase, user } = await requireUser();
+  // The id comes from the session, never from the caller: the proposal lookup
+  // below runs on the service client and user_id IS the scoping (M7).
+  const { user } = await requireUser();
   if (!user) return { error: "not authenticated" };
 
-  const proposal = await loadProposal(supabase, user.id, proposalId);
+  const proposal = await loadProposal(user.id, proposalId);
   if (!proposal) return { error: "proposal not found or already resolved" };
   if (proposal.tool_name !== "update_people") {
     return { error: "that proposal isn't a people change" };
@@ -873,10 +875,10 @@ export async function rejectPeopleProposal(
 ): Promise<{ error: string | null }> {
   if (!proposalId) return { error: "proposal required" };
 
-  const { supabase, user } = await requireUser();
+  const { user } = await requireUser();
   if (!user) return { error: "not authenticated" };
 
-  const proposal = await loadProposal(supabase, user.id, proposalId);
+  const proposal = await loadProposal(user.id, proposalId);
   if (!proposal) return { error: "proposal not found or already resolved" };
   if (proposal.tool_name !== "update_people") {
     return { error: "that proposal isn't a people change" };

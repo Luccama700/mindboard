@@ -34,6 +34,7 @@ const EXISTING = [
     occurred_at: `${TODAY}T00:00:00Z`,
     fingerprint: `${TODAY}|out|1250`,
     is_transfer: false,
+    note: null,
   },
 ];
 

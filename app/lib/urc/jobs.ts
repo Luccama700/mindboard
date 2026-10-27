@@ -305,7 +305,6 @@ export async function proposeSpawnUrc(
   });
 
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "spawn_urc",
     { folder: folder.value, deviceId: resolved.value.device.id, name: label.value },
