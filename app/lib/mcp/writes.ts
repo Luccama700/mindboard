@@ -55,6 +55,7 @@ import {
   resolveProposal,
   type ExecutorContext,
 } from "./audit";
+import { appApprovalMessage, requiresAppApproval } from "./approval";
 import { executeSpawnUrc } from "@/app/lib/urc/jobs";
 import {
   renderStockReceipt,
@@ -3140,6 +3141,16 @@ export async function confirmAction(
   const proposal = await loadProposal(supabase, ownerId, proposalId);
   if (!proposal) {
     return { ok: false, error: "proposal not found or already resolved" };
+  }
+
+  // H2: over MCP the proposing hand and the confirming hand are the same model,
+  // so for destructive, financial and execution-capable writes a chat confirm is
+  // not consent. Refuse BEFORE the claim, leaving the row at 'proposed' so the
+  // user can approve that very proposal in the app. `watch` is a human channel
+  // (a tap on the wrist) and passes, as does the in-app rail, which never
+  // reaches this function.
+  if (authKind.startsWith("mcp:") && requiresAppApproval(proposal.tool_name, proposal.input)) {
+    return { ok: false, error: appApprovalMessage(proposal.tool_name) };
   }
 
   const executor = EXECUTORS[proposal.tool_name];

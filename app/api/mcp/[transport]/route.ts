@@ -1430,7 +1430,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "Confirm a proposed write",
         description:
-          "Execute a previously proposed write (any propose-tool: tasks, repeating tasks, groups, goals, calendar events, daily log, settings, stock, finance) by its proposalId. Only call after the user has approved the preview. Pending proposals are visible via list_proposals (status=proposed).",
+          "Execute a previously proposed write (any propose-tool: tasks, repeating tasks, groups, goals, calendar events, daily log, settings, stock, finance) by its proposalId. Only call after the user has approved the preview. Pending proposals are visible via list_proposals (status=proposed).\n\nSOME PROPOSALS CANNOT BE CONFIRMED FROM A CHAT CLIENT and this tool will refuse them: deleting a task, deleting a spend limit, generating an audio overview, changing settings, finance ledger corrections (remove/adjust/reconcile), archiving a finance account/category/rule/income source, archiving a person, and setting a task's aiState to 'approved'. Those need the user's own tap in Mindboard. When this tool refuses one, the proposal stays pending — tell the user to open Mindboard at /approvals and approve or reject it there, and do not retry.",
         inputSchema: { proposalId: z.string() },
       },
       (args, extra) =>
