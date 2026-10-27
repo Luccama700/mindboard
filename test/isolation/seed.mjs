@@ -7,7 +7,14 @@
 // exception: the MCP token hash is provisioned server-side in production, so
 // the probe writes it with the admin client the same way /settings does.
 
+import { createHash } from "node:crypto";
+
 import { todayKey } from "./harness.mjs";
+
+// urc_devices.token_hash is SHA-256 hex of the device token. The probe never
+// presents the token anywhere — the row exists so the URC tools have a real
+// device and a real session link to refuse the other tenant.
+const sha256Hex = (value) => createHash("sha256").update(value, "utf8").digest("hex");
 
 // Every user-scoped table, snapshotted before and after the other tenant's
 // attack sweep. This list is hand-maintained and is the snapshot's weak point:
@@ -18,6 +25,7 @@ import { todayKey } from "./harness.mjs";
 export const OWNED_TABLES = [
   "groups",
   "tasks",
+  "task_dispatches",
   "recurring_tasks",
   "recurring_task_completions",
   "recurring_task_slots",
@@ -44,11 +52,25 @@ export const OWNED_TABLES = [
   "mindspace_labels",
   "mindspace_observations",
   "mindspace_sessions",
+  "people",
+  "people_groups",
+  "person_interactions",
+  "person_mention_candidates",
+  // urc_devices/urc_jobs have RLS on with NO policies (0054): service-role
+  // only. The snapshot runs on the admin client, which bypasses RLS, so these
+  // read fine here — and they MUST be in this list, because urc_jobs is where a
+  // forged spawn_urc would land and session_url is the most sensitive column in
+  // the schema.
+  "urc_devices",
+  "urc_jobs",
+  "urc_log",
   "vault_settings",
   "google_tokens",
   "worker_status",
   "jobs",
   "ai_audit_log",
+  "ai_conversations",
+  "ai_messages",
   "user_settings",
 ];
 
@@ -72,6 +94,9 @@ export async function seedTenant({
   currency,
   patHash,
   patHint,
+  // Rows that exist on the VICTIM only. See the decoy block near the bottom of
+  // this function for why the asymmetry is the whole point.
+  decoys = false,
 }) {
   const ids = { marker };
 
@@ -269,6 +294,181 @@ export async function seedTenant({
     duration_min: 60,
     user_text: ids.sessionText,
   });
+
+  // ---------------- people (0047/0048/0049) ----------------
+  // The relationship layer is the newest data the MCP surface can reach, and
+  // the one whose leak reads worst: names, cadences and logged conversations.
+  ids.peopleGroupName = `${marker}-circle`;
+  ids.peopleGroupId = await insert(client, "people_groups", {
+    user_id: userId,
+    name: ids.peopleGroupName,
+    color: "#778899",
+  });
+
+  // The name doubles as update_people's and get_person's fuzzy-resolution
+  // surface: both resolve id → exact name → unique substring, so a cross-tenant
+  // name must match nothing at all.
+  ids.personName = `${marker}-person`;
+  ids.personId = await insert(client, "people", {
+    user_id: userId,
+    name: ids.personName,
+    group_id: ids.peopleGroupId,
+    checkin_days: 30,
+  });
+
+  ids.interactionSummary = `${marker}-talked-about`;
+  ids.interactionId = await insert(client, "person_interactions", {
+    user_id: userId,
+    person_id: ids.personId,
+    summary: ids.interactionSummary,
+    occurred_at: todayKey(-5),
+    occurred_precision: "exact",
+    source: "logged",
+  });
+
+  // A mention candidate is unreviewed inference ABOUT the tenant's private
+  // prose; docs/people-plan.md §9 keeps its excerpt off every agent surface, so
+  // a needle on it catches both a tenant leak and a §9 regression.
+  ids.mentionExcerpt = `${marker}-mention-excerpt`;
+  ids.mentionCandidateId = await insert(client, "person_mention_candidates", {
+    user_id: userId,
+    person_id: ids.personId,
+    source_kind: "session",
+    source_ref: ids.sessionRef,
+    occurred_at: todayKey(-3),
+    excerpt: ids.mentionExcerpt,
+    matched_term: ids.personName,
+    status: "new",
+  });
+
+  // ---------------- agent hand-off (0051) ----------------
+  // A pending dispatch for claim_task_dispatch to try to steal. It stays
+  // 'requested' for the whole run; the attacker claiming it would move it.
+  ids.dispatchNote = `${marker}-dispatch-note`;
+  ids.dispatchId = await insert(client, "task_dispatches", {
+    user_id: userId,
+    task_id: ids.taskId,
+    note: ids.dispatchNote,
+    status: "requested",
+  });
+
+  // ---------------- assistant conversation (0014) ----------------
+  ids.conversationTitle = `${marker}-conversation`;
+  ids.conversationId = await insert(admin, "ai_conversations", {
+    user_id: userId,
+    title: ids.conversationTitle,
+  });
+  ids.messageContent = `${marker}-message-content`;
+  ids.messageId = await insert(admin, "ai_messages", {
+    user_id: userId,
+    conversation_id: ids.conversationId,
+    role: "user",
+    content: ids.messageContent,
+  });
+
+  // ---------------- URC (0054/0055) ----------------
+  // Admin client on purpose: urc_devices/urc_jobs have RLS enabled with NO
+  // policies, so the tenant's own session client cannot write these. That is
+  // the property under test, asserted from the app-path section of the runner.
+  ids.urcDeviceName = `${marker}-pc`;
+  ids.urcFolderKey = "probe";
+  ids.urcDeviceId = await insert(admin, "urc_devices", {
+    user_id: userId,
+    name: ids.urcDeviceName,
+    token_hash: sha256Hex(`${marker}-device-token`),
+    folder_keys: [ids.urcFolderKey],
+    last_seen: new Date().toISOString(),
+  });
+  // A session link is the single most sensitive string the schema holds (M8):
+  // anyone who opens it drives a live Claude Code session on the owner's PC.
+  // Giving the victim one makes "did any URC tool hand it to the other tenant"
+  // an assertion rather than an assumption.
+  ids.urcSessionUrl = `https://claude.ai/code/session_${marker}`;
+  ids.urcJobId = await insert(admin, "urc_jobs", {
+    user_id: userId,
+    device_id: ids.urcDeviceId,
+    folder_key: ids.urcFolderKey,
+    status: "running",
+    session_url: ids.urcSessionUrl,
+    confirmed_auth: "pat",
+    started_at: new Date().toISOString(),
+    // Far enough out that sweepStaleJobs cannot expire it mid-run.
+    expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+  });
+  ids.urcLogId = await insert(admin, "urc_log", {
+    user_id: userId,
+    job_id: ids.urcJobId,
+    event: "spawn_confirmed",
+    folder_key: ids.urcFolderKey,
+    confirmed_auth: "pat",
+  });
+
+  // ---------------- decoys: rows only the VICTIM has ----------------
+  //
+  // Ten tools used to pass this probe only because a PRECONDITION was missing
+  // for BOTH tenants — no Google token, no vault row, no group named
+  // "mindboard". "It failed" is not "isolation held": the code never reached
+  // its own scoping check, so a dropped user_id filter inside it would not turn
+  // the probe red.
+  //
+  // The fix is asymmetry, not symmetry. The VICTIM gets the credential; the
+  // ATTACKER gets none. Correct behaviour is then a specific, local refusal
+  // ("vault not connected", "google calendar connection failed"), while a
+  // scoping bug finds the victim's row and fails LATER and DIFFERENTLY — at
+  // GitHub, or at Google, with the victim's token in hand. The error text is
+  // the tenant signal, so the matrix asserts on it; see BLIND_SPOTS.
+  //
+  // Both credentials are deliberately junk. If a regression does reach them,
+  // the probe must fail a check, not successfully use a real account.
+  if (decoys) {
+    ids.vaultRepo = `${marker}-owner/${marker}-vault`;
+    const { error: vaultError } = await admin.from("vault_settings").upsert(
+      {
+        user_id: userId,
+        repo: ids.vaultRepo,
+        branch: "main",
+        github_token: `ghp_${marker}_not_a_real_token_000000000000`,
+      },
+      { onConflict: "user_id" },
+    );
+    if (vaultError) throw new Error(`seed vault_settings: ${vaultError.message}`);
+
+    // expires_at far in the FUTURE on purpose: getValidAccessToken only
+    // refreshes a near-expired token, and a refresh attempt throws the SAME
+    // GoogleCalendarConnectionError as "no row at all" — which would erase the
+    // very distinction this decoy exists to create. A future expiry means a
+    // leaked token is used verbatim and fails Google-side instead.
+    ids.googleAccessToken = `ya29.${marker}-not-a-real-token`;
+    const { error: googleError } = await admin.from("google_tokens").upsert(
+      {
+        user_id: userId,
+        access_token: ids.googleAccessToken,
+        refresh_token: `1//${marker}-not-a-real-refresh-token`,
+        expires_at: new Date(Date.now() + 365 * 24 * 60 * 60_000).toISOString(),
+        scopes: "https://www.googleapis.com/auth/calendar.events",
+      },
+      { onConflict: "user_id" },
+    );
+    if (googleError) throw new Error(`seed google_tokens: ${googleError.message}`);
+
+    // list_code_tasks resolves a group named exactly "mindboard" (case-
+    // insensitive) and returns {group: null, tasks: []} when the CALLER has
+    // none. Only the victim gets one, so the attacker's correct answer is
+    // `group: null` and a leak is a non-null group plus the victim's task.
+    ids.codeGroupId = await insert(client, "groups", {
+      user_id: userId,
+      name: "mindboard",
+      type: "project",
+      color: "#00ff00",
+    });
+    ids.codeTaskTitle = `${marker}-code-task`;
+    ids.codeTaskId = await insert(client, "tasks", {
+      user_id: userId,
+      group_id: ids.codeGroupId,
+      title: ids.codeTaskTitle,
+      status: "todo",
+    });
+  }
 
   // Settings carry the MCP token hash (provisioned server-side in production),
   // a timezone distinct from the other tenant's so a leaked preference row (or

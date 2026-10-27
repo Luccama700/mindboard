@@ -2,7 +2,12 @@
 // tenant A, then reports coverage against the server's live tools/list.
 
 import { leakNeedles, scanForLeak, stringLeaves, toolJson, toolText } from "./harness.mjs";
-import { BLIND_SPOTS, DECLARED_SKIPS, TOOL_MATRIX } from "./tool-matrix.mjs";
+import {
+  BLIND_SPOTS,
+  CONDITIONAL_TOOLS,
+  DECLARED_SKIPS,
+  TOOL_MATRIX,
+} from "./tool-matrix.mjs";
 
 async function callTool(client, name, args) {
   try {
@@ -20,11 +25,27 @@ export async function runToolMatrix({ mcpA, ctx, reporter }) {
   const exercised = new Map();
   const proposalsToCancel = [];
 
+  // Conditionally-registered tools (today: the four URC ones, gated on
+  // URC_OWNER_USER_ID) are skipped when absent rather than called. Calling an
+  // unregistered tool raises a protocol error, which `callTool` below records
+  // as a refusal — a PASS for free, and exactly the vacuous green this file
+  // exists to prevent.
+  const listed = await mcpA.listTools();
+  const live = new Set((listed?.tools ?? []).map((t) => t.name));
+
   reporter.section(`mcp attack sweep: A's token, B's ids and names (${TOOL_MATRIX.length} calls)`);
 
   for (const entry of TOOL_MATRIX) {
     if (entry.skip) {
       exercised.set(entry.tool, exercised.get(entry.tool) ?? { calls: 0, skip: entry.skip });
+      continue;
+    }
+
+    if (!live.has(entry.tool) && CONDITIONAL_TOOLS[entry.tool]) {
+      exercised.set(
+        entry.tool,
+        exercised.get(entry.tool) ?? { calls: 0, conditional: CONDITIONAL_TOOLS[entry.tool] },
+      );
       continue;
     }
 
@@ -96,7 +117,7 @@ export async function reportCoverage({ mcpA, exercised, reporter }) {
   for (const name of live) {
     const seen = exercised.get(name);
     if (!seen || (seen.calls ?? 0) === 0) {
-      const reason = seen?.skip ?? DECLARED_SKIPS[name];
+      const reason = seen?.skip ?? seen?.conditional ?? DECLARED_SKIPS[name];
       if (reason) {
         console.log(`  SKIP  ${name.padEnd(28)} ${reason}`);
       } else {
@@ -116,7 +137,16 @@ export async function reportCoverage({ mcpA, exercised, reporter }) {
     }
   }
 
-  const stale = [...exercised.keys()].filter((name) => !live.includes(name)).sort();
+  // A matrix entry for a tool the server no longer registers is rot — EXCEPT
+  // for the conditionally-registered ones, whose absence is a deployment fact
+  // (URC_OWNER_USER_ID unset), not a stale entry. Those are reported so the run
+  // says plainly which boundaries it did not test.
+  const missing = [...exercised.keys()].filter((name) => !live.includes(name)).sort();
+  const stale = missing.filter((name) => !CONDITIONAL_TOOLS[name]);
+  const notConfigured = missing.filter((name) => CONDITIONAL_TOOLS[name]);
+  for (const name of notConfigured) {
+    console.log(`  n/a   ${name.padEnd(28)} NOT REGISTERED — ${CONDITIONAL_TOOLS[name]}`);
+  }
 
   reporter.check(
     "every registered tool has an attack-table entry",
@@ -128,6 +158,13 @@ export async function reportCoverage({ mcpA, exercised, reporter }) {
     stale.length === 0,
     stale.join(", "),
   );
+  if (notConfigured.length > 0) {
+    reporter.info("");
+    reporter.info(
+      `${notConfigured.length} conditionally-registered tool(s) were NOT tested: ${notConfigured.join(", ")}.`,
+    );
+    reporter.info("Set URC_OWNER_USER_ID on the server to include them (README.md).");
+  }
 
   const weak = live.filter((name) => BLIND_SPOTS[name]);
   reporter.info("");

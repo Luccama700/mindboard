@@ -36,11 +36,20 @@ function refused(r) {
 }
 
 // Tools whose isolation boundary is a per-user external credential
-// (google_tokens, vault_settings). Probe tenants have none, so the only correct
-// outcome is a hard failure to reach anything.
-function blockedExternally(r) {
-  return r.isError === true;
+// (google_tokens, vault_settings). The ATTACKER has none and the VICTIM does
+// (seed.mjs's decoy block), so the only correct outcome is the app's own
+// "not connected" refusal — raised locally, before any external call.
+//
+// `signature` is what makes this an isolation assertion rather than "it threw":
+// reading the victim's credential would carry the request PAST this message and
+// fail later, at GitHub or at Google, with a different one. A refusal that does
+// not carry the local signature is therefore a failure, not a pass.
+function blockedByOwnMissingCredential(r, signature) {
+  return r.isError === true && signature.test(r.text ?? "");
 }
+
+const NO_VAULT = /vault not connected/i;
+const NO_GOOGLE = /google calendar connection failed/i;
 
 export const TOOL_MATRIX = [
   // ---------------- reads: no-argument cross-domain rollups ----------------
@@ -122,14 +131,24 @@ export const TOOL_MATRIX = [
   },
   {
     tool: "list_code_tasks",
-    attack: "overnight-agent read must resolve A's own 'mindboard' group, not B's",
+    // B owns the only group named "mindboard" (seed.mjs's decoy block) and the
+    // only task inside it. The group lookup is `.eq("user_id", ownerId)` +
+    // ilike "mindboard", so A's correct answer is the empty shape; a dropped
+    // filter resolves B's group and hands back B's task.
+    attack: "overnight-agent read must resolve A's own 'mindboard' group — only B has one",
     args: () => ({}),
-    assert: (r, ctx, check) =>
+    assert: (r, ctx, check) => {
       check(
-        "list_code_tasks resolves the group inside A and returns no B tasks",
-        Array.isArray(r.json?.tasks) && r.json.tasks.length === 0 && r.json.group === null,
+        "list_code_tasks finds no 'mindboard' group for A, though B has one",
+        r.json?.group === null,
+        `group=${JSON.stringify(r.json?.group)}`,
+      );
+      check(
+        "list_code_tasks returns none of B's code tasks",
+        Array.isArray(r.json?.tasks) && r.json.tasks.length === 0,
         r.text.slice(0, 160),
-      ),
+      );
+    },
   },
   {
     tool: "list_groups",
@@ -212,20 +231,20 @@ export const TOOL_MATRIX = [
   },
   {
     tool: "schedule_snapshot",
-    // getScheduleSnapshot calls listEvents unconditionally, which THROWS for a
-    // tenant with no google_tokens row — so this tool never reaches its
-    // preferences-scoping code here and is listed in BLIND_SPOTS. The
-    // wake-window assertion the isolation of this rollup deserves lives on
-    // get_snapshot instead, which survives the missing token and exposes the
-    // same wake-window-derived gaps. Seed a google_tokens row per tenant and
-    // this entry can be upgraded to the same value check.
-    attack: "free-time rollup is unreachable without A's own Google token",
+    // getScheduleSnapshot calls listEvents unconditionally, which throws
+    // GoogleCalendarConnectionError when the CALLER has no google_tokens row.
+    // B has one and A does not, so the local message is the proof: reading B's
+    // row instead would send B's (junk) token to Google and come back
+    // "calendar list request failed" — a different string, and a red check.
+    // The wake-window VALUE assertion still lives on get_snapshot, which
+    // survives the missing token.
+    attack: "free-time rollup must use A's own Google token — only B has one",
     args: () => ({}),
     assert: (r, ctx, check) =>
       check(
-        "schedule_snapshot reaches no calendar without A's own Google token",
-        blockedExternally(r),
-        r.text.slice(0, 120),
+        "schedule_snapshot stops at A's own missing Google token, never reaching B's",
+        blockedByOwnMissingCredential(r, NO_GOOGLE),
+        r.text.slice(0, 160),
       ),
   },
   {
@@ -287,13 +306,13 @@ export const TOOL_MATRIX = [
   },
   {
     tool: "list_events",
-    attack: "Google read with no token for A must reach nothing",
+    attack: "Google read must use A's own token — only B has one",
     args: () => ({ from: todayKey(), to: todayKey(7) }),
     assert: (r, ctx, check) =>
       check(
-        "list_events reaches no calendar without A's own Google token",
-        r.isError === true || emptyArray(r),
-        r.text.slice(0, 120),
+        "list_events stops at A's own missing Google token, never reaching B's",
+        blockedByOwnMissingCredential(r, NO_GOOGLE),
+        r.text.slice(0, 160),
       ),
   },
   {
@@ -396,21 +415,29 @@ export const TOOL_MATRIX = [
   },
   {
     tool: "list_brain_notes",
-    attack: "vault listing must use A's own credentials only",
+    // readVaultCredentials is `.eq("user_id", userId)`; B has a vault_settings
+    // row and A does not. A's correct answer is the app's own "vault not
+    // connected". Reading B's row would send B's junk PAT to GitHub and fail
+    // with a GitHub-shaped error instead — which this check rejects.
+    attack: "vault listing must use A's own credentials — only B has a vault row",
     args: () => ({}),
     assert: (r, ctx, check) =>
       check(
-        "list_brain_notes cannot list a vault A has not connected",
-        blockedExternally(r),
-        r.text.slice(0, 120),
+        "list_brain_notes stops at A's own missing vault row, never reaching B's",
+        blockedByOwnMissingCredential(r, NO_VAULT),
+        r.text.slice(0, 160),
       ),
   },
   {
     tool: "read_brain_note",
-    attack: "read B's vault note path",
+    attack: "read a path inside B's vault",
     args: (ctx) => ({ path: `Inbox/${ctx.b.marker}-note.md` }),
     assert: (r, ctx, check) =>
-      check("read_brain_note on B's path returns nothing", blockedExternally(r), r.text.slice(0, 120)),
+      check(
+        "read_brain_note on B's path stops at A's own missing vault row",
+        blockedByOwnMissingCredential(r, NO_VAULT),
+        r.text.slice(0, 160),
+      ),
   },
 
   // ---------------- propose writes aimed at B's rows ----------------
@@ -664,14 +691,14 @@ export const TOOL_MATRIX = [
   },
   {
     tool: "create_event",
-    attack: "calendar write must be blocked by A's missing Google token at confirm",
+    attack: "calendar write must use A's own Google token — only B has one",
     args: () => ({ summary: "cross-tenant event", date: todayKey(1), startTime: "10:00" }),
     confirm: true,
     assert: (r, ctx, check) =>
       check(
-        "create_event confirm cannot reach any calendar without A's Google token",
-        r.confirmFailed === true,
-        r.confirmText?.slice(0, 120),
+        "create_event confirm stops at A's own missing Google token, never using B's",
+        r.confirmFailed === true && NO_GOOGLE.test(r.confirmText ?? ""),
+        r.confirmText?.slice(0, 160),
       ),
   },
   {
@@ -686,16 +713,16 @@ export const TOOL_MATRIX = [
     confirm: true,
     assert: (r, ctx, check) =>
       check(
-        "reschedule_event confirm cannot reach any calendar without A's Google token",
-        r.confirmFailed === true,
-        r.confirmText?.slice(0, 120),
+        "reschedule_event confirm stops at A's own missing Google token, never using B's",
+        r.confirmFailed === true && NO_GOOGLE.test(r.confirmText ?? ""),
+        r.confirmText?.slice(0, 160),
       ),
   },
 
   // ---------------- fenced direct writes ----------------
   {
     tool: "capture_to_brain",
-    attack: "vault capture must use A's own vault credentials only",
+    attack: "vault capture must use A's own credentials — only B has a vault row",
     args: () => ({
       title: "isolation-probe-capture",
       summary_markdown: "probe capture",
@@ -703,9 +730,9 @@ export const TOOL_MATRIX = [
     }),
     assert: (r, ctx, check) =>
       check(
-        "capture_to_brain cannot write to a vault A has not connected",
-        blockedExternally(r),
-        r.text.slice(0, 120),
+        "capture_to_brain stops at A's own missing vault row, never writing into B's",
+        blockedByOwnMissingCredential(r, NO_VAULT),
+        r.text.slice(0, 160),
       ),
   },
   {
@@ -819,6 +846,180 @@ export const TOOL_MATRIX = [
       check("generate_audio_overview on B's course is refused", refused(r), r.text.slice(0, 120)),
   },
 
+  // ---------------- people (0047/0048/0049) ----------------
+  {
+    tool: "list_people",
+    attack: "roster listing must not include B's people",
+    args: () => ({ includeArchived: true }),
+    assert: (r, ctx, check) => {
+      check(
+        "list_people returns exactly A's one person",
+        Array.isArray(r.json?.people) &&
+          r.json.people.length === 1 &&
+          r.json.people[0].id === ctx.a.personId,
+        r.text.slice(0, 160),
+      );
+      // Groups ride along in the same payload and are resolved from a separate
+      // people_groups query, so they need their own assertion.
+      check(
+        "list_people's group list never carries B's group",
+        !JSON.stringify(r.json ?? null).includes(ctx.b.peopleGroupId),
+      );
+    },
+  },
+  {
+    tool: "get_person",
+    attack: "open B's dossier by person id",
+    args: (ctx) => ({ person: ctx.b.personId }),
+    assert: (r, ctx, check) =>
+      check("get_person on B's person id is refused", r.isError === true, r.text.slice(0, 160)),
+  },
+  {
+    tool: "get_person",
+    // resolvePersonRef runs id → exact name → unique substring over the rows
+    // the query returned. If that query lost its user filter, B's exact name
+    // resolves and the dossier — interactions, open loops, mention excerpts —
+    // comes back.
+    attack: "open B's dossier by their EXACT name (fuzzy resolution)",
+    args: (ctx) => ({ person: ctx.b.personName }),
+    assert: (r, ctx, check) =>
+      check("get_person on B's exact person name is refused", r.isError === true, r.text.slice(0, 160)),
+  },
+  {
+    tool: "update_people",
+    attack: "log a conversation onto B's person and re-home them into B's group",
+    args: (ctx) => ({
+      operations: [
+        { op: "log_interaction", person: ctx.b.personId, summary: "cross-tenant log" },
+        { op: "set_group", person: ctx.b.personId, group: ctx.b.peopleGroupId },
+        { op: "set_checkin", person: ctx.b.personName, days: 1 },
+        { op: "archive", person: ctx.b.personId },
+      ],
+    }),
+    assert: (r, ctx, check) =>
+      check("update_people against B's person is refused", refused(r), r.text.slice(0, 160)),
+  },
+
+  // ---------------- agent hand-off (0051) ----------------
+  {
+    tool: "claim_task_dispatch",
+    // The unfiltered form is the dangerous one: it claims "the oldest pending
+    // dispatch", and only `.eq("user_id", …)` decides whose. B has one pending
+    // and A has none, so A's correct answer is null.
+    attack: "claim the oldest pending dispatch — only B has one",
+    args: () => ({}),
+    assert: async (r, ctx, check) => {
+      check(
+        "claim_task_dispatch finds nothing for A, though B has one pending",
+        r.json?.dispatch === null,
+        r.text.slice(0, 160),
+      );
+      const { data } = await ctx.admin
+        .from("task_dispatches")
+        .select("status, attempts, claimed_at")
+        .eq("id", ctx.b.dispatchId)
+        .maybeSingle();
+      check(
+        "B's dispatch is still unclaimed after A's claim",
+        data?.status === "requested" && Number(data?.attempts) === 0 && !data?.claimed_at,
+        JSON.stringify(data),
+      );
+    },
+  },
+  {
+    tool: "claim_task_dispatch",
+    attack: "claim the dispatch for B's task by taskId",
+    args: (ctx) => ({ taskId: ctx.b.taskId }),
+    assert: (r, ctx, check) =>
+      check(
+        "claim_task_dispatch filtered by B's taskId claims nothing",
+        r.isError === true || r.json?.dispatch === null,
+        r.text.slice(0, 160),
+      ),
+  },
+  {
+    tool: "update_task_dispatch",
+    attack: "finish B's dispatch and write a result summary onto it",
+    args: (ctx) => ({
+      dispatchId: ctx.b.dispatchId,
+      status: "done",
+      resultSummary: "cross-tenant result",
+    }),
+    assert: async (r, ctx, check) => {
+      check("update_task_dispatch on B's dispatch is refused", r.isError === true, r.text.slice(0, 160));
+      const { data } = await ctx.admin
+        .from("task_dispatches")
+        .select("status, result_summary, finished_at")
+        .eq("id", ctx.b.dispatchId)
+        .maybeSingle();
+      check(
+        "B's dispatch keeps its status and carries no foreign result",
+        data?.status === "requested" && !data?.result_summary && !data?.finished_at,
+        JSON.stringify(data),
+      );
+    },
+  },
+
+  // ---------------- URC: owner-gated, and the session link ----------------
+  // These four are registered only when the deployment sets URC_OWNER_USER_ID
+  // (see CONDITIONAL_TOOLS). Neither probe tenant is ever that owner, so every
+  // one must refuse A — the gate under test is `urcAuth`'s owner check, which
+  // fires before any row is read. The victim's running session (seed.mjs) gives
+  // the id-taking tools something real to refuse, and its session_url is a leak
+  // needle the runner scans every response for.
+  {
+    tool: "spawn_urc",
+    attack: "start a Claude Code session on B's registered PC",
+    args: (ctx) => ({ folder: ctx.b.urcFolderKey, name: "probe" }),
+    assert: async (r, ctx, check) => {
+      check("spawn_urc is refused for a non-owner tenant", refused(r), r.text.slice(0, 160));
+      const { data } = await ctx.admin
+        .from("urc_jobs")
+        .select("id")
+        .eq("user_id", ctx.a.userId);
+      check("no urc job was queued for the attacker", (data ?? []).length === 0);
+    },
+  },
+  {
+    tool: "get_urc_status",
+    // The one tool that returns session_url, and only while the job is running
+    // — B's seeded job IS running, so this is the maximal exposure shape.
+    attack: "read B's running session, and with it the private session link",
+    args: (ctx) => ({ jobId: ctx.b.urcJobId }),
+    assert: (r, ctx, check) => {
+      check("get_urc_status on B's job is refused", r.isError === true, r.text.slice(0, 160));
+      check(
+        "no session link appears in the response",
+        !(r.text ?? "").includes("claude.ai/code/session_"),
+      );
+    },
+  },
+  {
+    tool: "list_urc_sessions",
+    attack: "list the PC's sessions and the folder keys it offers",
+    args: () => ({}),
+    assert: (r, ctx, check) =>
+      check("list_urc_sessions is refused for a non-owner tenant", r.isError === true, r.text.slice(0, 160)),
+  },
+  {
+    tool: "stop_urc",
+    attack: "kill B's running session",
+    args: (ctx) => ({ jobId: ctx.b.urcJobId }),
+    assert: async (r, ctx, check) => {
+      check("stop_urc on B's job is refused", r.isError === true, r.text.slice(0, 160));
+      const { data } = await ctx.admin
+        .from("urc_jobs")
+        .select("status, stop_requested_at")
+        .eq("id", ctx.b.urcJobId)
+        .maybeSingle();
+      check(
+        "B's session is still running and no stop was requested",
+        data?.status === "running" && !data?.stop_requested_at,
+        JSON.stringify(data),
+      );
+    },
+  },
+
   // ---------------- confirm / cancel across the boundary ----------------
   {
     tool: "confirm_action",
@@ -871,22 +1072,33 @@ export const TOOL_MATRIX = [
 // this table exists to prevent.
 export const DECLARED_SKIPS = {};
 
+// Tools this matrix has entries for that the server registers CONDITIONALLY.
+// Without this, a correct deployment that happens not to set the env would fail
+// the "matrix names a tool the server does not register" check — turning a
+// configuration fact into a false isolation failure. Absence is reported with
+// the reason instead; presence is probed exactly like any other tool.
+export const CONDITIONAL_TOOLS = {
+  spawn_urc: "registered only when URC_OWNER_USER_ID is set (urcConfigured())",
+  get_urc_status: "registered only when URC_OWNER_USER_ID is set (urcConfigured())",
+  list_urc_sessions: "registered only when URC_OWNER_USER_ID is set (urcConfigured())",
+  stop_urc: "registered only when URC_OWNER_USER_ID is set (urcConfigured())",
+};
+
 // Tools whose entry above passes because a PRECONDITION is missing, not because
 // isolation was demonstrated. Each fails before its code reaches the data path,
 // so a scoping bug inside it would not turn this probe red. Printed in the
 // coverage table so the number at the bottom is never read as more than it is.
-// Making them real tests means seeding per-tenant credentials (a Google token,
-// a vault_settings row, an Anthropic key, worker allowlisting).
+//
+// The eight that used to live here — list_events, schedule_snapshot,
+// create_event, reschedule_event, list_brain_notes, read_brain_note,
+// capture_to_brain and list_code_tasks — are now real assertions: seed.mjs
+// gives the VICTIM a google_tokens row, a vault_settings row and a group named
+// "mindboard", gives the ATTACKER none, and each entry asserts the attacker
+// stopped at its OWN missing precondition rather than finding the victim's.
+// Two remain, and both need something a throwaway tenant cannot have.
 export const BLIND_SPOTS = {
-  list_events: "no google_tokens row for either tenant — fails before the calendar read",
-  schedule_snapshot:
-    "listEvents throws without a google_tokens row; wake-window scoping is asserted on get_snapshot instead",
-  create_event: "confirm fails at the missing Google token, not at a scoping check",
-  reschedule_event: "confirm fails at the missing Google token, not at a scoping check",
-  list_brain_notes: "no vault_settings row — fails before the vault read",
-  read_brain_note: "no vault_settings row — fails before the vault read",
-  capture_to_brain: "no vault_settings row — fails before the vault write",
-  lookup_prices: "no Anthropic key — refusal is credential-shaped, though the price row IS checked",
-  process_reel: "tenant is not worker-allowlisted — fails before the vault/jobs path",
-  list_code_tasks: "neither tenant has a group named 'mindboard' — returns the empty shape",
+  lookup_prices:
+    "needs an Anthropic key encrypted under the server's ASSISTANT_KEY_SECRET, and a real priced lookup would spend money; the refusal is credential-shaped, though B's stored price IS checked afterwards",
+  process_reel:
+    "worker allowlisting is WORKER_ALLOWED_USER_IDS, an env var naming real account ids — a tenant created at runtime can never be on it, so this fails before the vault/jobs path",
 };

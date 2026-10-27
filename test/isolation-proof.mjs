@@ -189,6 +189,11 @@ try {
     currency: "CAD",
     patHash: patA.hash,
     patHint: patA.token.slice(-4),
+    // A is the ATTACKER and holds no external credentials at all. Every decoy
+    // lives on B; seed.mjs's decoy block explains why that asymmetry is what
+    // turns the credential-gated tools into real assertions instead of "it
+    // failed, so it must be fine".
+    decoys: false,
   });
   const seedB = await seedTenant({
     client: b.client,
@@ -204,6 +209,7 @@ try {
     currency: "SEK",
     patHash: patB.hash,
     patHint: patB.token.slice(-4),
+    decoys: true,
   });
   check("both tenants seed a full row set through their own RLS session", true);
 
@@ -281,12 +287,15 @@ try {
         tasksA.every((t) => t.title.startsWith(ctx.a.marker)),
     );
 
+    // Three, not two: B also owns the decoy task inside the "mindboard" group
+    // that list_code_tasks resolves against.
     const tasksB = toolJson(await mcpB.callTool({ name: "list_tasks", arguments: {} }));
     check(
       "MCP as B lists exactly B's tasks",
       Array.isArray(tasksB) &&
-        tasksB.length === 2 &&
+        tasksB.length === 3 &&
         tasksB.every((t) => t.title.startsWith(ctx.b.marker)),
+      `${tasksB?.length} task(s)`,
     );
 
     // B leaves a real pending proposal for A to try to steal, and vice versa.
