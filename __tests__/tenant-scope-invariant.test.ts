@@ -285,46 +285,23 @@ const ALLOWLIST: Allow[] = [
       "item_id comes from the `.select(\"id\").single()` of a user-scoped upsert in the same " +
       "loop iteration, so it can only ever be the caller's own item.",
   },
-  // ---- known open finding, NOT by design: audit F4 / C1 step 5 ----
-  // The fix (`.in("user_id", workerAllowedUserIds())` on the claim-side reads
-  // and `.eq("user_id", job.user_id)` on the updates) lives on ai/tenant-probe
-  // commit 4216276 and is owned by the C1 worker work, not by this test. These
-  // four entries exist so the test passes on main TODAY while naming the
-  // defect. When that fix lands these chains become scoped, the counts stop
-  // matching, and the stale-allowlist check below fails — which is the signal
-  // to DELETE these four entries.
+  // ---- OAuth bookkeeping with no user column ----
   {
-    file: "app/api/worker/route.ts",
-    table: "jobs",
-    contains: 'select("id, user_id, kind, payload, status, attempts")',
+    file: "app/lib/mcp/oauth-store.ts",
+    table: "oauth_used_codes",
+    contains: "insert({ code_hash",
     count: 1,
     why:
-      "AUDIT F4, open: loadJob addresses a job by id alone. A worker-bearer holder can load a " +
-      "non-allowlisted tenant's job. Fix pending on the C1 worker commit; remove this entry " +
-      "when it lands.",
+      "oauth_used_codes records spent authorization-code hashes; it has no user column by " +
+      "design (a code is single-use globally, whoever it belonged to). Service-role only, no " +
+      "client policy (0059).",
   },
   {
-    file: "app/api/worker/route.ts",
-    table: "jobs",
-    contains: 'update({ status: dead ? "failed" : "queued"',
+    file: "app/lib/mcp/oauth-store.ts",
+    table: "oauth_used_codes",
+    contains: '.lt("expires_at"',
     count: 1,
-    why: "AUDIT F4, open: failJob updates by job id alone. Same fix, same removal.",
-  },
-  {
-    file: "app/api/worker/route.ts",
-    table: "jobs",
-    contains: "heartbeat_at",
-    count: 1,
-    why:
-      "AUDIT F4, open: the heartbeat updates by job id (plus status) alone. Same fix, same " +
-      "removal.",
-  },
-  {
-    file: "app/api/worker/route.ts",
-    table: "jobs",
-    contains: 'update({ status: "done"',
-    count: 1,
-    why: "AUDIT F4, open: the completion update addresses a job by id alone. Same fix.",
+    why: "Garbage-collects expired code hashes across all users; the table holds no user data.",
   },
   // ---- worker storage ----
   {
@@ -390,6 +367,7 @@ describe("tenant-scope invariant (static)", () => {
     // leaves this list it has started using the service client and its chains
     // are now checked — which is the point.
     expect(excluded).toEqual([
+      "app/api/account/export/route.ts",
       "app/api/assistant/route.ts",
       "app/api/course-chat/route.ts",
       "app/api/mcp/oauth/authorize/route.ts",
