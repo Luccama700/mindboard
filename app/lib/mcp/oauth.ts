@@ -1,3 +1,4 @@
+import "server-only";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 // Minimal, stateless OAuth 2.1 primitives for the MCP authorization server.
