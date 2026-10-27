@@ -240,6 +240,16 @@ describe("job guards", () => {
     });
   });
 
+  test("an Object.prototype key name finds no folder", () => {
+    const { folders } = parseFolders(JSON.stringify({ mindboard: FOLDER }));
+    for (const key of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      const result = checkJob({ job: job({ folder_key: key }), config: CONFIG, folders });
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.error).toMatch(/no folder registered|not allowed/);
+    }
+  });
+
   test("a job with no user is ignored", () => {
     expect(
       checkJob({ job: job({ user_id: null }), config: CONFIG, folders: FOLDERS }).ok,

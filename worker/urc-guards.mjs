@@ -83,7 +83,9 @@ export function parseFolders(text) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { folders: {}, problems: ["urc.folders.json must be a { key: path } object"] };
   }
-  const folders = {};
+  // No prototype: a server-sent key like "constructor" must find nothing,
+  // not Object.prototype.constructor.
+  const folders = Object.create(null);
   const problems = [];
   for (const [key, value] of Object.entries(raw)) {
     if (!FOLDER_KEY_PATTERN.test(key)) {
@@ -376,8 +378,8 @@ export function checkJob({
   if (!FOLDER_KEY_PATTERN.test(key)) {
     return { ok: false, error: "folder key is not allowed" };
   }
-  const folder = folders[key];
-  if (!folder) {
+  const folder = Object.hasOwn(folders, key) ? folders[key] : null;
+  if (typeof folder !== "string" || !folder) {
     return { ok: false, error: `this PC has no folder registered as "${key}"` };
   }
   if (!pathExists(folder)) {
