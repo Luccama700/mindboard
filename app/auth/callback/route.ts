@@ -8,6 +8,7 @@ import {
   GOOGLE_TOKENS_TABLE,
   readGoogleToken,
 } from "@/utils/google/tokens";
+import { safeNextPath } from "./next-path";
 
 // Where the google_tokens row is read and written. The service client when one
 // is configured: migration 0058 revokes the anon/authenticated SELECT on the
@@ -43,7 +44,7 @@ async function storedRefreshToken(
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/";
+  const next = safeNextPath(searchParams.get("next"), origin);
 
   if (code) {
     const supabase = await createClient();
