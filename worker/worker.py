@@ -25,6 +25,7 @@ import base64
 import json
 import os
 import platform
+import re
 import shutil
 import struct
 import subprocess
@@ -119,13 +120,104 @@ def upload_put(url: str, data: bytes, content_type: str) -> None:
         response.read()
 
 
+PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+# Canonical form the server hands out: https://www.instagram.com/reel/<code>/
+# and nothing else. Anchored at BOTH ends — a substring match is what let a
+# forged row carry `… & powershell -enc …` onto a command line.
+INSTAGRAM_URL_RE = re.compile(r"^https://www\.instagram\.com/reel/[A-Za-z0-9_-]+/$")
+
+
+def split_template(template: str) -> list[str]:
+    """Split a command template into argv tokens the way a shell would — but
+    without a shell, and Windows-first.
+
+    Whitespace separates tokens unless quoted; quote characters are delimiters
+    and are dropped (so `"C:\\Program Files\\x.exe"` survives as one token);
+    a backslash is always a literal path separator, never an escape. Splitting
+    happens BEFORE any {placeholder} is substituted, so a value can never
+    introduce a new token or a shell operator.
+    """
+    tokens: list[str] = []
+    current = ""
+    quote = ""
+    started = False
+    for char in template:
+        if quote:
+            if char == quote:
+                quote = ""
+            else:
+                current += char
+            continue
+        if char in "\"'":
+            quote = char
+            started = True
+            continue
+        if char.isspace():
+            if started:
+                tokens.append(current)
+                current = ""
+                started = False
+            continue
+        current += char
+        started = True
+    if quote:
+        raise RuntimeError(f"unbalanced quote in command template: {template}")
+    if started:
+        tokens.append(current)
+    return tokens
+
+
+def build_argv(template: str, **values: str) -> list[str]:
+    """Tokenize a command template, then substitute {placeholders} INSIDE the
+    tokens. A value with spaces (a temp path, a URL) stays one argument, and an
+    unknown {name} is left alone so `-o {out}/reel.%(ext)s` style templates and
+    printf-ish patterns keep working."""
+    tokens = split_template(template)
+    if not tokens:
+        raise RuntimeError("empty command template")
+    return [
+        PLACEHOLDER_RE.sub(
+            lambda m: values[m.group(1)] if m.group(1) in values else m.group(0),
+            token,
+        )
+        for token in tokens
+    ]
+
+
+def resolve_executable(name: str) -> str:
+    """Find the program on PATH. shutil.which honours PATHEXT, so a bare
+    `yt-dlp`/`claude` still resolves to its .exe/.cmd shim on Windows, which is
+    what shell=True used to do for us."""
+    found = shutil.which(name)
+    if found:
+        return found
+    if Path(name).exists():
+        return name
+    raise RuntimeError(f"command not found: {name}")
+
+
+def safe_reel_url(url: str) -> str:
+    """The PC's own last check on a reel URL (the server canonicalizes at
+    enqueue AND re-derives at claim time). Holds even if the server is wrong or
+    hostile, which is the point of having it here."""
+    value = str(url or "").strip()
+    if not INSTAGRAM_URL_RE.match(value):
+        raise RuntimeError(f"refusing a non-canonical reel url: {value[:120]!r}")
+    return value
+
+
 def run_command(template: str, timeout: int | None = None, **paths: str) -> None:
-    command = template.format(**paths)
-    log(f"  $ {command}")
+    # No shell, ever: a templated value is substituted into one already-split
+    # argv token, so a payload cannot add `&`, `|`, `;` or a second command
+    # (audit 2026-10-26, C1).
+    argv = build_argv(template, **paths)
+    argv[0] = resolve_executable(argv[0])
+    log(f"  $ {argv}")
     # A timeout keeps a stuck child (a hung download/transcode) from blocking
     # the single-worker queue forever; the killed child surfaces as a
     # retryable failure. subprocess.run terminates the child on timeout.
-    subprocess.run(command, shell=True, check=True, timeout=timeout)
+    subprocess.run(argv, shell=False, check=True, timeout=timeout)
 
 
 def wav_duration_seconds(path: Path) -> int:
@@ -324,7 +416,7 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     if not WHISPER_CMD:
         raise RuntimeError("WHISPER_CMD is not configured on this worker")
     reel = claim["reel"]
-    url = reel["url"]
+    url = safe_reel_url(reel.get("url", ""))
     outdir = workdir / "out"
     outdir.mkdir()
     log(f"  downloading reel {reel.get('shortcode', '')}…")
