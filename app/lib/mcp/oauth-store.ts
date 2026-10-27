@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
-import { hashCode, newJti } from "./oauth";
+import { hashCode, newJti, parseClientId } from "./oauth";
 
 // The stateful half of the MCP authorization server (migration 0059).
 //
@@ -276,10 +276,30 @@ export async function legacyRefreshAllowed(
 
 export type ConnectedApp = {
   id: string;
+  // The host the authorization code was delivered to. This is the identity
+  // the list leads with: it had to clear the registration host allow-list,
+  // unlike clientName, which a registration simply asserts.
+  host: string;
   clientName: string | null;
   createdAt: string;
   lastUsedAt: string | null;
 };
+
+const UNKNOWN_HOST = "unknown host";
+
+// client_id is a signed token carrying the client's registered redirect_uris.
+// It can be past its own 1-year exp by the time this list renders, so a grant
+// whose client_id no longer verifies still has to show something.
+function grantHost(clientId: unknown): string {
+  if (typeof clientId !== "string") return UNKNOWN_HOST;
+  const uri = parseClientId(clientId)?.redirectUris[0];
+  if (!uri) return UNKNOWN_HOST;
+  try {
+    return new URL(uri).host;
+  } catch {
+    return UNKNOWN_HOST;
+  }
+}
 
 // Read for /settings. Every failure — including the pre-0059 missing table —
 // reports an empty list rather than breaking the page; this is a display read,
@@ -289,7 +309,7 @@ export async function listConnectedApps(userId: string): Promise<ConnectedApp[]>
     const supabase = createServiceClient();
     const { data, error } = await supabase
       .from("oauth_grants")
-      .select("id, client_name, created_at, last_used_at")
+      .select("id, client_id, client_name, created_at, last_used_at")
       .eq("user_id", userId)
       .is("revoked_at", null)
       .order("created_at", { ascending: false });
@@ -299,6 +319,7 @@ export async function listConnectedApps(userId: string): Promise<ConnectedApp[]>
       const r = row as Record<string, unknown>;
       return {
         id: String(r.id),
+        host: grantHost(r.client_id),
         clientName: typeof r.client_name === "string" ? r.client_name : null,
         createdAt: String(r.created_at),
         lastUsedAt: typeof r.last_used_at === "string" ? r.last_used_at : null,

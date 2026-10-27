@@ -21,6 +21,7 @@ import {
 import type { KeyProvider } from "@/app/lib/connections/types";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { getVaultSettings } from "@/app/lib/brain/vault";
+import { ConnectedApps } from "./connected-apps";
 import { McpConnectionCard } from "./mcp-connection-card";
 import { AgentModelsForm } from "./agent-models-form";
 import { PreferencesForm } from "./preferences-form";
@@ -218,6 +219,11 @@ export default async function SettingsPage() {
                 : "the always-on pc pulls jobs from a queue — no key is stored here. setup: worker/README.md."
           }
         />
+      </section>
+
+      <section className="space-y-3">
+        <SectionRuler label="connected apps" />
+        <ConnectedApps userId={user.id} />
       </section>
 
       <section className="space-y-4">

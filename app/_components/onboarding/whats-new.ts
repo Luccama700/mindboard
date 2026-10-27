@@ -14,6 +14,17 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-10-27-connected-apps",
+    date: "2026-10-27",
+    title: "every app you've connected, and the off switch",
+    items: [
+      "settings now lists every app holding a live connection to your mindboard — the site it talks to, what it calls itself, when you connected it and when it was last active. revoke one, or all of them, from there.",
+      "revoking cuts off new access straight away; anything already in flight stops working within the hour.",
+      "connecting an app is tighter too: the sign-in code now works exactly once instead of for a whole minute, and each connection quietly rotates its own key every time it refreshes — so a key that leaks can't be used twice without locking the whole connection out.",
+      "one-time cost: the apps you've already connected will ask you to sign in again, once.",
+    ],
+  },
+  {
     id: "2026-10-25-graph-lenses",
     date: "2026-10-25",
     title: "the graph, one lens at a time",
