@@ -60,6 +60,9 @@ export const EXCLUDED_TABLES: Record<string, string> = {
     "holds only your google access/refresh tokens — credentials, not your data",
   urc_devices: "remote-control device registry; service-role only, holds a token hash",
   urc_jobs: "remote-control sessions; service-role only, holds private session urls",
+  oauth_grants:
+    "connected-app sessions; service-role only, holds refresh-token ids (listed on /settings instead)",
+  oauth_used_codes: "spent one-time sign-in codes; service-role only, no user column",
 };
 
 // Column-name rules, not a hand-kept column list: a new encrypted column lands

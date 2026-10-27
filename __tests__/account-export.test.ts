@@ -35,8 +35,8 @@ function declaredTables(): Map<string, string[]> {
 describe("EXPORT_TABLES", () => {
   const declared = declaredTables();
 
-  test("the migrations parse into the 44 known tables", () => {
-    expect(declared.size).toBe(44);
+  test("the migrations parse into the 46 known tables", () => {
+    expect(declared.size).toBe(46);
   });
 
   test("every declared table is exported or explicitly excluded", () => {

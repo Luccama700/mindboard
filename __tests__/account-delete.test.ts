@@ -160,7 +160,7 @@ describe("storage bucket coverage", () => {
       if (!name.endsWith(".sql")) continue;
       const sql = readFileSync(join(MIGRATIONS, name), "utf8");
       for (const match of sql.matchAll(
-        /insert\s+into\s+storage\.buckets[^;]*?values\s*\(\s*'([a-z0-9-]+)'/gis,
+        /insert\s+into\s+storage\.buckets[^;]*?values\s*\(\s*'([a-z0-9-]+)'/gi,
       )) {
         buckets.add(match[1]);
       }
