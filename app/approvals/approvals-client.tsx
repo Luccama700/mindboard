@@ -42,9 +42,12 @@ function alreadyResolved(error: string): boolean {
 }
 
 export function ApprovalsClient({ items }: { items: PendingProposal[] }) {
-  // Seeded once on purpose. Each action revalidates the layout, so the server
-  // list would drop a row the moment it resolved and the user would never see
-  // what happened to it; holding the terminal state here keeps the receipt.
+  // The list is seeded once and never re-synced, deliberately: confirmProposal
+  // and cancelProposal both revalidatePath("/", "layout"), which refreshes this
+  // route's payload, so rendering the prop would drop each row the instant it
+  // resolved and the user would never see what became of it. Holding both the
+  // list and the per-row state here is what keeps the receipt on screen.
+  const [rows] = useState(items);
   const [states, setStates] = useState<Record<string, RowState>>({});
 
   function stateOf(id: string): RowState {
@@ -85,7 +88,7 @@ export function ApprovalsClient({ items }: { items: PendingProposal[] }) {
     );
   }
 
-  if (items.length === 0) {
+  if (rows.length === 0) {
     return (
       <p className="text-body text-muted pt-10 text-center">
         nothing waiting. anything i propose from a chat, the watch or{" "}
@@ -96,7 +99,7 @@ export function ApprovalsClient({ items }: { items: PendingProposal[] }) {
 
   return (
     <ul className="space-y-2">
-      {items.map((item) => {
+      {rows.map((item) => {
         const state = stateOf(item.id);
         const busy = state.kind === "working";
         const open = state.kind === "pending" || state.kind === "working" || state.kind === "failed";
