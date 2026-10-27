@@ -766,7 +766,10 @@ export const FORGERIES = [
     // while the victim names B's course and must die before that. No episode is
     // ever generated, so neither call spends money.
     outcome: { reaches: /has no converted sources yet/i },
-    victimError: /course/i,
+    // Pinned to resolveCourse's no-match sentence, not a loose /course/: the
+    // scratch course is named "<marker>-ctl-course", so a loose pattern would
+    // also match the CONTROL's message and stop distinguishing the two.
+    victimError: /no course matches/i,
     what: "generate an episode from B's course",
     victim: (ctx) => ({
       course: ctx.b.courseId,
@@ -877,7 +880,11 @@ export const FORGERIES = [
     // regression this pair exists to catch. The device rows exist on both sides
     // so the inputs are shape-identical and neither refusal can be a
     // "device not found" in disguise.
-    outcome: { gate: /not available|URC/i },
+    // URC_NOT_AVAILABLE, verbatim (app/lib/urc/preview.ts). Pinned to the
+    // sentence rather than /URC/, which would match any URC error at all —
+    // including "Your PC is offline", which would mean the owner gate did NOT
+    // fire first.
+    outcome: { gate: /URC isn't available for this account/i },
     what: "start a Claude Code session on B's PC",
     victim: (ctx) => ({
       folder: ctx.b.urcFolderKey,
@@ -933,6 +940,80 @@ function textOf(result) {
     .join(" ");
 }
 
+// The verdicts are PURE and exported so they can be unit-tested without a
+// server. They were not, once, and the bug that cost was exactly the kind a
+// structural test cannot see: the noForeignRef pair's "victim" is the caller's
+// own legitimate write, so it SUCCEEDS — and a runner that asserts
+// `isError === true` for every victim reports two false failures in the one
+// section whose job is to prove executor scoping. Shape tests never run a
+// confirm, so only a test of this function catches it.
+
+export function controlVerdict(forgery, { isError, text, verifiedOk }) {
+  const outcome = forgery.outcome ?? "applies";
+  if (typeof outcome === "object" && outcome.gate) {
+    return {
+      ok: isError === true && outcome.gate.test(text) && verifiedOk,
+      label: `CONTROL ${forgery.tool}: refused by the caller's own gate, not by anything in the stored input`,
+    };
+  }
+  if (typeof outcome === "object" && outcome.reaches) {
+    return {
+      ok: isError === true && outcome.reaches.test(text) && verifiedOk,
+      label: `CONTROL ${forgery.tool}: the forged shape resolves A's own row and fails only after it`,
+    };
+  }
+  return {
+    ok: isError !== true && verifiedOk,
+    label: `CONTROL ${forgery.tool}: the forged shape reaches the executor and applies to A's own row`,
+  };
+}
+
+// What the victim half must look like. For every entry that carries a foreign
+// id this is "refused". For the two that carry none it is the opposite: the
+// write must LAND, on the caller's own row — the isolation claim then lives
+// entirely in verifyVictim (the other tenant's row never moved).
+export function victimVerdict(forgery, { isError, text }) {
+  const outcome = forgery.outcome ?? "applies";
+  const extra = [];
+
+  if (forgery.noForeignRef) {
+    return {
+      ok: isError !== true,
+      label: `${forgery.tool} lands on the caller's own row (there is no foreign id to aim at)`,
+      extra,
+    };
+  }
+
+  if (typeof outcome === "object" && outcome.gate) {
+    extra.push({
+      label: `${forgery.tool}'s refusal comes from the caller gate, whatever the stored input says`,
+      ok: outcome.gate.test(text),
+    });
+  }
+  if (typeof outcome === "object" && outcome.reaches) {
+    // The whole point of `reaches`: the victim must die EARLIER than the
+    // control did. Seeing the control's message here would mean the victim's
+    // row resolved — a breach wearing a refusal's clothes for some later,
+    // unrelated reason.
+    extra.push({
+      label: `${forgery.tool} refuses B BEFORE the step the control reached`,
+      ok: !outcome.reaches.test(text),
+    });
+  }
+  if (forgery.victimError) {
+    extra.push({
+      label: `${forgery.tool}'s refusal is an ownership refusal, not an unrelated one`,
+      ok: forgery.victimError.test(text),
+    });
+  }
+
+  return {
+    ok: isError === true,
+    label: `${forgery.tool} executor refuses to ${forgery.what}`,
+    extra,
+  };
+}
+
 export async function runForgedProposalProbe({ mcpA, ctx, reporter, scratch }) {
   reporter.section("forged proposals: the executors, driven across the boundary");
   reporter.info(
@@ -947,11 +1028,15 @@ export async function runForgedProposalProbe({ mcpA, ctx, reporter, scratch }) {
   reporter.info("aimed at B, which must be refused.");
   reporter.info("");
   reporter.info(
-    "Three executors cannot succeed for a throwaway tenant, so their controls assert a",
+    "Four executors cannot succeed for a throwaway tenant, so their controls assert a",
   );
   reporter.info(
-    "weaker-but-real property instead — see the outcome vocabulary at the top of this file.",
+    "weaker-but-real property instead, and two take no foreign id at all (their victim half",
   );
+  reporter.info(
+    "APPLIES, and the claim lives in the untouched-row check) — see the outcome vocabulary",
+  );
+  reporter.info("at the top of this file.");
 
   let controlsReached = 0;
 
@@ -965,10 +1050,6 @@ export async function runForgedProposalProbe({ mcpA, ctx, reporter, scratch }) {
   };
 
   for (const forgery of FORGERIES) {
-    const outcome = forgery.outcome ?? "applies";
-    const gate = typeof outcome === "object" && outcome.gate ? outcome.gate : null;
-    const reaches = typeof outcome === "object" && outcome.reaches ? outcome.reaches : null;
-
     // 1. Control — the same shape, aimed at A's own row.
     const control = await confirmForged(
       ctx.a.userId,
@@ -977,31 +1058,18 @@ export async function runForgedProposalProbe({ mcpA, ctx, reporter, scratch }) {
       "control",
     );
     const controlVerified = await forgery.verifyControl(ctx.admin, scratch, ctx);
-
-    let controlOk;
-    let controlLabel;
-    if (gate) {
-      // Nothing applies; the claim is that the gate refused the CALLER, by its
-      // own message, before any row was resolved.
-      controlOk = control.result.isError === true && gate.test(control.text);
-      controlLabel = `CONTROL ${forgery.tool}: refused by the caller's own gate, not by anything in the stored input`;
-    } else if (reaches) {
-      // The control must fail, but with the message that only exists past the
-      // resolution step. Anything else means the shape never got that far.
-      controlOk =
-        control.result.isError === true && reaches.test(control.text) && controlVerified.ok;
-      controlLabel = `CONTROL ${forgery.tool}: the forged shape resolves A's own row and fails only after it`;
-    } else {
-      controlOk = control.result.isError !== true && controlVerified.ok;
-      controlLabel = `CONTROL ${forgery.tool}: the forged shape reaches the executor and applies to A's own row`;
-    }
+    const controlJudged = controlVerdict(forgery, {
+      isError: control.result.isError,
+      text: control.text,
+      verifiedOk: controlVerified.ok,
+    });
 
     reporter.check(
-      controlLabel,
-      controlOk,
+      controlJudged.label,
+      controlJudged.ok,
       `isError=${control.result.isError} ${controlVerified.detail} ${control.text.slice(0, 120)}`,
     );
-    if (controlOk) controlsReached += 1;
+    if (controlJudged.ok) controlsReached += 1;
     else {
       reporter.fail(
         `${forgery.tool}: the refusal below proves nothing — the forged shape never reached the executor`,
@@ -1009,43 +1077,22 @@ export async function runForgedProposalProbe({ mcpA, ctx, reporter, scratch }) {
       );
     }
 
-    // 2. Victim — the same shape, aimed at B. Must be refused, B untouched.
+    // 2. Victim — the same shape, aimed at B. Refused for every entry that
+    // carries a foreign id; APPLIED for the two that carry none, where the
+    // isolation claim lives in verifyVictim instead.
     const victim = await confirmForged(
       ctx.a.userId,
       forgery.tool,
       forgery.victim(ctx),
       "victim",
     );
-    reporter.check(
-      `${forgery.tool} executor refuses to ${forgery.what}`,
-      victim.result.isError === true,
-      victim.text.slice(0, 160),
-    );
-
-    if (gate) {
-      reporter.check(
-        `${forgery.tool}'s refusal comes from the caller gate, whatever the stored input says`,
-        gate.test(victim.text),
-        victim.text.slice(0, 160),
-      );
-    }
-    if (reaches) {
-      // The whole point of `reaches`: the victim must die EARLIER than the
-      // control did. Seeing the control's message here would mean the victim's
-      // row resolved — a breach wearing a refusal's clothes for some later,
-      // unrelated reason.
-      reporter.check(
-        `${forgery.tool} refuses B BEFORE the step the control reached`,
-        !reaches.test(victim.text),
-        victim.text.slice(0, 160),
-      );
-    }
-    if (forgery.victimError) {
-      reporter.check(
-        `${forgery.tool}'s refusal is an ownership refusal, not an unrelated one`,
-        forgery.victimError.test(victim.text),
-        victim.text.slice(0, 160),
-      );
+    const victimJudged = victimVerdict(forgery, {
+      isError: victim.result.isError,
+      text: victim.text,
+    });
+    reporter.check(victimJudged.label, victimJudged.ok, victim.text.slice(0, 160));
+    for (const extra of victimJudged.extra) {
+      reporter.check(extra.label, extra.ok, victim.text.slice(0, 160));
     }
 
     const victimVerified = await forgery.verifyVictim(ctx.admin, ctx);

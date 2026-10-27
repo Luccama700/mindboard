@@ -6,6 +6,8 @@
 // PATs, service-role keys and Authorization headers are never printed.
 
 import { readFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 export function loadEnv(envUrl) {
   const env = {};
@@ -23,8 +25,12 @@ export function loadEnv(envUrl) {
 // to production. MINDBOARD_PROBE_ENV may name a file to load instead, so a
 // local-stack config can live in one place without exporting four variables.
 export function probeEnv(overrides = process.env) {
+  // pathToFileURL, not string concatenation: under Git Bash on Windows $PWD is
+  // `/c/Users/…`, and `file:///${that}` yields `file:////c/Users/…`, which does
+  // not resolve. Relative paths are resolved against the cwd first so
+  // MINDBOARD_PROBE_ENV=.env.local.probe works too.
   const fromFile = overrides.MINDBOARD_PROBE_ENV
-    ? loadEnv(new URL(`file:///${String(overrides.MINDBOARD_PROBE_ENV).replace(/\\/g, "/")}`))
+    ? loadEnv(pathToFileURL(path.resolve(String(overrides.MINDBOARD_PROBE_ENV))))
     : {};
   // Explicit process env wins over the file, so a one-off override needs no edit.
   const merged = { ...fromFile };

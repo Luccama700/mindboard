@@ -19,7 +19,11 @@ import {
   DECLARED_SKIPS,
   TOOL_MATRIX,
 } from "../test/isolation/tool-matrix.mjs";
-import { FORGERIES } from "../test/isolation/forged-proposal.mjs";
+import {
+  controlVerdict,
+  FORGERIES,
+  victimVerdict,
+} from "../test/isolation/forged-proposal.mjs";
 import { validateResolvedFinanceOps } from "@/app/lib/mcp/finance-ops";
 import { validateResolvedOps } from "@/app/lib/mcp/inventory-ops";
 
@@ -514,6 +518,88 @@ describe("forged-proposal table", () => {
     const stock = FORGERIES.find((f) => f.tool === "update_stock");
     expect(validateResolvedFinanceOps(finance!.victim(ctx)).ok).toBe(true);
     expect(validateResolvedOps(stock!.victim(ctx)).ok).toBe(true);
+  });
+
+  // The verdict functions decide, for each outcome shape, what "pass" means.
+  // They are tested because the shape tests above never run a confirm, so a
+  // runner that got this wrong would look perfectly healthy right up to
+  // someone's first real run.
+  describe("verdicts", () => {
+    const applies = { tool: "complete_task", what: "x" };
+    const reaches = { tool: "generate_audio_overview", what: "x", outcome: { reaches: /no converted/i } };
+    const gate = { tool: "spawn_urc", what: "x", outcome: { gate: /URC isn't available/i } };
+    const noRef = { tool: "log_daily", what: "x", outcome: "applies", noForeignRef: true };
+
+    it("requires an 'applies' control to succeed AND to have mutated the row", () => {
+      expect(controlVerdict(applies, { isError: false, text: "", verifiedOk: true }).ok).toBe(true);
+      // Succeeded but nothing changed: the executor was reached and did
+      // nothing, which proves nothing.
+      expect(controlVerdict(applies, { isError: false, text: "", verifiedOk: false }).ok).toBe(false);
+      expect(controlVerdict(applies, { isError: true, text: "", verifiedOk: true }).ok).toBe(false);
+    });
+
+    it("requires a 'reaches' control to fail with the post-resolution message", () => {
+      expect(
+        controlVerdict(reaches, { isError: true, text: "it has no converted sources yet", verifiedOk: true }).ok,
+      ).toBe(true);
+      // Failed earlier — e.g. the shape drifted and was rejected as malformed.
+      expect(controlVerdict(reaches, { isError: true, text: "malformed operation", verifiedOk: true }).ok).toBe(
+        false,
+      );
+      expect(controlVerdict(reaches, { isError: false, text: "", verifiedOk: true }).ok).toBe(false);
+    });
+
+    it("folds the control's own verification into a 'gate' verdict too", () => {
+      // The regression the advisor caught: without this, spawn_urc's "the
+      // attacker holds 0 urc jobs" check was computed and thrown away.
+      expect(
+        controlVerdict(gate, { isError: true, text: "URC isn't available for this account", verifiedOk: true })
+          .ok,
+      ).toBe(true);
+      expect(
+        controlVerdict(gate, { isError: true, text: "URC isn't available for this account", verifiedOk: false })
+          .ok,
+      ).toBe(false);
+      // Refused, but by something other than the gate — so the gate did not
+      // fire first, which is the whole claim.
+      expect(controlVerdict(gate, { isError: true, text: "Your PC is offline", verifiedOk: true }).ok).toBe(
+        false,
+      );
+    });
+
+    it("expects a noForeignRef victim to APPLY, not to be refused", () => {
+      // executeLogDaily / executeUpdateSettings upsert on user_id: ownerId, so
+      // the "victim" input is the caller's own legitimate write and it
+      // succeeds. Asserting isError === true here reported two false failures
+      // in the section whose job is to prove executor scoping.
+      expect(victimVerdict(noRef, { isError: false, text: "" }).ok).toBe(true);
+      expect(victimVerdict(noRef, { isError: true, text: "" }).ok).toBe(false);
+      expect(victimVerdict(noRef, { isError: false, text: "" }).extra).toEqual([]);
+    });
+
+    it("expects every other victim to be refused, with its extra message checks", () => {
+      expect(victimVerdict(applies, { isError: true, text: "" }).ok).toBe(true);
+      expect(victimVerdict(applies, { isError: false, text: "" }).ok).toBe(false);
+
+      // A victim that reaches the control's message resolved B's row.
+      const leaked = victimVerdict(reaches, { isError: true, text: "it has no converted sources yet" });
+      expect(leaked.ok).toBe(true);
+      expect(leaked.extra.find((e: { label: string }) => e.label.includes("BEFORE"))?.ok).toBe(false);
+
+      const stoppedEarly = victimVerdict(reaches, { isError: true, text: 'no course matches "x"' });
+      expect(stoppedEarly.extra.every((e: { ok: boolean }) => e.ok)).toBe(true);
+    });
+
+    it("gives every FORGERIES entry a verdict pair that can be computed", () => {
+      for (const entry of FORGERIES) {
+        expect(typeof controlVerdict(entry, { isError: true, text: "", verifiedOk: true }).ok).toBe(
+          "boolean",
+        );
+        const v = victimVerdict(entry, { isError: true, text: "" });
+        expect(typeof v.ok).toBe("boolean");
+        expect(Array.isArray(v.extra)).toBe(true);
+      }
+    });
   });
 
   it("keeps victim and control structurally identical", () => {
