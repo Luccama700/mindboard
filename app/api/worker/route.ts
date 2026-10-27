@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
+import { ownerUserId, todayKey, workerAllowedUserIds } from "@/app/lib/mcp/config";
 import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
 import {
   createVaultBase64FileWithRetry,
@@ -24,7 +24,15 @@ import {
   vancouverStamp,
 } from "@/app/lib/mcp/course-ops";
 import { scriptToVibeVoiceText } from "@/app/lib/learn/podcast-script";
-import { canonicalReelRef, storagePathBelongsTo } from "@/app/lib/worker/claims";
+import {
+  canonicalReelRef,
+  followupContext,
+  parseFollowupResult,
+  storagePathBelongsTo,
+  type FollowupTaskRow,
+} from "@/app/lib/worker/claims";
+import { appendSection } from "@/app/lib/notes";
+import { idempotentProposalId } from "@/app/lib/watch/protocol";
 import {
   SOURCE_COLUMNS,
   type CourseSource,
@@ -70,6 +78,14 @@ function bad(message: string, status = 400) {
 // of letting it sit at the queue head (it is the oldest queued row) for three
 // more polls.
 class ClaimRejected extends Error {}
+
+// PostgREST returns an embedded one-to-one either as an object or as a
+// one-element array depending on how it infers the relationship.
+type GroupRel = { name: string } | { name: string }[] | null;
+function groupName(rel: GroupRel): string | null {
+  const row = Array.isArray(rel) ? (rel[0] ?? null) : rel;
+  return row?.name ?? null;
+}
 
 async function markSeen(info: Record<string, unknown> = {}) {
   const supabase = createServiceClient();
@@ -151,9 +167,28 @@ async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
   const supabase = createServiceClient();
 
   if (job.kind === "followup") {
-    // Claude Code on the PC does the work through the MCP server; the claim
-    // only carries the task context and the dictated instruction.
-    return { job: { id: job.id, kind: job.kind }, followup: job.payload };
+    // The PC's run is research-only (web tools, no MCP, no credential), and
+    // the write happens here on completion — so the claim carries nothing from
+    // jobs.payload except the task id it is looked up by, and nothing the run
+    // could write through. The owner gate is because the completion writes the
+    // owner's Mindboard; a non-owner's follow-up has nowhere legitimate to go.
+    if (job.user_id !== ownerUserId()) {
+      throw new ClaimRejected("follow-ups only run for the deployment owner");
+    }
+    const taskId = String(job.payload.task_id ?? "");
+    if (!taskId) throw new ClaimRejected("follow-up job carries no task id");
+    const { data } = await supabase
+      .from("tasks")
+      .select("title, notes, priority, due_date, due_time, groups(name)")
+      .eq("id", taskId)
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    if (!data) throw new ClaimRejected("the follow-up's task no longer exists");
+    const task = data as unknown as FollowupTaskRow & { groups: GroupRel };
+    return {
+      job: { id: job.id, kind: job.kind },
+      followup: followupContext(task, groupName(task.groups), job.payload),
+    };
   }
 
   if (job.kind === "reel") {
@@ -242,15 +277,80 @@ async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
   };
 }
 
-// The follow-up's writes already landed through MCP (create_task /
-// update_task → confirm_action, audited); the job row just keeps the receipt.
-function completeFollowup(body: Record<string, unknown>): Record<string, unknown> {
-  const ids = Array.isArray(body.created_task_ids)
-    ? body.created_task_ids.filter((id): id is string => typeof id === "string")
-    : [];
+// The follow-up's write happens HERE, not on the PC: the run has no Mindboard
+// credential and no MCP server, so it reports a validated result and the
+// server creates exactly one task from it (audit 2026-10-26, C1 fix step 4).
+async function completeFollowup(
+  job: JobRow,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const supabase = createServiceClient();
+  const parsed = parseFollowupResult(body.followup_result);
+  if (!parsed.ok) throw new Error(parsed.error);
+  const result = parsed.value;
+
+  const taskId = String(job.payload.task_id ?? "");
+  const { data: originalRow } = await supabase
+    .from("tasks")
+    .select("id, title, notes, priority, due_date, due_time, group_id")
+    .eq("id", taskId)
+    .eq("user_id", job.user_id)
+    .maybeSingle();
+  if (!originalRow) throw new Error("the follow-up's original task is gone");
+  const original = originalRow as {
+    id: string;
+    notes: string | null;
+    priority: string;
+    due_date: string | null;
+    due_time: string | null;
+    group_id: string | null;
+  };
+
+  // "Exactly one follow-up task" as a database fact, not a prompt rule: the id
+  // is derived from the job id, so a complete that blows up after the insert
+  // (and is therefore requeued and re-run) collides instead of creating a
+  // second task. On collision keep what already landed.
+  const followupId = idempotentProposalId(job.user_id, "followup-task", job.id);
+  const { error: insertError } = await supabase.from("tasks").insert({
+    id: followupId,
+    user_id: job.user_id,
+    group_id: original.group_id,
+    title: result.title,
+    notes: result.notes || null,
+    due_date: original.due_date,
+    due_time: original.due_date ? original.due_time : null,
+    priority: original.priority,
+  });
+  if (insertError && insertError.code !== "23505") {
+    throw new Error(insertError.message);
+  }
+
+  let updatedOriginal = false;
+  const update = result.original_update;
+  if (update) {
+    const patch: Record<string, unknown> = {
+      ...(update.title ? { title: update.title } : {}),
+      ...(update.due_date ? { due_date: update.due_date } : {}),
+      ...(update.priority ? { priority: update.priority } : {}),
+    };
+    if (update.notes_append) {
+      const today = await todayKey(supabase, job.user_id);
+      patch.notes = appendSection(original.notes, `Follow-up — ${today}`, update.notes_append);
+    }
+    const { error } = await supabase
+      .from("tasks")
+      .update(patch)
+      .eq("id", original.id)
+      .eq("user_id", job.user_id);
+    if (error) throw new Error(error.message);
+    updatedOriginal = true;
+  }
+
+  // Shape unchanged for whatever reads jobs.result (the watch's follow-up
+  // receipt); only its provenance moved from the PC to here.
   return {
-    created_task_ids: ids,
-    updated_original: body.updated_original === true,
+    created_task_ids: [followupId],
+    updated_original: updatedOriginal,
     summary: typeof body.summary === "string" ? body.summary.slice(0, 500) : "",
     cost_usd: typeof body.cost_usd === "number" ? body.cost_usd : null,
   };
@@ -508,7 +608,7 @@ export async function POST(request: Request) {
           : job.kind === "reel"
             ? await completeReel(job, body)
             : job.kind === "followup"
-              ? completeFollowup(body)
+              ? await completeFollowup(job, body)
               : await completeTts(job, body);
 
       await supabase

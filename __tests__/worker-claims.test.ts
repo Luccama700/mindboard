@@ -4,7 +4,15 @@
 // storage path gets signed with the service role.
 import { describe, expect, test } from "vitest";
 
-import { canonicalReelRef, storagePathBelongsTo } from "@/app/lib/worker/claims";
+import {
+  canonicalReelRef,
+  followupContext,
+  FOLLOWUP_INSTRUCTION_MAX,
+  FOLLOWUP_NOTES_MAX,
+  FOLLOWUP_TITLE_MAX,
+  parseFollowupResult,
+  storagePathBelongsTo,
+} from "@/app/lib/worker/claims";
 
 describe("canonicalReelRef", () => {
   test("accepts the canonical form the enqueue paths write", () => {
@@ -67,5 +75,148 @@ describe("storagePathBelongsTo", () => {
   test("rejects a missing or non-string path", () => {
     expect(storagePathBelongsTo(user, source, null)).toBe(false);
     expect(storagePathBelongsTo(user, source, 7)).toBe(false);
+  });
+});
+
+describe("followupContext", () => {
+  const task = {
+    title: "book the dentist",
+    notes: "called once, no answer",
+    priority: "high",
+    due_date: "2026-11-04",
+    due_time: "09:30:00",
+  };
+
+  test("carries only server-read fields plus the instruction", () => {
+    const context = followupContext(task, "health", {
+      task_id: "t1",
+      instruction: "find a clinic open saturdays",
+      source: "apple watch",
+      // Everything below is the forged half of a client-written payload.
+      group_id: "forged-group",
+      title: "forged title",
+      notes: "forged notes",
+      priority: "forged",
+    });
+    expect(context).toEqual({
+      title: "book the dentist",
+      notes: "called once, no answer",
+      group_name: "health",
+      due_date: "2026-11-04",
+      due_time: "09:30:00",
+      priority: "high",
+      instruction: "find a clinic open saturdays",
+      source: "apple watch",
+    });
+    expect(Object.keys(context)).not.toContain("group_id");
+    expect(Object.keys(context)).not.toContain("task_id");
+  });
+
+  test("falls back when the payload's source is not one of the two known ones", () => {
+    expect(followupContext(task, null, { source: "https://evil.test" }).source).toBe(
+      "mindboard app",
+    );
+  });
+
+  test("falls back when the stored priority is not a known one", () => {
+    expect(followupContext({ ...task, priority: null }, null, {}).priority).toBe("med");
+  });
+
+  test("caps the instruction and the notes it ships to the pc", () => {
+    const context = followupContext({ ...task, notes: "n".repeat(50_000) }, null, {
+      instruction: "i".repeat(50_000),
+    });
+    expect(context.instruction.length).toBeLessThanOrEqual(FOLLOWUP_INSTRUCTION_MAX);
+    expect(context.notes.length).toBeLessThanOrEqual(FOLLOWUP_NOTES_MAX);
+  });
+
+  test("a non-string instruction becomes empty, never 'undefined'", () => {
+    expect(followupContext(task, null, { instruction: { toString: "x" } }).instruction).toBe("");
+  });
+});
+
+describe("parseFollowupResult", () => {
+  test("accepts the minimal shape the agent is told to print", () => {
+    const parsed = parseFollowupResult({
+      title: "call Dr Chen's office",
+      notes: "- open sat 9-1\n- https://example.test",
+      original_update: null,
+    });
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok === true && parsed.value).toEqual({
+      title: "call Dr Chen's office",
+      notes: "- open sat 9-1\n- https://example.test",
+      original_update: null,
+    });
+  });
+
+  test("a missing original_update is the same as null", () => {
+    const parsed = parseFollowupResult({ title: "x" });
+    expect(parsed.ok === true && parsed.value).toEqual({
+      title: "x",
+      notes: "",
+      original_update: null,
+    });
+  });
+
+  test("keeps only the update fields that were actually sent", () => {
+    const parsed = parseFollowupResult({
+      title: "x",
+      original_update: { due_date: "2026-12-01", priority: "low" },
+    });
+    expect(parsed.ok === true && parsed.value.original_update).toEqual({
+      due_date: "2026-12-01",
+      priority: "low",
+    });
+  });
+
+  test("an update with nothing usable in it collapses to null", () => {
+    const parsed = parseFollowupResult({
+      title: "x",
+      original_update: { title: "   ", notes_append: "" },
+    });
+    expect(parsed.ok === true && parsed.value.original_update).toBeNull();
+  });
+
+  test.each([
+    ["a non-object", "FOLLOWUP_RESULT: ok"],
+    ["an array", [{ title: "x" }]],
+    ["null", null],
+    ["a missing title", { notes: "found it" }],
+    ["a blank title", { title: "   " }],
+    ["a non-string title", { title: 7 }],
+    ["non-string notes", { title: "x", notes: ["a"] }],
+    ["an array original_update", { title: "x", original_update: ["title"] }],
+    ["a non-object original_update", { title: "x", original_update: "yes" }],
+    ["a bad priority", { title: "x", original_update: { priority: "urgent" } }],
+    ["a non-ISO due_date", { title: "x", original_update: { due_date: "Dec 1 2026" } }],
+    ["an impossible due_date", { title: "x", original_update: { due_date: "2026-02-31" } }],
+    ["a non-string update title", { title: "x", original_update: { title: 7 } }],
+  ])("rejects %s", (_label, value) => {
+    expect(parseFollowupResult(value).ok).toBe(false);
+  });
+
+  test("accepts a leap day and rejects the one that isn't", () => {
+    expect(
+      parseFollowupResult({ title: "x", original_update: { due_date: "2028-02-29" } }).ok,
+    ).toBe(true);
+    expect(
+      parseFollowupResult({ title: "x", original_update: { due_date: "2027-02-29" } }).ok,
+    ).toBe(false);
+  });
+
+  test("truncates runaway free text instead of failing a run that already cost money", () => {
+    const parsed = parseFollowupResult({
+      title: "t".repeat(5_000),
+      notes: "n".repeat(100_000),
+      original_update: { notes_append: "a".repeat(100_000) },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.title.length).toBeLessThanOrEqual(FOLLOWUP_TITLE_MAX);
+    expect(parsed.value.notes.length).toBeLessThanOrEqual(FOLLOWUP_NOTES_MAX);
+    expect(parsed.value.original_update?.notes_append?.length).toBeLessThanOrEqual(
+      FOLLOWUP_NOTES_MAX,
+    );
   });
 });

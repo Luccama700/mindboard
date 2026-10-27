@@ -20,14 +20,24 @@ audio output, so no VibeVoice.)
 ## Follow-ups from the Apple Watch
 
 A `followup` job is a dictated instruction about an open task (see the main
-README, "Apple Watch API"). The worker runs the Claude Code CLI on this PC —
-`claude -p` with permissions bypassed, the prompt on stdin, and a temporary
-`--mcp-config` pointing at the deployed Mindboard MCP server on this worker's
-bearer — and Claude creates the follow-up task itself (same group, same due
-date; the original stays open). Requirements: `claude` on PATH (or set
-`CLAUDE_CMD`) and a logged-in Claude Code. Budget/turn caps:
-`FOLLOWUP_BUDGET_USD` (default 5), `FOLLOWUP_MAX_TURNS` (60),
-`FOLLOWUP_TIMEOUT_SECONDS` (1800). Restart the worker after pulling this.
+README, "Apple Watch API"). The worker runs the Claude Code CLI on this PC as
+a **research sandbox**: `claude -p` with the prompt on stdin, `--tools
+WebSearch,WebFetch` (the exclusive availability list), `--strict-mcp-config`
+with no MCP server at all, `--permission-mode dontAsk`, the worker's bearer
+and app URL stripped from the child's environment, and the job's empty temp
+dir as its cwd. Permissions are **not** bypassed and the run holds no
+Mindboard credential — it researches, prints a final `FOLLOWUP_RESULT:` JSON
+line, and **the app** creates the one follow-up task from it (same group, same
+due date; the original stays open). The task's title and notes are fenced in
+the prompt as untrusted data, because web text written there by an earlier
+agent used to reach a bypass-mode run (audit 2026-10-26, C1).
+
+Requirements: `claude` on PATH (or set `CLAUDE_CMD`) and a logged-in Claude
+Code. Budget/turn caps: `FOLLOWUP_BUDGET_USD` (default 5),
+`FOLLOWUP_MAX_TURNS` (60), `FOLLOWUP_TIMEOUT_SECONDS` (1800). A run that
+prints no parseable `FOLLOWUP_RESULT` line fails the job and retries — nothing
+was written, so there is no receipt to keep. Restart the worker after pulling
+this.
 
 ## Option A — one-time setup (Windows 11 → WSL2)
 
