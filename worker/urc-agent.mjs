@@ -50,7 +50,7 @@ import {
   sessionUrlFor,
   spawnAllowed,
   untrackedStopsToAck,
-  URC_SESSION_PREFIX,
+  processQueryFor,
   windowsTerminalArgs,
 } from "./urc-guards.mjs";
 
@@ -262,11 +262,11 @@ function killPid(pid) {
 // failed — callers must then leave their state alone and retry next tick.
 function processTableFor(sessions) {
   if (!sessions || sessions.length === 0) return new Map();
-  const out = powershell(
-    `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${URC_SESSION_PREFIX}*' -and ` +
-      `$_.CommandLine -notlike '*Get-CimInstance*' } | ` +
-      `ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }`,
-  );
+  const query = processQueryFor(sessions);
+  // Nothing safe to search for: report "unknown" rather than an empty table,
+  // so callers keep their state instead of declaring every session dead.
+  if (!query) return null;
+  const out = powershell(query);
   return out === null ? null : parseProcessTable(out);
 }
 

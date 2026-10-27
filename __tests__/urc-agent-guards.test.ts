@@ -23,6 +23,7 @@ import {
   parseFolders,
   parseProcessTable,
   pidBelongsToSession,
+  processQueryFor,
   psQuote,
   readConfig,
   recordSpawn,
@@ -714,5 +715,29 @@ describe("chat-chosen session name on the PC", () => {
     expect(plan.args.slice(0, 4)).toEqual(["--remote-control", "fix-tests-aabbcc", "--name", "fix-tests-aabbcc"]);
     const hostile = decideSpawn({ id: JOB_ID, label: 'x"; calc' }, { bypass: false });
     expect(hostile.sessionName).toBe("urc-aabbccdd");
+  });
+});
+
+
+describe("process query covers named sessions", () => {
+  test("searches each tracked name, not a urc- prefix", () => {
+    const q = processQueryFor([{ sessionName: "fix-tests-aabbcc" }, { sessionName: "urc-aabbccdd" }]);
+    expect(q).toContain("-like '*fix-tests-aabbcc*'");
+    expect(q).toContain("-like '*urc-aabbccdd*'");
+  });
+
+  test("a named session in the table is live (the orphan regression)", () => {
+    const table = parseProcessTable(
+      '4242|"C:\\Users\\U\\.local\\bin\\claude.exe" --remote-control fix-tests-aabbcc --name fix-tests-aabbcc --model claude-opus-5-5',
+    );
+    expect(sessionIsLive(table, { pid: 4242, sessionName: "fix-tests-aabbcc" })).toBe(true);
+  });
+
+  test("names that could break the -like pattern are never embedded", () => {
+    expect(processQueryFor([{ sessionName: "x'*; calc" }])).toBeNull();
+    expect(processQueryFor([])).toBeNull();
+    const q = processQueryFor([{ sessionName: "ok-name-abc123" }, { sessionName: "bad'name" }]);
+    expect(q).toContain("ok-name-abc123");
+    expect(q).not.toContain("bad'name");
   });
 });
