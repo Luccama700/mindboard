@@ -23,6 +23,7 @@ import {
   verifyRefreshToken,
   verifyToken,
 } from "@/app/lib/mcp/oauth";
+import { oauthAllowedRedirectHosts } from "@/app/lib/mcp/config";
 
 // A chainable PostgREST stub. Each test scripts `db.state.respond`, which sees
 // the whole call (table, verb, payload, filters) and returns { data, error }.
@@ -112,6 +113,14 @@ vi.mock("@/utils/supabase/service", () => ({
 // name the origin the request arrived on.
 vi.mock("mcp-handler", () => ({
   getPublicOrigin: (request: Request) => new URL(request.url).origin,
+}));
+
+// A signed-in session, so /authorize renders its consent form instead of
+// bouncing through /login.
+vi.mock("@/utils/supabase/server", () => ({
+  createClient: async () => ({
+    auth: { getUser: async () => ({ data: { user: { id: "owner-1" } } }) },
+  }),
 }));
 
 beforeAll(() => {
@@ -275,10 +284,45 @@ describe("client_id + redirect allow-list", () => {
   });
 });
 
+describe("default registration host allow-list", () => {
+  const ENV = "MCP_OAUTH_ALLOWED_REDIRECT_HOSTS";
+  const saved = process.env[ENV];
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV];
+    else process.env[ENV] = saved;
+  });
+
+  // A bare host matches every subdomain and every path on it, so chatgpt.com
+  // in the default meant any custom GPT could register a redirect target
+  // (audit L2). Putting it back is now a deliberate act by whoever controls
+  // the deployment.
+  test("ships only the hosts this deployment uses", () => {
+    delete process.env[ENV];
+    expect(oauthAllowedRedirectHosts()).toEqual([
+      "claude.ai",
+      "claude.com",
+      "localhost",
+      "127.0.0.1",
+    ]);
+    expect(oauthAllowedRedirectHosts()).not.toContain("chatgpt.com");
+  });
+
+  test("the env var replaces the default outright", () => {
+    process.env[ENV] = " chatgpt.com , example.test ";
+    expect(oauthAllowedRedirectHosts()).toEqual(["chatgpt.com", "example.test"]);
+  });
+
+  test("an empty env var falls back to the default", () => {
+    process.env[ENV] = "  ,  ";
+    expect(oauthAllowedRedirectHosts()).toContain("claude.ai");
+  });
+});
+
 // Registration is unauthenticated, so this host gate is what stops an attacker
 // registering their own redirect target and phishing a code out of a signed-in
 // user.
-describe("registration host allow-list", () => {
+describe("registration host matching", () => {
   const hosts = ["claude.ai", "chatgpt.com", "localhost"];
 
   test("accepts allowed hosts and their subdomains", () => {
@@ -465,6 +509,47 @@ describe("token endpoint — authorization codes are single-use", () => {
           : {};
 
     expect((await postToken(exchangeBody(freshCode()))).status).toBe(200);
+  });
+});
+
+describe("consent page", () => {
+  async function renderConsent(clientName?: string): Promise<string> {
+    const { GET } = await import("@/app/api/mcp/oauth/authorize/route");
+    const url = new URL(`${TOKEN_ORIGIN}/api/mcp/oauth/authorize`);
+    url.searchParams.set("client_id", issueClientId([REDIRECT], clientName));
+    url.searchParams.set("redirect_uri", REDIRECT);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("code_challenge", CHALLENGE);
+    url.searchParams.set("code_challenge_method", "S256");
+    const response = await GET(new Request(url));
+    expect(response.status).toBe(200);
+    return response.text();
+  }
+
+  // client_name is whatever the (unauthenticated) registration typed, so it
+  // must never occupy the spot a user reads as "who is asking".
+  test("leads with the redirect host and demotes client_name to a claim", async () => {
+    const html = await renderConsent("Mindboard Official Sync");
+
+    expect(html).toContain('<span class="who">claude.ai</span>');
+    expect(html).toContain("It calls itself");
+    expect(html.indexOf('class="who"')).toBeLessThan(
+      html.indexOf("Mindboard Official Sync"),
+    );
+    // The browser tab is the one surface a phished user sees first.
+    expect(html).toContain("<title>Authorize claude.ai — Mindboard</title>");
+  });
+
+  test("a client with no name shows the host alone", async () => {
+    const html = await renderConsent();
+    expect(html).toContain('<span class="who">claude.ai</span>');
+    expect(html).not.toContain("It calls itself");
+  });
+
+  test("a client_name cannot inject markup", async () => {
+    const html = await renderConsent('<script>alert(1)</script>');
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;");
   });
 });
 
