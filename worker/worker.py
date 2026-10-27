@@ -5,13 +5,16 @@ Pulls jobs from the Vercel app over HTTPS (no database key on this machine):
 
     claim -> run MinerU (ocr) or VibeVoice (tts) -> complete/fail
 
-Auth is a single bearer token (the app's MCP_BEARER_TOKEN). Audio results are
+Auth is a single bearer token (the app's WORKER_BEARER_TOKEN), which buys
+/api/worker and nothing else — it is NOT an MCP credential. Audio results are
 PUT directly to a Supabase signed upload URL; markdown returns in the
 complete body. See worker/README.md for WSL2 setup.
 
 Env:
   MINDBOARD_URL      e.g. https://mindboard.example.com
-  WORKER_TOKEN       the MCP_BEARER_TOKEN value
+  WORKER_TOKEN       the WORKER_BEARER_TOKEN value from the app's env
+                     (while that var is unset the app still accepts the old
+                     MCP_BEARER_TOKEN — set the new one and switch)
   MINERU_CMD         default: mineru -p {pdf} -o {outdir} -b hybrid
   VIBEVOICE_CMD      e.g. python /opt/VibeVoice/demo/inference_from_file.py \
                        --model_path /models/VibeVoice-Large-Q8 \

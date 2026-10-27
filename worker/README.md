@@ -116,7 +116,7 @@ this.
 
    ```bash
    export MINDBOARD_URL=https://<your-vercel-domain>
-   export WORKER_TOKEN=<MCP_BEARER_TOKEN from Vercel env>
+   export WORKER_TOKEN=<WORKER_BEARER_TOKEN from Vercel env>
    python3 worker/worker.py
    ```
 
@@ -181,12 +181,19 @@ This is the configured setup on the current PC. Components:
 
 3. **Env vars** are set at user level (`MINDBOARD_URL`, `MINERU_CMD`,
    `VIBEVOICE_CMD`). `WORKER_TOKEN` must be set manually to the value of
-   `MCP_BEARER_TOKEN` from Vercel → project → Settings → Environment
+   `WORKER_BEARER_TOKEN` from Vercel → project → Settings → Environment
    Variables:
 
    ```powershell
    [Environment]::SetEnvironmentVariable('WORKER_TOKEN', '<paste>', 'User')
    ```
+
+   `WORKER_BEARER_TOKEN` is the worker's own secret: it buys `/api/worker`
+   and nothing else. The app still accepts the old `MCP_BEARER_TOKEN` here
+   *while* `WORKER_BEARER_TOKEN` is unset, so the cutover is: add the new
+   Vercel var, redeploy, set `WORKER_TOKEN` to it, restart the worker — then
+   rotate `MCP_BEARER_TOKEN`, which until now also bought every MCP tool as
+   the owner (audit 2026-10-26, H1).
 
 4. **Run the worker**: `python worker\worker.py` (new terminal so it sees
    the env vars).

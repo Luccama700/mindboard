@@ -112,7 +112,7 @@ The server is **multi-tenant**: every request resolves to a specific Supabase us
 - Auth, three ways (each resolves to a user id in `authInfo.extra.userId`):
   1. **OAuth 2.1** for claude.ai — discovery (`/.well-known/oauth-protected-resource` + `/.well-known/oauth-authorization-server`), dynamic client registration, authorization-code + PKCE. The `/authorize` step reuses the app's Google/Supabase login; whoever signs in authorizes access to their own data (the token's `sub` is their user id). All OAuth artifacts are stateless HMAC-signed tokens (`MCP_OAUTH_SECRET`), no DB tables.
   2. **Per-user personal access token** (`mbp_…`) for non-OAuth clients (Claude Desktop, MCP inspector, curl) — generated on `/settings`, shown once, stored only as a SHA-256 hash in `user_settings.mcp_token_hash`.
-  3. **Legacy static `MCP_BEARER_TOKEN`** — still accepted and mapped to the deployment owner (`MINDBOARD_OWNER_USER_ID`); also the home worker's auth for `/api/worker`.
+  3. **Legacy static `MCP_BEARER_TOKEN`** — still accepted and mapped to the deployment owner (`MINDBOARD_OWNER_USER_ID`). The home worker no longer shares it: `/api/worker` has its own `WORKER_BEARER_TOKEN`, and falls back to `MCP_BEARER_TOKEN` only while that is unset.
 - Data access: a service-role Supabase client (`SUPABASE_SERVICE_ROLE_KEY`) with every query filtered by the authenticated user id explicitly (the service role bypasses RLS; the app's own pages use session clients where RLS is the boundary).
 - Home worker: shared infrastructure, gated by an allowlist — only jobs from the owner plus `WORKER_ALLOWED_USER_IDS` (comma-separated user ids) are claimed.
 
@@ -121,6 +121,7 @@ Additional server env vars:
 ```bash
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_secret   # Dashboard > Settings > API
 MCP_BEARER_TOKEN=a_long_random_secret        # legacy static token, maps to the owner
+WORKER_BEARER_TOKEN=a_long_random_secret     # the home worker's own secret for /api/worker
 MINDBOARD_OWNER_USER_ID=your_supabase_auth_user_id   # owner mapping + worker heartbeat
 MCP_OAUTH_SECRET=a_long_random_secret        # signs the stateless OAuth tokens
 WORKER_ALLOWED_USER_IDS=uuid1,uuid2          # optional: extra users allowed on the home worker

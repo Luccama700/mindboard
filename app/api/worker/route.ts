@@ -43,7 +43,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // The home worker's only door into the app. The PC holds no database key —
-// just this bearer (the same static MCP_BEARER_TOKEN used by MCP tooling).
+// just this bearer (WORKER_BEARER_TOKEN; it buys this API and nothing else).
 // Claims are atomic via claim_next_job() (FOR UPDATE SKIP LOCKED + stale-
 // heartbeat reclaim); results land either in the request body (ocr markdown)
 // or directly in storage via a signed upload URL (tts audio — too big for a
@@ -59,7 +59,13 @@ type JobRow = {
 };
 
 function authorized(request: Request): boolean {
-  const expected = process.env.MCP_BEARER_TOKEN;
+  // The worker has its own secret (audit 2026-10-26, H1: MCP_BEARER_TOKEN was
+  // a skeleton key — every MCP tool as the owner, plus this whole API). The
+  // old token is accepted ONLY while WORKER_BEARER_TOKEN is unset, so the
+  // cutover is: set the new var, restart the PC's worker with it, then rotate
+  // MCP_BEARER_TOKEN. Once WORKER_BEARER_TOKEN exists the old one is refused
+  // here, with no overlap window to forget about.
+  const expected = process.env.WORKER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN;
   if (!expected) return false;
   const header = request.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
