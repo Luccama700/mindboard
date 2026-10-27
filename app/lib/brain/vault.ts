@@ -4,6 +4,14 @@ import { revalidateTag, updateTag } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createClient } from "@/utils/supabase/server";
+import { createServiceClient } from "@/utils/supabase/service";
+import {
+  decryptSecret,
+  encryptSecret,
+  isEncryptedSecret,
+  type SecretScope,
+} from "@/app/lib/assistant/crypto";
+import { backfillEncryptedColumns } from "@/app/lib/secrets/backfill";
 import {
   buildResolver,
   computeBacklinks,
@@ -99,24 +107,63 @@ export const getVaultSettings = cache(
 
 export type VaultCredentials = { repo: string; branch: string; token: string };
 
-// The only read path for the token: RLS-scoped on the session client (/brain),
-// explicitly user-filtered on the service client (MCP capture_to_brain). The
-// token is never returned to the client and never logged.
+export const VAULT_SETTINGS_TABLE = "vault_settings";
+
+// The AAD scope the stored PAT is bound to. Exported so the save action in
+// app/actions/brain.ts encrypts under exactly the scope this read opens.
+export function vaultTokenScope(userId: string): SecretScope {
+  return { userId, table: VAULT_SETTINGS_TABLE, column: "github_token" };
+}
+
+// The only read path for the token. It is AES-256-GCM at rest (audit
+// 2026-10-26, H4) and never returned to a client or logged.
+//
+// The read runs on the SERVICE client whenever one is configured: migration
+// 0058 revokes the anon/authenticated SELECT on github_token, so after it
+// lands the cookie client cannot read the column at all. The service client
+// bypasses RLS, hence the explicit user_id filter — the app/lib/mcp/* scoping
+// invariant. The passed client stays the fallback for a deployment with no
+// service-role key, and remains how callers thread a client (people sync
+// in after(), the MCP server); it keeps working until 0058 is applied.
 export async function readVaultCredentials(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<VaultCredentials | null> {
-  const { data } = await supabase
-    .from("vault_settings")
+  const client = process.env.SUPABASE_SERVICE_ROLE_KEY
+    ? createServiceClient()
+    : supabase;
+  const { data } = await client
+    .from(VAULT_SETTINGS_TABLE)
     .select("repo, branch, github_token")
     .eq("user_id", userId)
     .maybeSingle();
   if (!data) return null;
-  return {
-    repo: data.repo as string,
-    branch: data.branch as string,
-    token: data.github_token as string,
-  };
+
+  const repo = data.repo as string;
+  const branch = data.branch as string;
+  const stored = data.github_token as string;
+
+  // Lazy migration: a value with no version prefix is a legacy plaintext PAT.
+  // Use it, and re-write it encrypted off the request's critical path.
+  if (!isEncryptedSecret(stored)) {
+    backfillEncryptedColumns(client, VAULT_SETTINGS_TABLE, userId, () => ({
+      github_token: encryptSecret(stored, vaultTokenScope(userId)),
+    }));
+    return { repo, branch, token: stored };
+  }
+
+  try {
+    return {
+      repo,
+      branch,
+      token: decryptSecret(stored, vaultTokenScope(userId)),
+    };
+  } catch {
+    // Ciphertext that will not open (a rotated ASSISTANT_KEY_SECRET, a row
+    // moved between users) is a disconnected vault, not a PAT to send to
+    // GitHub. Callers already treat null as "no vault", which is normal.
+    return null;
+  }
 }
 
 async function getVaultCredentials(
