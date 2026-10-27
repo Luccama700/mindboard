@@ -24,6 +24,7 @@ import {
   vancouverStamp,
 } from "@/app/lib/mcp/course-ops";
 import { scriptToVibeVoiceText } from "@/app/lib/learn/podcast-script";
+import { canonicalReelRef, storagePathBelongsTo } from "@/app/lib/worker/claims";
 import {
   SOURCE_COLUMNS,
   type CourseSource,
@@ -63,6 +64,13 @@ function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+// A claim guard that re-derives a value and finds the row forged, or pointing
+// outside its own account, is not a transient failure: a retry re-runs the
+// same check against the same row. Dead-letter it on the first attempt instead
+// of letting it sit at the queue head (it is the oldest queued row) for three
+// more polls.
+class ClaimRejected extends Error {}
+
 async function markSeen(info: Record<string, unknown> = {}) {
   const supabase = createServiceClient();
   await supabase.from("worker_status").upsert(
@@ -88,9 +96,9 @@ async function loadJob(jobId: string): Promise<JobRow | null> {
   return (data as JobRow | null) ?? null;
 }
 
-async function failJob(job: JobRow, message: string) {
+async function failJob(job: JobRow, message: string, permanent = false) {
   const supabase = createServiceClient();
-  const dead = job.attempts >= 3;
+  const dead = permanent || job.attempts >= 3;
   await supabase
     .from("jobs")
     .update({ status: dead ? "failed" : "queued", error: message })
@@ -151,13 +159,15 @@ async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
   if (job.kind === "reel") {
     // The worker downloads the reel itself (yt-dlp); it only needs the URL.
     // Transcript + frame notes + a cover thumbnail come back in the complete
-    // body — no signed URL to hand out.
+    // body — no signed URL to hand out. The URL is re-derived through the same
+    // canonicalizer the enqueue paths use, so what reaches the PC's command
+    // line is always `https://www.instagram.com/reel/<shortcode>/` and never
+    // whatever the row happened to hold.
+    const ref = canonicalReelRef(job.payload.url);
+    if (!ref.ok) throw new ClaimRejected(ref.error);
     return {
       job: { id: job.id, kind: job.kind },
-      reel: {
-        url: String(job.payload.url ?? ""),
-        shortcode: String(job.payload.shortcode ?? ""),
-      },
+      reel: { url: ref.value.url, shortcode: ref.value.shortcode },
     };
   }
 
@@ -171,6 +181,12 @@ async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
       .maybeSingle();
     const source = sourceRow as CourseSource | null;
     if (!source?.storage_path) throw new Error("source has no stored pdf");
+    // RLS lets a client PATCH storage_path after attachSourceFile checked it,
+    // so re-assert the prefix before the service role signs a download for it
+    // (audit M7; migration 0057 adds the matching CHECK).
+    if (!storagePathBelongsTo(job.user_id, source.id, source.storage_path)) {
+      throw new ClaimRejected("source pdf is stored outside this account's folder");
+    }
 
     const { data: signed, error } = await supabase.storage
       .from("course-files")
@@ -461,7 +477,7 @@ export async function POST(request: Request) {
         return NextResponse.json(await enrichClaim(job));
       } catch (e) {
         const message = e instanceof Error ? e.message : "claim enrichment failed";
-        await failJob(job, message);
+        await failJob(job, message, e instanceof ClaimRejected);
         return NextResponse.json({ job: null, skipped: message });
       }
     }
