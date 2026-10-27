@@ -18,6 +18,12 @@ export function hashPatToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
+// The legacy static MCP_BEARER_TOKEN → owner mapping is opt-in. Only the
+// exact string "true" enables it, so a typo or an empty value fails closed.
+export function staticBearerEnabled(env: Record<string, string | undefined>): boolean {
+  return env.MCP_STATIC_BEARER_ENABLED === "true";
+}
+
 export function looksLikePat(bearer: string): boolean {
   return bearer.startsWith(PAT_PREFIX);
 }

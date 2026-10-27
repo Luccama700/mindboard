@@ -8,7 +8,7 @@ import {
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
 import { verifyAccessToken } from "@/app/lib/mcp/oauth";
-import { looksLikePat, resolvePatUserId } from "@/app/lib/mcp/pat";
+import { looksLikePat, resolvePatUserId, staticBearerEnabled } from "@/app/lib/mcp/pat";
 import { mcpAuthKind, urcConfigured } from "@/app/lib/urc/auth";
 import {
   getUrcStatus,
@@ -1613,9 +1613,11 @@ const mcpHandler = createMcpHandler(
 // claude.ai authenticates via OAuth (see app/api/mcp/oauth/* + the well-known
 // metadata); the token's sub is the Supabase user id. Non-OAuth clients (MCP
 // inspector, curl, Claude Desktop) use a per-user mbp_ personal access token
-// generated on /settings. The legacy static MCP_BEARER_TOKEN keeps working and
-// maps to the configured owner (MINDBOARD_OWNER_USER_ID). Every path puts the
-// resolved user id in authInfo.extra.userId, which uid() requires per tool call.
+// generated on /settings. The legacy static MCP_BEARER_TOKEN → owner mapping is
+// OFF unless MCP_STATIC_BEARER_ENABLED=true: one shared, never-rotated secret
+// that is also the home worker's credential was a skeleton key to the owner's
+// whole account (audit 2026-10-26 H1). Every path puts the resolved user id in
+// authInfo.extra.userId, which uid() requires per tool call.
 // withMcpAuth returns 401 + a WWW-Authenticate that points at the
 // protected-resource metadata, which kicks off the OAuth flow.
 
@@ -1631,7 +1633,12 @@ async function verifyToken(_req: Request, bearer?: string) {
 
   const staticToken = process.env.MCP_BEARER_TOKEN;
   const staticOwner = process.env.MINDBOARD_OWNER_USER_ID;
-  if (staticToken && staticOwner && safeEqual(bearer, staticToken)) {
+  if (
+    staticBearerEnabled(process.env) &&
+    staticToken &&
+    staticOwner &&
+    safeEqual(bearer, staticToken)
+  ) {
     return {
       token: bearer,
       clientId: "static",
