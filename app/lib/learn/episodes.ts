@@ -371,7 +371,11 @@ export async function generateEpisodeFor(
         .eq("user_id", userId);
       if (queuedError) return fail(queuedError.message);
 
-      const { error: jobError } = await supabase.from("jobs").insert({
+      // Always the service client, whichever client the caller passed:
+      // migration 0056 takes insert/update on `jobs` away from the session
+      // client, because the home worker treats a job row as something the
+      // server wrote (audit C1). userId is explicit, as everywhere else here.
+      const { error: jobError } = await createServiceClient().from("jobs").insert({
         user_id: userId,
         kind: "tts",
         payload: { episode_id: episodeId },
