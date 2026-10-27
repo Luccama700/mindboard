@@ -25,6 +25,7 @@ import { getVaultSettings } from "@/app/lib/brain/vault";
 import { ConnectedApps } from "./connected-apps";
 import { McpConnectionCard } from "./mcp-connection-card";
 import { AgentModelsForm } from "./agent-models-form";
+import { DataFlows } from "./data-flows";
 import { PreferencesForm } from "./preferences-form";
 import { YourData } from "./your-data";
 
@@ -243,6 +244,11 @@ export default async function SettingsPage() {
             sign out
           </button>
         </form>
+      </section>
+
+      <section className="space-y-4">
+        <SectionRuler label="where your data goes" />
+        <DataFlows />
       </section>
 
       <section className="space-y-4">

@@ -14,6 +14,16 @@ export type NewsEntry = {
 
 export const NEWS: NewsEntry[] = [
   {
+    id: "2026-10-27-your-data",
+    date: "2026-10-27",
+    title: "your data, on your terms",
+    items: [
+      "settings now ends with where your data goes — a plain list of every outside service the app can talk to, what it sends, and whose key it uses. short version: none of it moves unless you connected the key yourself, and a provider you haven't connected is never contacted.",
+      "download my data gives you one json file with every row mindboard holds for you — tasks, finance, inventory, people, courses, notes, assistant history. api keys and tokens are stripped out of it.",
+      "delete my account is there too, behind a typed phrase. it removes every row and every file you uploaded, for good. your brain vault stays put — it's your own github repo — and your google account is untouched; the panel says where to revoke both.",
+    ],
+  },
+  {
     id: "2026-10-27-connected-apps",
     date: "2026-10-27",
     title: "every app you've connected, and the off switch",
