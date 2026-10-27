@@ -1,3 +1,7 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+// @ts-nocheck -- the probe harness is plain JS (test/isolation/*.mjs) with
+// inferred shapes; this file asserts its runtime behaviour, which vitest still
+// runs. Next 16.4 type-checks test files at build time.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
