@@ -37,6 +37,20 @@ const SCOPED_DIRS = [
   "app/lib/snapshots",
   "app/lib/finance",
   "app/lib/shopping",
+  "app/lib/brain",
+  "app/lib/secrets",
+  "app/lib/account",
+  "app/lib/worker",
+  "app/lib/assistant",
+  "app/lib/reels",
+  "app/lib/capture",
+  "app/lib/dispatch",
+  "app/lib/agent",
+  "app/lib/connections",
+  "app/lib/inventory",
+  "app/actions",
+  "app/auth",
+  "utils/google",
   "app/api",
 ];
 
@@ -89,7 +103,17 @@ function sourceFiles(): string[] {
 // Everything else is in scope — including the client-agnostic libraries that
 // take `supabase: SupabaseClient` as a parameter, because the MCP route hands
 // those the service client.
-function inScope(src: string): boolean {
+// Files that import neither factory because their client is a parameter, and
+// whose only caller hands them the cookie client, so RLS is their boundary.
+// Each entry names that caller; a test below holds the caller to it.
+const PARAMETER_COOKIE_CLIENT: Record<string, string> = {
+  "app/lib/assistant/tools.ts": "app/api/assistant/route.ts",
+};
+
+function inScope(src: string, file?: string): boolean {
+  if (file && path.relative(ROOT, file).replace(/\\/g, "/") in PARAMETER_COOKIE_CLIENT) {
+    return false;
+  }
   const usesService = src.includes(SERVICE_IMPORT);
   const usesCookie = src.includes(COOKIE_IMPORT);
   return usesService || !usesCookie;
@@ -285,6 +309,23 @@ const ALLOWLIST: Allow[] = [
       "item_id comes from the `.select(\"id\").single()` of a user-scoped upsert in the same " +
       "loop iteration, so it can only ever be the caller's own item.",
   },
+  // ---- cookie-client storage calls in a file that also uses the service client ----
+  {
+    file: "app/actions/learn.ts",
+    table: "course-audio",
+    contains: "remove([episode.storage_path])",
+    count: 1,
+    why:
+      "Runs on the session (cookie) client, so storage RLS folder-scopes it to the caller; " +
+      "the file imports the service client only for the jobs insert.",
+  },
+  {
+    file: "app/actions/learn.ts",
+    table: "course-files",
+    contains: "remove([source.storage_path])",
+    count: 1,
+    why: "Same: session client, storage RLS limits it to the caller's own folder.",
+  },
   // ---- OAuth bookkeeping with no user column ----
   {
     file: "app/lib/mcp/oauth-store.ts",
@@ -342,7 +383,7 @@ function matches(a: Allow, c: Chain) {
 }
 
 const files = sourceFiles();
-const scanned = files.filter((f) => inScope(readFileSync(f, "utf8")));
+const scanned = files.filter((f) => inScope(readFileSync(f, "utf8"), f));
 const chains = scanned.flatMap((f) => extractChains(f, readFileSync(f, "utf8")));
 const unscoped = chains.filter((c) => !isScoped(c));
 
@@ -359,7 +400,7 @@ describe("tenant-scope invariant (static)", () => {
 
   it("excludes only the files where RLS is provably the boundary", () => {
     const excluded = files
-      .filter((f) => !inScope(readFileSync(f, "utf8")))
+      .filter((f) => !inScope(readFileSync(f, "utf8"), f))
       .map((f) => path.relative(ROOT, f).replace(/\\/g, "/"))
       .sort();
     // These read the cookie client and never import the service factory, so
@@ -367,14 +408,53 @@ describe("tenant-scope invariant (static)", () => {
     // leaves this list it has started using the service client and its chains
     // are now checked — which is the point.
     expect(excluded).toEqual([
+      "app/actions/assistant.ts",
+      "app/actions/auth.ts",
+      "app/actions/auto-sort.ts",
+      "app/actions/calendar.ts",
+      "app/actions/connections.ts",
+      "app/actions/daily-log.ts",
+      "app/actions/finance.ts",
+      "app/actions/groups.ts",
+      "app/actions/inventory-icon.ts",
+      "app/actions/inventory.ts",
+      "app/actions/mcp-token.ts",
+      "app/actions/mindspace-import.ts",
+      "app/actions/mindspace.ts",
+      "app/actions/oauth-grants.ts",
+      "app/actions/onboarding.ts",
+      "app/actions/people-groups.ts",
+      "app/actions/people.ts",
+      "app/actions/recurring-tasks.ts",
+      "app/actions/reels.ts",
+      "app/actions/settings.ts",
+      "app/actions/shopping.ts",
+      "app/actions/stock-capture.ts",
+      "app/actions/tasks.ts",
       "app/api/account/export/route.ts",
       "app/api/assistant/route.ts",
       "app/api/course-chat/route.ts",
       "app/api/mcp/oauth/authorize/route.ts",
+      "app/lib/assistant/tools.ts",
       "app/lib/mindspace/read.ts",
       "app/lib/mindspace/share-bar.ts",
       "app/lib/people/suggest-groups.ts",
     ]);
+  });
+
+  it("hands each parameter-client file only the cookie client", () => {
+    for (const [file, caller] of Object.entries(PARAMETER_COOKIE_CLIENT)) {
+      const src = readFileSync(path.join(ROOT, caller), "utf8");
+      expect(src.includes(COOKIE_IMPORT), `${caller} must build the cookie client`).toBe(true);
+      expect(src.includes(SERVICE_IMPORT), `${caller} must not import the service client`).toBe(false);
+      const callers = files.filter((f) => {
+        const rel = path.relative(ROOT, f).replace(/\\/g, "/");
+        return rel !== file && readFileSync(f, "utf8").includes(file.replace(/\.ts$/, "").replace(/^app\//, "app/"));
+      });
+      for (const f of callers) {
+        expect(path.relative(ROOT, f).replace(/\\/g, "/"), `${file} has a caller other than ${caller}`).toBe(caller);
+      }
+    }
   });
 
   // The one query in these trees whose table is a variable. ownsRow is the
@@ -402,8 +482,22 @@ describe("tenant-scope invariant (static)", () => {
         .filter(([, receiver]) => !NOT_A_CLIENT.test(receiver))
         .map(() => path.relative(ROOT, f).replace(/\\/g, "/"));
     });
+    // Hand-checked 2026-10-27: every one of these filters by user_id or, for
+    // storage, lists/removes only under the caller's own `${userId}/` prefix.
+    // - writes.ts: ownsRow (asserted above).
+    // - secrets/backfill.ts: `.from(table).update(...).eq("user_id", userId)`.
+    // - auth/callback, utils/google/calendar.ts: GOOGLE_TOKENS_TABLE, every
+    //   read/update `.eq("user_id", userId)`, upserts carry `user_id`.
+    // - brain/vault.ts, actions/brain.ts: VAULT_SETTINGS_TABLE, same shape.
+    // - actions/account.ts: `storage.from(bucket)`, walked under `user.id/`.
     expect([...new Set(dynamic)].sort(), "a new dynamic-table query needs its own check").toEqual([
+      "app/actions/account.ts",
+      "app/actions/brain.ts",
+      "app/auth/callback/route.ts",
+      "app/lib/brain/vault.ts",
       "app/lib/mcp/writes.ts",
+      "app/lib/secrets/backfill.ts",
+      "utils/google/calendar.ts",
     ]);
   });
 

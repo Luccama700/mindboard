@@ -392,7 +392,7 @@ Those proposals wait for a human tap on `/approvals`, the in-app rail, or the wa
 - `overnight/HARDENING.md` is the runbook for the real boundary: a separate Windows user, the service-role key off the PC, and DPAPI for the rest.
 
 **Tenant isolation has two guards.**
-- `__tests__/tenant-scope-invariant.test.ts` runs in `npm run test`. It statically walks every service-client query chain under `app/lib` and `app/api` and fails on any chain without a `user_id` filter or payload, unless it has an allowlist entry that says why.
+- `__tests__/tenant-scope-invariant.test.ts` runs in `npm run test`. It statically walks every service-client query chain under `app/lib`, `app/api`, `app/actions`, `app/auth` and `utils/google` and fails on any chain without a `user_id` filter or payload, unless it has an allowlist entry that says why.
 - `npm run test:isolation` is the live two-tenant probe. It covers every MCP tool with B's ids under A's credential, forged proposals for every executor, and OAuth over HTTP; `test/isolation/README.md` has the details. It refuses the production project and runs only against a local stack or a Supabase branch.
 - Adding an MCP tool means adding its matrix entry, or the probe's coverage check fails.
 
