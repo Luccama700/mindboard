@@ -358,7 +358,7 @@ export function validateUpdateTask(raw: Record<string, unknown>): Result<UpdateT
       return {
         ok: false,
         error:
-          "aiState 'approved' is the human build-approval gate and cannot be set by an AI client. Ask the user to approve the plan in Mindboard — the 'approve' button on the task itself, or /approvals.",
+          "aiState 'approved' is the human build-approval gate and cannot be set by an AI client. Ask the user to approve the plan in Mindboard with the 'approve' button on the task itself (no proposal for it can exist).",
       };
     }
     out.aiState = raw.aiState as AiState | null;

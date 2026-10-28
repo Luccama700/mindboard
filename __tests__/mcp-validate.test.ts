@@ -302,7 +302,7 @@ describe("validateUpdateTask", () => {
     const refused = validateUpdateTask({ taskId: "t1", aiState: "approved" });
     expect(refused.ok).toBe(false);
     if (!refused.ok) {
-      expect(refused.error).toContain("/approvals");
+      expect(refused.error).toContain("approve' button");
       expect(refused.error).toContain("approve");
     }
   });

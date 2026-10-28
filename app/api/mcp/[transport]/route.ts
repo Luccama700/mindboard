@@ -225,7 +225,7 @@ const mcpHandler = createMcpHandler(
       {
         title: "List code tasks (overnight agent)",
         description:
-          "Open tasks in the user's 'mindboard' group — app-improvement ideas the overnight agent plans and builds. Each carries ai_state (null=untouched, planned=plan in notes awaiting approval, approved=cleared to build, building, built, failed, declined) plus the notes holding the plan. Filter with aiState ('none' = untouched). Advance states via update_task's aiState field — EXCEPT 'approved', which is the user's own build-approval tap in the app (the 'approve' button on the task, or /approvals) and is refused to every AI client.",
+          "Open tasks in the user's 'mindboard' group — app-improvement ideas the overnight agent plans and builds. Each carries ai_state (null=untouched, planned=plan in notes awaiting approval, approved=cleared to build, building, built, failed, declined) plus the notes holding the plan. Filter with aiState ('none' = untouched). Advance states via update_task's aiState field — EXCEPT 'approved', which is the user's own build-approval tap in the app (the 'approve' button on the task) and is refused to every AI client.",
         inputSchema: {
           aiState: z
             .enum(["none", "planned", "approved", "building", "built", "failed", "declined"])

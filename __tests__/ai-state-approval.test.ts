@@ -44,7 +44,7 @@ describe("propose time", () => {
       aiState: "approved",
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("/approvals");
+    if (!result.ok) expect(result.error).toContain("approve' button");
     expect(db.tables.ai_audit_log).toHaveLength(0);
   });
 
