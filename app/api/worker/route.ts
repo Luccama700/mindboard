@@ -96,12 +96,28 @@ function groupName(rel: GroupRel): string | null {
 // One worker_status row per tenant the worker actually serves, not just the
 // owner: /settings reads the caller's own row, so an allowlisted user used to
 // see "offline" and a stuck queue while their jobs were being drained.
+// One row per allowlisted tenant, written one at a time: a single bad id (a
+// deleted account, a typo in WORKER_ALLOWED_USER_IDS) must not fail the whole
+// batch and leave the owner's own status frozen. The PC's self-description
+// (hostname and the like) goes to the owner's row only; other tenants learn
+// "online" and nothing about the machine.
 async function markSeen(info: Record<string, unknown> = {}) {
   const supabase = createServiceClient();
   const lastSeenAt = new Date().toISOString();
-  await supabase.from("worker_status").upsert(
-    workerAllowedUserIds().map((userId) => ({ user_id: userId, last_seen_at: lastSeenAt, info })),
-    { onConflict: "user_id" },
+  const owner = ownerUserId();
+  await Promise.all(
+    workerAllowedUserIds().map((userId) =>
+      supabase
+        .from("worker_status")
+        .upsert(
+          { user_id: userId, last_seen_at: lastSeenAt, info: userId === owner ? info : {} },
+          { onConflict: "user_id" },
+        )
+        .then(
+          () => undefined,
+          () => undefined,
+        ),
+    ),
   );
 }
 
