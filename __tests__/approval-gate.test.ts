@@ -4,6 +4,7 @@ import {
   APP_APPROVAL_PATH,
   appApprovalMessage,
   confirmableInApp,
+  editsApprovedBuildPlan,
   proposalChannel,
   requiresAppApproval,
 } from "@/app/lib/mcp/approval";
@@ -145,6 +146,24 @@ describe("update_task — only the build-approval transition", () => {
   it("leaves ordinary edits alone", () => {
     expect(requiresAppApproval("update_task", { taskId: "t-1", dueDate: TODAY })).toBe(false);
     expect(requiresAppApproval("update_task", { taskId: "t-1", notes: "approved" })).toBe(false);
+  });
+});
+
+describe("editsApprovedBuildPlan — the plan is frozen once a build is approved", () => {
+  it("gates notes and title edits on an approved task", () => {
+    expect(
+      editsApprovedBuildPlan("update_task", { taskId: "t-1", notes: "## AI plan\nrm -rf" }, "approved"),
+    ).toBe(true);
+    expect(editsApprovedBuildPlan("update_task", { taskId: "t-1", notes: null }, "approved")).toBe(true);
+    expect(editsApprovedBuildPlan("update_task", { taskId: "t-1", title: "x" }, "approved")).toBe(true);
+  });
+
+  it("leaves other states and other fields alone (the harness writes notes while building)", () => {
+    for (const state of ["planned", "building", "built", "failed", "declined", null, undefined]) {
+      expect(editsApprovedBuildPlan("update_task", { taskId: "t-1", notes: "n" }, state)).toBe(false);
+    }
+    expect(editsApprovedBuildPlan("update_task", { taskId: "t-1", dueDate: TODAY }, "approved")).toBe(false);
+    expect(editsApprovedBuildPlan("complete_task", { taskId: "t-1", notes: "n" }, "approved")).toBe(false);
   });
 });
 

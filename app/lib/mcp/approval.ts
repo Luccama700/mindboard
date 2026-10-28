@@ -107,6 +107,23 @@ export function requiresAppApproval(toolName: string, input: unknown): boolean {
   }
 }
 
+// State-dependent half of the build gate. Once a task is 'approved' the
+// overnight harness builds whatever its notes' latest "## AI plan" says (and
+// its title names), so rewriting either between approval and the build would
+// let a chat change what runs on the PC without a human seeing it. The harness
+// itself never writes notes or title while a task is 'approved' — it flips the
+// task to 'building' first — so gating only that state costs it nothing.
+export function editsApprovedBuildPlan(
+  toolName: string,
+  input: unknown,
+  currentAiState: string | null | undefined,
+): boolean {
+  if (toolName !== "update_task" || currentAiState !== "approved") return false;
+  if (typeof input !== "object" || input === null) return false;
+  const v = input as { notes?: unknown; title?: unknown };
+  return v.notes !== undefined || v.title !== undefined;
+}
+
 // Which surface a pending proposal came from, derived from the stored row.
 // `source` only distinguishes the in-app copilot from everything external; the
 // watch records source 'mcp' (it is an external client of the same class) and

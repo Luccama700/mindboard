@@ -55,7 +55,7 @@ import {
   resolveProposal,
   type ExecutorContext,
 } from "./audit";
-import { appApprovalMessage, requiresAppApproval } from "./approval";
+import { appApprovalMessage, editsApprovedBuildPlan, requiresAppApproval } from "./approval";
 import { executeSpawnUrc } from "@/app/lib/urc/jobs";
 import {
   renderStockReceipt,
@@ -3131,6 +3131,21 @@ export async function confirmAction(
   // reaches this function.
   if (authKind.startsWith("mcp:") && requiresAppApproval(proposal.tool_name, proposal.input)) {
     return { ok: false, error: appApprovalMessage(proposal.tool_name) };
+  }
+  if (authKind.startsWith("mcp:") && proposal.tool_name === "update_task") {
+    const taskId = (proposal.input as { taskId?: unknown } | null)?.taskId;
+    if (typeof taskId === "string" && taskId) {
+      const { data: target } = await supabase
+        .from("tasks")
+        .select("ai_state")
+        .eq("id", taskId)
+        .eq("user_id", ownerId)
+        .maybeSingle();
+      const aiState = (target as { ai_state: string | null } | null)?.ai_state;
+      if (editsApprovedBuildPlan(proposal.tool_name, proposal.input, aiState)) {
+        return { ok: false, error: appApprovalMessage(proposal.tool_name) };
+      }
+    }
   }
 
   const executor = EXECUTORS[proposal.tool_name];
