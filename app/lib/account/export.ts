@@ -8,7 +8,10 @@
 //
 // `order` keeps `.range()` paging stable. Most tables have a uuid `id`; the
 // four that do not are keyed by their primary key instead.
-export type ExportTable = { table: string; order: string[] };
+// `columns` names the select list for a table whose secret columns the
+// session role can no longer read at all (0058 revokes them), where "*" would
+// fail the whole table instead of being stripped afterwards.
+export type ExportTable = { table: string; order: string[]; columns?: string };
 
 export const EXPORT_TABLES: ExportTable[] = [
   { table: "groups", order: ["id"] },
@@ -27,7 +30,11 @@ export const EXPORT_TABLES: ExportTable[] = [
   { table: "ai_conversations", order: ["id"] },
   { table: "ai_messages", order: ["id"] },
   { table: "ai_audit_log", order: ["id"] },
-  { table: "vault_settings", order: ["user_id"] },
+  {
+    table: "vault_settings",
+    order: ["user_id"],
+    columns: "user_id, repo, branch, created_at, updated_at",
+  },
   { table: "recurring_tasks", order: ["id"] },
   { table: "recurring_task_completions", order: ["id"] },
   { table: "account_reconciliations", order: ["id"] },

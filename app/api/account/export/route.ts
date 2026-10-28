@@ -33,10 +33,10 @@ export async function GET() {
   const problems: Record<string, string> = {};
 
   await Promise.all(
-    EXPORT_TABLES.map(async ({ table, order }) => {
+    EXPORT_TABLES.map(async ({ table, order, columns }) => {
       const rows: unknown[] = [];
       for (let from = 0; from < MAX_ROWS_PER_TABLE; from += PAGE) {
-        let query = supabase.from(table).select("*");
+        let query = supabase.from(table).select(columns ?? "*");
         for (const column of order) query = query.order(column);
         // PostgREST caps a response at 1000 rows, so a busy ledger or a long
         // assistant history has to be paged or it truncates in silence.
@@ -47,7 +47,7 @@ export async function GET() {
         }
         const page = data ?? [];
         for (const row of page) {
-          rows.push(stripSecrets(row as Record<string, unknown>));
+          rows.push(stripSecrets(row as unknown as Record<string, unknown>));
         }
         if (page.length < PAGE) break;
       }
