@@ -55,7 +55,9 @@ function MarkdownLink({
   if (href === "#unresolved") {
     return <span className="text-muted">{children}</span>;
   }
-  if (href?.startsWith("/")) {
+  // "//host" and "/\host" are protocol-relative: they leave the app, so they
+  // take the external branch below (new tab, noreferrer), not next/link.
+  if (href?.startsWith("/") && !href.startsWith("//") && !href.startsWith("/\\")) {
     return (
       <Link href={href} className="text-accent underline underline-offset-4">
         {children}

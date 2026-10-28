@@ -45,6 +45,11 @@ import {
 } from "@/app/lib/brain/parse";
 import { daysBetweenKeys } from "@/app/_components/people-recency";
 import { resolvePersonRef, type ResolvablePerson } from "./people-ops";
+import {
+  UNTRUSTED_MENTION_NOTICE,
+  wrapUntrustedExtract,
+  wrapUntrustedNote,
+} from "./untrusted";
 import type {
   Account,
   BalanceChange,
@@ -324,7 +329,7 @@ export async function listTasks(userId: string, filter: {
 // plans and, once approved, builds. Optional aiState narrows the lifecycle
 // stage ("none" = not yet touched by the agent).
 export async function listCodeTasks(userId: string, filter?: {
-  aiState?: "none" | "planned" | "approved" | "building" | "built" | "failed";
+  aiState?: "none" | "planned" | "approved" | "building" | "built" | "failed" | "declined";
 }) {
   const { supabase, ownerId } = scoped(userId);
 
@@ -1248,8 +1253,11 @@ export async function getPersonFor(
       archived: row.archived,
       createdAt: row.created_at,
     },
-    intro,
-    openLoops,
+    // Everything pulled out of the person's vault note, labelled as the
+    // third-party text it is (audit H2). Someone else may have written the
+    // intro line or an open-questions bullet — a shared capture, a brief — so
+    // neither is context the model should take instructions from.
+    untrusted_note_content: wrapUntrustedExtract(intro, openLoops),
     // The 'noted' signal: when the note was last revised. NOT contact, and it
     // never advances lastTalked (§2).
     noteUpdated,
@@ -1274,6 +1282,7 @@ export async function getPersonFor(
     // are strictly reviewable material, not a recency signal.
     mentions: {
       unreviewed: candidateCount,
+      notice: UNTRUSTED_MENTION_NOTICE,
       recent: candidates.map((c) => ({
         id: c.id,
         occurredAt: c.occurred_at,
@@ -1313,5 +1322,8 @@ export async function readBrainNote(userId: string, path: string) {
   if (!note) {
     throw new Error(`no note at "${path}" — check list_brain_notes for paths`);
   }
-  return note;
+  // The body is third-party text (briefs built from email/WhatsApp, reel
+  // transcripts, captures), so it is handed over labelled rather than as a bare
+  // `markdown` field a model would read as its own context. Audit H2.
+  return wrapUntrustedNote(note.path, note.markdown);
 }

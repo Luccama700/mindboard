@@ -349,11 +349,16 @@ export function validateUpdateTask(raw: Record<string, unknown>): Result<UpdateT
     }
     // The human approval gate: 'approved' is only ever granted by the user in
     // the app (setTaskAiState). An AI client that could set it would be
-    // approving its own builds.
+    // approving its own builds — and 'approved' is what makes the overnight
+    // harness check out a worktree and run npm on Lucca's PC (audit 2026-10-26,
+    // H1.3). Refused here, at propose time, so no such proposal is ever
+    // recorded; confirmAction's requiresAppApproval gate (approval.ts) is the
+    // second half, for a forged ai_audit_log row that never met this validator.
     if (raw.aiState === "approved") {
       return {
         ok: false,
-        error: "aiState 'approved' can only be set by the user in the app",
+        error:
+          "aiState 'approved' is the human build-approval gate and cannot be set by an AI client. Ask the user to approve the plan in Mindboard with the 'approve' button on the task itself (no proposal for it can exist).",
       };
     }
     out.aiState = raw.aiState as AiState | null;

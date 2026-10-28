@@ -8,16 +8,17 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:isolation": "node test/isolation-proof.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "@dnd-kit/core": "^6.3.1",
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.106.0",
     "mcp-handler": "^1.1.0",
-    "next": "16.2.6",
+    "next": "16.4.3",
     "pdf-lib": "^1.17.1",
     "proper-lockfile": "^4.1.2",
     "react": "19.2.4",
@@ -28,6 +29,11 @@
     "unpdf": "^1.6.2",
     "zod": "^3.25.76"
   },
+  "overrides": {
+    "mcp-handler": {
+      "@modelcontextprotocol/sdk": "$@modelcontextprotocol/sdk"
+    }
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@testing-library/dom": "^10.4.1",
@@ -37,9 +43,8 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.2",
     "eslint": "^9",
-    "eslint-config-next": "16.2.6",
+    "eslint-config-next": "16.4.3",
     "jsdom": "^26.1.0",
-    "sharp": "^0.34.5",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.7"

@@ -25,7 +25,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import lockfile from "proper-lockfile";
@@ -59,6 +61,7 @@ import {
   planPrompt,
   previewUrl,
   quoteArg,
+  staleLogFiles,
   triagePrompt,
 } from "./lib.mjs";
 
@@ -140,6 +143,37 @@ const today = new Date().toISOString().slice(0, 10);
 const logDir = join(HERE, "logs");
 mkdirSync(logDir, { recursive: true });
 const logFile = join(logDir, `${today}.log`);
+
+// Retention (audit finding M9): this folder keeps every run log and every
+// result-*.md / dispatch-*.md deliverable copy forever, and the app's prune
+// cannot see it. Best-effort by design — a cleanup that throws must never be
+// the reason a night's run does not happen.
+function pruneOldLogs() {
+  try {
+    const entries = [];
+    for (const entry of readdirSync(logDir, { withFileTypes: true })) {
+      try {
+        entries.push({
+          name: entry.name,
+          isFile: entry.isFile(),
+          mtimeMs: statSync(join(logDir, entry.name)).mtimeMs,
+        });
+      } catch {
+        // unreadable entry: leave it alone
+      }
+    }
+    for (const name of staleLogFiles(entries, Date.now())) {
+      try {
+        rmSync(join(logDir, name), { force: true });
+      } catch {
+        // locked or already gone: the next run tries again
+      }
+    }
+  } catch {
+    // the folder itself is unreadable; nothing to prune
+  }
+}
+pruneOldLogs();
 
 function log(message) {
   const line = `[${new Date().toISOString()}] ${message}`;
@@ -841,6 +875,35 @@ const DISPATCH_DISALLOWED_TOOLS = [
   "Bash(git merge*)",
   "Bash(git rebase*)",
   "Bash(git reset --hard*)",
+  // Second-shell and network spellings that walk around every pattern above
+  // (audit 2026-10-26 H3): a nested shell re-parses the command where these
+  // rules can't see it, and the raw HTTP clients are how a read secret would
+  // leave the machine. Research goes through WebFetch/WebSearch instead.
+  "Bash(cmd*)",
+  "Bash(powershell*)",
+  "Bash(pwsh*)",
+  "Bash(bash -c*)",
+  "Bash(sh -c*)",
+  "Bash(curl*)",
+  "Bash(wget*)",
+  "Bash(Invoke-WebRequest*)",
+  "Bash(Invoke-RestMethod*)",
+  "Bash(iwr*)",
+  "Bash(irm*)",
+  "Bash(gh *)",
+  // One-liner interpreters re-run arbitrary code where no pattern can see it.
+  "Bash(node -e*)",
+  "Bash(node --eval*)",
+  "Bash(python -c*)",
+  "Bash(python3 -c*)",
+  "Bash(py -c*)",
+  "Bash(cat *.env*)",
+  "Bash(cat *.claude.json*)",
+  "Bash(type *.env*)",
+  "Read(**/.env*)",
+  "Read(**/*.env)",
+  "Read(**/.claude.json)",
+  "Read(**/.ssh/**)",
 ].join(",");
 
 const DISPATCH_TOOL_PROFILE = {

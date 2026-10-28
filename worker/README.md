@@ -20,14 +20,24 @@ audio output, so no VibeVoice.)
 ## Follow-ups from the Apple Watch
 
 A `followup` job is a dictated instruction about an open task (see the main
-README, "Apple Watch API"). The worker runs the Claude Code CLI on this PC —
-`claude -p` with permissions bypassed, the prompt on stdin, and a temporary
-`--mcp-config` pointing at the deployed Mindboard MCP server on this worker's
-bearer — and Claude creates the follow-up task itself (same group, same due
-date; the original stays open). Requirements: `claude` on PATH (or set
-`CLAUDE_CMD`) and a logged-in Claude Code. Budget/turn caps:
-`FOLLOWUP_BUDGET_USD` (default 5), `FOLLOWUP_MAX_TURNS` (60),
-`FOLLOWUP_TIMEOUT_SECONDS` (1800). Restart the worker after pulling this.
+README, "Apple Watch API"). The worker runs the Claude Code CLI on this PC as
+a **research sandbox**: `claude -p` with the prompt on stdin, `--tools
+WebSearch,WebFetch` (the exclusive availability list), `--strict-mcp-config`
+with no MCP server at all, `--permission-mode dontAsk`, the worker's bearer
+and app URL stripped from the child's environment, and the job's empty temp
+dir as its cwd. Permissions are **not** bypassed and the run holds no
+Mindboard credential — it researches, prints a final `FOLLOWUP_RESULT:` JSON
+line, and **the app** creates the one follow-up task from it (same group, same
+due date; the original stays open). The task's title and notes are fenced in
+the prompt as untrusted data, because web text written there by an earlier
+agent used to reach a bypass-mode run (audit 2026-10-26, C1).
+
+Requirements: `claude` on PATH (or set `CLAUDE_CMD`) and a logged-in Claude
+Code. Budget/turn caps: `FOLLOWUP_BUDGET_USD` (default 5),
+`FOLLOWUP_MAX_TURNS` (60), `FOLLOWUP_TIMEOUT_SECONDS` (1800). A run that
+prints no parseable `FOLLOWUP_RESULT` line fails the job and retries — nothing
+was written, so there is no receipt to keep. Restart the worker after pulling
+this.
 
 ## Option A — one-time setup (Windows 11 → WSL2)
 
@@ -106,7 +116,7 @@ date; the original stays open). Requirements: `claude` on PATH (or set
 
    ```bash
    export MINDBOARD_URL=https://<your-vercel-domain>
-   export WORKER_TOKEN=<MCP_BEARER_TOKEN from Vercel env>
+   export WORKER_TOKEN=<WORKER_BEARER_TOKEN from Vercel env>
    python3 worker/worker.py
    ```
 
@@ -171,12 +181,19 @@ This is the configured setup on the current PC. Components:
 
 3. **Env vars** are set at user level (`MINDBOARD_URL`, `MINERU_CMD`,
    `VIBEVOICE_CMD`). `WORKER_TOKEN` must be set manually to the value of
-   `MCP_BEARER_TOKEN` from Vercel → project → Settings → Environment
+   `WORKER_BEARER_TOKEN` from Vercel → project → Settings → Environment
    Variables:
 
    ```powershell
    [Environment]::SetEnvironmentVariable('WORKER_TOKEN', '<paste>', 'User')
    ```
+
+   `WORKER_BEARER_TOKEN` is the worker's own secret: it buys `/api/worker`
+   and nothing else. The app still accepts the old `MCP_BEARER_TOKEN` here
+   *while* `WORKER_BEARER_TOKEN` is unset, so the cutover is: add the new
+   Vercel var, redeploy, set `WORKER_TOKEN` to it, restart the worker — then
+   rotate `MCP_BEARER_TOKEN`, which until now also bought every MCP tool as
+   the owner (audit 2026-10-26, H1).
 
 4. **Run the worker**: `python worker\worker.py` (new terminal so it sees
    the env vars).
@@ -195,3 +212,33 @@ This is the configured setup on the current PC. Components:
 - TTS: receives the episode's speaker-tagged script, renders with VibeVoice,
   PUTs the wav straight to storage via a signed upload URL (never through
   the app), then reports the duration.
+
+## Logs — rotate them yourself
+
+`worker/logs/` is **not** rotated by anything. `run-worker.cmd` and
+`run-urc-agent.cmd` append to `worker.out` / `urc-agent.out` with a shell
+`>>` redirect, so the files grow forever and the worker process has no say
+in it — changing `worker.py` would not help, and the redirect holds the
+handle open while the worker runs. These logs carry reel transcripts, task
+notes and course text, so they are the one copy of your data that neither the
+app's nightly prune (`supabase/migrations/0061_retention_prune.sql`) nor
+`overnight/run.mjs`'s 30-day cleanup can reach.
+
+Roll them by hand, or on a monthly Task Scheduler job, with the worker
+**stopped** (otherwise the move fails on the open handle):
+
+```powershell
+$logs = Join-Path $PSScriptRoot 'logs'   # or the full path to worker\logs
+$stamp = Get-Date -Format 'yyyyMMdd'
+foreach ($name in 'worker.out', 'urc-agent.out') {
+  $live = Join-Path $logs $name
+  if (Test-Path $live) { Move-Item $live (Join-Path $logs "$name.$stamp") }
+}
+Get-ChildItem $logs -File |
+  Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
+  Remove-Item
+```
+
+The `.cmd` launchers recreate `worker.out` / `urc-agent.out` on the next
+start; the dated copies age out on the same 30-day window the overnight
+harness uses.

@@ -5,8 +5,19 @@ import {
   generatePatToken,
   hashPatToken,
   looksLikePat,
+  staticBearerEnabled,
 } from "@/app/lib/mcp/pat";
 import { workerAllowedUserIds } from "@/app/lib/mcp/config";
+
+describe("legacy static bearer", () => {
+  test("is off unless explicitly enabled with the exact string true", () => {
+    expect(staticBearerEnabled({})).toBe(false);
+    expect(staticBearerEnabled({ MCP_STATIC_BEARER_ENABLED: "" })).toBe(false);
+    expect(staticBearerEnabled({ MCP_STATIC_BEARER_ENABLED: "1" })).toBe(false);
+    expect(staticBearerEnabled({ MCP_STATIC_BEARER_ENABLED: "TRUE" })).toBe(false);
+    expect(staticBearerEnabled({ MCP_STATIC_BEARER_ENABLED: "true" })).toBe(true);
+  });
+});
 
 describe("mcp personal access tokens", () => {
   test("generated tokens carry the prefix and enough entropy", () => {
@@ -37,7 +48,7 @@ describe("mcp personal access tokens", () => {
 });
 
 describe("worker allowlist", () => {
-  const OWNER = "8fd62772-a371-4d26-8a93-678b88c2b879";
+  const OWNER = "00000000-0000-4000-8000-0000000000a1";
   const originalOwner = process.env.MINDBOARD_OWNER_USER_ID;
   const originalAllowed = process.env.WORKER_ALLOWED_USER_IDS;
 

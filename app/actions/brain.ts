@@ -2,11 +2,27 @@
 
 import { updateTag } from "next/cache";
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 import { createClient } from "@/utils/supabase/server";
+import { createServiceClient } from "@/utils/supabase/service";
+import { encryptSecret } from "@/app/lib/assistant/crypto";
 import { normalizeVaultSettingsInput } from "@/app/lib/brain/settings";
-import { githubHeaders, vaultTag } from "@/app/lib/brain/vault";
+import {
+  githubHeaders,
+  readVaultCredentials,
+  VAULT_SETTINGS_TABLE,
+  vaultTag,
+  vaultTokenScope,
+} from "@/app/lib/brain/vault";
 
 export type VaultActionResult = { error: string | null };
+
+function tokenStore(cookieClient: SupabaseClient): SupabaseClient {
+  return process.env.SUPABASE_SERVICE_ROLE_KEY
+    ? createServiceClient()
+    : cookieClient;
+}
 
 async function verifyVaultAccess(
   repo: string,
@@ -50,15 +66,19 @@ export async function saveVaultSettings(input: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
+  // The token column is server-only after migration 0058, so both the
+  // read-back and the write go through the service client with an explicit
+  // user_id. The cookie client stays the fallback where no service-role key
+  // is configured.
+  const store = tokenStore(supabase);
+
   let token = normalized.token;
   if (!token) {
-    const { data: existing } = await supabase
-      .from("vault_settings")
-      .select("github_token")
-      .eq("user_id", user.id)
-      .maybeSingle();
+    // "leave blank to keep the current token" — readVaultCredentials is the
+    // one place that knows how to open a v1/v2/legacy value.
+    const existing = await readVaultCredentials(store, user.id);
     if (!existing) return { error: "token required" };
-    token = existing.github_token as string;
+    token = existing.token;
   }
 
   const accessError = await verifyVaultAccess(
@@ -68,10 +88,19 @@ export async function saveVaultSettings(input: {
   );
   if (accessError) return { error: accessError };
 
-  const { error } = await supabase.from("vault_settings").upsert(
+  let encryptedToken: string;
+  try {
+    encryptedToken = encryptSecret(token, vaultTokenScope(user.id));
+  } catch {
+    return {
+      error: "server key storage is not configured (ASSISTANT_KEY_SECRET)",
+    };
+  }
+
+  const { error } = await store.from(VAULT_SETTINGS_TABLE).upsert(
     {
       user_id: user.id,
-      github_token: token,
+      github_token: encryptedToken,
       repo: normalized.repo,
       branch: normalized.branch,
       updated_at: new Date().toISOString(),

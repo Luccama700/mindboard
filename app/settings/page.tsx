@@ -12,22 +12,34 @@ import { ReplayToursButton } from "@/app/_components/onboarding/replay-tours-but
 import { SettingsSections } from "@/app/_components/settings-panel";
 import { SectionRuler } from "@/app/_components/ui";
 import { VaultSettingsForm } from "@/app/brain/_components/vault-settings-form";
+import { isDeploymentOwner } from "@/app/lib/account/delete";
 import { decryptSecret } from "@/app/lib/assistant/crypto";
-import { KEY_COLUMNS, keyHint } from "@/app/lib/connections/keys";
+import {
+  KEY_COLUMNS,
+  keyHint,
+  providerKeyScope,
+} from "@/app/lib/connections/keys";
 import type { KeyProvider } from "@/app/lib/connections/types";
 import { getUserPreferences } from "@/app/lib/data/settings";
 import { getVaultSettings } from "@/app/lib/brain/vault";
+import { ConnectedApps } from "./connected-apps";
 import { McpConnectionCard } from "./mcp-connection-card";
 import { AgentModelsForm } from "./agent-models-form";
+import { DataFlows } from "./data-flows";
 import { PreferencesForm } from "./preferences-form";
+import { YourData } from "./your-data";
 
 // Key saves make one live verification call to the provider.
 export const maxDuration = 30;
 
-function hintFor(encrypted: string | null | undefined): string | null {
+function hintFor(
+  encrypted: string | null | undefined,
+  userId: string,
+  provider: KeyProvider,
+): string | null {
   if (!encrypted) return null;
   try {
-    return keyHint(decryptSecret(encrypted));
+    return keyHint(decryptSecret(encrypted, providerKeyScope(userId, provider)));
   } catch {
     return null;
   }
@@ -160,7 +172,11 @@ export default async function SettingsPage() {
             powers={card.powers}
             placeholder={card.placeholder}
             connected={Boolean(row?.[KEY_COLUMNS[card.provider]])}
-            hint={hintFor(row?.[KEY_COLUMNS[card.provider]])}
+            hint={hintFor(
+              row?.[KEY_COLUMNS[card.provider]],
+              user.id,
+              card.provider,
+            )}
           />
         ))}
 
@@ -208,6 +224,11 @@ export default async function SettingsPage() {
         />
       </section>
 
+      <section className="space-y-3">
+        <SectionRuler label="connected apps" />
+        <ConnectedApps userId={user.id} />
+      </section>
+
       <section className="space-y-4">
         <SectionRuler label="help" />
         <ReplayToursButton />
@@ -223,6 +244,16 @@ export default async function SettingsPage() {
             sign out
           </button>
         </form>
+      </section>
+
+      <section className="space-y-4">
+        <SectionRuler label="where your data goes" />
+        <DataFlows />
+      </section>
+
+      <section className="space-y-4">
+        <SectionRuler label="your data" />
+        <YourData isOwner={isDeploymentOwner(user.id, process.env)} />
       </section>
     </main>
   );

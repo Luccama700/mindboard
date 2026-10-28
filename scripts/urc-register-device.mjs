@@ -3,6 +3,11 @@
 //
 //   node scripts/urc-register-device.mjs --user <supabase-user-uuid> --name "home-pc"
 //
+// Rotate an existing device's token in place (the old token stops working the
+// moment this runs; paste the new one into worker/urc.env and restart the agent):
+//
+//   node scripts/urc-register-device.mjs --user <supabase-user-uuid> --rotate <device-uuid>
+//
 // Reads NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from .env.local
 // (same loader shape as test/isolation-proof.mjs) and writes one urc_devices
 // row holding only the SHA-256 hash of the token. The plaintext token is shown
@@ -25,11 +30,16 @@ function argValue(flag) {
 
 const userId = argValue("--user");
 const name = argValue("--name");
+const rotateId = argValue("--rotate");
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-if (!userId || !UUID.test(userId) || !name) {
+if (!userId || !UUID.test(userId) || (!name && !rotateId) || (rotateId && !UUID.test(rotateId))) {
   console.error(
-    'usage: node scripts/urc-register-device.mjs --user <supabase-user-uuid> --name "home-pc"',
+    [
+      "usage:",
+      '  node scripts/urc-register-device.mjs --user <supabase-user-uuid> --name "home-pc"',
+      "  node scripts/urc-register-device.mjs --user <supabase-user-uuid> --rotate <device-uuid>",
+    ].join("\n"),
   );
   process.exit(1);
 }
@@ -56,18 +66,34 @@ const admin = createClient(url, serviceKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
 
-const { data, error } = await admin
-  .from("urc_devices")
-  .insert({ user_id: userId, name, token_hash: tokenHash })
-  .select("id, name, created_at")
-  .single();
+const { data, error } = rotateId
+  ? await admin
+      .from("urc_devices")
+      .update({ token_hash: tokenHash })
+      .eq("id", rotateId)
+      .eq("user_id", userId)
+      .select("id, name, created_at")
+      .single()
+  : await admin
+      .from("urc_devices")
+      .insert({ user_id: userId, name, token_hash: tokenHash })
+      .select("id, name, created_at")
+      .single();
 
 if (error) {
-  console.error(`could not register the device: ${error.message}`);
+  console.error(
+    rotateId
+      ? `could not rotate the device token (is ${rotateId} this user's device?): ${error.message}`
+      : `could not register the device: ${error.message}`,
+  );
   process.exit(1);
 }
 
-console.log(`registered device ${data.name} (${data.id}) for user ${userId}`);
+console.log(
+  rotateId
+    ? `rotated the token for device ${data.name} (${data.id}); the old token no longer works`
+    : `registered device ${data.name} (${data.id}) for user ${userId}`,
+);
 console.log("");
 console.log("URC_DEVICE_TOKEN (shown once - paste into worker/urc.env):");
 console.log("");

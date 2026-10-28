@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@/utils/supabase/server";
 import { decryptSecret } from "@/app/lib/assistant/crypto";
+import { providerKeyScope } from "@/app/lib/connections/keys";
 
 // The inbox "auto sort" button's server side. One forced-tool Claude call
 // (the user's stored key, same rail as free-form stock notes) maps inbox
@@ -68,7 +69,7 @@ export async function autoSortInbox(): Promise<AutoSortResult> {
   }
   let apiKey: string;
   try {
-    apiKey = decryptSecret(encrypted);
+    apiKey = decryptSecret(encrypted, providerKeyScope(user.id, "anthropic"));
   } catch {
     return { error: "key unreadable — paste it again in settings" };
   }

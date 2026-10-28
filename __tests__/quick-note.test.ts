@@ -49,7 +49,7 @@ describe("bearerAuthorized", () => {
     expect(bearerAuthorized("Bearer s3cret", "s3cret")).toBe(true);
   });
 
-  test.each([
+  test.each<[string | null, string]>([
     ["Bearer wrong!", "wrong token"],
     ["Bearer s3cret-longer", "wrong length"],
     ["s3cret", "missing Bearer prefix"],
@@ -433,7 +433,7 @@ describe("createQuickNote", () => {
         file: null,
       },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
 
     expect(result).toEqual({
@@ -474,7 +474,7 @@ describe("createQuickNote", () => {
         file: null,
       },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
     expect(result.ok && result.value.path).toBe(
       "Inbox/2026-07-06 1930 Quick note -2.md",
@@ -497,7 +497,7 @@ describe("createQuickNote", () => {
         file: null,
       },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
     expect(result).toEqual({
       ok: false,
@@ -516,7 +516,7 @@ describe("createQuickNote", () => {
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
 
     expect(result).toEqual({
@@ -554,7 +554,7 @@ describe("createQuickNote", () => {
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
 
     expect(result.ok && result.value.filePath).toBe(
@@ -576,7 +576,7 @@ describe("createQuickNote", () => {
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
     expect(result.ok).toBe(false);
     expect(calls).toHaveLength(1);
@@ -593,7 +593,7 @@ describe("createQuickNote", () => {
         file: { name: "lease.pdf", base64: "aGVsbG8=" },
       },
       PDT_NOW,
-      fetchImpl,
+      "America/Vancouver", fetchImpl,
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {

@@ -1,7 +1,7 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
-import { workerAllowedUserIds } from "@/app/lib/mcp/config";
+import { ownerUserId } from "@/app/lib/mcp/config";
 import { idempotentProposalId } from "./protocol";
 import type { WatchWriteOutcome } from "./writes";
 
@@ -64,7 +64,9 @@ export async function queueFollowupFromWatch(
   idempotencyKey: string | null,
   source: FollowupSource = "apple watch",
 ): Promise<WatchWriteOutcome> {
-  if (!workerAllowedUserIds().includes(userId)) {
+  // Followups run on the owner's PC and are served for the owner only (the
+  // claim path dead-letters anyone else's), so refuse up front.
+  if (userId !== ownerUserId()) {
     return { ok: false, status: 503, error: "no home worker serves this account" };
   }
   const supabase = createServiceClient();

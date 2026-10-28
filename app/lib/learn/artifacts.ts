@@ -1,4 +1,5 @@
 import "server-only";
+import { userTimeZone } from "@/app/lib/mcp/config";
 import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -9,7 +10,7 @@ import {
   sanitizeCaptureTitle,
   VAULT_NOT_CONFIGURED_MESSAGE,
 } from "@/app/lib/mcp/capture";
-import { vancouverStamp } from "@/app/lib/mcp/course-ops";
+import { zonedStamp } from "@/app/lib/mcp/course-ops";
 import type { Result } from "@/app/lib/mcp/validate";
 import {
   COURSE_COLUMNS,
@@ -168,7 +169,7 @@ export async function generateArtifactFor(
 
   const safeCourse = sanitizeCaptureTitle(course.name);
   if (!safeCourse.ok) return safeCourse;
-  const stamp = vancouverStamp(new Date());
+  const stamp = zonedStamp(new Date(), await userTimeZone(supabase, userId));
   const document = [
     "---",
     "type: course-artifact",

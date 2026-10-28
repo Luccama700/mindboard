@@ -29,9 +29,11 @@ Shipped routes:
 - `/` dashboard: a **stream** (daily pulse header + NOW/NEXT/LATER task sections) as the left column, with a week calendar pane beside it on desktop (`hidden lg:block`, ~50/50 two-column grid); on mobile the stream stands alone and the calendar is the dedicated `/week` route.
 - `/login`: Google OAuth sign-in.
 - `/auth/callback`: exchanges Supabase OAuth code and persists Google provider tokens.
-- `/groups`: group list with inline create form, inbox card, and per-group edit panels for renaming, type, color, and Google Calendar link.
-- `/groups/[id]`: tasks for one group, plus upcoming events from the linked Google Calendar (if any).
-- `/inbox`: tasks with no group.
+- `/tasks`: every task, filterable by group (`?group=<id>` / `?group=inbox`), with the group manager (`app/tasks/groups-client.tsx`) and `/tasks/history`. The old `/groups`, `/groups/[id]` and `/inbox` routes are permanent redirects to it (`next.config.ts`).
+- `/week`: the week calendar on mobile (the dashboard shows it beside the stream on desktop).
+- `/plan`: the in-app assistant (propose → confirm cards).
+- `/approvals`: every pending proposal from any channel, with approve / reject. Risky MCP writes can only be confirmed here (see "Security model").
+- `/brain` (+ `/brain/graph`, `/brain/note/[...path]`): the vault reader. `/mindspace` (+ `/mindspace/import`), `/people` (+ `/people/[id]`), `/settings`.
 - `/finance`: accounts + ledger + recurring expenses + income sources + spending categories on the left, a cashflow-forecast calendar on the right. See the Finance section.
 - `/inventory`: stock items grouped, with a per-item depletion-forecast calendar. See the Inventory section.
 - `/learn`: courses + sources + audio overviews (NotebookLM-style study engine); `/learn/[id]/chat` (grounded chat with citations) and `/learn/[id]/study` (flashcards + study-document generators). See the Learn section and `docs/education-plan.md`.
@@ -75,7 +77,7 @@ The active theme palette lives in `app/globals.css` via `@theme inline` tokens s
 
 Palette customization is per theme. Overrides persist in `localStorage` under `palette-${theme}` and are applied by setting CSS variables at runtime.
 
-`app/_components/get-started-screen.tsx` lets first-time users choose dark or cream before login. `app/_components/settings-panel.tsx` renders the appearance section inline on `/settings`: a theme dropdown plus a collapsed "customize colors" disclosure wrapping the shared `ColorPicker` palette editor. Legacy plaintext image-gen keys in `localStorage` migrate to encrypted provider columns via `app/_components/legacy-image-key-migration.tsx` on the next `/settings` visit. `app/_components/theme-initializer.tsx` applies the saved theme class and palette variables after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
+Signed-out visitors get the landing page (`app/_components/landing/`, rendered by `app/page.tsx` when there is no session), whose `theme-split.tsx` lets them choose dark or cream before login. `app/_components/settings-panel.tsx` renders the appearance section inline on `/settings`: a theme dropdown plus a collapsed "customize colors" disclosure wrapping the shared `ColorPicker` palette editor. Legacy plaintext image-gen keys in `localStorage` migrate to encrypted provider columns via `app/_components/legacy-image-key-migration.tsx` on the next `/settings` visit. `app/_components/theme-initializer.tsx` applies the saved theme class and palette variables after hydration; do not reintroduce raw `<script>` or `next/script` theme bootstrapping in `app/layout.tsx`, because it can mutate `<html>` before React hydrates and trigger hydration warnings.
 
 `app/_components/color-picker.tsx` is the shared 12-swatch palette + custom RGB picker, used by both the group edit panel and the settings panel.
 
@@ -130,11 +132,26 @@ Migrations live in `supabase/migrations`.
 
 `0035_multi_tenant_mcp.sql` adds `user_settings.mcp_token_hint`/`mcp_token_created_at` (display metadata for the per-user MCP token whose SHA-256 hash lives in `mcp_token_hash` from `0016`) and re-creates `claim_next_job(allowed_users uuid[] default null)` so the home worker only claims allowlisted users' jobs.
 
-`0054_urc.sql` creates `urc_devices` / `urc_jobs` / `urc_log` + the `claim_urc_job(p_device)` SKIP-LOCKED claim RPC for URC (see that section). It is the one place in the schema where RLS is enabled with **no policies at all** (`urc_devices`, `urc_jobs`): both tables are service-role only, so a session JWT cannot read a device token hash, queue a session, or flip one to running with its own `session_url`. `urc_log` is select-own and append-only to clients.
+`0054_urc.sql` creates `urc_devices` / `urc_jobs` / `urc_log` + the `claim_urc_job(p_device)` SKIP-LOCKED claim RPC for URC (see that section). It was the first place in the schema with RLS enabled and **no policies at all** (`urc_devices`, `urc_jobs`; `oauth_grants` / `oauth_used_codes` from `0059` are the same): both tables are service-role only, so a session JWT cannot read a device token hash, queue a session, or flip one to running with its own `session_url`. `urc_log` is select-own and append-only to clients.
+
+`0055_urc_label.sql` adds the chat-chosen session label. `0053` was never written (the numbering skips it).
+
+The 2026-10-26 security audit (`security/audit-2026-10`) adds `0056`–`0065`. **Apply order matters: deploy the code first, then apply these** (each migration's header says why). Notes:
+
+- **Server-only tables (no client write policy).** `0056_jobs_server_enqueue.sql` makes `jobs` server-enqueued, and `0060_audit_log_server_only.sql` does the same for `ai_audit_log`. Both are select-own for clients; every write goes through the service client with an explicit `user_id`.
+- **Constraints.**
+  - `0057_course_source_path_check.sql` adds a CHECK that pins `course_sources.storage_path` to the owner's folder. It is added NOT VALID; validate it after applying.
+  - `0063_urc_session_url_retention.sql` adds a CHECK so a finished URC job can't keep its link.
+  - `0064_same_tenant_fks.sql` makes every FK between user-owned tables composite, `(user_id, x_id) → parent (user_id, id)`, so a row can never point at another tenant's row.
+- **Token columns.** `0058_token_columns_server_only.sql` revokes client SELECT on the `google_tokens` and `vault_settings` token columns, which are now AES-GCM ciphertext (v2, AAD-bound to user + column).
+- **OAuth.** `0059_oauth_grants.sql` creates `oauth_grants` and `oauth_used_codes` (service-role only), giving single-use codes and refresh-token families.
+- **Retention.** `0061_retention_prune.sql` is a nightly `pg_cron` prune of terminal jobs, resolved proposals, old URC rows, and dormant users' Google tokens. It needs `pg_cron` enabled first.
+- **Storage.** `0062_storage_lockdown.sql` stops `inventory-icons` from being listable and sets MIME/size limits on every bucket.
+- **Grants and policies.** `0065_rls_hardening.sql` revokes anon's default table grants and rewrites every policy's `auth.uid()` as `(select auth.uid())`.
 
 Every other table has RLS enabled and user-scoped policies. Never disable RLS as a debugging shortcut.
 
-**Multi-tenant MCP invariant.** The MCP tool layer (`app/lib/mcp/reads.ts`, `writes.ts`, `courses.ts`, `brain.ts`, plus `proposeGenerateAudioOverview`) runs on the RLS-bypassing service client, so every function takes the authenticated caller's `userId` as its first parameter and every query filters by it. The route (`app/api/mcp/[transport]/route.ts`) resolves that id per request — OAuth token `sub`, `mbp_` PAT hash lookup (`app/lib/mcp/pat.ts`), or the legacy static token mapped to `MINDBOARD_OWNER_USER_ID` — and hands it to tools via `uid(extra)`. Never add an MCP tool that touches data without threading the userId, and never reintroduce env-based data scoping.
+**Multi-tenant MCP invariant.** The MCP tool layer (`app/lib/mcp/reads.ts`, `writes.ts`, `courses.ts`, `brain.ts`, plus `proposeGenerateAudioOverview`) runs on the RLS-bypassing service client, so every function takes the authenticated caller's `userId` as its first parameter and every query filters by it. The route (`app/api/mcp/[transport]/route.ts`) resolves that id per request — OAuth token `sub`, `mbp_` PAT hash lookup (`app/lib/mcp/pat.ts`), or the legacy static token mapped to `MINDBOARD_OWNER_USER_ID` — and hands it to tools via `uid(extra)`. Never add an MCP tool that touches data without threading the userId, and never reintroduce env-based data scoping. Two guards back this rule (see "Security model"): the static scope-invariant test in `npm run test`, and the live two-tenant probe.
 
 **Vault read-freshness invariant.** `listVaultNotePaths` and `readVaultNoteRaw` (`app/lib/brain/vault.ts`) default to an uncached tree fetch and must stay that way: they are how an agent verifies its own write landed, so a cached answer is a correctness bug, not a saved request. Do not "optimize" them back onto the cache — the cached path is stale-while-revalidate, so a read can be served the pre-commit tree even past the TTL, and on serverless the refreshed entry may not reach the next invocation. Staleness is opt-in via `{ fresh: false }` (the DockMount note-count badge takes it, and the people open-loop hydration in `app/lib/snapshots/planning-read.ts` takes it so ≤3 note reads share one cached tree — both display-only, neither a read-your-writes path). `getVaultCorpus` stays cached — it downloads every blob — as does `fetchBlob` (sha-addressed, immutable). Every path that commits to the vault must also invalidate the tag: `revalidateVaultTree(userId)` from Route Handlers, `expireVaultTree(userId)` from Server Actions (Next 16 allows `updateTag` only there). Invalidation alone is NOT sufficient for read-your-writes from a Route Handler, which is why the reads bypass the cache.
 
@@ -151,7 +168,6 @@ Key files:
 - `app/auth/callback/route.ts`: stores `session.provider_token` and `session.provider_refresh_token` into `google_tokens`.
 - `app/login/page.tsx`: requests Google OAuth scopes with `access_type=offline` and `prompt=consent`.
 - `app/_components/dashboard-calendar.tsx`: month/week UI.
-- `app/_components/event-row.tsx`: read-only virtual row for events from a linked calendar, rendered in the today list and on group pages.
 - `app/page.tsx`: dashboard server component that fetches tasks, groups, calendar events, and builds the calendar-id → group link map.
 
 Current Google scopes:
@@ -203,9 +219,8 @@ Event rescheduling (write-back of `start`/`end`) is shipped. Event creation, del
 
 ## Task UX
 
-The task capture bar is the highest-priority interaction.
+Capture is the highest-priority interaction. It lives in the **Dock** (`app/_components/dock.tsx`, mounted globally by `dock-mount.tsx`), whose one field parses three modes (task / spend / note; grammar in `app/lib/capture/parse.ts`) and hands optimistic rows to the open list through `capture-bus.ts`.
 
-- File: `app/_components/task-capture-bar.tsx`
 - It is a fixed bottom island.
 - It should stay usable while scrolling.
 - The input should stay focused after submit.
@@ -224,7 +239,7 @@ Tapping the title of any task row expands an inline edit panel with four fields,
 - `✦ follow up` (open tasks only): a textarea + "send to claude" that queues the same `followup` job the Apple Watch dictates (`queueTaskFollowup` in `app/actions/tasks.ts` → `queueFollowupFromWatch` in `app/lib/watch/followup.ts`, payload `source: "mindboard app"`). The home worker's Claude Code run does the research and creates one follow-up task in the same group with the same due date; the original stays open. The panel only shows "queued" at submit time — there is no in-app pending/failed indicator yet (the watch reads `meta.followups`). Non-allowlisted accounts see the worker's "no home worker serves this account" error inline.
 - Delete is in the same panel.
 
-Group edit lives in `app/groups/groups-client.tsx`. Tapping the `···` on a group row opens an inline panel with rename, type, color, Google Calendar link, and archive. The shared `ColorPicker` and `TypePicker` components are reused by the create form and the edit panel. `CalendarLinkPicker` lists every readable Google Calendar from `listCalendars`.
+Group edit lives in `app/tasks/groups-client.tsx`. Tapping the `···` on a group row opens an inline panel with rename, type, color, Google Calendar link, and archive. The shared `ColorPicker` and `TypePicker` components are reused by the create form and the edit panel. `CalendarLinkPicker` lists every readable Google Calendar from `listCalendars`.
 
 Color picker:
 
@@ -234,8 +249,8 @@ Color picker:
 
 Task optimistic UI patterns are in:
 
-- `app/_components/today-client.tsx`: dashboard list, merges tasks with virtual events from linked calendars. Optimistic capture should map the selected group id to `group_name`/`group_color` immediately.
-- `app/_components/tasks-client.tsx`: inbox and single-group list, removes a task from the visible list when its group is changed off the current page. Optimistic capture should only show a new task if its selected group belongs on the current page.
+- `app/_components/stream-client.tsx`: the dashboard stream. Optimistic capture should map the selected group id to `group_name`/`group_color` immediately.
+- `app/_components/tasks-client.tsx`: the `/tasks` list (all, inbox, or one group), removes a task from the visible list when its group is changed off the current page. Optimistic capture should only show a new task if its selected group belongs on the current page.
 
 Mutations live in:
 
@@ -246,7 +261,7 @@ Mutations live in:
 - `app/actions/inventory.ts`: inventory group/item/usage CRUD and quantity adjustments; `app/actions/inventory-icon.ts`: item icon upload/generation.
 - `app/actions/auth.ts`.
 
-**Agent hand-off (2026-09-09; design: `docs/superpowers/specs/2026-09-09-agent-handoff-design.md`).** Two ways to hand an open task to the home PC, both in the task edit panel: `✦ follow up` (a `followup` job → `worker.py` → one new follow-up task, same group and due date) and `✦ do it` (`app/_components/dispatch-sheet.tsx` → `requestTaskDispatch` → a `task_dispatches` row, migration 0051 → `run.mjs` Track C drains it on the 5-minute poll and writes `## Agent result` into the notes, `ai_state` building → built/failed). `✦ do it` also sits on the stream cards, where it renders only for the owner (`agentServicesUser` in `app/page.tsx`): `run.mjs` claims over the owner's personal MCP token, which is user-scoped, while follow-ups gate on `workerAllowedUserIds()` because `worker.py` claims through the worker bearer on the service role. Neither button is gated in the panel; the action answers "no agent PC serves this account". Executor guardrails: `overnight/dispatch-capabilities.md` (never submit/send/sign/purchase, never `main`, never `git push`).
+**Agent hand-off (2026-09-09; design: `docs/superpowers/specs/2026-09-09-agent-handoff-design.md`).** Two ways to hand an open task to the home PC, both in the task edit panel: `✦ follow up` (a `followup` job → `worker.py` runs a web-research-only Claude with no shell or credentials → the server creates one new follow-up task from its result, same group and due date) and `✦ do it` (`app/_components/dispatch-sheet.tsx` → `requestTaskDispatch` → a `task_dispatches` row, migration 0051 → `run.mjs` Track C drains it on the 5-minute poll and writes `## Agent result` into the notes, `ai_state` building → built/failed). `✦ do it` also sits on the stream cards, where it renders only for the owner (`agentServicesUser` in `app/page.tsx`): `run.mjs` claims over the owner's personal MCP token, which is user-scoped, and follow-ups are served for the owner only (`queueFollowupFromWatch` refuses anyone else, and the claim path re-checks) because they run on the owner's PC. Neither button is gated in the panel; the action answers "no agent PC serves this account". Executor guardrails: `overnight/dispatch-capabilities.md` (never submit/send/sign/purchase, never `main`, never `git push`).
 
 **One lifecycle (2026-09-09).** `tasks.ai_state` gained `declined` (migration 0052): overnight triage writes it with the reason under `## AI triage — <date>` instead of only caching infeasible verdicts in `overnight/state.json`; the edit panel shows `✦ not taken` plus the reason (`latestSection`/`firstLine` in `app/_components/notes-sections.ts`) and opens the follow-up composer by default without focusing it (focusing on open would pop the phone keyboard); `clear` re-triages on the next run because `pickLifeTasks` only picks null `ai_state`. Approving a plan (`setTaskAiState(id, "approved")`) also stamps `agent_run_requested_at` for the owner, so the 5-minute poll runs a sweep: `✦ queued → ✦ working… → ✦ done` without a second tap; the panel notes "the pc picks it up within ~5 min" / "queued for the 4am run" / "couldn't wake the pc — it runs at 4am". The action returns `{ error, stamped, stampError }`; `requestAgentRun` shares its `servesAgentRuns`/`stampAgentRun` helpers.
 
@@ -286,7 +301,7 @@ Files: `app/inventory/page.tsx`, `app/inventory/inventory-client.tsx`, `app/_com
 
 - **Ingestion, three paths, one contract** (markdown → vault via the create-only `Courses/` writer, a second fenced direct-write exception alongside `capture_to_brain`'s `Inbox/`): (1) chat-AI transcription over MCP — `begin_source_upload` → `append_source_markdown` (contiguous 1-based parts ≤20k chars) → `finalize_source`, on subscription tokens; (2) the home worker (MinerU, free); (3) Claude-API conversion on the stored key (`app/lib/learn/convert.ts`: `unpdf` probe → `pdf-lib` ~20-page slices with 1-page overlap → per-slice document-block calls → anchor-trimmed stitch). Original PDFs upload browser→storage directly (private `course-files`, `{user}/{source}/` folders).
 - **Audio overviews** (`app/lib/learn/episodes.ts` + `podcast-script.ts`): Claude writes a typed script — two hosts (flavors deep-dive/brief/debate) or a single narrator (flavor solo) — from the sources' vault markdown; voices render via **Gemini Flash TTS** (one multi-speaker request; PCM→WAV in pure JS — no ffmpeg on Vercel) or **VibeVoice on the home worker** ($0, queued). Episodes live in `audio_episodes` + the private `course-audio` bucket, played via signed URLs. MCP `generate_audio_overview` is propose → confirm (it spends money); the in-app tap executes directly.
-- **Home worker** (`worker/worker.py` + `worker/README.md`): pull-based, no inbound ports, no DB key on the PC — it polls `POST /api/worker` (bearer = `MCP_BEARER_TOKEN`) for claim/heartbeat/complete/fail; claims are atomic (`claim_next_job(allowed_users)`, stale-heartbeat reclaim, 3-attempt dead-letter) and **allowlist-gated**: only jobs from the owner + `WORKER_ALLOWED_USER_IDS` (comma-separated ids; `workerAllowedUserIds()` in `app/lib/mcp/config.ts`) are claimed, and the enqueue paths (`queueSourceConversion`, the vibevoice branch of `generateEpisodeFor`) refuse non-allowlisted users up front. PDFs travel via signed download URLs and audio via signed upload URLs; all vault/Postgres finalization stays in the app. The settings connections card shows online/queue state from `worker_status`.
+- **Home worker** (`worker/worker.py` + `worker/README.md`): pull-based, no inbound ports, no DB key on the PC — it polls `POST /api/worker` (bearer = `WORKER_BEARER_TOKEN`; it falls back to `MCP_BEARER_TOKEN` only while the new variable is unset) for claim/heartbeat/complete/fail; claims are atomic (`claim_next_job(allowed_users)`, stale-heartbeat reclaim, 3-attempt dead-letter) and **allowlist-gated**: only jobs from the owner + `WORKER_ALLOWED_USER_IDS` (comma-separated ids; `workerAllowedUserIds()` in `app/lib/mcp/config.ts`) are claimed, and the enqueue paths (`queueSourceConversion`, the vibevoice branch of `generateEpisodeFor`) refuse non-allowlisted users up front. PDFs travel via signed download URLs and audio via signed upload URLs; all vault/Postgres finalization stays in the app. The settings connections card shows online/queue state from `worker_status`.
 - **Grounded chat** (`/api/course-chat` + `/learn/[id]/chat`): selected sources attach as citation-enabled text documents; answers stream over SSE and end with numbered citation chips (quoted passage + `noteHref` deep link into `/brain`). Source-subset toggling is the context strategy — no pgvector, honoring the cancelled Phase 3.
 - **Study** (`/learn/[id]/study` + `app/lib/learn/artifacts.ts`): study guide/FAQ/briefing/timeline generate as vault notes (`type: course-artifact`); flashcards persist in `course_cards` with got/miss progress (reveal → grade, retest-missed, weak-cards deck).
 - **Connections** (settings): every provider key lives in one section, one `ConnectionCard` recipe (status dot, last-4 hint, plain-language "powers" line, verify-on-save), all encrypted server-side via `app/actions/connections.ts` + `app/lib/connections/keys.ts`. Icon-generation keys moved here from localStorage; only provider/model prefs stay client-side.
@@ -336,12 +351,52 @@ There are exactly **two blessed boundary resolvers** — `todayKey(supabase, use
 
 URC starts a Claude Code **remote-control session** on Lucca's Windows PC from a claude.ai chat, over MCP, and hands back the private `claude.ai/code/session_…` link. Four tools (`spawn_urc` propose → `confirm_action`, `get_urc_status`, `list_urc_sessions`, `stop_urc`), migration `0054_urc.sql`, server logic in `app/lib/urc/*`, the PC's door at `app/api/urc/device/route.ts`, the agent in `worker/urc-agent.mjs` (+ pure `worker/urc-guards.mjs`). Operator docs: `worker/URC.md`.
 
-- **Three gates, one per layer.** (1) Server env `URC_OWNER_USER_ID` — the tools are registered only when it is set and every handler refuses anyone else; all four also refuse `clientId === "static"`, so the shared `MCP_BEARER_TOKEN` can never start a session (OAuth or `mbp_` PAT only). (2) DB — `urc_devices` binds a device to a user; the device token is a SHA-256 hash compared in constant time and works on `/api/urc/device` **only**. (3) The PC — the agent acts only when `URC_ENABLED=true` in `worker/urc.env` and only on jobs whose `user_id` matches its configured owner, and it refuses unknown folder keys, missing paths and folders not yet trusted in `~/.claude.json` (which it only ever reads).
+- **Three gates, one per layer.** (1) Server env `URC_OWNER_USER_ID` — the tools are registered only when it is set and every handler refuses anyone else; all four also refuse `clientId === "static"` and `clientId === "pat"`, so neither the shared `MCP_BEARER_TOKEN` nor the PAT stored in `overnight/.env` can start a session (OAuth only). (2) DB — `urc_devices` binds a device to a user; the device token is a SHA-256 hash compared in constant time and works on `/api/urc/device` **only**. (3) The PC — the agent acts only when `URC_ENABLED=true` in `worker/urc.env` and only on jobs whose `user_id` matches its configured owner, and it refuses unknown folder keys, missing paths and folders not yet trusted in `~/.claude.json` (which it only ever reads).
 - **Pull, never push, and keys not paths.** Like the home worker the PC polls (heartbeat / claim / started / failed / stopped); the server only ever hands back a folder **key** the PC itself reported, so a compromised server can at most queue a job the agent then refuses. Deliberately NOT on `/api/worker` or the `jobs` table: that bearer is shared and `jobs` RLS lets any user insert any kind.
 - **Bypass is a PC-side switch.** `URC_BYPASS_PERMISSIONS` lives in `worker/urc.env` and is read at spawn time by `buildSpawnArgs({ sessionName, bypass })`, which never sees the job — a job or server field named `bypass_permissions` changes nothing (asserted in `__tests__/urc-agent-guards.test.ts`). The PC *reports* its mode in the heartbeat (`urc_devices.bypass_permissions`) so the propose preview shows the true command. It is acceptable only because a spawned session starts **idle**: there is no starting prompt in v1 and the only way to drive it is the private link returned to Lucca's own account. **Never add a starting prompt while bypass can be on.**
 - **Nothing trusts the proposal row.** `ai_audit_log` RLS lets a signed-in user insert their own `proposed` row, so `EXECUTORS.spawn_urc` re-derives device, online state, folder and limits from server state, reads only the folder key out of the stored input, refuses a proposal older than 5 minutes, and takes the confirming credential from the new `ExecutorContext` (4th EXECUTORS arg; `confirmAction(userId, proposalId, authKind)` where authKind is `mcp:<clientId>` / `"assistant"` / `"watch"`).
-- **Expiry and limits.** A queued job expires 2 minutes after confirm, and a `claimed` job the PC never started is swept to `failed` (`sweepStaleJobs`, run before any limit count and on both reads; `claim_urc_job` does the queued half) — otherwise a crash mid-spawn would hold a slot forever. The limit counts `queued` too: 2 concurrent sessions and 5 spawns/hour, enforced on the server *and* locally by the agent (`worker/urc-state.json`). A partial unique index on `urc_jobs.audit_id` makes one confirmed proposal → at most one job a database fact. `session_url` is returned only by `get_urc_status` and only while the job is `running` — `list_urc_sessions` never carries it (least exposure).
+- **Expiry and limits.** A queued job expires 2 minutes after confirm, and a `claimed` job the PC never started is swept to `failed` (`sweepStaleJobs`, run before any limit count and on both reads; `claim_urc_job` does the queued half) — otherwise a crash mid-spawn would hold a slot forever. The limit counts `queued` too: 4 concurrent sessions and 5 spawns/hour, enforced on the server *and* locally by the agent (`worker/urc-state.json`). A partial unique index on `urc_jobs.audit_id` makes one confirmed proposal → at most one job a database fact. `session_url` is returned only by `get_urc_status`, only while the job is `running`, and only to the OAuth client that confirmed the spawn — `list_urc_sessions` never carries it (least exposure). The server nulls it when a job stops or fails (a CHECK in `0063` makes that a database fact), and the PC agent never logs it.
 - **The PC never reports what it cannot verify.** Its process query returns null (not "") when it fails, so one timed-out query can't look like "every session exited" — tracked sessions are kept and retried, and the kill switch re-runs until each pid is confirmed dead or killed. A pid is killed only while the live process still carries that session's name (pids get recycled; `urc-state.json` outlives a reboot), never `WindowsTerminal.exe`, and one agent per PC is enforced by a pidfile lock.
+
+## Security model
+
+The 2026-10-26 security audit itself is kept out of this repo (the repo is public); the rules it produced are here.
+
+**Credentials, and what each one can do.**
+- **OAuth (claude.ai)** is the primary MCP credential.
+  - Codes are single-use.
+  - Refresh tokens rotate per grant, and a replayed one revokes the whole grant.
+  - Access tokens are audience-checked.
+  - `/settings` lists connected apps and can revoke them.
+  - The DCR redirect allowlist defaults to `claude.ai, claude.com, localhost, 127.0.0.1`; add others through `MCP_OAUTH_ALLOWED_REDIRECT_HOSTS`.
+- **`mbp_` PATs** are one per user. They are accepted by every MCP tool **except URC**.
+- **The static `MCP_BEARER_TOKEN` → owner mapping is off.** It works only with `MCP_STATIC_BEARER_ENABLED=true`, and nothing in the repo needs it.
+- **The home worker authenticates with `WORKER_BEARER_TOKEN`** on `/api/worker` only.
+- **URC accepts OAuth only.** See the URC section.
+
+**Propose → confirm is not human consent over MCP.** A model can call `confirm_action` on its own proposal, so `requiresAppApproval` (`app/lib/mcp/approval.ts`) refuses MCP confirmation for:
+- destructive or financial writes;
+- settings;
+- paid generation;
+- `aiState → approved` (which makes the PC build and run code).
+
+Those proposals wait for a human tap on `/approvals`, the in-app rail, or the watch. When adding a write tool, decide which side of that predicate it belongs on.
+
+**Text written by third parties is data, never instructions.** Task notes are partly written by agents and web research; the vault holds briefs built from email/WhatsApp, reel transcripts, and captures.
+- Every prompt that reaches a tool-holding agent fences such text: the worker followup's `<task>`, the dispatch prompt's `<task-notes>`, and `read_brain_note`/`get_person` returning an untrusted-content envelope.
+- New prompts must do the same.
+
+**The home PC.**
+- Followups run `claude -p` with web tools only: no MCP, no shell, no credential. The server makes the one write from their JSON result.
+- Track C dispatch keeps `Bash(*)` but disallows nested shells, raw HTTP clients, `gh`, and reads of `.env*`/`.claude.json`/`.ssh`. That is still pattern matching, not a sandbox.
+- `overnight/HARDENING.md` is the runbook for the real boundary: a separate Windows user, the service-role key off the PC, and DPAPI for the rest.
+
+**Tenant isolation has two guards.**
+- `__tests__/tenant-scope-invariant.test.ts` runs in `npm run test`. It statically walks every service-client query chain under `app/lib`, `app/api`, `app/actions`, `app/auth` and `utils/google` and fails on any chain without a `user_id` filter or payload, unless it has an allowlist entry that says why.
+- `npm run test:isolation` is the live two-tenant probe. It covers every MCP tool with B's ids under A's credential, forged proposals for every executor, and OAuth over HTTP; `test/isolation/README.md` has the details. It refuses the production project and runs only against a local stack or a Supabase branch.
+- Adding an MCP tool means adding its matrix entry, or the probe's coverage check fails.
+
+**Rows the server trusts are written by the server.** `jobs`, `ai_audit_log`, `urc_*` and `oauth_*` have no client write policy. A worker claim re-derives its payload from server state, so it never forwards what a row says.
 
 ## AI Second-Brain Direction
 
@@ -365,12 +420,12 @@ Decided constraints: assistant writes are **propose → confirm** (never silent)
 - `app/_components/dispatch-sheet.tsx`: the `✦ do it` sheet (one note → `requestTaskDispatch`), used by stream cards and the task edit panel.
 - `app/_components/calendar-types.ts`: shared `CalendarItem` discriminated union for tasks, events, and finance changes in the calendar widget.
 - `app/_components/task-row.tsx`: shared task row with inline edit panel (title, date, group, Markdown notes, delete).
-- `app/_components/event-row.tsx`: read-only virtual row for events from a linked Google Calendar.
-- `app/_components/today-client.tsx`: dashboard task list, mixes tasks with virtual events from linked calendars.
-- `app/_components/tasks-client.tsx`: inbox and single-group task list.
+- `app/_components/dock.tsx`: the global capture Dock (task / spend / note modes).
+- `app/_components/stream-client.tsx`: the dashboard stream.
+- `app/_components/tasks-client.tsx`: the `/tasks` list (all, inbox, or one group).
 - `app/_components/types.ts`: shared task types.
 - `app/_components/date-utils.ts`: date helpers.
-- `app/groups/groups-client.tsx`: group list, create form, per-group edit panel, color picker, calendar linker.
+- `app/tasks/groups-client.tsx`: group list, create form, per-group edit panel, color picker, calendar linker.
 - `app/finance/finance-client.tsx`: finance UI — accounts, ledger, recurring expenses, income sources, categories, and the balance-update panel with multi-category split.
 - `app/_components/finance-projection.ts`: pure, unit-tested net-worth/cashflow projection.
 - `app/_components/money.ts`: money formatting + `splitEvenly`/`sumMoney`.
