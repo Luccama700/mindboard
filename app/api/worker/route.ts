@@ -85,6 +85,14 @@ function bad(message: string, status = 400) {
 // more polls.
 class ClaimRejected extends Error {}
 
+// What a worker.py build says it can do safely, sent with every claim.
+const FOLLOWUP_SANDBOX_CAPABILITY = "followup-sandbox-1";
+
+function workerCapabilities(body: Record<string, unknown>): Set<string> {
+  const raw = body.capabilities;
+  return new Set(Array.isArray(raw) ? raw.filter((c): c is string => typeof c === "string") : []);
+}
+
 // PostgREST returns an embedded one-to-one either as an object or as a
 // one-element array depending on how it infers the relationship.
 type GroupRel = { name: string } | { name: string }[] | null;
@@ -600,6 +608,21 @@ export async function POST(request: Request) {
       const jobs = (data ?? []) as JobRow[];
       if (jobs.length === 0) return NextResponse.json({ job: null });
       const job = jobs[0];
+      // A follow-up is only safe on a worker that runs it sandboxed (web tools
+      // only, no credentials). An older worker.py would run it with a shell, so
+      // until the PC is updated its follow-ups go back on the queue untouched
+      // (the claim's attempt is handed back) instead of being served.
+      if (job.kind === "followup" && !workerCapabilities(body).has(FOLLOWUP_SANDBOX_CAPABILITY)) {
+        await supabase
+          .from("jobs")
+          .update({ status: "queued", attempts: Math.max(0, job.attempts - 1), heartbeat_at: null })
+          .eq("id", job.id)
+          .eq("user_id", job.user_id);
+        return NextResponse.json({
+          job: null,
+          skipped: "follow-ups need an updated worker.py (sandboxed runs); update the PC and restart it",
+        });
+      }
       try {
         return NextResponse.json(await enrichClaim(job));
       } catch (e) {

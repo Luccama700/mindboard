@@ -545,6 +545,10 @@ def handle_reel(claim: dict, workdir: Path) -> dict:
     return result
 
 
+# Sent with every claim. The server only hands follow-ups to a worker that
+# runs them sandboxed (web tools only, no credentials), i.e. this build.
+WORKER_CAPABILITIES = ["followup-sandbox-1"]
+
 FOLLOWUP_MARKER = "FOLLOWUP_RESULT:"
 
 FOLLOWUP_PROMPT = """You are the follow-up researcher for Mindboard, running on Lucca's PC. He sent a follow-up on one of his open tasks from his {source}.
@@ -719,7 +723,7 @@ def main() -> None:
     log(f"mindboard worker polling {APP_URL} every {POLL_SECONDS}s")
     while True:
         try:
-            claim = api({"op": "claim", "info": {"host": platform.node()}})
+            claim = api({"op": "claim", "info": {"host": platform.node()}, "capabilities": WORKER_CAPABILITIES})
             if claim.get("job"):
                 process(claim)
                 continue  # drain the queue before sleeping
