@@ -166,6 +166,21 @@ export type RotateResult =
   | { status: "unprotected" }
   | { status: "error" };
 
+export const REFRESH_GRACE_MS = 60_000;
+
+// Pure so it can be unit-tested: is `presented` the token this family rotated
+// away from, recently enough to be a lost-response retry?
+export function isWithinRefreshGrace(
+  previousJti: string | null | undefined,
+  rotatedAt: string | null | undefined,
+  presented: string,
+  nowMs: number,
+): boolean {
+  if (!previousJti || previousJti !== presented || !rotatedAt) return false;
+  const at = Date.parse(rotatedAt);
+  return Number.isFinite(at) && nowMs - at >= 0 && nowMs - at <= REFRESH_GRACE_MS;
+}
+
 // Rotate a family forward one step. Every outcome but "ok" is invalid_grant at
 // the endpoint; they are distinguished here because only ONE of them
 // (`reuse`) means the family is compromised and gets revoked.
@@ -179,7 +194,7 @@ export async function rotateRefreshToken(input: {
     const supabase = createServiceClient();
     const { data, error } = await supabase
       .from("oauth_grants")
-      .select("id, client_id, revoked_at, current_refresh_jti")
+      .select("id, client_id, revoked_at, current_refresh_jti, previous_refresh_jti, rotated_at")
       .eq("id", input.grantId)
       .eq("user_id", input.userId)
       .maybeSingle();
@@ -196,12 +211,23 @@ export async function rotateRefreshToken(input: {
       client_id?: string;
       revoked_at?: string | null;
       current_refresh_jti?: string | null;
+      previous_refresh_jti?: string | null;
+      rotated_at?: string | null;
     } | null;
     if (!grant) return { status: "revoked" };
     if (grant.revoked_at) return { status: "revoked" };
     if (grant.client_id !== input.clientId) return { status: "client_mismatch" };
 
-    if (grant.current_refresh_jti !== input.jti) {
+    // A retry of the refresh that just rotated this family (the client never
+    // saw the response) presents the immediately-previous token. Inside the
+    // grace window that rotates the family forward again from its CURRENT jti
+    // instead of revoking it; a stale token outside the window is still reuse.
+    const isGraceRetry =
+      grant.current_refresh_jti !== input.jti &&
+      isWithinRefreshGrace(grant.previous_refresh_jti, grant.rotated_at, input.jti, Date.now());
+    const expectedJti = isGraceRetry ? grant.current_refresh_jti ?? "" : input.jti;
+
+    if (grant.current_refresh_jti !== input.jti && !isGraceRetry) {
       // The presented token was already rotated away. Either it leaked and the
       // thief is using it, or it leaked and the legitimate client is — there
       // is no way to tell, so the whole family dies (RFC 9700 §4.14.2).
@@ -214,12 +240,17 @@ export async function rotateRefreshToken(input: {
     const next = newJti();
     const { data: rotated, error: rotateError } = await supabase
       .from("oauth_grants")
-      .update({ current_refresh_jti: next, last_used_at: new Date().toISOString() })
+      .update({
+        current_refresh_jti: next,
+        previous_refresh_jti: expectedJti,
+        rotated_at: new Date().toISOString(),
+        last_used_at: new Date().toISOString(),
+      })
       // Compare-and-swap on the jti we just read: two refreshes racing on the
       // same token must not both mint a successor.
       .eq("id", input.grantId)
       .eq("user_id", input.userId)
-      .eq("current_refresh_jti", input.jti)
+      .eq("current_refresh_jti", expectedJti)
       .is("revoked_at", null)
       .select("id");
 

@@ -62,7 +62,12 @@ create table public.oauth_grants (
   -- Bumped on every successful refresh — "last active", not "last tool call".
   last_used_at timestamptz,
   revoked_at timestamptz,
-  current_refresh_jti text not null
+  current_refresh_jti text not null,
+  -- The jti that current_refresh_jti replaced, and when. A client that lost the
+  -- response to a refresh retries with the previous token; within a short grace
+  -- window that is a retry, not a theft, and must not revoke the family.
+  previous_refresh_jti text,
+  rotated_at timestamptz
 );
 
 -- The settings list and the revoke actions both read by user.

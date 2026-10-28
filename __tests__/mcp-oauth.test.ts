@@ -644,6 +644,49 @@ describe("token endpoint — refresh families rotate and can be revoked", () => 
     expect(result.body.refresh_token).toBeUndefined();
   });
 
+  test("a lost-response retry of the previous token inside the grace window rotates, not revokes", async () => {
+    db.state.respond = (op) => {
+      if (op.terminal === "maybeSingle") {
+        return {
+          data: {
+            ...liveGrant("jti-2"),
+            previous_refresh_jti: "jti-1",
+            rotated_at: new Date(Date.now() - 5_000).toISOString(),
+          },
+        };
+      }
+      if (op.verb === "update") return { data: [{ id: GRANT_ID }] };
+      return {};
+    };
+
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(200);
+    const update = db.state.calls.find((c) => c.verb === "update");
+    expect(update?.payload?.revoked_at).toBeUndefined();
+    // the CAS runs on the family's CURRENT jti, so only one retry can win
+    expect(update?.filters).toContainEqual(["eq", "current_refresh_jti", "jti-2"]);
+  });
+
+  test("the previous token outside the grace window is still reuse", async () => {
+    db.state.respond = (op) => {
+      if (op.terminal === "maybeSingle") {
+        return {
+          data: {
+            ...liveGrant("jti-2"),
+            previous_refresh_jti: "jti-1",
+            rotated_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+          },
+        };
+      }
+      return {};
+    };
+
+    const result = await postRefresh(refreshFor("jti-1"));
+    expect(result.status).toBe(400);
+    const revoke = db.state.calls.find((c) => c.verb === "update");
+    expect(typeof revoke?.payload?.revoked_at).toBe("string");
+  });
+
   // Answering "revoked" while the revoke itself failed would be a lie the
   // caller acts on.
   test("a failed family revoke reports server_error, not reuse", async () => {
@@ -681,12 +724,14 @@ describe("token endpoint — refresh families rotate and can be revoked", () => 
     expect(result.body.error_description).toBe("client mismatch");
   });
 
-  test("client_id is required on refresh", async () => {
-    db.state.respond = () => ({});
+  test("a refresh without client_id uses the client the token names", async () => {
+    db.state.respond = (op) => {
+      if (op.terminal === "maybeSingle") return { data: liveGrant("jti-1") };
+      if (op.verb === "update") return { data: [{ id: GRANT_ID }] };
+      return {};
+    };
     const result = await postRefresh(refreshFor("jti-1"), null);
-    expect(result.status).toBe(400);
-    expect(result.body.error).toBe("invalid_request");
-    expect(db.state.calls).toHaveLength(0);
+    expect(result.status).toBe(200);
   });
 
   test("a client_id that disagrees with the token is refused", async () => {

@@ -126,13 +126,19 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   if (grantType === "refresh_token") {
-    const { refresh_token: refreshToken, client_id: clientId } = params;
-    // client_id is REQUIRED here. It used to be optional, which meant a leaked
-    // refresh token alone was a complete credential.
-    if (!refreshToken || !clientId) return json({ error: "invalid_request" }, 400);
+    const { refresh_token: refreshToken, client_id: presentedClientId } = params;
+    if (!refreshToken) return json({ error: "invalid_request" }, 400);
     const parsed = verifyRefreshToken(refreshToken);
     if (!parsed) return invalidGrant("bad or expired refresh token");
-    if (parsed.clientId !== clientId) return invalidGrant("client mismatch");
+    // client_id is optional for this public client (RFC 6749 §6): the token
+    // already names its client, so requiring the parameter would add no secret
+    // and would break clients that omit it. When it is sent it must match.
+    // What makes a leaked refresh token survivable is rotation + reuse
+    // revocation below, not this check.
+    if (presentedClientId && parsed.clientId !== presentedClientId) {
+      return invalidGrant("client mismatch");
+    }
+    const clientId = parsed.clientId;
 
     if (!parsed.grantId || !parsed.jti) {
       const legacy = await legacyRefreshAllowed(parsed.ownerId);
