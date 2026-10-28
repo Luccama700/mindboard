@@ -85,13 +85,18 @@ begin
   -- for an account nobody has signed into in six months is a standing grant
   -- on that person's calendar with nothing using it. Losing it costs the user
   -- nothing: /auth/callback re-writes the row from the OAuth session on the
-  -- next sign-in. Keyed off auth.users.last_sign_in_at, which is null only
-  -- for an account that has never signed in at all.
+  -- next sign-in.
+  --
+  -- "Dormant" needs BOTH signals. last_sign_in_at alone is wrong: a session
+  -- refresh and the MCP connector don't bump it, so a long-lived PWA session or
+  -- a connector-only user would lose calendar access while actively using it.
+  -- google_tokens.updated_at moves on every access-token refresh, and access
+  -- tokens expire hourly, so any calendar use in the window keeps the row.
   delete from public.google_tokens g
   using auth.users u
   where u.id = g.user_id
-    and u.last_sign_in_at is not null
-    and u.last_sign_in_at < now() - interval '180 days';
+    and g.updated_at < now() - interval '180 days'
+    and (u.last_sign_in_at is null or u.last_sign_in_at < now() - interval '180 days');
   get diagnostics google_tokens_removed = row_count;
 
   return jsonb_build_object(
