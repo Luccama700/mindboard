@@ -108,7 +108,7 @@ to the decrease). Helpers `splitEvenly`/`sumMoney` in `app/_components/money.ts`
 
 ## Strategic redirection (2026-07-02) — merge with the 2ndBrain vault
 
-Recorded per `docs/MINDBOARD_KICKOFF.md`. Mindboard has merged, conceptually, with
+Recorded per `docs/archive/MINDBOARD_KICKOFF.md`. Mindboard has merged, conceptually, with
 **2ndBrain**, an Obsidian vault maintained by Claude in Cowork. The vault owns identity,
 knowledge, goals, and narrative; Mindboard owns operations (tasks, calendar, money,
 inventory). Claude clients span both. Consequences for the phased roadmap above:
@@ -413,7 +413,7 @@ connect. Phone-verify the Milestone 2/3 done-criteria from there.
 
 Kickoff of the owner-commissioned full redesign ("THE STREAM" / Terminal Calm v2
 "SIGNAL"). The complete design spec, clutter diagnosis, binding decisions, and
-milestone table now live in `docs/REDESIGN.md` — that file is the redesign's
+milestone table now live in `docs/archive/REDESIGN.md` — that file is the redesign's
 durable record; this log tracks per-milestone shipping notes.
 
 **Shipped (skin/foundation only — zero structural or behavioral change):**
@@ -656,7 +656,7 @@ ghost proposals → confirm → `ai_audit_log` rows with `source='assistant'`.
 
 ## Implementation log — Redesign M6 (2026-07-06): section de-clutter — the redesign ships complete
 
-The last milestone. All seven milestones of "THE STREAM" (docs/REDESIGN.md)
+The last milestone. All seven milestones of "THE STREAM" (docs/archive/REDESIGN.md)
 are now live.
 
 **Shipped:**
