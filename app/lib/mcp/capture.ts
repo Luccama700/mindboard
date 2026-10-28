@@ -98,6 +98,11 @@ export function sanitizeCaptureTitle(title: string): Result<string> {
   if (!cleaned) {
     return { ok: false, error: "title has no filename-safe characters" };
   }
+  // A path segment named after a Windows device (CON, NUL, COM1, ...) can't be
+  // checked out on Windows at all; course names become folder names verbatim.
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(cleaned)) {
+    return { ok: true, value: `${cleaned}_` };
+  }
   return { ok: true, value: cleaned };
 }
 

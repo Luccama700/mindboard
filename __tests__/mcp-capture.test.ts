@@ -113,6 +113,14 @@ describe("sanitizeCaptureTitle", () => {
     });
   });
 
+  test("Windows device names stay checkout-able", () => {
+    for (const name of ["CON", "nul", "Com1", "LPT9", "aux.txt"]) {
+      const result = sanitizeCaptureTitle(name);
+      expect(result.ok && result.value.endsWith("_")).toBe(true);
+    }
+    expect(sanitizeCaptureTitle("console notes")).toEqual({ ok: true, value: "console notes" });
+  });
+
   test("drops every NTFS-illegal character and trailing dots", () => {
     expect(sanitizeCaptureTitle('a:b*c?d"e<f>g|h')).toEqual({
       ok: true,
