@@ -23,6 +23,11 @@ Read this first when resuming. Newest entry on top. `PLAN.md` is the current pla
 - Wave 2 detailed in `PLAN.md` (`306865c`): Task 6 tables and stores, Task 7 tick and routes, Task 8 Today on sample data, Task 9 migration rehearsal. `motion` and `@electric-sql/pglite` (dev only) installed.
 - A read-only JSON export of the database ran and matched an independent row count on all 44 tables. Tool and output are outside git (`docs/rebuild/tools/export-json.mjs`, `Documents\mindboard\backups\`). It is a copy of the data, not a restorable dump.
 - `docs/rebuild/05-cutover-runbook.md` written (outside git): the order for the sitting that makes the security release live.
+- Task 2 (planner) built and reviewed by a stronger reviewer. Four fix rounds, each on a case the reviewer reproduced: the guaranteed floor block losing its slot, a block leaving the plan at midnight, a floor fix that moved blocks it should have left alone, and a newly demanded block taking the top task's reserved slot. Clean at `a3e98d4`. 96 tests, including a two-day sweep that replans every ten minutes.
+- Task 6 (tables and stores) built and reviewed. `0066` creates nine tables and one server-only function and touches nothing that exists. `0067` schedules the tick through Vault. Two fix rounds (replacing a day's plan is now one locked statement; the in-memory store mirrors the database's rules). Clean at `69f7fe4`. Neither migration has been applied anywhere real.
+- Task 9 (migration rehearsal) built and reviewed. Every migration runs in an in-memory Postgres as part of `npm run test`. It found no fault in `0056` to `0067`. Run on the real export, the nine security migrations applied cleanly, and production's constraint and policy names match the files exactly.
+- Task 8 (Today on sample data) built, rendered at phone width and reviewed. Fixture mode only (`V2_FIXTURES=1`, never in production). The first render caught a stylesheet that did not parse, which no test could see.
+- Task 7 (the tick, incoming answers, routes) in progress at the time of this entry. If its commit is missing from `git log`, it starts again from its brief plus `.superpowers/sdd/PLAN/task-7-context.md` (if that file is gone, the same facts are in the Task 2, 3, 4, 5 and 6 sections of `PLAN.md`).
 
 ### How the build runs
 
