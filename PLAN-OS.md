@@ -314,8 +314,153 @@ export function CalendarPane(props: {
 
 ---
 
+### Task 3: the tile engine (pure, not wired to any screen)
+
+The engine under the tiled shell the owner chose: panes that always fill the workspace, dividers that resize, panes that dock against each other or stack as tabs, named arrangements, one saved state per screen size. **Nothing imports it in this plan.** It is written now, from a spec, so the shell (which waits for the owner's yes) starts on tested ground.
+
+**The model is the split tree of the prototype he chose**, not either of the other two tile models written up during the research (a 12 column snapping grid; tiles with up to two floated windows). The reference implementation is `docs/rebuild/mockups/os-b-tiled.html` (outside git): the tree and its operations are at about lines 340 to 506, saving at 584 to 606, the divider and drop zone geometry at 846 to 932. Port its behaviour. Do not port its style: it mutates one global tree and takes ids from a counter; this engine is pure.
+
+**Files:**
+- Create: `app/lib/v2/tiles/types.ts`, `tree.ts`, `layout.ts`, `store.ts`, `catalog.ts`, `index.ts`
+- Test: `__tests__/v2-tiles-tree.test.ts`, `__tests__/v2-tiles-layout.test.ts`, `__tests__/v2-tiles-store.test.ts`
+- Read for house style: `app/lib/v2/view/appearance.ts` (a pure module with a tolerant parser)
+- Do not touch anything else.
+
+**Interfaces**
+
+```ts
+// types.ts
+export type PaneId = string;
+export type SplitDir = "h" | "v";            // h: side by side, v: one above the other
+export type Zone = "left" | "right" | "top" | "bottom" | "centre";
+export type Direction = "left" | "right" | "up" | "down";
+export type ScreenClass = "regular" | "wide"; // the phone has no tiles
+
+export interface Leaf { kind: "leaf"; id: string; tabs: PaneId[]; active: PaneId }
+export interface Split { kind: "split"; id: string; dir: SplitDir; ratio: number; first: TileNode; second: TileNode }
+export type TileNode = Leaf | Split;
+
+export interface PaneSpec { id: PaneId; title: string; minWidth: number; minHeight: number; closable: boolean }
+/** Where a closed pane was, so it can come back there. */
+export interface Spot { beside: PaneId; zone: Zone; ratio: number | null }
+
+/** One arrangement of the workspace as it is right now. */
+export interface Arrangement {
+  tree: TileNode | null;
+  maximized: PaneId | null;
+  focus: PaneId | null;
+  lastSpot: Record<PaneId, Spot>;
+}
+
+export interface Rect { x: number; y: number; w: number; h: number }
+export interface Workspace { width: number; height: number }
+export interface TileRects {
+  leaves: Array<Rect & { leafId: string }>;
+  dividers: Array<Rect & { splitId: string; dir: SplitDir; start: number; size: number }>;
+}
+```
+
+```ts
+// tree.ts : every function is pure and returns a NEW arrangement; a call that
+// changes nothing returns the SAME object, so a caller can tell.
+export function leavesOf(node: TileNode | null): Leaf[];
+export function leafOf(tree: TileNode | null, pane: PaneId): Leaf | null;
+export function openPanes(tree: TileNode | null): PaneId[];
+export function normalize(node: TileNode | null): TileNode | null;
+export function signature(node: TileNode | null): string;
+export function movePane(arr: Arrangement, pane: PaneId, targetLeafId: string, zone: Zone): Arrangement;
+export function closePane(arr: Arrangement, pane: PaneId, specs: readonly PaneSpec[]): Arrangement;
+export function openPane(arr: Arrangement, pane: PaneId, rects: TileRects | null): Arrangement;
+export function setRatio(arr: Arrangement, splitId: string, ratio: number, size: number, specs: readonly PaneSpec[]): Arrangement;
+export function equalize(arr: Arrangement, splitId: string): Arrangement;
+export function swapLeaves(arr: Arrangement, leafIdA: string, leafIdB: string): Arrangement;
+export function activateTab(arr: Arrangement, pane: PaneId): Arrangement;
+export function cycleTab(arr: Arrangement, step: 1 | -1): Arrangement;
+export function toggleMaximize(arr: Arrangement, pane: PaneId): Arrangement;
+```
+
+```ts
+// layout.ts
+export const GAP = 6;
+export function minSize(node: TileNode, specs: readonly PaneSpec[]): { w: number; h: number };
+export function shareLimits(split: Split, size: number, specs: readonly PaneSpec[]): [number, number];
+export function layoutTree(arr: Arrangement, workspace: Workspace, specs: readonly PaneSpec[]): TileRects;
+export function neighbourOf(rects: TileRects, leafId: string, dir: Direction): string | null;
+export function zoneAt(rect: Rect, x: number, y: number): Zone;
+export function zoneRect(rect: Rect, zone: Zone): Rect;
+```
+
+```ts
+// catalog.ts
+export const PANES: readonly PaneSpec[];              // today (not closable), calendar, status, past-due, not-today
+export const ARRANGEMENTS: readonly [
+  { name: "today"; title: "Today" },
+  { name: "plan"; title: "Plan the week" },
+  { name: "backlog"; title: "Clear the backlog" },
+];
+export const TILE_COPY: { zone: Record<Zone, string> }; // "Left of", "Right of", "Above", "Below", "Make a tab of"
+export function screenClassFor(width: number): ScreenClass | null;  // null under 1024, regular to 1599, wide from 1600
+export function defaultTree(cls: ScreenClass, name: string): TileNode;
+export function defaultArrangement(cls: ScreenClass, name: string): Arrangement;
+```
+
+```ts
+// store.ts : what is saved, one slot per screen class
+export interface ClassState { current: string; working: Arrangement; saved: Record<string, TileNode> }
+export interface TileSet { version: 1; classes: Partial<Record<ScreenClass, ClassState>> }
+export const EMPTY_TILE_SET: TileSet;
+export function parseTileSet(value: unknown): TileSet;                 // tolerant: a string or an object
+export function serializeTileSet(set: TileSet): string;                // stable key order
+export function classState(set: TileSet, cls: ScreenClass): ClassState;               // the stored slot, or that class's default
+export function withClassState(set: TileSet, cls: ScreenClass, state: ClassState): TileSet; // replaces ONE slot
+export function applyArrangement(state: ClassState, cls: ScreenClass, name: string): ClassState;
+export function saveOver(state: ClassState, name: string): ClassState;
+export function isEdited(state: ClassState, cls: ScreenClass): boolean;
+export function resetClass(set: TileSet, cls: ScreenClass): TileSet;
+```
+
+**Behaviour the tests pin**
+
+1. **Ids are a function of the tree.** A new leaf is `l<n>` and a new split `s<n>`, where n is one more than the largest number used by any id in the tree. No counter lives outside the tree, so the same operations on the same tree always give the same ids.
+2. **`normalize`**: a leaf with no tabs disappears; a split left with one child becomes that child; a ratio is clamped to 0.05 to 0.95 and a ratio that is not a finite number becomes 0.5; an `active` that is not among the tabs becomes the first tab. An empty tree is null.
+3. **`movePane`**, as the prototype: dropping on `centre` appends the pane to the target's tabs and makes it active; any other zone splits the target in half with the moved pane on that side, the target keeping its own id. It is a no-op when the target does not exist, or when the pane's own leaf is the target and either it is that leaf's only tab or the zone is `centre`. It clears `maximized` and sets `focus` to the pane. A pane that was closed can be moved in (that is how it opens at a chosen place).
+4. **`closePane`** is refused for a pane whose spec is not closable and for the only pane open. Otherwise it remembers a `Spot` exactly as the prototype does (a tab: beside another tab of the same leaf, zone `centre`; a lone leaf: beside the first leaf of its sibling, with the side it was on and the split's ratio), then removes it. `maximized` is cleared when it was that pane; `focus` moves to the first leaf's active tab when it was that pane.
+5. **`openPane`** is a no-op for a pane already open. With a remembered spot whose neighbour is still open, the pane returns there and the split takes back the remembered ratio. Otherwise it goes beside the largest leaf of `rects` (to the right when that leaf is at least 1.2 times wider than tall, else below), or to the right of the first leaf when `rects` is null. Opening into an empty tree makes it the tree.
+6. **`setRatio`** stores the ratio clamped to `shareLimits` for the size given: that is the user's own drag, at the size they did it. **Nothing else ever writes a clamped value back**: `layoutTree` clamps for drawing and returns rects only. A test lays a tree out on a small workspace, then on the original one, and gets the original rects.
+7. **`swapLeaves`** exchanges the tabs and the active tab of two leaves and nothing else. `activateTab` also sets `focus`. `cycleTab` walks the focused pane's leaf and wraps. `toggleMaximize` sets or clears `maximized`, and is a no-op for a pane that is not open.
+8. **`layoutTree`**, as the prototype: a split gives its first child `round((size - GAP) * clamp(ratio, lo, hi))`, then the gap, then the rest; `shareLimits` come from the two children's minimum sizes, and are `[0.5, 0.5]` when they cannot both fit. A leaf's minimum is the largest minimum among its tabs. When `maximized` names an open pane, that pane's leaf gets the whole workspace and the other rects are still returned as they would be. A workspace of zero, or smaller than the tree's minimum, never yields a negative number or NaN.
+9. **Tiling.** For any tree and any workspace at least as large as the tree's minimum, the leaf rects and divider rects cover the workspace exactly: no overlap, no gap, total area equal to the workspace's. Every leaf is at least its minimum size.
+10. **`neighbourOf`**, as the prototype: among leaves that share an edge in that direction (within 2 px of the gap) the one with the longest shared edge. `zoneAt`: the nearest edge when the point is within 27 percent of it, else `centre`. `zoneRect`: the half of the rect on that side, or all of it for `centre`.
+11. **The defaults** are the prototype's six desktop trees with these pane ids (`today`, `status`, `past-due`, `not-today`, `calendar`):
+    - wide, today: h 0.5 [ h 0.5 [ v 0.67 [today | status] | v 0.5 [past-due | not-today] ] | calendar ]
+    - wide, plan: h 0.29 [ v 0.56 [ tabs(not-today, past-due) | tabs(today, status) ] | calendar ]
+    - wide, backlog: h 0.25 [ v 0.65 [today | status] | h 0.8 [ h 0.5 [past-due | not-today] | calendar ] ]
+    - regular, today: h 0.5 [ tabs(today, status, past-due, not-today) | calendar ]
+    - regular, plan: h 0.3 [ tabs(not-today, past-due, today, status) | calendar ]
+    - regular, backlog: h 0.72 [ h 0.5 [past-due | not-today] | tabs(calendar, today, status) ]
+
+    Every default opens every pane exactly once and fits a workspace of 896 by 600 (regular) and 1472 by 700 (wide) at the catalog's minimum sizes. Minimums: 230 by 150 unless said; `today` 320 by 320; `calendar` 320 by 300.
+12. **One slot per screen class.** `classState` returns the stored slot or that class's own default, and never fills one class from another. `withClassState` and `resetClass` change one slot and leave the others exactly as they were (the same object references).
+13. **`parseTileSet` cannot return a broken screen.** Anything malformed, another version, or a value that is not an object gives `EMPTY_TILE_SET`. Inside a class: a pane id the catalog does not know is dropped and the tree normalized; a pane listed twice keeps its first place; a tree deeper than 12 levels, or one that ends with nothing open, is replaced by that class's default; a pane that is not closable and is missing is put back with `openPane`; `maximized` and `focus` that name a pane that is not open become null and the first open pane; saved trees go through the same repair and a saved name the catalog does not list is dropped; `current` falls back to the first arrangement. Keys named `__proto__`, `constructor` or `prototype` are ignored and nothing on `Object.prototype` changes. It never clamps a ratio to a workspace, because it has none.
+14. **Round trip.** `parseTileSet(serializeTileSet(x))` deeply equals `x` for every set the engine can produce, and `serializeTileSet` gives the same text for equal sets whatever order their keys were written in.
+15. **`isEdited`** compares `signature` of the working tree with the saved tree of the current name, or with the default when none is saved. `applyArrangement` loads the saved tree or the default, clears `maximized` and keeps `lastSpot`. `saveOver` stores the working tree under a name and makes it current.
+16. **Sequences.** A seeded generator written in the test (no new dependency) runs 400 random operations from each default, including closes, opens, moves into every zone, ratio changes at several workspace sizes, tab changes, maximize, and a serialize and parse every 25 steps. After every step: each open pane appears exactly once; no leaf is empty and no split has fewer than two children; ids are unique; the pane that is not closable is open; the tiling property of 9 holds on three workspace sizes; no number is NaN.
+17. No DOM, no storage, no clock, no randomness in the module. No `localeCompare`. Named constants for every number above. No em dash or en dash in any string. Titles and zone words are the only user facing strings and they join the no-dash walk.
+
+**Steps**
+
+- [ ] Read the reference file's tree, layout, save and zone code.
+- [ ] Write the failing tests for `normalize`, ids, `movePane`, `closePane`, `openPane`, the tab and maximize operations.
+- [ ] Implement `types.ts` and `tree.ts`. Run, pass.
+- [ ] Write the failing tests for `layoutTree`, the tiling property, `neighbourOf`, `zoneAt`, the six defaults.
+- [ ] Implement `layout.ts` and `catalog.ts`. Run, pass.
+- [ ] Write the failing tests for the store and the parser, then the sequence test.
+- [ ] Implement `store.ts` and `index.ts`. Run the three test files, `npx eslint` on your files, `npx tsc --noEmit`.
+
+---
+
 ## After this stage
 
-- **Stage 2, the tiled shell.** Panes that always fill the screen, dividers that resize, panes that dock against each other or stack as tabs, three saved arrangements, one saved layout per screen size. Its pure engine gets a written spec taken from the prototype the owner chose. Today is not restructured into panes until he has seen stage 1 and said yes.
+- **Stage 2, the tiled shell.** Panes that always fill the screen, dividers that resize, panes that dock against each other or stack as tabs, three saved arrangements, one saved layout per screen size. Task 3 above is its pure engine. The shell itself (the workspace, the panes, the rail, the motion, where the layout is saved) has no plan yet, and Today is not restructured into panes until the owner has seen stage 1 and said yes.
 - **Stage 3, editing the calendar**, against the engine's fake, after the engine's two open defects are fixed.
 - **Stage 4, after the security release:** the Google adapter, layouts saved to the account, live data.
