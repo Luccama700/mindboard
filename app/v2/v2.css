@@ -109,6 +109,42 @@
   margin: 0;
 }
 
+/* Read, not seen. The line of stops needs an h2 between the page's h1 and the
+   stops' h3 so the heading order does not skip a level. */
+[data-v2-root] .v2-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ------------------------------------------------- the old app's own chrome
+ *
+ * The root layout above this one mounts, for a signed in owner, a capture dock
+ * fixed to the bottom of the screen and a row of buttons fixed to the top, and
+ * app/globals.css pads the body to reserve the top row's band. None of those
+ * files may be edited from here, and this screen has its own bottom bar, so the
+ * two would sit on top of each other.
+ *
+ * These are the only rules in this file that do not start at [data-v2-root];
+ * they are still scoped to it, by :has(), so they cannot reach a page outside
+ * app/v2. !important because the body rule they cancel has the same specificity
+ * and the order the two stylesheets are injected in is not ours to decide.
+ */
+body:has([data-v2-root]) [data-capture-dock],
+body:has([data-v2-root]) [data-chrome-top] {
+  display: none !important;
+}
+
+body:has([data-v2-root]) {
+  padding-top: 0 !important;
+}
+
 /* ----------------------------------------------------------------- the frame */
 
 [data-v2-root] .v2-phone {
@@ -359,8 +395,14 @@
   color: var(--v2-ink-3);
 }
 
-[data-v2-root] .v2-stop[data-state="past"] {
-  opacity: 0.62;
+/* A row behind you is muted with COLOUR, never with opacity on the whole row:
+   opacity multiplies every pixel, so a word that carries meaning ("Not today",
+   "Done") would drop to about 2.3:1 against the page. Every colour below clears
+   4.5:1 on --v2-night. Opacity is still fine on the rail and the dot, which
+   carry no text. */
+[data-v2-root] .v2-stop[data-state="past"] h3,
+[data-v2-root] .v2-stop[data-state="done"] h3 {
+  color: var(--v2-ink-2);
 }
 
 [data-v2-root] .v2-stop[data-state="past"]::before,
@@ -374,13 +416,13 @@
   background: var(--v2-lane);
 }
 
-[data-v2-root] .v2-stop[data-state="done"] {
-  opacity: 0.72;
-}
-
 [data-v2-root] .v2-stop[data-state="done"] h3 {
   text-decoration: line-through;
   text-decoration-color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-stop[data-state="done"] .v2-tag {
+  color: var(--v2-ink-2);
 }
 
 /* A skipped stop is NOT a stop any more. The planner keeps it in the day's
@@ -390,8 +432,11 @@
    rail instead, so the day still shows what was dropped without claiming it
    occupies the time. */
 [data-v2-root] .v2-stop[data-state="skipped"] {
-  opacity: 0.55;
   padding-bottom: 10px;
+}
+
+[data-v2-root] .v2-stop[data-state="skipped"] .v2-tag {
+  color: var(--v2-ink-2);
 }
 
 [data-v2-root] .v2-stop[data-state="skipped"]::after {
@@ -587,10 +632,12 @@
   font: 600 15px/1.3 var(--v2-display);
 }
 
+/* ink-2, not ink-3: this text sits on --v2-deck rather than on the page, where
+   ink-3 is about 3.8:1 and ink-2 is about 6.5:1. */
 [data-v2-root] .v2-row span {
   flex: 0 1 auto;
   margin-left: auto;
-  color: var(--v2-ink-3);
+  color: var(--v2-ink-2);
   font-size: 13px;
   text-align: right;
 }

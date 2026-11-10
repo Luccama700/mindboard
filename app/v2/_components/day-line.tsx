@@ -45,6 +45,7 @@ export function DayLine({
   clock,
   movedIds,
   revision,
+  focusToken,
   onStart,
   onDone,
   onSkip,
@@ -57,6 +58,8 @@ export function DayLine({
   movedIds: ReadonlySet<string>;
   /** Which replan that was, so a block that moves twice flashes twice. */
   revision: number;
+  /** Counts the presses that unmounted a button. See StopCard. */
+  focusToken: number;
   onStart: (blockId: string) => void;
   onDone: (blockId: string) => void;
   onSkip: (blockId: string) => void;
@@ -99,9 +102,12 @@ export function DayLine({
         // row mounted until its exit finishes: for those 140ms its buttons are
         // still the old plan's, and a second tap would reach a block that is no
         // longer on the day.
+        // Under reduced motion the row goes at once: a zero duration lets
+        // AnimatePresence unmount it on the spot instead of holding its space
+        // for an animation that is not running.
         exit={
           still
-            ? { opacity: 1, pointerEvents: "none" }
+            ? { opacity: 1, pointerEvents: "none", transition: { duration: 0 } }
             : {
                 opacity: 0,
                 x: -28,
@@ -120,6 +126,7 @@ export function DayLine({
           lit={stop.id === litStopId}
           moved={stop.source === "block" && movedIds.has(stop.id)}
           revision={revision}
+          focusToken={focusToken}
           onStart={onStart}
           onDone={onDone}
           onSkip={onSkip}
@@ -129,13 +136,21 @@ export function DayLine({
   });
   if (marker >= stops.length) children.push(markerRow);
 
+  // The section exists for its heading: the page is h1 (the day) and the stops
+  // are h3, so without an h2 between them the heading order skips a level. It is
+  // read, not seen.
   return (
-    <ol className="v2-line" aria-label={TODAY_COPY.line}>
-      {/* The default mode on purpose: a leaving stop keeps its space until it is
-          gone, and the rows below it then slide up through their own layout
-          animation. popLayout would take it out of flow and position it against
-          the nearest positioned ancestor, which is the whole frame. */}
-      <AnimatePresence initial={false}>{children}</AnimatePresence>
-    </ol>
+    <section aria-labelledby="v2-line-heading">
+      <h2 className="v2-hidden" id="v2-line-heading">
+        {TODAY_COPY.line}
+      </h2>
+      <ol className="v2-line">
+        {/* The default mode on purpose: a leaving stop keeps its space until it
+            is gone, and the rows below it then slide up through their own layout
+            animation. popLayout would take it out of flow and position it
+            against the nearest positioned ancestor, which is the whole frame. */}
+        <AnimatePresence initial={false}>{children}</AnimatePresence>
+      </ol>
+    </section>
   );
 }

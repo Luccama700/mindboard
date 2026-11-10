@@ -47,12 +47,16 @@ export interface TodayInput {
   /**
    * Display names for the ids in `plan.dropped`.
    *
-   * The planner reports a drop as an id and a reason, never a title, so the
-   * caller (which holds the candidates) has to supply the names. `droppedTitles`
-   * builds this map. An id with no name is LEFT OUT of `notToday`: a raw task id
-   * is not copy, and a silent omission beats printing one.
+   * REQUIRED, and required on purpose. The planner reports a drop as an id and a
+   * reason, never a title, so the caller (which holds the candidates) has to
+   * supply the names; `droppedTitles` builds the map. Making it optional meant a
+   * caller who forgot it got a "Did not fit today" list that was silently short,
+   * which is exactly the class of defect AGENTS.md says to remove by making the
+   * argument required so the compiler lists the call sites. An id the map does
+   * not name still appears, under a generic name: the user needs to know
+   * something was dropped more than they need to know which thing.
    */
-  titles?: Record<string, string>;
+  titles: Record<string, string>;
 }
 
 export interface Stop {
@@ -90,6 +94,14 @@ export interface TodayView {
 // minute block does not tell the user what to do with it. The kind wins.
 const KIND_REASON: Partial<Record<BlockKind, string>> = {
   touch: "Open it and read it",
+};
+
+// The income block carries no task, so its title is a planner default rather
+// than anything the user wrote, and the view is free to name it. It has to: the
+// same block is named here when it lands and in PLANNER_OWNED_TITLES when it is
+// dropped, and the screen cannot call one thing two names.
+const KIND_TITLE: Partial<Record<BlockKind, string>> = {
+  income: "Work block",
 };
 
 /** Why a block is on the day. Keys are planner reasons (plan/planner.ts REASON). */
@@ -139,6 +151,15 @@ export const TODAY_COPY = {
   energyGroup: "Energy today",
   allDay: "All day",
   line: "The line of your day",
+  /** The name of a drop whose id the titles map does not cover. */
+  unnamedDrop: "Another task",
+  /** What a press did, for the status line. Keyed by the state it set. */
+  acted: {
+    started: "started",
+    done: "marked done",
+    skipped: "moved off today",
+  },
+  next: "Next",
   youAreHere: "You are here",
   nextStop: "Next stop",
   now: "Now",
@@ -188,6 +209,21 @@ export function droppedTitles(candidates: Candidate[]): Record<string, string> {
   return out;
 }
 
+/**
+ * What a press did and what is next, for the screen's one status line. A
+ * keyboard or screen reader user gets no other confirmation: the button they
+ * pressed is gone the moment the planner replans.
+ */
+export function actionLine(
+  action: keyof typeof TODAY_COPY.acted,
+  title: string,
+  nextTitle: string | null,
+): string {
+  const tail =
+    nextTitle === null ? TODAY_COPY.dayOver : `${TODAY_COPY.next}: ${nextTitle}.`;
+  return `${title} ${TODAY_COPY.acted[action]}. ${tail}`;
+}
+
 // ---------------------------------------------------------------------- stops
 
 interface Entry {
@@ -223,9 +259,12 @@ export function buildTodayView(input: TodayInput): TodayView {
 
   for (const event of input.fixed) {
     if (event.allDay) continue;
-    const leaveAt = leaveByFixedId.get(event.id);
+    const startMs = msOf(event.start);
+    // A leave by time is advice about a journey you have either taken or
+    // missed, so it goes away the moment the thing it was about has started.
+    const leaveAt = startMs > nowMs ? leaveByFixedId.get(event.id) : undefined;
     entries.push({
-      startMs: msOf(event.start),
+      startMs,
       endMs: msOf(event.end),
       blockState: null,
       stop: {
@@ -253,7 +292,7 @@ export function buildTodayView(input: TodayInput): TodayView {
         id: block.id,
         source: "block",
         kind: block.kind,
-        title: block.title,
+        title: KIND_TITLE[block.kind] ?? block.title,
         start: clockLabel(block.start, timeZone),
         end: clockLabel(block.end, timeZone),
         lane: block.lane === null ? null : (laneById.get(block.lane) ?? null),
@@ -266,13 +305,25 @@ export function buildTodayView(input: TodayInput): TodayView {
     });
   }
 
-  // Code point order on the tie-break, never locale order: this runs on the
+  // Start order, then the settled rows, then the id.
+  //
+  // The settled rule matters because a skipped block's minutes go back to the
+  // planner, so the very next plan can place something over them: two rows then
+  // share a start, and the struck-through leftover has to sit ABOVE the live one
+  // rather than below the lit card as if it came after it.
+  //
+  // The id tie-break is code point order, never locale order: this runs on the
   // server and again in the browser, whose Intl collations differ, so
   // localeCompare could order two stops that start at the same minute
   // differently in the two renders. That is a hydration mismatch, not a detail.
-  entries.sort((a, b) =>
-    a.startMs === b.startMs ? compareText(a.stop.id, b.stop.id) : a.startMs - b.startMs,
-  );
+  const settledRank = (entry: Entry) =>
+    entry.blockState === "done" || entry.blockState === "skipped" ? 0 : 1;
+  entries.sort((a, b) => {
+    if (a.startMs !== b.startMs) return a.startMs - b.startMs;
+    const bySettled = settledRank(a) - settledRank(b);
+    if (bySettled !== 0) return bySettled;
+    return compareText(a.stop.id, b.stop.id);
+  });
 
   // Behaviour 2. One stop is lit: the one in hand. A block the user started is
   // that stop whatever the clock says, because the clock cannot resolve it for
@@ -312,16 +363,16 @@ export function buildTodayView(input: TodayInput): TodayView {
   const energyAsk =
     input.openAsks.find((ask) => ask.kind === "energy" && ask.status === "open") ?? null;
 
-  const titles = input.titles ?? {};
-  const notToday: TodayView["notToday"] = [];
-  for (const drop of plan.dropped) {
-    const title = titles[drop.candidateId] ?? PLANNER_OWNED_TITLES[drop.candidateId];
-    if (!title) continue;
-    notToday.push({
-      title,
-      reason: DROP_REASON[drop.reason] ?? DROP_REASON_FALLBACK,
-    });
-  }
+  // Nothing is ever dropped from this list. A name the caller did not supply
+  // becomes a generic one, because "something did not fit and here is why" is
+  // the part the user acts on; which thing it was is the detail.
+  const notToday: TodayView["notToday"] = plan.dropped.map((drop) => ({
+    title:
+      input.titles[drop.candidateId] ??
+      PLANNER_OWNED_TITLES[drop.candidateId] ??
+      TODAY_COPY.unnamedDrop,
+    reason: DROP_REASON[drop.reason] ?? DROP_REASON_FALLBACK,
+  }));
 
   return {
     dateLabel: dayLabel(input.date),

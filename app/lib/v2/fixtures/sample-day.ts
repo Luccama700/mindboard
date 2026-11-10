@@ -233,8 +233,8 @@ function feeds(): FeedStatus[] {
       lastGoodAt: at("08:05", "2026-04-11"),
       cause: "auth-expired",
     },
-    { feed: "fd-desk", state: "alive", lastGoodAt: at("10:18"), cause: null },
-    { feed: "fd-alarm", state: "alive", lastGoodAt: at("07:34"), cause: null },
+    { feed: "fd-transit", state: "alive", lastGoodAt: at("10:18"), cause: null },
+    { feed: "fd-weather", state: "alive", lastGoodAt: at("07:34"), cause: null },
   ];
 }
 
@@ -243,8 +243,8 @@ const FEED_LABELS: Record<string, string> = {
   "fd-coursework": "Coursework",
   "fd-mail": "Mail",
   "fd-bank": "Bank balance",
-  "fd-desk": "Desk agent",
-  "fd-alarm": "Wake alarm",
+  "fd-transit": "Transit times",
+  "fd-weather": "Weather",
 };
 
 export interface SampleDay {

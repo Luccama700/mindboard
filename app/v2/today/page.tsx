@@ -1,10 +1,23 @@
 // The Today screen. In this slice it runs on the sample day only: no database,
 // no sign in, no session. Task 7 adds the live branch beside the fixture one.
 //
-// The gate is deliberately strict and deliberately pure (`fixturesEnabled`, so
-// it is testable): the flag has to be exactly "1" AND the deployment must not be
-// production. Anything else is a 404, so a route that serves invented data can
-// never appear on the real site by accident.
+// THE GATE. `V2_FIXTURES === "1"` and `VERCEL_ENV !== "production"`, exactly as
+// the brief has it, and the reasoning is worth writing down because the pair
+// looks redundant and is not:
+//
+//   - This app is only ever hosted on Vercel, so `VERCEL_ENV` is always set
+//     there and is the only thing that distinguishes the production deployment
+//     from a preview. A preview is a production BUILD, which is why the test is
+//     on the environment and not on NODE_ENV: a preview has to be able to show
+//     the sample, and that is the whole point of this route.
+//   - `V2_FIXTURES` is never set for the production environment. The flag is the
+//     switch; the environment check is the backstop for the day somebody sets it
+//     in the wrong place.
+//   - What is behind the gate is invented data only: no database read, no
+//     session, nothing of anybody's. The worst a leak could do is show a
+//     stranger a fictional Wednesday.
+//
+// The check is pure (`fixturesEnabled`) so it is testable on its own.
 //
 // Server and client: the server decides fixture mode and builds the sample (that
 // parses the planner rules, which the browser has no use for), then hands plain
@@ -20,6 +33,12 @@ import { TodayClient } from "./today-client";
 export const metadata: Metadata = {
   title: "Today",
 };
+
+// The gate reads two environment variables, so it has to run per request rather
+// than once at build time. Declared here rather than left to whatever the root
+// layout happens to do, so the gate cannot be prerendered into a static answer
+// by a change somewhere above this page.
+export const dynamic = "force-dynamic";
 
 export default function TodayPage() {
   if (

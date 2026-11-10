@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { fixturesEnabled, sampleDay } from "@/app/lib/v2/fixtures/sample-day";
@@ -340,7 +340,46 @@ describe("the fixtures gate", () => {
 
   test("never opens in production, whatever the flag says", () => {
     expect(fixturesEnabled({ V2_FIXTURES: "1", VERCEL_ENV: "production" })).toBe(false);
+    // A Vercel preview is a production BUILD, and showing the sample on a
+    // preview is the point of this route, so the test is on the environment.
     expect(fixturesEnabled({ V2_FIXTURES: "1", VERCEL_ENV: "preview" })).toBe(true);
     expect(fixturesEnabled({ V2_FIXTURES: "1", VERCEL_ENV: "development" })).toBe(true);
+  });
+});
+
+// The pure gate above is only half of it: the page has to read the right two
+// variables and actually refuse. notFound() works by throwing, so a page that
+// forgot to call it, or read the wrong name, returns an element instead.
+describe("the page is wired to the gate", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  test("renders the sample day with the flag on", async () => {
+    vi.stubEnv("V2_FIXTURES", "1");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const { default: TodayPage } = await import("@/app/v2/today/page");
+    expect(TodayPage()).toBeTruthy();
+  });
+
+  test("is not found with the flag off", async () => {
+    vi.stubEnv("V2_FIXTURES", "");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const { default: TodayPage } = await import("@/app/v2/today/page");
+    expect(() => TodayPage()).toThrow();
+  });
+
+  test("is not found in production, flag or no flag", async () => {
+    vi.stubEnv("V2_FIXTURES", "1");
+    vi.stubEnv("VERCEL_ENV", "production");
+    const { default: TodayPage } = await import("@/app/v2/today/page");
+    expect(() => TodayPage()).toThrow();
+  });
+
+  test("asks to be rendered per request, so the gate is never prerendered", async () => {
+    vi.stubEnv("V2_FIXTURES", "1");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const page = await import("@/app/v2/today/page");
+    expect(page.dynamic).toBe("force-dynamic");
   });
 });

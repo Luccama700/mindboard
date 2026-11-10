@@ -4,35 +4,22 @@ import { useCallback, useMemo, useState } from "react";
 
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { clockLabel } from "@/app/lib/v2/view/format";
-import { TODAY_COPY, buildTodayView, droppedTitles } from "@/app/lib/v2/view/today";
-import type {
-  Ask,
-  Block,
-  BlockState,
-  Energy,
-  FeedStatus,
-  LaneKey,
-  PlanInput,
-  PlanOutput,
-} from "@/app/lib/v2/types";
+import {
+  TODAY_COPY,
+  actionLine,
+  buildTodayView,
+  droppedTitles,
+} from "@/app/lib/v2/view/today";
+// Type only, so none of the fixture (and none of the schema it parses its rules
+// with) reaches the browser bundle: the server builds the sample and hands the
+// plain data down.
+import type { SampleDay } from "@/app/lib/v2/fixtures/sample-day";
+import type { Block, Energy, PlanOutput } from "@/app/lib/v2/types";
 import { DayHeader } from "../_components/day-header";
 import { DayLine } from "../_components/day-line";
 import { EnergyRow } from "../_components/energy-row";
 import { NavBar } from "../_components/nav-bar";
 import { NotTodayList } from "../_components/not-today-list";
-
-/**
- * The sample day, as plain data. The page builds it on the server (building it
- * parses the rules, which costs a schema the browser has no use for) and hands
- * it down; everything from here on is the real engine running in the browser.
- */
-export interface TodaySample {
-  input: PlanInput;
-  lanes: Array<{ key: LaneKey; label: string; color: string }>;
-  feeds: FeedStatus[];
-  feedLabels: Record<string, string>;
-  openAsks: Ask[];
-}
 
 interface DayState {
   /** What the user has said. null until they say. */
@@ -44,6 +31,14 @@ interface DayState {
    * keys the node that carries it.
    */
   revision: number;
+  /**
+   * How many of those replans came from a press that unmounted its own button.
+   * The lit card takes focus when this changes, and only then, so answering the
+   * energy question does not drag focus off the control being used.
+   */
+  focusToken: number;
+  /** What just happened, for the status line. null falls back to the energy. */
+  said: string | null;
 }
 
 /**
@@ -61,13 +56,15 @@ interface DayState {
  * makes the first render deterministic (the server and the browser plan the same
  * day) and what makes a screenshot reproducible.
  */
-export function TodayClient({ sample }: { sample: TodaySample }) {
+export function TodayClient({ sample }: { sample: SampleDay }) {
   const { input } = sample;
 
   const [state, setState] = useState<DayState>(() => ({
     energy: input.energy,
     plan: planDay(input),
     revision: 0,
+    focusToken: 0,
+    said: null,
   }));
 
   const replan = useCallback(
@@ -76,20 +73,53 @@ export function TodayClient({ sample }: { sample: TodaySample }) {
     [input],
   );
 
+  const titles = useMemo(() => droppedTitles(input.candidates), [input.candidates]);
+
+  const viewFor = useCallback(
+    (energy: Energy | null, plan: PlanOutput) =>
+      buildTodayView({
+        date: input.date,
+        now: input.now,
+        timeZone: input.rules.timeZone,
+        plan,
+        fixed: input.fixed,
+        lanes: sample.lanes,
+        feeds: sample.feeds,
+        feedLabels: sample.feedLabels,
+        openAsks: sample.openAsks,
+        energy,
+        titles,
+      }),
+    [input, sample, titles],
+  );
+
+  // The status line is composed here rather than in the render, because it is
+  // about a transition: what the press did, and what the planner lit instead.
+  // Both titles are read off the view, so they are the words on the screen
+  // rather than the planner's raw ones.
   const setBlockState = useCallback(
-    (blockId: string, next: BlockState) => {
+    (blockId: string, next: "started" | "done" | "skipped") => {
       setState((prev) => {
         const existing = prev.plan.blocks.map((block) =>
           block.id === blockId ? { ...block, state: next } : block,
         );
+        const plan = replan(prev.energy, existing);
+        const after = viewFor(prev.energy, plan);
+        const pressed = after.stops.find((stop) => stop.id === blockId);
+        const lit = after.stops.find((stop) => stop.id === after.litStopId);
         return {
           energy: prev.energy,
-          plan: replan(prev.energy, existing),
+          plan,
           revision: prev.revision + 1,
+          focusToken: prev.focusToken + 1,
+          said:
+            pressed === undefined
+              ? null
+              : actionLine(next, pressed.title, lit?.title ?? null),
         };
       });
     },
-    [replan],
+    [replan, viewFor],
   );
 
   const onStart = useCallback(
@@ -104,17 +134,20 @@ export function TodayClient({ sample }: { sample: TodaySample }) {
     (blockId: string) => setBlockState(blockId, "skipped"),
     [setBlockState],
   );
+  // The energy buttons are not unmounted by their own press, so focus stays
+  // where the user put it and the token does not move. The status line falls
+  // back to the energy label, which is the confirmation for this press.
   const onEnergy = useCallback(
     (energy: Energy) =>
       setState((prev) => ({
         energy,
         plan: replan(energy, prev.plan.blocks),
         revision: prev.revision + 1,
+        focusToken: prev.focusToken,
+        said: null,
       })),
     [replan],
   );
-
-  const titles = useMemo(() => droppedTitles(input.candidates), [input.candidates]);
 
   const movedIds = useMemo(
     () => new Set(state.plan.moved.map((entry) => entry.blockId)),
@@ -122,21 +155,8 @@ export function TodayClient({ sample }: { sample: TodaySample }) {
   );
 
   const view = useMemo(
-    () =>
-      buildTodayView({
-        date: input.date,
-        now: input.now,
-        timeZone: input.rules.timeZone,
-        plan: state.plan,
-        fixed: input.fixed,
-        lanes: sample.lanes,
-        feeds: sample.feeds,
-        feedLabels: sample.feedLabels,
-        openAsks: sample.openAsks,
-        energy: state.energy,
-        titles,
-      }),
-    [input, sample, state, titles],
+    () => viewFor(state.energy, state.plan),
+    [viewFor, state.energy, state.plan],
   );
 
   const clock = clockLabel(input.now, input.rules.timeZone);
@@ -145,6 +165,14 @@ export function TodayClient({ sample }: { sample: TodaySample }) {
     <div className="v2-phone">
       <DayHeader dateLabel={view.dateLabel} feed={view.feed} allDay={view.allDay} />
       <EnergyRow energy={view.energy} answered={state.energy} onPick={onEnergy} />
+
+      {/* The screen's one live region. Pressing Start, Done or Not today
+          unmounts the button that was pressed, so this sentence is the only
+          confirmation a keyboard or screen reader user gets; between presses it
+          falls back to the energy the plan ran on. */}
+      <p className="v2-said" role="status">
+        {state.said ?? view.energy.label}
+      </p>
 
       {view.empty ? (
         <p className="v2-empty">{TODAY_COPY.empty}</p>
@@ -156,6 +184,7 @@ export function TodayClient({ sample }: { sample: TodaySample }) {
             clock={clock}
             movedIds={movedIds}
             revision={state.revision}
+            focusToken={state.focusToken}
             onStart={onStart}
             onDone={onDone}
             onSkip={onSkip}

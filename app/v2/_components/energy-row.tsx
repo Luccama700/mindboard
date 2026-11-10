@@ -43,31 +43,28 @@ export function EnergyRow({
   // answer, and nothing reads as pressed.
   const index = ORDER.indexOf(answered ?? "ok");
 
+  // The three buttons stay pressable after the first answer, so a reviewer can
+  // go back and forth between the three days.
   return (
-    <>
-      <div className="v2-energy">
-        <span>{TODAY_COPY.energy}</span>
-        <div className="v2-seg" role="group" aria-label={TODAY_COPY.energyGroup}>
-          <div
-            className="v2-thumb"
-            data-answered={answered === null ? "no" : "yes"}
-            style={{ transform: `translateX(${index * 100}%)` }}
-          />
-          {options.map((option) => (
-            <button
-              key={option.energy}
-              type="button"
-              aria-pressed={answered === option.energy}
-              onClick={() => onPick(option.energy)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+    <div className="v2-energy">
+      <span>{TODAY_COPY.energy}</span>
+      <div className="v2-seg" role="group" aria-label={TODAY_COPY.energyGroup}>
+        <div
+          className="v2-thumb"
+          data-answered={answered === null ? "no" : "yes"}
+          style={{ transform: `translateX(${index * 100}%)` }}
+        />
+        {options.map((option) => (
+          <button
+            key={option.energy}
+            type="button"
+            aria-pressed={answered === option.energy}
+            onClick={() => onPick(option.energy)}
+          >
+            {option.label}
+          </button>
+        ))}
       </div>
-      <p className="v2-said" aria-live="polite">
-        {energy.label}
-      </p>
-    </>
+    </div>
   );
 }

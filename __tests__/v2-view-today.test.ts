@@ -10,6 +10,7 @@ import { parseRules } from "@/app/lib/v2/rules";
 import {
   STOP_STATUS_COPY,
   TODAY_COPY,
+  actionLine,
   buildTodayView,
   droppedTitles,
   type TodayInput,
@@ -88,6 +89,7 @@ function input(over: Partial<TodayInput> = {}): TodayInput {
     feedLabels: {},
     openAsks: [],
     energy: "ok",
+    titles: {},
     ...over,
   };
 }
@@ -165,6 +167,37 @@ describe("the stops", () => {
     expect(view.stops[0].lane).toEqual({ label: "Study", color: "#7C9BFF" });
     expect(view.stops[1].lane).toBeNull();
     expect(view.stops[2].lane).toBeNull();
+  });
+
+  // A skipped block's minutes go back to the planner, so the next plan can put
+  // something on top of them. The leftover has to read as the thing that was
+  // dropped, which means sitting above the live row rather than under it.
+  test("put a settled stop above a live one that starts at the same minute", () => {
+    const view = buildTodayView(
+      input({
+        plan: plan({
+          blocks: [
+            block({ id: "b-live", start: at("10:35"), end: at("11:25") }),
+            block({ id: "b-gone", state: "skipped", start: at("10:35"), end: at("11:00") }),
+            block({ id: "a-done", state: "done", start: at("10:35"), end: at("11:00") }),
+          ],
+        }),
+      }),
+    );
+    expect(view.stops.map((stop) => stop.id)).toEqual(["a-done", "b-gone", "b-live"]);
+    expect(view.litStopId).toBe("b-live");
+  });
+
+  test("tie-break two live stops by id, in code point order", () => {
+    const view = buildTodayView(
+      input({
+        fixed: [event({ id: "a-fixed", start: at("10:35"), end: at("11:00") })],
+        plan: plan({
+          blocks: [block({ id: "b-block", start: at("10:35"), end: at("11:00") })],
+        }),
+      }),
+    );
+    expect(view.stops.map((stop) => stop.id)).toEqual(["a-fixed", "b-block"]);
   });
 
   test("keep the block kind, and call a fixed event fixed", () => {
@@ -283,6 +316,39 @@ describe("the lit stop", () => {
     expect(view.litStopId).toBe("b-started");
   });
 
+  // The block's own state beats the clock: a block finished early is finished,
+  // and a block finished for a slot that has not arrived yet is still finished.
+  test("is never a done block whose time is still ahead", () => {
+    const view = buildTodayView(
+      input({
+        plan: plan({
+          blocks: [
+            block({ id: "b-done-later", state: "done", start: at("15:20"), end: at("17:20") }),
+            block({ id: "b-next", start: at("10:35"), end: at("11:00") }),
+          ],
+        }),
+      }),
+    );
+    expect(view.litStopId).toBe("b-next");
+    const byId = new Map(view.stops.map((stop) => [stop.id, stop.state]));
+    expect(byId.get("b-done-later")).toBe("done");
+    expect(byId.get("b-next")).toBe("next");
+  });
+
+  test("is nothing when every stop is settled, even ones still ahead", () => {
+    const view = buildTodayView(
+      input({
+        plan: plan({
+          blocks: [
+            block({ id: "b-done", state: "done", start: at("15:20"), end: at("17:20") }),
+            block({ id: "b-skipped", state: "skipped", start: at("21:10"), end: at("22:50") }),
+          ],
+        }),
+      }),
+    );
+    expect(view.litStopId).toBeNull();
+  });
+
   test("is nothing when the day is over", () => {
     const view = buildTodayView(
       input({
@@ -319,6 +385,31 @@ describe("leave by", () => {
     );
     expect(view.stops[0].leaveBy).toBe("Leave by 12:35");
     expect(view.stops[1].leaveBy).toBeNull();
+  });
+
+  // It is advice about a journey. Once the thing has started the advice is
+  // either taken or moot, and leaving it on screen reads as an instruction.
+  test("goes away once the event has started", () => {
+    const view = buildTodayView(
+      input({
+        fixed: [
+          event({ id: "fx-running", start: at("10:00"), end: at("11:30") }),
+          event({ id: "fx-over", start: at("09:00"), end: at("09:45") }),
+          event({ id: "fx-ahead", start: at("13:00"), end: at("15:00") }),
+        ],
+        plan: plan({
+          leaveBy: [
+            { fixedId: "fx-running", at: at("09:35") },
+            { fixedId: "fx-over", at: at("08:35") },
+            { fixedId: "fx-ahead", at: at("12:35") },
+          ],
+        }),
+      }),
+    );
+    const byId = new Map(view.stops.map((stop) => [stop.id, stop.leaveBy]));
+    expect(byId.get("fx-over")).toBeNull();
+    expect(byId.get("fx-running")).toBeNull();
+    expect(byId.get("fx-ahead")).toBe("Leave by 12:35");
   });
 
   test("never lands on a block", () => {
@@ -581,10 +672,11 @@ describe("not today", () => {
   });
 
   // The ids are the planner's, not a caller's, so the view names them whether or
-  // not anybody built a titles map.
-  test("names them even with no titles map at all", () => {
+  // not the caller's map covers them.
+  test("names them even when the titles map is empty", () => {
     const view = buildTodayView(
       input({
+        titles: {},
         plan: plan({
           dropped: [
             { candidateId: "income", reason: "cap" },
@@ -617,8 +709,9 @@ describe("not today", () => {
     }
   });
 
-  // A raw task id is not copy. Nothing the screen cannot name gets listed.
-  test("leaves out a drop it cannot name", () => {
+  // A raw task id is not copy, but a drop that disappears is worse: the user can
+  // act on "something did not fit, and here is why" without knowing which thing.
+  test("shows a drop it cannot name under a generic name", () => {
     const view = buildTodayView(
       input({
         titles,
@@ -630,9 +723,89 @@ describe("not today", () => {
         }),
       }),
     );
-    expect(view.notToday.map((entry) => entry.title)).toEqual([
-      "Reconcile last week's ledger",
+    expect(view.notToday).toEqual([
+      { title: "Another task", reason: "Past today's capacity" },
+      { title: "Reconcile last week's ledger", reason: "Past today's capacity" },
     ]);
+  });
+
+  // `titles` is a required argument on purpose: an omitted map used to make this
+  // list silently short. The compiler is the guard, so this only has to prove
+  // that an empty map still lists everything.
+  test("never drops a row, whatever the titles map holds", () => {
+    const view = buildTodayView(
+      input({
+        titles: {},
+        plan: plan({
+          dropped: [
+            { candidateId: "a", reason: "capacity" },
+            { candidateId: "b", reason: "no-room" },
+            { candidateId: "c", reason: "cap" },
+          ],
+        }),
+      }),
+    );
+    expect(view.notToday).toHaveLength(3);
+  });
+});
+
+// One block, one name. The planner titles its own income block "Income work"
+// and reports a dropped one under the token `income`, so without this the same
+// thing would be called two different things on one screen.
+describe("the work block", () => {
+  test("is called the same whether it lands or is dropped", () => {
+    const landed = buildTodayView(
+      input({
+        plan: plan({
+          blocks: [
+            block({
+              id: "b-income",
+              kind: "income",
+              title: "Income work",
+              reason: "income-target",
+              start: at("15:20"),
+              end: at("17:20"),
+            }),
+          ],
+        }),
+      }),
+    );
+    const dropped = buildTodayView(
+      input({ plan: plan({ dropped: [{ candidateId: "income", reason: "cap" }] }) }),
+    );
+    expect(landed.stops[0].title).toBe("Work block");
+    expect(dropped.notToday[0].title).toBe("Work block");
+  });
+
+  test("leaves every other block's title alone", () => {
+    const view = buildTodayView(
+      input({
+        plan: plan({
+          blocks: [block({ id: "b", title: "Glaze the test tiles", start: at("11:10"), end: at("12:00") })],
+        }),
+      }),
+    );
+    expect(view.stops[0].title).toBe("Glaze the test tiles");
+  });
+});
+
+describe("the status line", () => {
+  test("says what the press did and what is next", () => {
+    expect(actionLine("done", "Ethics essay", "Stretch for ten minutes")).toBe(
+      "Ethics essay marked done. Next: Stretch for ten minutes.",
+    );
+    expect(actionLine("started", "Ethics essay", "Ceramics workshop")).toBe(
+      "Ethics essay started. Next: Ceramics workshop.",
+    );
+    expect(actionLine("skipped", "Glaze the test tiles", "Work block")).toBe(
+      "Glaze the test tiles moved off today. Next: Work block.",
+    );
+  });
+
+  test("says the day is over when nothing is left", () => {
+    expect(actionLine("done", "Grant form", null)).toBe(
+      "Grant form marked done. Nothing left on the line.",
+    );
   });
 });
 
