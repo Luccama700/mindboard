@@ -48,6 +48,11 @@ const SCOPED_DIRS = [
   "app/lib/agent",
   "app/lib/connections",
   "app/lib/inventory",
+  // The v2 engine. Its store/supabase.ts runs on the service client (the
+  // client arrives as a parameter and the cron/webhook routes hand it the
+  // service one), so the tree has to be scanned here or behaviour 9 of its
+  // brief is unenforceable: nothing else reads that file for a tenant filter.
+  "app/lib/v2",
   "app/actions",
   "app/auth",
   "utils/google",
@@ -343,6 +348,40 @@ const ALLOWLIST: Allow[] = [
     contains: '.lt("expires_at"',
     count: 1,
     why: "Garbage-collects expired code hashes across all users; the table holds no user data.",
+  },
+  // ---- the v2 engine's three identity lookups ----
+  {
+    file: "app/lib/v2/store/supabase.ts",
+    table: "v2_rules",
+    contains: '.select("user_id").eq("enabled", true)',
+    count: 1,
+    why:
+      "The tick's roster. It crosses accounts by design - a ten minute cron run has to know " +
+      "which accounts have the engine switched on - and it returns ids ONLY: no rules " +
+      "document, no chat, no day. Everything the tick then reads goes through a userId-first " +
+      "method on the same store.",
+  },
+  {
+    file: "app/lib/v2/store/supabase.ts",
+    table: "v2_channels",
+    contains: '.eq("chat_id", chatId)',
+    count: 1,
+    why:
+      "This IS the identity lookup for an incoming Telegram update, the same shape as the PAT " +
+      "lookup in app/lib/mcp/pat.ts: the chat id resolves WHICH account is calling, so there " +
+      "is no user_id to filter by yet and filtering would be circular. chat_id is uniquely " +
+      "indexed, and the statement returns a user id and nothing else.",
+  },
+  {
+    file: "app/lib/v2/store/supabase.ts",
+    table: "v2_channels",
+    contains: '.eq("pairing_hash", codeHash)',
+    count: 1,
+    why:
+      "Redeeming a pairing code, and the code is the identity: /start arrives from a chat that " +
+      "belongs to nobody yet. The hash is a SHA-256 of a one-time code, uniquely indexed, with " +
+      "an expiry checked in the same statement that clears it, so it works once. It returns a " +
+      "user id and nothing else, and the unique index on chat_id stops it taking over a chat.",
   },
   // ---- worker storage ----
   {
