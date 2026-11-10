@@ -32,6 +32,15 @@ Read this first when resuming. Newest entry on top. `PLAN.md` is the current pla
 - Verdict of the last re-check: fit to show as built and reviewed, not yet live. What is still open is listed in `PLAN.md` under "Known open edges" and "Next after this plan".
 - **Not built, and required before the engine can be switched on for anyone:** the live Today screen, a go-live script (nothing yet writes an account's rules, expectations or pairing code, or enables an account), and a first run of the storage code against a real database.
 
+### 2026-11-10
+
+- The owner tried the sample screen and asked for a desktop version, his own data on it, and a colour scheme he can change. All three built, reviewed by rendering, and committed (`a144aea`).
+- **Local mode.** `V2_LOCAL_SNAPSHOT` names a folder of local JSON files (an export, a rules document, a manifest, calendar events). The page builds the same planner input the live engine will and never connects to a database. It is refused in production and never writes. This is how the screen is tried on real data until the security release is live.
+- **Desktop layout** from 1024 px: a rail, the day, and a side column (energy, lanes, items past their date, what did not fit). Phone layout unchanged below that.
+- **Colour schemes.** Every token derives from two colours. Black and purple is the default and is what the server renders. The choice is stored per browser under `mb-v2-appearance`.
+- **Planner, from real data:** an overdue item now ranks after live work (`0c171aa`). On a real account the oldest overdue task had been taking the guaranteed block every day.
+- The screen input has one shape whatever built it: `app/lib/v2/view/screen-data.ts`.
+
 ### How the build runs
 
 One implementer agent per task, then a separate reviewer agent, then fixes until the review is clean. The orchestrating session makes every commit. The working ledger with every ruling is `.superpowers/sdd/PLAN/progress.md` (git-ignored, so it can be lost; the rulings that matter are copied into the final report and into `docs/rebuild/04-decisions.md`).
@@ -46,6 +55,7 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 | All nine tasks, before the whole-branch review, `4827115` | 0 errors, 2 warnings | 2646 of 2646 (118 files) | ok, placeholder env |
 | After the whole-branch fix pass, `2159f52` | 0 errors, 2 warnings | 2742 of 2742 (119 files) | ok, placeholder env |
 | Final, one test added after `2159f52` | 0 errors, 2 warnings | 2743 of 2743 (119 files) | not re-run: no code changed since the build above |
+| Real-data mode, desktop layout, colour schemes, `a144aea` | 0 errors, 2 warnings | 2902 of 2902 (121 files) | ok, placeholder env |
 
 ### Known traps
 
