@@ -55,12 +55,13 @@ interface DayState {
  * is what makes the first render deterministic (the server and the browser plan
  * the same day) and a screenshot reproducible.
  *
- * ONE DOCUMENT, TWO LAYOUTS. The order below is rail, main, side, which is the
- * reading and tab order on desktop. Below 1024px the two wrappers go
+ * ONE DOCUMENT, EVERY LAYOUT. The order below is rail, main, side, which is the
+ * reading and tab order on desktop. Below 1024px the wrappers go
  * `display: contents` and the leaves are ordered back into the phone's own
  * sequence by the stylesheet (header, all day, energy, status, the line, what
  * did not fit), so the phone screen is unchanged and there is only ever one copy
- * of every control.
+ * of every control. From 1024px up the stylesheet decides how many columns the
+ * side becomes (one, two or three) from the width of the window alone.
  */
 export function TodayClient({ data }: { data: TodayScreenData }) {
   const { input } = data;
@@ -198,24 +199,34 @@ export function TodayClient({ data }: { data: TodayScreenData }) {
         </div>
       </div>
 
+      {/* The day's context. The two inner wrappers are nothing at all on the
+          phone and on a small desktop window. On a wide one each becomes a
+          column of its own, and on a wider one still each list does, so the
+          page fills the window with information instead of leaving it black. */}
       <div className="v2-side">
-        <EnergyRow energy={view.energy} answered={state.energy} onPick={onEnergy} />
+        <div className="v2-status">
+          <EnergyRow energy={view.energy} answered={state.energy} onPick={onEnergy} />
 
-        {/* The screen's one live region. Pressing Start, Done or Not today
-            unmounts the button that was pressed, so this sentence is the only
-            confirmation a keyboard or screen reader user gets; between presses
-            it falls back to the energy the plan ran on. */}
-        <p className="v2-said" role="status">
-          {state.said ?? view.energy.label}
-        </p>
+          {/* The screen's one live region. Pressing Start, Done or Not today
+              unmounts the button that was pressed, so this sentence is the only
+              confirmation a keyboard or screen reader user gets; between presses
+              it falls back to the energy the plan ran on. */}
+          <p className="v2-said" role="status">
+            {state.said ?? view.energy.label}
+          </p>
 
-        <AllDayRow items={view.allDay} />
-        <FeedStrip feed={view.feed} />
-        <LaneSummary lanes={view.lanes} />
-        {/* Above what did not fit today, on both layouts: an item whose date has
-            gone by is a decision waiting, where a drop is only today's news. */}
-        <PastDueList entries={view.pastDue} />
-        <NotTodayList entries={view.notToday} />
+          <AllDayRow items={view.allDay} />
+          <FeedStrip feed={view.feed} />
+          <LaneSummary lanes={view.lanes} />
+        </div>
+
+        <div className="v2-lists">
+          {/* Above what did not fit today, on every layout: an item whose date
+              has gone by is a decision waiting, where a drop is only today's
+              news. */}
+          <PastDueList entries={view.pastDue} />
+          <NotTodayList entries={view.notToday} />
+        </div>
       </div>
     </div>
   );

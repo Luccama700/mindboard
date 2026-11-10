@@ -13,6 +13,8 @@ import path from "node:path";
 import { createElement } from "react";
 import { hydrateRoot } from "react-dom/client";
 
+import postcss from "postcss";
+
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -762,22 +764,33 @@ describe("the appearance panel is really a dialog", () => {
   const focusablesOf = (panel: HTMLElement) =>
     Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_IN_PANEL));
 
+  // The press's default is prevented, and that is the part jsdom cannot show by
+  // itself: a real browser moves focus to the body as the press's default
+  // action, AFTER the handler handed it back to the trigger, and jsdom has no
+  // such default. fireEvent returns false exactly when it was prevented.
   test("closes on a press on the veil, and hands focus back", async () => {
     const { trigger, veil } = await openPanel();
+    let allowed = true;
     await act(async () => {
-      fireEvent.mouseDown(veil);
+      allowed = fireEvent.mouseDown(veil);
     });
+    expect(allowed).toBe(false);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
 
   // A drag that starts on a control and ends on the veil must not close
-  // anything, which is why it is mousedown with target === currentTarget.
+  // anything, which is why it is mousedown with target === currentTarget. And
+  // its default is left alone, or pressing a control would stop focusing it.
   test("does not close on a press that starts on a control inside it", async () => {
     const { panel } = await openPanel();
+    let allowed = false;
     await act(async () => {
-      fireEvent.mouseDown(screen.getByRole("button", { name: SCHEMES[0].name }));
+      allowed = fireEvent.mouseDown(
+        screen.getByRole("button", { name: SCHEMES[0].name }),
+      );
     });
+    expect(allowed).toBe(true);
     expect(screen.getByRole("dialog")).toBe(panel);
   });
 
@@ -1007,5 +1020,147 @@ describe("the appearance root and this browser's storage", () => {
     expect(root.getAttribute("data-v2-scheme")).toBe(CUSTOM_SCHEME_ID);
     expectTokens(root, stored);
     expect(errors).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// The desktop page fills the window
+//
+// The owner opened the first desktop page on a wide monitor and it used the
+// left half: the frame was capped at 1140px. The frame has no cap now, and the
+// day's context becomes more columns as the window allows. jsdom lays nothing
+// out, so what is pinned here is the two things that layout depends on: the
+// elements the stylesheet turns into columns, and the stylesheet's own rules.
+// ===========================================================================
+
+describe("the desktop page fills the window", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const sheet = postcss.parse(
+    readFileSync(path.join(process.cwd(), "app/v2/v2.css"), "utf8"),
+  );
+
+  /** The last value one selector is given for one property inside one tier. */
+  const inTier = (minWidth: number, selector: string, prop: string) => {
+    let found: string | null = null;
+    sheet.walkAtRules("media", (media) => {
+      if (media.params.trim() !== `(min-width: ${minWidth}px)`) return;
+      media.walkRules((rule) => {
+        const own = rule.selectors.map((entry) => entry.trim());
+        if (!own.includes(`[data-v2-root] ${selector}`)) return;
+        rule.walkDecls(prop, (decl) => {
+          found = decl.value;
+        });
+      });
+    });
+    return found;
+  };
+
+  test("gives status and the two lists their own elements, in reading order", () => {
+    const { container } = render(createElement(TodayClient, { data: sampleDay() }));
+    const side = container.querySelector(".v2-side") as HTMLElement;
+    const [status, lists] = Array.from(side.children);
+    expect(status.className).toBe("v2-status");
+    expect(lists.className).toBe("v2-lists");
+
+    // The controls and the live region stay with status.
+    expect(status.querySelector(".v2-energy")).not.toBeNull();
+    expect(status.querySelector('[role="status"]')).not.toBeNull();
+
+    // Past their date first, then what did not fit, each a column of its own.
+    const columns = Array.from(lists.children);
+    expect(columns.map((column) => column.getAttribute("aria-labelledby"))).toEqual([
+      "v2-past-due",
+      "v2-not-today",
+    ]);
+    for (const column of columns) {
+      expect(column.classList.contains("v2-list")).toBe(true);
+      const rows = column.querySelector(".v2-list-rows") as HTMLElement;
+      expect(rows.querySelectorAll(".v2-row").length).toBeGreaterThan(0);
+      // Every row is inside the element that lays rows out, none beside it.
+      expect(column.querySelectorAll(".v2-row").length).toBe(
+        rows.querySelectorAll(".v2-row").length,
+      );
+    }
+  });
+
+  test("keeps the rail, the day and the context in that order in the document", () => {
+    const { container } = render(createElement(TodayClient, { data: sampleDay() }));
+    const shell = container.querySelector(".v2-shell") as HTMLElement;
+    expect(Array.from(shell.children).map((child) => child.className)).toEqual([
+      "v2-nav",
+      "v2-main",
+      "v2-side",
+    ]);
+  });
+
+  test("puts no width cap on the frame at any desktop width", () => {
+    const caps: string[] = [];
+    sheet.walkAtRules("media", (media) => {
+      // The phone and the framed tablet both carry a max-width in their query,
+      // and both cap the frame on purpose. Everything else is a desktop tier.
+      if (!media.params.includes("min-width") || media.params.includes("max-width")) {
+        return;
+      }
+      media.walkRules((rule) => {
+        if (!rule.selectors.some((entry) => entry.trim().endsWith(".v2-shell"))) return;
+        rule.walkDecls("max-width", (decl) => {
+          caps.push(`${media.params}: ${decl.value}`);
+        });
+      });
+    });
+    expect(caps).toEqual([]);
+  });
+
+  test("gives everything left over to the context, not to a fixed column", () => {
+    for (const tier of [1024, 1360, 2400]) {
+      const columns = inTier(tier, ".v2-shell", "grid-template-columns") ?? "";
+      // The last explicit track is flexible at every tier.
+      expect(columns.trim().endsWith("fr)")).toBe(true);
+    }
+    // And the day stops growing, so the rest has somewhere to go.
+    expect(inTier(1024, ".v2-shell", "grid-template-columns")).toContain(
+      "minmax(420px, 640px)",
+    );
+  });
+
+  test("turns the context into more columns as the window widens", () => {
+    // At 1024 the side is the one column and its halves are nothing.
+    expect(inTier(1024, ".v2-side", "display")).toBe("flex");
+    expect(inTier(1024, ".v2-status", "display")).toBe("contents");
+    expect(inTier(1024, ".v2-lists", "display")).toBe("contents");
+
+    // From 1360 the side is nothing and its halves are the columns.
+    expect(inTier(1360, ".v2-side", "display")).toBe("contents");
+    expect(inTier(1360, ".v2-status", "display")).toBe("flex");
+    expect(inTier(1360, ".v2-lists", "display")).toBe("flex");
+    expect(inTier(1360, ".v2-shell", "grid-auto-flow")).toBe("column");
+
+    // From 1760 each list is a column, so the pair's wrapper is nothing.
+    expect(inTier(1760, ".v2-lists", "display")).toBe("contents");
+    expect(inTier(1760, ".v2-list", "overflow-y")).toBe("auto");
+  });
+
+  test("does not keep an empty column when there is nothing to list", () => {
+    expect(inTier(1360, ".v2-lists:empty", "display")).toBe("none");
+  });
+
+  test("cannot be pushed sideways by a narrow column or one long word", () => {
+    // A column narrower than the rows' own minimum would be overflowed by it.
+    expect(inTier(1024, ".v2-list-rows", "grid-template-columns")).toContain("min(");
+    // A grid item's automatic minimum is its content.
+    expect(inTier(1024, ".v2-main", "min-width")).toBe("0");
+    expect(inTier(1024, ".v2-side", "min-width")).toBe("0");
+    expect(inTier(1760, ".v2-list", "min-width")).toBe("0");
+  });
+
+  test("keeps the rail wide enough for its longest word", () => {
+    let railWidth: string | null = null;
+    sheet.walkDecls("--v2-rail-w", (decl) => {
+      railWidth = decl.value;
+    });
+    expect(Number.parseInt(railWidth ?? "0", 10)).toBeGreaterThanOrEqual(120);
   });
 });

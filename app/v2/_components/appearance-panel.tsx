@@ -115,9 +115,15 @@ export function AppearancePanel({
    * KNOWN COST, ACCEPTED: dismissing the browser's own colour popup by pressing
    * on the page also presses the veil, so the panel closes too. Colours apply as
    * they are picked, so nothing is lost by that.
+   *
+   * The default is prevented because a press's own default action moves focus
+   * to the nearest focusable ancestor of whatever was pressed, and the veil has
+   * none: left alone, the browser would drop focus on the body straight after
+   * onClose handed it back to the opener.
    */
   const onVeilPress = (event: MouseEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
+    event.preventDefault();
     onClose();
   };
 

@@ -73,11 +73,9 @@
   --v2-gutter: 16px;
   --v2-time: 50px;
   --v2-rail-gap: 26px;
-  /* the desktop page's two fixed columns */
-  --v2-rail-w: 96px;
-  /* 340px of content plus the 6px either side that the side column needs for a
-     focus ring to be drawn rather than clipped by its own overflow. */
-  --v2-side-w: 352px;
+  /* the desktop page's one fixed column. Wide enough for its longest word:
+     at 96px the word at its foot ran over the rail's own edge. */
+  --v2-rail-w: 128px;
 
   display: block;
   min-height: 100dvh;
@@ -174,12 +172,14 @@ body:has([data-v2-root]) {
 
 /* ----------------------------------------------------------------- the frame */
 
-/* The two wrappers exist for the desktop page. Here they are nothing at all, so
+/* The wrappers exist for the desktop page. Here they are nothing at all, so
    their children are the frame's own children and the phone's order below can
    interleave them: the energy control belongs between the header and the line
    on a phone, and in the side column on a desktop. */
 [data-v2-root] .v2-main,
-[data-v2-root] .v2-side {
+[data-v2-root] .v2-side,
+[data-v2-root] .v2-status,
+[data-v2-root] .v2-lists {
   display: contents;
 }
 
@@ -1093,13 +1093,23 @@ body:has([data-v2-root]) {
  *
  * From 1024px up this is not a wider phone. It is a rail down the left edge, the
  * day as the main column (up to 640px, so a line of text stays under about 80
- * characters), and a side column that holds the day's context and stays in view
- * while the line scrolls.
+ * characters), and the day's context beside it, which stays in view while the
+ * line scrolls.
  *
- * The three tracks are rail / flexible / 340px. The middle one is the flexible
- * one on purpose: at 1024px it has to give way, and a definite track would
- * overflow the window sideways instead. The page is left anchored rather than
- * centred, because the rail belongs to the edge of the screen.
+ * THE PAGE FILLS THE WINDOW. There is no max-width on the frame. The day takes
+ * what it needs and stops at 640px; every pixel after that goes to the context,
+ * because that is where the information is, and the context becomes more
+ * columns as the window allows:
+ *
+ *   from 1024px   rail / day / one column (status, then the two lists)
+ *   from 1360px   rail / day / status / the two lists
+ *   from 1760px   rail / day / status / past their date / did not fit today
+ *   from 2400px   the same, with the lists taking most of what is left, and a
+ *                 list laying its rows two or three across once it is that wide
+ *
+ * The day's track has a floor of 420px, so at 1024px it gives way before
+ * anything overflows sideways. The page is anchored to the left edge, because
+ * the rail belongs to the edge of the screen.
  *
  * Nothing below animates a layout property, and nothing below is a new motion:
  * the three durations and the one easing family are unchanged.
@@ -1116,44 +1126,69 @@ body:has([data-v2-root]) {
 
   /* align-items is left at `stretch` ON PURPOSE. A sticky element can only move
      inside its own containing block, which for a grid item is its grid area, so
-     with `start` the side column's area would be exactly as tall as its content
-     and `position: sticky` below would never stick. Stretched, both the rail and
-     the side column own the full height of the row and slide inside it; their
+     with `start` a column's area would be exactly as tall as its content and
+     `position: sticky` below would never stick. Stretched, the rail and every
+     context column own the full height of the row and slide inside it; their
      own heights are capped at the viewport. */
   [data-v2-root] .v2-shell {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) var(--v2-side-w);
+    grid-template-columns: auto minmax(420px, 640px) minmax(340px, 1fr);
     column-gap: clamp(20px, 2.6vw, 44px);
-    max-width: 1140px;
     min-height: 100dvh;
-    padding-right: 28px;
   }
 
+  /* min-width: 0 on every column: a grid item's automatic minimum is its
+     content, and one long unbroken word in a task title would otherwise widen
+     its track and push the page sideways. */
   [data-v2-root] .v2-main {
     display: flex;
     flex-direction: column;
-    max-width: 640px;
+    min-width: 0;
     padding: 30px 0 64px;
   }
 
-  /* Stays in view while the day scrolls, and scrolls on its own when the energy
-     control, the lanes and eight drops together outrun the window.
+  /* A COLUMN OF CONTEXT. It stays in view while the day scrolls, and scrolls on
+     its own when what is in it outruns the window. Which element is that column
+     depends on the width (see the table above): the three share these
+     declarations, and `display` decides which of them is a box at all.
      The inline padding is not decoration: `overflow-y: auto` clips the inline
      axis too, so without it the focus ring on a row or on Show more is cut off
-     at the column's edge. The track carries those 12px (see --v2-side-w).
+     at the column's edge.
      The scrollbar is given the scheme's own colours rather than the platform's
-     grey bar, which on a black page is the loudest thing on the screen. */
-  [data-v2-root] .v2-side {
+     grey bar, which on a black page is the loudest thing on the screen, and its
+     gutter is always reserved, so pressing Show more does not shift a row. */
+  [data-v2-root] .v2-side,
+  [data-v2-root] .v2-status,
+  [data-v2-root] .v2-lists {
     position: sticky;
     top: 0;
     display: flex;
     flex-direction: column;
     gap: 16px;
+    min-width: 0;
     max-height: 100dvh;
     overflow-y: auto;
     padding: 30px 6px 32px;
     scrollbar-width: thin;
     scrollbar-color: var(--v2-edge) transparent;
+    scrollbar-gutter: stable;
+  }
+
+  /* At this width the side is the one column, and its two halves are still
+     nothing: their children stack inside it as one list of blocks. */
+  [data-v2-root] .v2-status,
+  [data-v2-root] .v2-lists {
+    display: contents;
+  }
+
+  /* A list's rows. One across until the list is wide enough for two (about
+     570px), which only happens on a very wide screen: a row stretched across
+     600px is one long line of title with its date a hand's width away. min()
+     keeps a column narrower than 280px from being overflowed by its own track. */
+  [data-v2-root] .v2-list-rows {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+    column-gap: 10px;
   }
 
   /* A pill around six dots, not a control: it shrink wraps and it is not 44px
@@ -1325,6 +1360,66 @@ body:has([data-v2-root]) {
   [data-v2-root] .v2-panel {
     width: 360px;
     max-height: calc(100dvh - 40px);
+  }
+}
+
+/* ---- wide: status and the lists are two columns ---- */
+
+@media (min-width: 1360px) {
+  /* rail / day / status, and then one more column for the lists. That last one
+     is an IMPLICIT track, made by the element when it exists, so an account with
+     nothing past its date and nothing dropped does not keep an empty column. */
+  [data-v2-root] .v2-shell {
+    grid-template-columns: auto minmax(420px, 640px) minmax(320px, 0.9fr);
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(300px, 1.1fr);
+  }
+
+  [data-v2-root] .v2-side {
+    display: contents;
+  }
+
+  [data-v2-root] .v2-status,
+  [data-v2-root] .v2-lists {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-lists:empty {
+    display: none;
+  }
+}
+
+/* ---- wider: each list is a column of its own ---- */
+
+@media (min-width: 1760px) {
+  [data-v2-root] .v2-lists {
+    display: contents;
+  }
+
+  /* The same column as above, on the list itself. It is a block and not a flex
+     column: its heading, its line and its rows already carry their own spacing. */
+  [data-v2-root] .v2-list {
+    position: sticky;
+    top: 0;
+    min-width: 0;
+    max-height: 100dvh;
+    overflow-y: auto;
+    padding: 30px 6px 32px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--v2-edge) transparent;
+    scrollbar-gutter: stable;
+  }
+}
+
+/* ---- widest: the lists take most of what is left ---- */
+
+@media (min-width: 2400px) {
+  /* Status is a short column of controls and counts; past about 450px it only
+     gets emptier. The lists are where the words are, and a list this wide lays
+     its rows two or three across (see .v2-list-rows). */
+  [data-v2-root] .v2-shell {
+    grid-template-columns: auto minmax(420px, 640px) minmax(320px, 0.6fr);
+    grid-auto-columns: minmax(300px, 1.4fr);
   }
 }
 

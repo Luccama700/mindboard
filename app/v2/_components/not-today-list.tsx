@@ -28,18 +28,21 @@ export function NotTodayList({ entries }: { entries: TodayView["notToday"] }) {
   const rest = entries.length - shown.length;
 
   return (
-    <section className="v2-side-block" aria-labelledby="v2-not-today">
+    <section className="v2-side-block v2-list" aria-labelledby="v2-not-today">
       <h2 className="v2-sub" id="v2-not-today">
         {TODAY_COPY.notTodayHeading}
       </h2>
-      {shown.map((entry, index) => (
-        <ListRow
-          key={`${entry.full}-${index}`}
-          entry={entry}
-          identity={null}
-          meta={entry.reason}
-        />
-      ))}
+      {/* Its own element so a very wide column can lay the rows two across. */}
+      <div className="v2-list-rows">
+        {shown.map((entry, index) => (
+          <ListRow
+            key={`${entry.full}-${index}`}
+            entry={entry}
+            identity={null}
+            meta={entry.reason}
+          />
+        ))}
+      </div>
       {rest > 0 && (
         <button type="button" className="v2-more" onClick={() => setAll(true)}>
           {showMoreLabel(rest)}

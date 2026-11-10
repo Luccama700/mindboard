@@ -32,19 +32,22 @@ export function PastDueList({ entries }: { entries: TodayView["pastDue"] }) {
   const rest = entries.length - shown.length;
 
   return (
-    <section className="v2-side-block" aria-labelledby="v2-past-due">
+    <section className="v2-side-block v2-list" aria-labelledby="v2-past-due">
       <h2 className="v2-sub" id="v2-past-due">
         {TODAY_COPY.pastDueHeading}
       </h2>
       <p className="v2-side-line">{TODAY_COPY.pastDueLine}</p>
-      {shown.map((entry) => (
-        <ListRow
-          key={entry.id}
-          entry={entry}
-          identity={entry.identity}
-          meta={entry.date}
-        />
-      ))}
+      {/* Its own element so a very wide column can lay the rows two across. */}
+      <div className="v2-list-rows">
+        {shown.map((entry) => (
+          <ListRow
+            key={entry.id}
+            entry={entry}
+            identity={entry.identity}
+            meta={entry.date}
+          />
+        ))}
+      </div>
       {rest > 0 && (
         <button type="button" className="v2-more" onClick={() => setAll(true)}>
           {showMoreLabel(rest)}
