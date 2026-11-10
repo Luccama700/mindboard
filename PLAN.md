@@ -341,7 +341,7 @@ Environment names used from here on (values live in the host's settings, never i
 6. `empty` is true with no stops and no all-day events, and the screen then says `Nothing planned. Add a task and it lands here.`
 7. No output string of `view/` contains U+2014 or U+2013, for every fixture. No streak, point, level or penalty appears in data or copy.
 8. The sample day is fictional (invented titles, six lanes named Study, Work, Money, People, Craft, Body) and is a real `PlanInput`: the screen shows `planDay(sampleDay().input)`, not a hand-written plan.
-9. `app/v2/today/page.tsx` renders the sample day when `process.env.V2_FIXTURES === "1"` and `process.env.VERCEL_ENV !== "production"`. In that mode it reads no database and needs no sign-in. In every other case it calls `notFound()` (Task 7 adds the live branch).
+9. `app/v2/today/page.tsx` renders the sample day when `process.env.V2_FIXTURES === "1"` and `process.env.VERCEL_ENV !== "production"`. In that mode it reads no database and needs no sign-in. In every other case it calls `notFound()`. The live branch is a later task of its own (see "Next after this plan"), because it also has to deal with the old app's chrome around the new screen.
 10. On the sample screen the buttons work on local state: Start, Done and Not today change the block and re-run `planDay` in the browser, so a replan is the real planner. Blocks that move animate to their new place (shared layout animation). The energy options replan too.
 11. The look follows the prototype: the day as one line of stops, one lit stop as a filled tinted card, no glow. Colour tokens live in `app/v2/v2.css` under `[data-v2-root]` and `app/globals.css` is not edited. Fonts are Chakra Petch for display and Atkinson Hyperlegible for text, loaded with `next/font/google` in `app/v2/layout.tsx`. Motion uses `motion`, with durations 140, 280 and 520 ms, and stops when the system asks for reduced motion.
 12. It works at 375 px wide with no sideways scroll, every control is at least 44 px tall, and keyboard focus is visible.
@@ -383,6 +383,13 @@ Environment names used from here on (values live in the host's settings, never i
 - [ ] **Step 4: Run your test file, eslint on your paths and `npx tsc --noEmit`.**
 
 ---
+
+## Next after this plan
+
+- **Live Today.** `app/v2/today/page.tsx` gets its live branch: a signed-in account whose `v2_rules.enabled` is true reads its day through the stores (session client, select-own policies) and the same `buildTodayView`. Start, Done, Not today and the energy options become server actions that go through the same effect code as a Telegram answer. The old app's capture dock and tour buttons must not show on the new screen.
+- **More probes.** The morning brief, the diary and the collector each leave a note in the vault. A probe that looks for today's note turns each into a feed the watchdog can judge.
+- **The outside check.** A small script in the owner's Google account that reads `/api/v2/status` every 15 minutes and sends an email when it is stale or unreachable.
+- **A run against a real database.** `store/supabase.ts` has only ever been type-checked and reviewed. Its first run must be against a staging project or a watched first tick.
 
 ## Not in this plan
 
