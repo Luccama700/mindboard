@@ -1373,7 +1373,12 @@ describe("an overdue hard item does not flood the day", () => {
   // The consequence that matters: the day's guaranteed 25 minutes go to live
   // work. On real data the engine put them on a homework three weeks past its
   // date, ahead of a paper due in three days.
-  test("the floor block does not go to an overdue item while live work exists", () => {
+  //
+  // This case is two LANE STEPS, which is all the first version of the rule
+  // covered: it ordered overdue items inside each tier, and a side quest ranks
+  // after every lane step, so the cross-kind case below went on failing. The
+  // name says lane step for that reason.
+  test("the floor block does not go to an overdue lane step while a live lane step exists", () => {
     // A 12 hour hard window, so both items are ordinary steps and the floor
     // block is decided by the ranking alone rather than by a mandatory tier.
     const rules = parseRules({ hardWindowHours: 12 });
@@ -1401,6 +1406,79 @@ describe("an overdue hard item does not flood the day", () => {
     expect(out.blocks.map((b) => [b.kind, b.taskId])).toEqual([["floor", "paper"]]);
     expect(out.dropped.map((d) => d.candidateId)).toContain("homework");
     expect(out.dropped.map((d) => d.candidateId)).not.toContain("paper");
+  });
+
+  // R1, the reviewer's probe. A task with no lane becomes a side quest
+  // (engine/sources.ts), and a side quest ranks after every lane step, so
+  // ordering overdue items only INSIDE each tier left the dead lane step ahead
+  // of the live errand: the floor block went to the three-week-old homework and
+  // the thing due tomorrow was dropped for capacity. An item whose date has gone
+  // by ranks after every item whose date has not, whatever kind either is.
+  test("the floor block does not go to an overdue lane step while a live side quest exists", () => {
+    const out = planDay(
+      input({
+        energy: "low",
+        candidates: [
+          candidate({
+            id: "homework",
+            lane: "lane-a",
+            hard: true,
+            due: utc("23:59", "2026-02-17"),
+          }),
+          candidate({ id: "errand", kind: "side", due: utc("18:00", "2026-03-11") }),
+        ],
+      }),
+    );
+
+    expect(out.blocks.map((b) => [b.kind, b.taskId])).toEqual([["floor", "errand"]]);
+    expect(out.dropped.map((d) => d.candidateId)).toEqual(["homework"]);
+  });
+
+  test("the more recently overdue leads whatever its kind", () => {
+    const out = planDay(
+      input({
+        energy: "low",
+        candidates: [
+          candidate({
+            id: "homework",
+            lane: "lane-a",
+            hard: true,
+            due: utc("23:59", "2026-02-17"),
+          }),
+          // A week old against three weeks old, and a side quest, which ranks
+          // after every lane step while its date is still ahead.
+          candidate({ id: "errand", kind: "side", due: utc("18:00", "2026-03-03") }),
+        ],
+      }),
+    );
+
+    expect(out.blocks.map((b) => [b.kind, b.taskId])).toEqual([["floor", "errand"]]);
+    expect(out.dropped.map((d) => d.candidateId)).toEqual(["homework"]);
+  });
+
+  test("with nothing live left, the freshest lapse is still planned", () => {
+    const out = planDay(
+      input({
+        energy: "low",
+        candidates: [
+          candidate({
+            id: "older",
+            lane: "lane-a",
+            hard: true,
+            due: utc("23:59", "2026-02-17"),
+          }),
+          candidate({
+            id: "fresher",
+            lane: "lane-b",
+            hard: true,
+            due: utc("23:59", "2026-03-08"),
+          }),
+        ],
+      }),
+    );
+
+    expect(out.blocks.map((b) => [b.kind, b.taskId])).toEqual([["floor", "fresher"]]);
+    expect(out.dropped.map((d) => d.candidateId)).toEqual(["older"]);
   });
 
   // Not changed by F4, and pinned so it is a decision rather than an accident:

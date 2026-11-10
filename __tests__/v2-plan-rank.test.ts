@@ -97,6 +97,49 @@ describe("rankCandidates", () => {
     ).toEqual(["ahead", "undated", "lapsed-soft", "lapsed"]);
   });
 
+  // R1. The rule is about dates, not about kinds: ordering overdue items only
+  // inside each tier left an overdue lane step ahead of every live side quest,
+  // because a side quest ranks after every lane step. The floor block, which is
+  // ranked[0], then went to the dead item.
+  test("an overdue lane step ranks after a live side quest", () => {
+    expect(
+      tiers([
+        candidate({ id: "lapsed-step", lane: "lane-a", hard: true, due: "2026-02-17T23:59:00+00:00" }),
+        candidate({ id: "live-errand", kind: "side", due: "2026-03-11T18:00:00+00:00" }),
+      ]).map(([id]) => id),
+    ).toEqual(["live-errand", "lapsed-step"]);
+  });
+
+  test("among overdue items of different kinds the more recently overdue leads", () => {
+    expect(
+      tiers([
+        candidate({ id: "step-old", lane: "lane-a", hard: true, due: "2026-02-17T23:59:00+00:00" }),
+        candidate({ id: "errand-new", kind: "side", due: "2026-03-08T18:00:00+00:00" }),
+        candidate({ id: "step-newest", lane: "lane-b", hard: true, due: "2026-03-09T23:59:00+00:00" }),
+      ]).map(([id]) => id),
+    ).toEqual(["step-newest", "errand-new", "step-old"]);
+  });
+
+  test("the kind is only the tie break inside the overdue group", () => {
+    const lapsed = "2026-03-08T12:00:00+00:00";
+    expect(
+      tiers([
+        candidate({ id: "errand", kind: "side", due: lapsed }),
+        candidate({ id: "step", lane: "lane-a", hard: true, due: lapsed }),
+      ]).map(([id]) => id),
+    ).toEqual(["step", "errand"]);
+  });
+
+  test("the live tiers keep their order: every lane step before every side quest", () => {
+    expect(
+      tiers([
+        candidate({ id: "errand", kind: "side", expiresAt: "2026-03-12T00:00:00+00:00" }),
+        candidate({ id: "step", lane: "lane-a", due: "2026-04-01T00:00:00+00:00" }),
+        candidate({ id: "lapsed", lane: "lane-b", hard: true, due: "2026-03-01T00:00:00+00:00" }),
+      ]).map(([id]) => id),
+    ).toEqual(["step", "errand", "lapsed"]);
+  });
+
   test("an overdue side quest goes after the live ones, pinned or not", () => {
     // The overdue test is decided before the pinned rule: a pinned side quest
     // whose date is still ahead is live work, an overdue one is not. An overdue

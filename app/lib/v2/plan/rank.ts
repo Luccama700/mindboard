@@ -1,4 +1,8 @@
-// Which bucket a candidate falls in, and the order inside each bucket.
+// Which bucket a candidate falls in, and the order the buckets are walked in.
+//
+// One rule cuts across the buckets: an item whose own date has gone by sorts
+// after every item whose date has not, in either ordinary bucket and whatever
+// kind either item is. See `ordinaryOrder` and the sort at the bottom.
 //
 // The deadline buckets are decided before the kind, so a side quest that
 // genuinely closes today is treated as a deadline, not as an errand. Both
@@ -50,10 +54,10 @@ export function tierOf(
   // blocks, every day, with nothing dropped: the deadline tiers are exempt from
   // capacity and from the per-lane limit, so nothing bounded them. Nor is it a
   // deadline the day can still serve: the day it closed on has gone. It ranks
-  // as an ordinary step or side quest, and inside that tier it sorts after
-  // every item that is not overdue, most recently overdue first
-  // (`ordinaryOrder`); capacity and the lane limit then decide how much of the
-  // backlog the day takes on.
+  // as an ordinary step or side quest, and from there it sorts after every item
+  // whose date has not gone by, in EITHER ordinary tier, most recently overdue
+  // first (`ordinaryOrder`); capacity and the lane limit then decide how much of
+  // the backlog the day takes on.
   if (candidate.hard && dueMs !== null && dueMs >= nowMs) {
     if (zonedDateKey(dueMs, rules.timeZone) === todayKey) return "due-today";
     if (dueMs - nowMs <= rules.hardWindowHours * HOUR_MS) return "hard-window";
@@ -70,9 +74,10 @@ function isOrdinary(tier: CandidateTier): boolean {
 }
 
 /**
- * How an item sorts inside the ordinary tiers: `overdue` 1 sorts AFTER every
- * item whose own date is still ahead or absent, and `at` is the instant it
- * sorts on inside its own group, ascending.
+ * How an item sorts in the ordinary tiers: `overdue` 1 sorts AFTER every item
+ * whose own date is still ahead or absent, in EITHER tier and whatever kind
+ * either item is, and `at` is the instant it sorts on inside its own group,
+ * ascending.
  *
  * An overdue item's `at` is the NEGATED instant, so the most recently overdue
  * comes first. A pile of lapsed items holds some that are dead and some that
@@ -144,14 +149,33 @@ export function rankCandidates(
       tier: tierOf(candidate, nowMs, todayKey, rules),
     }))
     .sort((a, b) => {
-      const byTier = TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
-      if (byTier !== 0) return byTier;
-      // Overdue after everything that is not, dated or undated, and decided
-      // BEFORE the pinned rule: a pinned side quest whose date is still ahead
-      // is live work and an overdue one is not.
+      // Overdue after every item whose date has NOT gone by, decided before the
+      // tier, because the rule is about dates and not about kinds.
+      //
+      // Inside each tier was not enough. A task with no lane becomes a side
+      // quest (engine/sources.ts) and a side quest ranks after every lane step,
+      // so a three-week-old lane step still led a live errand due tomorrow, and
+      // the floor block, which is ranked[0], went to the dead one. A deadline
+      // tier can never be overdue (`tierOf` refuses one), so putting this first
+      // cannot move a session or a hard-window block.
       const overdueA = isOrdinary(a.tier) ? ordinaryOrder(a.candidate, nowMs).overdue : 0;
       const overdueB = isOrdinary(b.tier) ? ordinaryOrder(b.candidate, nowMs).overdue : 0;
       if (overdueA !== overdueB) return overdueA - overdueB;
+
+      if (overdueA === 1) {
+        // One group, both kinds. How long ago it lapsed is the whole ordering
+        // (freshest first, `ordinaryOrder`); the kind is only the tie break,
+        // and the pinned rule does not apply because an overdue item is not
+        // ordered by its expiry.
+        const byLapse = compare(clockKey(a, nowMs), clockKey(b, nowMs));
+        if (byLapse !== 0) return byLapse;
+        const byKind = TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
+        if (byKind !== 0) return byKind;
+        return compareText(a.candidate.id, b.candidate.id);
+      }
+
+      const byTier = TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
+      if (byTier !== 0) return byTier;
       // A pinned side quest never expires, so it waits for the ones that do.
       if (a.tier === "side" && a.candidate.pinned !== b.candidate.pinned) {
         return a.candidate.pinned ? 1 : -1;
