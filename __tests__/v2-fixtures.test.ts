@@ -10,9 +10,12 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { createElement } from "react";
 
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { TodayClient } from "@/app/v2/today/today-client";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { fixturesEnabled, sampleDay } from "@/app/lib/v2/fixtures/sample-day";
 import {
@@ -327,6 +330,79 @@ describe("ordering never depends on the locale", () => {
       /toLocale(Date|Time)?String|new Intl\./.test(codeOf(file)),
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+// Focus and the status line are what a keyboard or screen reader user gets
+// instead of watching the line re-sort, so they are checked on the real screen.
+// JSX would need a .tsx file, and this task owns three .ts ones, hence
+// createElement.
+describe("the screen keeps your place", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const screenOf = () => render(createElement(TodayClient, { sample: sampleDay() }));
+  const litHeadings = () =>
+    Array.from(document.querySelectorAll("[data-lit-heading]")).map(
+      (heading) => heading.textContent ?? "",
+    );
+  const press = async (name: string) => {
+    const button = screen.getByRole("button", { name });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+  };
+
+  test("takes nothing on load", () => {
+    screenOf();
+    expect(document.activeElement).toBe(document.body);
+    expect(litHeadings()).toHaveLength(1);
+  });
+
+  test("moves focus to the new lit card when a press takes its button away", async () => {
+    screenOf();
+    await press("Done");
+    const focused = document.activeElement as HTMLElement | null;
+    expect(focused?.tagName).toBe("H3");
+    expect(focused?.hasAttribute("data-lit-heading")).toBe(true);
+  });
+
+  // The defect this pins: the focus effect used to watch the lit flag as well as
+  // the press counter, so once any press had happened, a later energy press that
+  // lit a different card pulled focus off the energy button the user was on.
+  test("leaves focus on the energy control, even after an earlier press", async () => {
+    screenOf();
+    // Two skips put a block on the line that a low day cannot afford, so the
+    // next energy press really does change which stop is lit.
+    await press("Not today");
+    await press("Not today");
+    const before = litHeadings();
+    expect(before).toHaveLength(1);
+
+    const low = screen.getByRole("button", { name: "Low" });
+    low.focus();
+    await press("Low");
+
+    // The test only means anything if the lit stop changed.
+    expect(litHeadings().some((title) => title !== before[0])).toBe(true);
+    expect(document.activeElement).toBe(low);
+  });
+
+  test("does not name a started block as its own next stop", async () => {
+    screenOf();
+    await press("Start");
+    const said = document.querySelector('[role="status"]')?.textContent ?? "";
+    expect(said.endsWith(" started.")).toBe(true);
+    expect(said).not.toContain(TODAY_COPY.next);
+  });
+
+  test("says what happened and what is next after a press that moves on", async () => {
+    screenOf();
+    await press("Done");
+    const said = document.querySelector('[role="status"]')?.textContent ?? "";
+    expect(said).toContain(TODAY_COPY.acted.done);
+    expect(said).toContain(`${TODAY_COPY.next}: `);
   });
 });
 

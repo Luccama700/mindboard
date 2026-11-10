@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { TODAY_COPY, type Stop, type TodayView } from "@/app/lib/v2/view/today";
@@ -58,7 +58,11 @@ export function DayLine({
   movedIds: ReadonlySet<string>;
   /** Which replan that was, so a block that moves twice flashes twice. */
   revision: number;
-  /** Counts the presses that unmounted a button. See StopCard. */
+  /**
+   * Counts the presses that unmounted their own button. A change means the
+   * control the user was on has gone, so the lit card takes focus and their
+   * place is kept. It must NOT count anything else: see the effect below.
+   */
   focusToken: number;
   onStart: (blockId: string) => void;
   onDone: (blockId: string) => void;
@@ -66,6 +70,39 @@ export function DayLine({
 }) {
   const still = useReducedMotion() === true;
   const moves = still ? undefined : ("position" as const);
+
+  // Focus belongs to one effect, keyed on the token and on NOTHING else.
+  //
+  // The token counts the presses that unmounted their own button, so a change in
+  // it means "the control the user was on has gone, keep their place". An
+  // earlier version lived in each card and also watched `lit`, which looked
+  // equivalent and was not: once any press had happened the token stayed above
+  // zero, so a later energy press that happened to light a different card
+  // flipped that card's `lit` to true and the card took focus off the energy
+  // button. Depending on the token alone makes that impossible rather than
+  // unlikely.
+  //
+  // The ref is what stops the mount run from firing: it starts at whatever the
+  // token already is, so the first render (and a remount mid session) focuses
+  // nothing. The heading is found in the DOM rather than held in a ref, because
+  // a ref that attaches on one card while detaching from another is a question
+  // about commit order, and a query after the commit is not.
+  //
+  // Exactly one marker is a condition, not an assumption, and two of them is a
+  // state this screen really reaches: a leaving row stays mounted for its exit
+  // rendering the props it had, so an energy press that drops the lit block
+  // leaves the old marker beside the new one for 140ms. The token does not move
+  // on an energy press, so the effect is not running then; if that ever changes,
+  // focus stays where the user put it rather than landing on a row that is on
+  // its way out.
+  const list = useRef<HTMLOListElement | null>(null);
+  const handled = useRef(focusToken);
+  useEffect(() => {
+    if (focusToken === handled.current) return;
+    handled.current = focusToken;
+    const marked = list.current?.querySelectorAll<HTMLElement>("[data-lit-heading]");
+    if (marked !== undefined && marked.length === 1) marked[0].focus();
+  }, [focusToken]);
 
   const markerAt = stops.findIndex((stop) => isAhead(stop.state));
   const marker = markerAt < 0 ? stops.length : markerAt;
@@ -126,7 +163,6 @@ export function DayLine({
           lit={stop.id === litStopId}
           moved={stop.source === "block" && movedIds.has(stop.id)}
           revision={revision}
-          focusToken={focusToken}
           onStart={onStart}
           onDone={onDone}
           onSkip={onSkip}
@@ -144,7 +180,7 @@ export function DayLine({
       <h2 className="v2-hidden" id="v2-line-heading">
         {TODAY_COPY.line}
       </h2>
-      <ol className="v2-line">
+      <ol className="v2-line" ref={list}>
         {/* The default mode on purpose: a leaving stop keeps its space until it
             is gone, and the rows below it then slide up through their own layout
             animation. popLayout would take it out of flow and position it

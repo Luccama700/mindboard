@@ -794,9 +794,6 @@ describe("the status line", () => {
     expect(actionLine("done", "Ethics essay", "Stretch for ten minutes")).toBe(
       "Ethics essay marked done. Next: Stretch for ten minutes.",
     );
-    expect(actionLine("started", "Ethics essay", "Ceramics workshop")).toBe(
-      "Ethics essay started. Next: Ceramics workshop.",
-    );
     expect(actionLine("skipped", "Glaze the test tiles", "Work block")).toBe(
       "Glaze the test tiles moved off today. Next: Work block.",
     );
@@ -806,6 +803,20 @@ describe("the status line", () => {
     expect(actionLine("done", "Grant form", null)).toBe(
       "Grant form marked done. Nothing left on the line.",
     );
+  });
+
+  // Starting something leaves it lit, so the caller's "next" IS the block that
+  // was pressed. Saying it would read "Ethics essay started. Next: Ethics
+  // essay." The tail is dropped whatever the caller passes, so the rule cannot
+  // be got wrong at a call site.
+  test("says nothing about next after a start, because nothing moved on", () => {
+    expect(actionLine("started", "Ethics essay", "Ethics essay")).toBe(
+      "Ethics essay started.",
+    );
+    expect(actionLine("started", "Ethics essay", "Ceramics workshop")).toBe(
+      "Ethics essay started.",
+    );
+    expect(actionLine("started", "Ethics essay", null)).toBe("Ethics essay started.");
   });
 });
 

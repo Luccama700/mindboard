@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type CSSProperties } from "react";
+import type { CSSProperties } from "react";
 
 import { STOP_STATUS_COPY, TODAY_COPY, type Stop } from "@/app/lib/v2/view/today";
 
@@ -30,7 +30,6 @@ export function StopCard({
   lit,
   moved,
   revision,
-  focusToken,
   onStart,
   onDone,
   onSkip,
@@ -41,12 +40,6 @@ export function StopCard({
   moved: boolean;
   /** Which replan that was, so a block that moves twice flashes twice. */
   revision: number;
-  /**
-   * Counts the presses that unmounted a button. 0 is the first render, which
-   * must not steal focus; any change after that means the control the user was
-   * on has gone, so the lit card takes focus and their place is kept.
-   */
-  focusToken: number;
   onStart: (blockId: string) => void;
   onDone: (blockId: string) => void;
   onSkip: (blockId: string) => void;
@@ -64,19 +57,18 @@ export function StopCard({
   const flash = moved ? "v2-moved" : undefined;
   const flashKey = moved ? `moved-${revision}` : "still";
 
-  const heading = useRef<HTMLHeadingElement | null>(null);
-  useEffect(() => {
-    if (!lit || focusToken === 0) return;
-    heading.current?.focus();
-  }, [lit, focusToken]);
-
   if (lit) {
     return (
       <div className="v2-lit">
         <p className={`v2-when ${flash ?? ""}`.trim()} key={flashKey}>
           {when}, {stop.start}
         </p>
-        <h3 ref={heading} tabIndex={-1}>
+        {/* The thing DayLine moves focus to after a press. It is marked rather
+            than ref'd from here: whose turn it is to hold focus is a decision
+            about the whole line, so one effect up there owns it (see day-line).
+            A card deciding for itself is how focus ended up being taken off the
+            energy control whenever a replan lit a different card. */}
+        <h3 data-lit-heading tabIndex={-1}>
           {stop.title}
         </h3>
         {stop.reason !== "" && <p>{stop.reason}</p>}

@@ -219,9 +219,14 @@ export function actionLine(
   title: string,
   nextTitle: string | null,
 ): string {
+  const said = `${title} ${TODAY_COPY.acted[action]}.`;
+  // Starting something does not move you on: the block you just started is the
+  // one still in hand, so a "next" here would name it to itself. The rule lives
+  // in this function rather than at the call sites, where it could be missed.
+  if (action === "started") return said;
   const tail =
     nextTitle === null ? TODAY_COPY.dayOver : `${TODAY_COPY.next}: ${nextTitle}.`;
-  return `${title} ${TODAY_COPY.acted[action]}. ${tail}`;
+  return `${said} ${tail}`;
 }
 
 // ---------------------------------------------------------------------- stops
