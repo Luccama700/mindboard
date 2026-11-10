@@ -807,10 +807,23 @@ body:has([data-v2-root]) {
 }
 
 /* Which group or lane this row belongs to. On the line a dot on the rail says
-   that; in a flat list nothing does, so the row names it. */
+   that; in a flat list nothing does, so the row names it. It is the user's own
+   name for a group and can be any length, so it gives way (with an ellipsis)
+   before it pushes the date out of the row. */
 [data-v2-root] .v2-row .v2-row-ident {
+  min-width: 0;
+  overflow: hidden;
   color: var(--v2-ident);
   white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A list takes focus so a keyboard can scroll it (see the list components).
+   The ring is drawn inside the box: on a wide window the list is a column that
+   touches the top and bottom of the window, and a ring outside it would be cut
+   off there. */
+[data-v2-root] .v2-list:focus-visible {
+  outline-offset: -2px;
 }
 
 [data-v2-root] .v2-row .v2-row-reason {
@@ -1156,7 +1169,9 @@ body:has([data-v2-root]) {
      at the column's edge.
      The scrollbar is given the scheme's own colours rather than the platform's
      grey bar, which on a black page is the loudest thing on the screen, and its
-     gutter is always reserved, so pressing Show more does not shift a row. */
+     gutter is always reserved, so pressing Show more does not shift a row.
+     The wider padding on the right keeps the last column's rows off the edge of
+     the window, now that the frame has no padding of its own there. */
   [data-v2-root] .v2-side,
   [data-v2-root] .v2-status,
   [data-v2-root] .v2-lists {
@@ -1168,7 +1183,7 @@ body:has([data-v2-root]) {
     min-width: 0;
     max-height: 100dvh;
     overflow-y: auto;
-    padding: 30px 6px 32px;
+    padding: 30px 14px 32px 6px;
     scrollbar-width: thin;
     scrollbar-color: var(--v2-edge) transparent;
     scrollbar-gutter: stable;
@@ -1404,7 +1419,7 @@ body:has([data-v2-root]) {
     min-width: 0;
     max-height: 100dvh;
     overflow-y: auto;
-    padding: 30px 6px 32px;
+    padding: 30px 14px 32px 6px;
     scrollbar-width: thin;
     scrollbar-color: var(--v2-edge) transparent;
     scrollbar-gutter: stable;

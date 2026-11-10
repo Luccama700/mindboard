@@ -28,7 +28,10 @@ export function NotTodayList({ entries }: { entries: TodayView["notToday"] }) {
   const rest = entries.length - shown.length;
 
   return (
-    <section className="v2-side-block v2-list" aria-labelledby="v2-not-today">
+    // Focusable, because on a wide window this section is a column that scrolls
+    // on its own and nothing on a row presses: until Show more exists there is
+    // no stop inside it, and a keyboard could not reach it to scroll it.
+    <section className="v2-side-block v2-list" aria-labelledby="v2-not-today" tabIndex={0}>
       <h2 className="v2-sub" id="v2-not-today">
         {TODAY_COPY.notTodayHeading}
       </h2>

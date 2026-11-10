@@ -32,7 +32,10 @@ export function PastDueList({ entries }: { entries: TodayView["pastDue"] }) {
   const rest = entries.length - shown.length;
 
   return (
-    <section className="v2-side-block v2-list" aria-labelledby="v2-past-due">
+    // Focusable, because on a wide window this section is a column that scrolls
+    // on its own and nothing on a row presses: with no stop inside it, a
+    // keyboard could not reach it to scroll it. Its heading names it.
+    <section className="v2-side-block v2-list" aria-labelledby="v2-past-due" tabIndex={0}>
       <h2 className="v2-sub" id="v2-past-due">
         {TODAY_COPY.pastDueHeading}
       </h2>

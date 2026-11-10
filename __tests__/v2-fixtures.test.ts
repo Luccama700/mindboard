@@ -1163,4 +1163,89 @@ describe("the desktop page fills the window", () => {
     });
     expect(Number.parseInt(railWidth ?? "0", 10)).toBeGreaterThanOrEqual(120);
   });
+
+  // On a wide window a list is a column that scrolls on its own, and nothing
+  // on a row presses. Without a stop of its own a keyboard could not reach it
+  // to scroll it (Safari does not make a scroller focusable by itself).
+  test("lets a keyboard reach each list, and names it", () => {
+    const { container } = render(createElement(TodayClient, { data: sampleDay() }));
+    const lists = Array.from(container.querySelectorAll<HTMLElement>(".v2-list"));
+    expect(lists).toHaveLength(2);
+    for (const list of lists) {
+      expect(list.tabIndex).toBe(0);
+      const heading = document.getElementById(list.getAttribute("aria-labelledby") ?? "");
+      expect((heading?.textContent ?? "").length).toBeGreaterThan(0);
+    }
+    // The ring is drawn inside the box, where the window cannot cut it off.
+    let offset: string | null = null;
+    sheet.walkRules((rule) => {
+      if (!rule.selectors.includes("[data-v2-root] .v2-list:focus-visible")) return;
+      rule.walkDecls("outline-offset", (decl) => {
+        offset = decl.value;
+      });
+    });
+    expect(offset).toBe("-2px");
+  });
+
+  test("renders nothing at all in the lists element when there is nothing to list", () => {
+    const sample = sampleDay();
+    const data = { ...sample, input: { ...sample.input, candidates: [] } };
+    const { container } = render(createElement(TodayClient, { data }));
+    const lists = container.querySelector(".v2-lists") as HTMLElement;
+    // :empty is what hides the column, and it needs no child of any kind.
+    expect(lists.childNodes.length).toBe(0);
+  });
+
+  test("leaves the wrappers as nothing below the desktop width", () => {
+    const found: string[] = [];
+    sheet.each((node) => {
+      // Top level rules only: what applies when no media query does.
+      if (node.type !== "rule") return;
+      const own = node.selectors.map((entry) => entry.trim());
+      if (!own.includes("[data-v2-root] .v2-status")) return;
+      node.walkDecls("display", (decl) => {
+        found.push(`${own.join(", ")} => ${decl.value}`);
+      });
+    });
+    expect(found).toEqual([
+      "[data-v2-root] .v2-main, [data-v2-root] .v2-side, [data-v2-root] .v2-status, [data-v2-root] .v2-lists => contents",
+    ]);
+  });
+
+  test("makes every context column a scroller of its own that stays in view", () => {
+    for (const [tier, selector] of [
+      [1024, ".v2-side"],
+      [1024, ".v2-status"],
+      [1024, ".v2-lists"],
+      [1760, ".v2-list"],
+    ] as const) {
+      expect(inTier(tier, selector, "position")).toBe("sticky");
+      expect(inTier(tier, selector, "max-height")).toBe("100dvh");
+      expect(inTier(tier, selector, "overflow-y")).toBe("auto");
+      expect(inTier(tier, selector, "scrollbar-gutter")).toBe("stable");
+    }
+  });
+
+  test("gives the lists most of what is left on the widest screens", () => {
+    expect(inTier(2400, ".v2-shell", "grid-auto-columns")).toBe("minmax(300px, 1.4fr)");
+    expect(inTier(1360, ".v2-shell", "grid-auto-columns")).toBe("minmax(300px, 1.1fr)");
+    // 1760 changes which elements are columns, not how wide a column is.
+    expect(inTier(1760, ".v2-shell", "grid-template-columns")).toBeNull();
+  });
+
+  test("lets a long group name give way before it pushes the date out of a row", () => {
+    let overflow: string | null = null;
+    let minWidth: string | null = null;
+    sheet.walkRules((rule) => {
+      if (!rule.selectors.includes("[data-v2-root] .v2-row .v2-row-ident")) return;
+      rule.walkDecls("text-overflow", (decl) => {
+        overflow = decl.value;
+      });
+      rule.walkDecls("min-width", (decl) => {
+        minWidth = decl.value;
+      });
+    });
+    expect(overflow).toBe("ellipsis");
+    expect(minWidth).toBe("0");
+  });
 });
