@@ -559,11 +559,11 @@ describe("behaviour 4: demand, in order", () => {
         ],
       }),
     );
-    // The floor outranks the small block, so it takes the start of the window
-    // and the side quest follows it.
+    // The day is wide open, so nothing threatens the floor and the blocks land
+    // in demand order.
     expect(out.blocks.map((b) => [b.kind, b.taskId, shape(b)])).toEqual([
-      ["floor", "step", "floor 09:00-09:25"],
-      ["small", "s1", "small 09:35-09:45"],
+      ["small", "s1", "small 09:00-09:10"],
+      ["floor", "step", "floor 09:20-09:45"],
     ]);
     expect(out.dropped).toEqual([
       { candidateId: "s2", reason: "capacity" },
@@ -742,9 +742,9 @@ describe("behaviour 6: the floor", () => {
     assertNoOverlap(out, fixed);
   });
 
-  test("the hold is given back when the top candidate gets a real block", () => {
-    // The same two candidates on an empty day: the top one takes the start of
-    // the window itself, so holding a span for the floor costs nothing.
+  test("the floor guard leaves a plan it does not threaten alone", () => {
+    // The same two candidates on an empty day: nothing is at risk, so both
+    // blocks land in demand order at the start of the window.
     const out = planDay(
       input({
         rules: parseRules({ capacity: { good: { small: 1 } } }),
@@ -760,6 +760,60 @@ describe("behaviour 6: the floor", () => {
       ["small", "q", "small 10:00-10:10"],
     ]);
     expect(out.dropped).toEqual([]);
+  });
+
+  test("an optional block that comes before the top candidate keeps its own time", () => {
+    // Income is step 4 and the lane step is step 5, so income is placed first.
+    // The floor must not cost it the start of the window, nor push the top
+    // candidate's own block later.
+    const rules = parseRules({
+      incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
+    });
+    const out = planDay(
+      input({ rules, candidates: [candidate({ id: "a", lane: "lane-a" })] }),
+    );
+    expect(out.blocks.map((b) => [b.kind, b.taskId, shape(b)])).toEqual([
+      ["income", null, "income 09:00-11:00"],
+      ["focus", "a", "focus 11:10-12:00"],
+    ]);
+    expect(out.dropped).toEqual([]);
+  });
+
+  test("a tight day stays put as the clock advances", () => {
+    // One free stretch, 09:00 to 12:40, holding income and the lane step with
+    // nothing to spare. Walking the clock up to the first block's start must
+    // change nothing: no moves, no removals, and the lane step keeps its own
+    // focus block rather than being downgraded to a floor block.
+    const rules = parseRules({
+      incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
+    });
+    const fixed = [event({ start: utc("12:50"), end: utc("23:30") })];
+    const candidates = [candidate({ id: "a", lane: "lane-a" })];
+
+    const first = planDay(
+      input({ now: utc("08:00"), rules, fixed, candidates }),
+    );
+    expect(first.blocks.map((b) => [b.kind, b.taskId, shape(b)])).toEqual([
+      ["income", null, "income 09:00-11:00"],
+      ["focus", "a", "focus 11:10-12:00"],
+    ]);
+
+    let existing = first.blocks;
+    const firstStart = Math.min(
+      ...first.blocks.map((b) => Date.parse(b.start)),
+    );
+    for (let ms = Date.parse(utc("08:05")); ms < firstStart; ms += 5 * 60_000) {
+      const now = new Date(ms).toISOString();
+      const out = planDay(input({ now, rules, fixed, candidates, existing }));
+      expect(out.moved, now).toEqual([]);
+      expect(out.removed, now).toEqual([]);
+      expect(out.dropped, now).toEqual([]);
+      expect(out.blocks.map((b) => [b.kind, b.taskId, shape(b)]), now).toEqual([
+        ["income", null, "income 09:00-11:00"],
+        ["focus", "a", "focus 11:10-12:00"],
+      ]);
+      existing = out.blocks;
+    }
   });
 
   test("the floor goes to the top candidate, not to whoever fits", () => {
@@ -1367,93 +1421,160 @@ describe("whole-day invariants", () => {
   // catches a classification that slips backwards as time passes, which is how
   // a block came to be removed at midnight and returned at wake.
   test("replanning every ten minutes across two days never oscillates", () => {
-    const rules = parseRules({
-      gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
-      incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
-      capacity: { good: { blocks: 4, small: 1 } },
-    });
-    const candidates = [
-      // Two hard items on one lane: the lane limit bites unless the hard
-      // window exempts them, which is the classification that used to slip.
-      candidate({
-        id: "x",
-        lane: "lane-a",
-        hard: true,
-        due: "2026-03-14T08:30:00+00:00",
-        earlyTouchDone: true,
-      }),
-      candidate({
-        id: "z",
-        lane: "lane-a",
-        hard: true,
-        due: utc("12:00", "2026-03-12"),
-        earlyTouchDone: true,
-      }),
-      candidate({
-        id: "t",
-        lane: "lane-c",
-        hard: true,
-        due: utc("20:00", "2026-03-13"),
-      }),
-      candidate({ id: "s", lane: "lane-b" }),
-      candidate({ id: "q", kind: "side", minutes: 10 }),
-    ];
-    const fixed = [
-      event({ id: "class-10", start: utc("10:00"), end: utc("12:00") }),
-      event({
-        id: "shift-11",
-        start: utc("14:00", "2026-03-11"),
-        end: utc("18:00", "2026-03-11"),
-        countsTowardCap: true,
-      }),
+    // Two scenarios, because they put different things at risk. The first has
+    // hard items sharing a lane, where the hard-window exemption is the
+    // classification that used to slip at midnight. The second has no hard item
+    // at all, so the top-ranked candidate is an ordinary lane step and the floor
+    // is live the whole way: that is the shape in which setting a span aside in
+    // advance made the other blocks drift as the clock moved.
+    const scenarios = [
+      {
+        name: "deadlines on one lane",
+        rules: parseRules({
+          gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
+          incomeTarget: {
+            lane: "lane-income",
+            weeklyHours: 10,
+            blockMinutes: 120,
+          },
+          capacity: { good: { blocks: 4, small: 1 } },
+        }),
+        candidates: [
+          candidate({
+            id: "x",
+            lane: "lane-a",
+            hard: true,
+            due: "2026-03-14T08:30:00+00:00",
+            earlyTouchDone: true,
+          }),
+          candidate({
+            id: "z",
+            lane: "lane-a",
+            hard: true,
+            due: utc("12:00", "2026-03-12"),
+            earlyTouchDone: true,
+          }),
+          candidate({
+            id: "t",
+            lane: "lane-c",
+            hard: true,
+            due: utc("20:00", "2026-03-13"),
+          }),
+          candidate({ id: "s", lane: "lane-b" }),
+          candidate({ id: "q", kind: "side", minutes: 10 }),
+        ],
+        fixed: [
+          event({ id: "class-10", start: utc("10:00"), end: utc("12:00") }),
+          event({
+            id: "shift-11",
+            start: utc("14:00", "2026-03-11"),
+            end: utc("18:00", "2026-03-11"),
+            countsTowardCap: true,
+          }),
+        ],
+      },
+      {
+        name: "the floor live on a tight day",
+        rules: parseRules({
+          incomeTarget: {
+            lane: "lane-income",
+            weeklyHours: 10,
+            blockMinutes: 120,
+          },
+          capacity: { good: { blocks: 3, small: 1 } },
+        }),
+        candidates: [
+          candidate({ id: "a", lane: "lane-a" }),
+          candidate({ id: "b", lane: "lane-b" }),
+          candidate({ id: "q", kind: "side", minutes: 10 }),
+        ],
+        fixed: [
+          event({ id: "evening-10", start: utc("12:50"), end: utc("23:30") }),
+          event({
+            id: "evening-11",
+            start: utc("12:50", "2026-03-11"),
+            end: utc("23:30", "2026-03-11"),
+          }),
+        ],
+      },
     ];
 
     const state = new Map<string, Block[]>();
-    // Each date remembers every block id it has removed. Nothing about this
-    // walk changes except the clock, and the reference instant only ever moves
+    // Each key remembers every block id it has removed. Nothing about this walk
+    // changes except the clock, and the reference instant only ever moves
     // forward, so a block that leaves the plan has no way back: a return is
-    // oscillation, whether or not it lands on its old slot. (Asserting only
-    // the old slot is too weak to catch it, because the blocks after the gap
-    // shift earlier to fill it and the returning one then lands elsewhere.)
+    // oscillation, whether or not it lands on its old slot. (Asserting only the
+    // old slot is too weak to catch it, because the blocks after the gap shift
+    // earlier to fill it and the returning one then lands elsewhere.)
     const gone = new Map<string, Set<string>>();
 
     const first = Date.parse(utc("04:00"));
     const last = Date.parse(utc("04:00", "2026-03-12"));
-    for (let ms = first; ms <= last; ms += 10 * 60_000) {
+    const step = 10 * 60_000;
+    for (let ms = first; ms <= last; ms += step) {
       const now = new Date(ms).toISOString();
       const todayKey = zonedDateKey(ms, "UTC");
-      for (const date of [todayKey, zonedDateKey(ms + 86_400_000, "UTC")]) {
-        const existing = state.get(date) ?? [];
-        const out = planDay(
-          input({ date, now, rules, energy: "good", fixed, candidates, existing }),
-        );
-        const where = `${now} planning ${date}`;
-
-        const ids = out.blocks.map((b) => b.id);
-        expect(new Set(ids).size, where).toBe(ids.length);
-        assertNoOverlap(out, fixed);
-        for (const block of out.blocks) {
-          expect(Date.parse(block.end), where).toBeGreaterThan(
-            Date.parse(block.start),
+      for (const scenario of scenarios) {
+        const { rules, candidates, fixed } = scenario;
+        for (const date of [todayKey, zonedDateKey(ms + 86_400_000, "UTC")]) {
+          const key = `${scenario.name}|${date}`;
+          const existing = state.get(key) ?? [];
+          const out = planDay(
+            input({
+              date,
+              now,
+              rules,
+              energy: "good",
+              fixed,
+              candidates,
+              existing,
+            }),
           );
-        }
+          const where = `${now} planning ${date} (${scenario.name})`;
 
-        const history = gone.get(date) ?? new Set<string>();
-        for (const block of out.blocks) {
-          expect(
-            history.has(block.id),
-            `${where}: ${block.id} came back after being removed`,
-          ).toBe(false);
+          // Only the clock moved. Unless a block began or ended in this step,
+          // which changes what the planner may touch, the plan must stand.
+          const crossed = existing.some((b) => {
+            const edges = [Date.parse(b.start), Date.parse(b.end)];
+            return edges.some((edge) => edge > ms - step && edge <= ms);
+          });
+          if (existing.length > 0 && !crossed) {
+            expect(out.moved, where).toEqual([]);
+            expect(out.removed, where).toEqual([]);
+          }
+
+          const ids = out.blocks.map((b) => b.id);
+          expect(new Set(ids).size, where).toBe(ids.length);
+          assertNoOverlap(out, fixed);
+          for (const block of out.blocks) {
+            expect(Date.parse(block.end), where).toBeGreaterThan(
+              Date.parse(block.start),
+            );
+          }
+
+          const history = gone.get(key) ?? new Set<string>();
+          for (const block of out.blocks) {
+            expect(
+              history.has(block.id),
+              `${where}: ${block.id} came back after being removed`,
+            ).toBe(false);
+          }
+          for (const entry of out.removed) history.add(entry.blockId);
+          gone.set(key, history);
+          state.set(key, out.blocks);
         }
-        for (const entry of out.removed) history.add(entry.blockId);
-        gone.set(date, history);
-        state.set(date, out.blocks);
       }
     }
 
     // The walk has to have produced something, or it proves nothing.
-    expect((state.get(DATE) ?? []).length).toBeGreaterThan(0);
-    expect((state.get("2026-03-11") ?? []).length).toBeGreaterThan(0);
+    for (const scenario of scenarios) {
+      for (const date of [DATE, "2026-03-11"]) {
+        expect(
+          (state.get(`${scenario.name}|${date}`) ?? []).length,
+          `${scenario.name}|${date}`,
+        ).toBeGreaterThan(0);
+      }
+    }
   });
 
   test("works in UTC, America/Phoenix and Asia/Tokyo", () => {

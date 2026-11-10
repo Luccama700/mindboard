@@ -72,6 +72,7 @@ const DROPPED = {
 const REMOVED = {
   notDemanded: "not-demanded",
   skipped: "skipped",
+  replaced: "replaced",
 } as const;
 
 // The income and gym blocks come from the rules, not from a task, so they have
@@ -573,26 +574,44 @@ export function planDay(input: PlanInput): PlanOutput {
   }
 
   const placed: Block[] = [];
-  const tryPlace = (request: Request, pool: MsInterval[]) => {
+
+  // Every span this request could take, in placement order: one per free
+  // interval, earliest interval first (latest first for a session), then the
+  // session's relaxed fit. The first entry is the plain earliest or latest fit,
+  // so a request that has nothing to dodge is placed exactly as before.
+  const fitsFor = (request: Request, pool: MsInterval[]): MsInterval[] => {
     const lengthMs = request.minutes * MINUTE_MS;
-    const strict =
-      request.fit === "latest"
-        ? fitLatest(pool, lengthMs, request.earliestMs, request.latestMs)
-        : fitEarliest(pool, lengthMs, request.earliestMs, request.latestMs);
-    return strict ?? fitBeforeClosing(pool, request, floorMs);
+    const order = request.fit === "latest" ? [...pool].reverse() : pool;
+    const out: MsInterval[] = [];
+    for (const interval of order) {
+      const one =
+        request.fit === "latest"
+          ? fitLatest([interval], lengthMs, request.earliestMs, request.latestMs)
+          : fitEarliest(
+              [interval],
+              lengthMs,
+              request.earliestMs,
+              request.latestMs,
+            );
+      if (one !== null) out.push(one);
+    }
+    const relaxed = fitBeforeClosing(pool, request, floorMs);
+    if (relaxed !== null) out.push(relaxed);
+    return out;
   };
 
   // Behaviour 6's priority half. The top-ranked candidate is owed a block of at
-  // least floor length, and that outranks every non-mandatory block, so a span
-  // for it is held back before the optional requests are placed. Without the
-  // hold, a 10 minute side quest could take the day's last gap and leave no
-  // room for the floor, which is exactly the "day with no room" the spec calls
-  // the most likely to bite.
+  // least floor length, and that outranks every non-mandatory block: a 10
+  // minute side quest may not take the day's last gap and leave the floor with
+  // nowhere to go, which is exactly the "day with no room" the spec calls the
+  // most likely to bite.
   //
-  // The hold is the TOP CANDIDATE'S space, not the floor block's: its own block
-  // of any kind may land there, so a normal day still gives it a full focus
-  // block at the start of the window. Only when nothing served it does the hold
-  // become a floor block.
+  // It is enforced where the risk is, at the moment an optional block is about
+  // to be committed, and NOT by setting a span aside in advance. Holding a span
+  // ahead of time changes plans that were never in danger: an earlier optional
+  // step (income is step 4, lane steps are step 5) gets pushed past the held
+  // span, the top candidate's longer block then cannot use it, and the span is
+  // released empty. It also made future blocks drift as the clock advanced.
   const top = ranked[0]?.candidate;
   const topEnough =
     top === undefined
@@ -607,13 +626,37 @@ export function planDay(input: PlanInput): PlanOutput {
       (block) => block.taskId === top.id && blockLengthMs(block) >= topEnough,
     );
   const floorBlockId = top === undefined ? null : blockId("floor", top.id);
-  let floorHold: MsInterval | null = null;
+  const requestById = new Map(
+    requests.map((request) => [request.blockId, request]),
+  );
 
-  const commitOrDrop = (
-    request: Request,
-    pending: MsInterval[],
-    hold: MsInterval | null,
-  ) => {
+  /** The top candidate is holding a slot of its own that would serve it. */
+  const topHoldsReservation = () => {
+    if (top === undefined) return false;
+    for (const [id, span] of reserved) {
+      if (requestById.get(id)?.taskId !== top.id) continue;
+      if (span.endMs - span.startMs >= topEnough) return true;
+    }
+    return false;
+  };
+
+  // The guard is off unless the floor is genuinely at risk: the top candidate
+  // has nothing yet, is not holding a slot of its own, and no floor block of
+  // its own is already on the day.
+  const floorAtRisk = () =>
+    top !== undefined &&
+    floorBlockId !== null &&
+    !spokenFor.has(floorBlockId) &&
+    !topServed() &&
+    !topHoldsReservation();
+
+  /** Would a floor block still fit somewhere once this span is taken? */
+  const leavesFloorRoom = (span: MsInterval) =>
+    carveIntervals(strictPool, [pad(span)]).some(
+      (interval) => interval.endMs - interval.startMs >= floorMs,
+    );
+
+  const commitOrDrop = (request: Request, pending: MsInterval[]) => {
     if (!request.mandatory) {
       if (request.budget === "blocks" && blocksLeft <= 0) {
         reserved.delete(request.blockId);
@@ -628,17 +671,30 @@ export function planDay(input: PlanInput): PlanOutput {
     }
 
     const pool = request.allowProtected ? openPool : strictPool;
-    const offLimits =
-      hold !== null && request.taskId !== (top?.id ?? null) ? [pad(hold)] : [];
     let span = reserved.get(request.blockId) ?? null;
     if (span === null) {
+      // Behaviour 6's priority half. An optional block that is not the top
+      // candidate's own may not take the last space a floor block could use;
+      // it moves to its next fit, and is dropped when none leaves room. The
+      // check is skipped entirely when the floor is not at risk, so a normal
+      // day is placed exactly as it would be without it, and no reservation is
+      // ever evicted on the floor's behalf.
+      const guarded =
+        !request.mandatory &&
+        request.taskId !== (top?.id ?? null) &&
+        floorAtRisk();
+
       // First try around the slots other blocks are holding; only if nothing
       // fits does this request take space one of them was keeping, and that
-      // block then re-places and shows up in `moved`. The floor hold is never
-      // takeable this way.
-      span =
-        tryPlace(request, carveIntervals(pool, [...pending, ...offLimits])) ??
-        tryPlace(request, carveIntervals(pool, offLimits));
+      // block then re-places and shows up in `moved`.
+      for (const candidatePool of [carveIntervals(pool, pending), pool]) {
+        for (const fit of fitsFor(request, candidatePool)) {
+          if (guarded && !leavesFloorRoom(fit)) continue;
+          span = fit;
+          break;
+        }
+        if (span !== null) break;
+      }
     }
     reserved.delete(request.blockId);
     if (span === null) {
@@ -668,8 +724,6 @@ export function planDay(input: PlanInput): PlanOutput {
     if (request.budget === "blocks") blocksLeft -= 1;
     if (request.budget === "small") smallLeft -= 1;
     undrop(request.dropId);
-    // The top candidate got what it was owed, so the hold is given back.
-    if (floorHold !== null && topServed()) floorHold = null;
   };
 
   const pendingAfter = (from: number): MsInterval[] => {
@@ -681,73 +735,17 @@ export function planDay(input: PlanInput): PlanOutput {
     return out;
   };
 
-  const requestById = new Map(
-    requests.map((request) => [request.blockId, request]),
-  );
-
-  // Where the hold goes: the slot a floor block already had, else the earliest
-  // fit that leaves the other blocks' reservations alone, else the earliest fit
-  // at all. A reservation it has to overlap is released, so that block
-  // re-places and lands in `moved` rather than sitting under the floor.
-  const chooseFloorHold = (pending: MsInterval[]): MsInterval | null => {
-    if (top === undefined || floorBlockId === null) return null;
-    if (topServed() || spokenFor.has(floorBlockId)) return null;
-    const lengthMs = rules.blockMinutes.floor * MINUTE_MS;
-
-    const prev = previousById.get(floorBlockId);
-    const prevStart = prev === undefined ? null : maybeInstantMs(prev.start);
-    if (prevStart !== null) {
-      const span = { startMs: prevStart, endMs: prevStart + lengthMs };
-      const free = strictPool.some(
-        (interval) =>
-          interval.startMs <= span.startMs && interval.endMs >= span.endMs,
-      );
-      if (free) return span;
-    }
-
-    const infinite = [
-      Number.NEGATIVE_INFINITY,
-      Number.POSITIVE_INFINITY,
-    ] as const;
-    return (
-      fitEarliest(
-        carveIntervals(strictPool, pending),
-        lengthMs,
-        infinite[0],
-        infinite[1],
-      ) ?? fitEarliest(strictPool, lengthMs, infinite[0], infinite[1])
-    );
-  };
-
-  const decideFloorHold = (from: number) => {
-    floorHold = chooseFloorHold(pendingAfter(from));
-    if (floorHold === null) return;
-    const padded = pad(floorHold);
-    for (const [id, other] of [...reserved]) {
-      if (!overlaps(padded, other)) continue;
-      if (requestById.get(id)?.taskId === top?.id) continue;
-      reserved.delete(id);
-    }
-  };
-
-  let holdDecided = false;
   for (let i = 0; i < requests.length; i++) {
-    // Mandatory requests (steps 1 and 2) still come before the floor.
-    if (!requests[i].mandatory && !holdDecided) {
-      holdDecided = true;
-      decideFloorHold(i);
-    }
-    commitOrDrop(requests[i], pendingAfter(i + 1), floorHold);
+    commitOrDrop(requests[i], pendingAfter(i + 1));
   }
-  if (!holdDecided) decideFloorHold(requests.length);
 
   // Behaviour 6. There is always one block of at least floor length on the
   // top-ranked candidate, whatever capacity said, and none at all when there
   // are no candidates. Whether one is needed can only be read from what
-  // actually landed, so the block itself is cut here, out of the span the hold
-  // above kept free for it. A candidate that says it takes five minutes is
-  // served by its own five minute block: a 25 minute floor block beside it
-  // would book the same work twice.
+  // actually landed, so the block is cut here, in the room the guard above kept
+  // open for it. A candidate that says it takes five minutes is served by its
+  // own five minute block: a 25 minute floor block beside it would book the
+  // same work twice.
   if (top !== undefined && floorBlockId !== null) {
     if (!topServed() && !spokenFor.has(floorBlockId)) {
       const floorRequest: Request = {
@@ -767,8 +765,9 @@ export function planDay(input: PlanInput): PlanOutput {
         mandatory: true,
         allowProtected: false,
       };
-      if (floorHold !== null) reserved.set(floorRequest.blockId, floorHold);
-      commitOrDrop(floorRequest, [], null);
+      const kept = reservationFor(floorRequest);
+      if (kept !== null) reserved.set(floorRequest.blockId, kept);
+      commitOrDrop(floorRequest, []);
     }
   }
 
@@ -793,11 +792,19 @@ export function planDay(input: PlanInput): PlanOutput {
   for (const prev of previous) {
     if (placedIds.has(prev.id)) continue;
     const token = prev.taskId ?? prev.kind;
+    // A task that is still on the day under another block id was not dropped:
+    // its block changed shape (a focus that became a floor block, say), so
+    // "not-demanded" would read as if the work had gone away.
+    const replaced =
+      prev.taskId !== null &&
+      placed.some((block) => block.taskId === prev.taskId);
     const reason =
       prev.taskId !== null && skippedTaskIds.has(prev.taskId)
         ? REMOVED.skipped
-        : (dropped.find((entry) => entry.candidateId === token)?.reason ??
-          REMOVED.notDemanded);
+        : replaced
+          ? REMOVED.replaced
+          : (dropped.find((entry) => entry.candidateId === token)?.reason ??
+            REMOVED.notDemanded);
     removed.push({ blockId: prev.id, reason });
   }
 

@@ -8,10 +8,10 @@
 //
 // The second argument is THE REFERENCE INSTANT, not necessarily the clock.
 // "Today" is the day it falls on in the user's zone, and the hard window is
-// measured from it. Planning today, the caller passes `now`; planning a later
-// day it passes the start of that day's window, so the buckets describe the day
-// being planned rather than the day the planner happens to run (behaviour 11,
-// handled in planner.ts).
+// measured from it. The caller passes the later of `now` and the start of the
+// planned day's window, so the buckets describe the day being planned rather
+// than the day the planner happens to run, and they do not shift when the same
+// day is replanned before wake (behaviour 11, handled in planner.ts).
 //
 // Energy is deliberately not an argument. The low-energy preference for cheap
 // work is a planner concern (it only reorders the lane-step bucket), so it lives
