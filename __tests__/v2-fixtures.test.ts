@@ -1224,6 +1224,12 @@ describe("the desktop page fills the window", () => {
       expect(inTier(tier, selector, "overflow-y")).toBe("auto");
       expect(inTier(tier, selector, "scrollbar-gutter")).toBe("stable");
     }
+    // And a list is NOT a scroller while something around it already is: one
+    // scroller inside another traps the wheel in the inner one.
+    for (const tier of [1024, 1360]) {
+      expect(inTier(tier, ".v2-list", "overflow-y")).toBeNull();
+      expect(inTier(tier, ".v2-list", "max-height")).toBeNull();
+    }
   });
 
   test("gives the lists most of what is left on the widest screens", () => {
