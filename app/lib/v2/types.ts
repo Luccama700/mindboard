@@ -272,8 +272,14 @@ export interface Alert {
   status: "open" | "closed";
 }
 
+/**
+ * What the watchdog decided for one alert. `open`, `escalate` and `close` are
+ * sent to the user. `update` is silent: the alert's feed list changed, so the
+ * row is stored again and nothing is sent.
+ */
 export type AlertAction =
   | { type: "open"; alert: Alert }
+  | { type: "update"; alert: Alert }
   | { type: "escalate"; alert: Alert }
   | { type: "close"; alert: Alert };
 

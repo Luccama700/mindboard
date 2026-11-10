@@ -126,6 +126,7 @@
 5. Time-critical: `interrupt` while `interruptsSentToday` is under the budget, else `digest`. The budget is `rules.interruptsPerDay`, halved and rounded up when `weeklyAnswerRate` is a number under 0.5.
 6. `slipAsk`: kind `slip`, topic `` `block:${block.id}` ``, dedupe key `` `slip:${block.id}` ``, time-critical, expires `rules.slipDefaultAfterMinutes` after `now`, no reminder. Options in this order: `did` "Did it" (`block.done`, fraction 1), `later` "Later today" (`block.reschedule`, `later-today`), `tomorrow` "Tomorrow" (`block.reschedule`, `tomorrow`), `drop` "Drop" (`block.drop`). Default `later`. Text: `` `Still doing ${block.title}?` ``.
 7. `energyAsk`: kind `energy`, topic and dedupe key `` `energy:${date}` ``, time-critical, expires at 12:00 local on `date`, no reminder. Options `low` "Low", `ok` "OK", `good` "Good", each an `energy.set` effect. Default `ok`. Text: `Energy today?`.
+8. `expireDue` never throws. An ask whose default option is missing from its options still expires, marked assumed, with effect `none`: one bad row must not stop an unattended sweep. `dueReminders` skips an ask that is already past `expiresAt`.
 
 - [ ] **Step 1: Write the failing tests**, one per behaviour, plus `answering twice changes nothing the second time`, `an unknown option throws`, `an expired ask applies its default and is marked assumed`, `a reminder is due once and never again`.
 - [ ] **Step 2: Run them and see them fail.**
@@ -155,7 +156,8 @@
 4. Otherwise, if the newest finished run is `ok` with too few items: `failing`, cause `empty-run`.
 5. Otherwise: `late` up to twice the interval plus grace, then `blind`. Cause `no-run`.
 6. Outside `activeHours` a feed is never downgraded for lateness. It reports `alive` unless rule 3 or 4 applies.
-7. `planAlerts` keeps one open alert per cause. A new cause opens one (step 0, `lastSentAt` null). The feed list of an open alert is updated without a new action. Step 0 to 1 after 2 hours open, 1 to 2 after 12 hours, each as one `escalate` action. A cause with no failing feed left produces `close`.
+7. `planAlerts` keeps one open alert per cause. Feeds that are `failing` or `blind` raise alerts, `late` does not. A new cause opens one (step 0, `lastSentAt` null). When the feed list of an open alert changes and nothing else happens to that alert in the same plan, the action is `update` (silent: stored, never sent). The step follows the alert's age: 1 from 2 hours open, 2 from 12 hours, as a single `escalate` action that goes straight to the step the age calls for. A cause with no failing or blind feed left produces `close`.
+8. `daysSince` never returns a negative number.
 
 - [ ] **Step 1: Write the failing tests**, one per behaviour, plus `eight feeds with the same error class make one alert`, `a run that finished ok with zero items is a failure after the grace period`.
 - [ ] **Step 2: Run them and see them fail.**
@@ -190,7 +192,7 @@
 **Behaviour the tests pin:**
 
 1. Exact copy. `feedLine` with every feed alive: `All feeds alive.` With one not alive: `` `I can't see ${label} since ${sinceLabel(lastGoodAt)}.` `` With several: `` `${n} feeds are down. Worst: ${label}, since ${sinceLabel(lastGoodAt)}.` ``
-2. `morningMessage`: at most four lines. Line 1 `Morning.` Line 2 `` `First thing: ${title} at ${time}, leave by ${leaveBy}.` `` (without the leave-by clause when null, and `Nothing fixed today.` when there is no fixed event). Line 3 the top block as `` `Then: ${title} at ${time}.` `` when present. Last line the feed line. With an `energyAsk` the text ends with `Energy today?` and the buttons are that ask's options.
+2. `morningMessage`: at most three lines (the spec's limit). Line 1 `` `Morning. First thing: ${title} at ${time}, leave by ${leaveBy}.` `` (without the leave-by clause when null, and `Morning. Nothing fixed today.` when there is no fixed event). Line 2, only when there is a top block, `` `Then: ${title} at ${time}.` `` The last line is the feed line. With an `energyAsk`, ` Energy today?` is appended to that same last line and the buttons are that ask's options. In `feedLine`, "worst" is the feed that is not alive with the oldest last good run, and a feed that never had one counts as oldest.
 3. `replanMessage`: `` `Moved ${moved}. Next is ${title} at ${time}.` `` With removals, `` ` Dropped ${removed}.` `` is appended. With no next: `Moved ${moved}. Nothing else today.`
 4. `alertMessage`: `` `${causeLabel}. ${affected} things affected, day ${days + 1}.` `` followed by the fix on its own line when present. One affected thing reads `1 thing affected`.
 5. `planMessage`: line 1 is `` `${energyLabel} day.` ``, or `` `${energyLabel} day, assumed.` `` when `assumed` is true. Then one line per entry, `` `${time} ${title}` ``. With a `startAsk` the buttons are that ask's options.
