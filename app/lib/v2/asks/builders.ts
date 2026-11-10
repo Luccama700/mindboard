@@ -16,7 +16,8 @@ export function slipAsk(
   return {
     userId,
     kind: "slip",
-    topic: `block:${block.id}`,
+    // Shared across blocks of the same task (or kind), so backoff can see repeats.
+    topic: block.taskId !== null ? `task:${block.taskId}` : `kind:${block.kind}`,
     text: `Still doing ${block.title}?`,
     options: [
       { id: "did", label: "Did it", effect: { type: "block.done", blockId: block.id, fraction: 1 } },
@@ -52,7 +53,8 @@ export function energyAsk(
   return {
     userId,
     kind: "energy",
-    topic: `energy:${date}`,
+    // One topic for every day, so unanswered energy asks add up across the week.
+    topic: "energy",
     text: "Energy today?",
     options: [
       { id: "low", label: "Low", effect: { type: "energy.set", date, energy: "low" } },

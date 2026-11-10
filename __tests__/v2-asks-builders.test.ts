@@ -54,8 +54,26 @@ describe("slipAsk", () => {
   test("identity: kind, user, topic and dedupe key", () => {
     expect(draft.kind).toBe("slip");
     expect(draft.userId).toBe("user-9");
-    expect(draft.topic).toBe("block:blk-7");
+    expect(draft.topic).toBe("task:task-1");
     expect(draft.dedupeKey).toBe("slip:blk-7");
+  });
+
+  test("topic is the task when the block has one, so repeats share a topic", () => {
+    const first = slipAsk(makeBlock({ id: "blk-1", taskId: "task-9" }), "user-9", makeRules(), now);
+    const second = slipAsk(makeBlock({ id: "blk-2", taskId: "task-9" }), "user-9", makeRules(), now);
+    expect(first.topic).toBe("task:task-9");
+    expect(second.topic).toBe("task:task-9");
+    expect(first.dedupeKey).not.toBe(second.dedupeKey);
+  });
+
+  test("topic is the block kind when the block has no task", () => {
+    const gym = slipAsk(makeBlock({ id: "blk-3", taskId: null, kind: "gym" }), "user-9", makeRules(), now);
+    const gymAgain = slipAsk(makeBlock({ id: "blk-4", taskId: null, kind: "gym" }), "user-9", makeRules(), now);
+    const floor = slipAsk(makeBlock({ id: "blk-5", taskId: null, kind: "floor" }), "user-9", makeRules(), now);
+    expect(gym.topic).toBe("kind:gym");
+    expect(gymAgain.topic).toBe("kind:gym");
+    expect(floor.topic).toBe("kind:floor");
+    expect(gym.dedupeKey).toBe("slip:blk-3");
   });
 
   test("text names the block", () => {
@@ -107,9 +125,8 @@ describe("slipAsk", () => {
     }
   });
 
-  test("a different block gets its own topic, key and effects", () => {
+  test("a different block gets its own dedupe key and effects", () => {
     const other = slipAsk(makeBlock({ id: "blk-8", title: "Read" }), "user-9", makeRules(), now);
-    expect(other.topic).toBe("block:blk-8");
     expect(other.dedupeKey).toBe("slip:blk-8");
     expect(other.text).toBe("Still doing Read?");
     expect(other.options[0].effect).toEqual({ type: "block.done", blockId: "blk-8", fraction: 1 });
@@ -128,8 +145,15 @@ describe("energyAsk", () => {
   test("identity: kind, user, topic and dedupe key", () => {
     expect(draft.kind).toBe("energy");
     expect(draft.userId).toBe("user-9");
-    expect(draft.topic).toBe("energy:2026-07-08");
+    expect(draft.topic).toBe("energy");
     expect(draft.dedupeKey).toBe("energy:2026-07-08");
+  });
+
+  test("asks for different dates share a topic and differ in dedupe key", () => {
+    const other = energyAsk("2026-07-09", "user-9", rules, "2026-07-09T07:30:00+09:00");
+    expect(other.topic).toBe(draft.topic);
+    expect(other.dedupeKey).toBe("energy:2026-07-09");
+    expect(other.dedupeKey).not.toBe(draft.dedupeKey);
   });
 
   test("text is the plain question", () => {
