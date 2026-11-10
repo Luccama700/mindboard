@@ -2,7 +2,6 @@ import "server-only";
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 
 import {
-  RowShapeError,
   assertChatMessageId,
   assertErrorClass,
   assertOptionId,
@@ -22,7 +21,7 @@ import {
   parseRulesDocument,
   toAlertRow,
   toAskRow,
-  toBlockRow,
+  toPlanRows,
   toExpectationRow,
   toFeedRunRow,
   toOutboxRow,
@@ -219,14 +218,11 @@ export function createSupabaseStores(client: SupabaseClient): Stores {
         // Issued from here as read, then delete, then insert, it could be
         // neither: both callers would read the same snapshot and each would
         // delete only what ITS snapshot called stale.
-        const rows = next.map((block) => {
-          if (block.date !== date) {
-            throw new RowShapeError("v2_blocks", "date", `is ${block.date}, not ${date}`);
-          }
-          const row = toBlockRow(userId, block);
-          fromBlockRow(row);
-          return row;
-        });
+        //
+        // toPlanRows is the shared builder, so both stores refuse the same bad
+        // plans - a block dated elsewhere, the same id twice, a bad row shape -
+        // and refuse them before anything is sent.
+        const rows = toPlanRows(userId, date, next);
         const { error } = await client.rpc("v2_replace_planned_blocks", { p_user: userId, p_date: date, p_blocks: rows });
         if (error) raise("blocks.replacePlanned", error);
       },

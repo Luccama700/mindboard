@@ -331,6 +331,37 @@ export function toBlockRow(userId: string, block: Block): BlockRow {
   };
 }
 
+/**
+ * The rows of one plan, checked the way the day's own write checks them.
+ *
+ * Both stores build their plan through this, so the two cannot drift on what a
+ * bad plan is - which is the whole risk in having two implementations. It
+ * refuses, before anything is written:
+ *
+ * - a block dated somewhere other than the day being planned, because a plan is
+ *   a plan for one day and a stray row would land where no later replan of that
+ *   day would ever find it;
+ * - the same id twice, because Postgres answers that with "ON CONFLICT DO
+ *   UPDATE command cannot affect row a second time" and fails the WHOLE call,
+ *   so a planner bug that emitted one id twice would break every replan;
+ * - anything `fromBlockRow` refuses, which is every check `v2_blocks` states.
+ */
+export function toPlanRows(userId: string, date: string, blocks: Block[]): BlockRow[] {
+  const seen = new Set<string>();
+  return blocks.map((block) => {
+    if (block.date !== date) {
+      throw new RowShapeError("v2_blocks", "date", `is ${block.date}, not ${date}`);
+    }
+    if (seen.has(block.id)) {
+      throw new RowShapeError("v2_blocks", "id", `appears twice in one plan: ${block.id}`);
+    }
+    seen.add(block.id);
+    const row = toBlockRow(userId, block);
+    fromBlockRow(row);
+    return row;
+  });
+}
+
 export function fromBlockRow(row: unknown): Block {
   const parsed = parse(blockRowSchema, "v2_blocks", row);
   return {

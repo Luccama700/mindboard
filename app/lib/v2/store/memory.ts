@@ -31,7 +31,6 @@ import {
   type FeedRunRow,
   type OutboxRow,
   type RulesRow,
-  RowShapeError,
   assertChatMessageId,
   assertErrorClass,
   assertOptionId,
@@ -51,7 +50,7 @@ import {
   parseRulesDocument,
   toAlertRow,
   toAskRow,
-  toBlockRow,
+  toPlanRows,
   toExpectationRow,
   toFeedRunRow,
   toOutboxRow,
@@ -180,25 +179,20 @@ export function createMemoryStores(): Stores {
       // Supabase store issues for this. Every clause below is one of its five
       // numbered promises; keep the two in step.
       async replacePlanned(userId: string, date: DateKey, next: Block[]): Promise<void> {
-        // (1) and (5): everything is checked before anything is written, so a
-        // bad block leaves the stored plan exactly as it was, and a block
-        // belonging to another day is a caller mistake rather than a row that
-        // quietly lands where no later replan will find it.
-        const rows = next.map((block) => {
-          if (block.date !== date) {
-            throw new RowShapeError("v2_blocks", "date", `is ${block.date}, not ${date}`);
-          }
-          const row = toBlockRow(userId, block);
-          fromBlockRow(row);
-          return row;
-        });
+        // (1) and (5): everything is checked before anything is written - the
+        // shape of every block, the day each one claims, and the same id twice
+        // - through the one builder the Supabase store also uses, so the two
+        // cannot disagree about what a bad plan is.
+        const rows = toPlanRows(userId, date, next);
 
-        // (2) A row recording what he did is not the planner's to rewrite, on
-        // this date or any other, so its id is simply not available to a plan.
-        const touched = new Set(
-          ownBlocks(userId).filter((row) => row.state !== "planned").map((row) => row.id),
-        );
-        const keep = rows.filter((row) => !touched.has(row.id));
+        // (2) and (4): an id is available to this plan only if nothing holds
+        // it, or the row that holds it is a planned row of this same day. A
+        // row recording what he did is not the planner's to rewrite, and a
+        // planned block of another day is not the planner's to drag over here.
+        const keep = rows.filter((row) => {
+          const current = blocks.get(key(userId, row.id));
+          return !current || (current.state === "planned" && current.date === date);
+        });
         const keepIds = new Set(keep.map((row) => row.id));
 
         // (3) Planned rows of this day that the new plan does not mention.
@@ -208,11 +202,10 @@ export function createMemoryStores(): Stores {
           }
         }
 
-        // (4) `state` is never written by a plan: a new row starts 'planned'
-        // and an existing one keeps whatever it has.
+        // `state` is never written by a plan: a new row starts 'planned' and a
+        // kept one is planned already.
         for (const row of keep) {
-          const current = blocks.get(key(userId, row.id));
-          blocks.set(key(userId, row.id), { ...row, state: current?.state ?? "planned" });
+          blocks.set(key(userId, row.id), { ...row, state: "planned" });
         }
       },
 

@@ -345,16 +345,55 @@ describe("0066: v2_replace_planned_blocks", () => {
     expect(body).toContain("b.state = 'planned'");
   });
 
-  test("never writes state on a row that already exists, and only touches planned ones", () => {
+  test("never writes state or date on a row that already exists", () => {
     const update = FUNCTION.slice(FUNCTION.indexOf("on conflict (user_id, id) do update"));
     const assignments = update.slice(0, update.indexOf("where"));
     expect(/\bstate\s*=/.test(assignments), "a plan must never write state").toBe(false);
-    expect(update).toContain("where public.v2_blocks.state = 'planned'");
+    expect(/\bdate\s*=/.test(assignments), "a plan must never move an existing row's day").toBe(
+      false,
+    );
+  });
+
+  test("updates an existing row only while it is planned AND already on p_date", () => {
+    // Without the date half, a planned block of another day with the same id
+    // would be dragged onto this one by `date = excluded.date`.
+    const update = FUNCTION.slice(FUNCTION.indexOf("on conflict (user_id, id) do update"));
+    const guard = update.slice(update.indexOf("where"), update.indexOf(";"));
+    expect(guard).toContain("public.v2_blocks.state = 'planned'");
+    expect(guard).toContain("public.v2_blocks.date = p_date");
+  });
+
+  test("looks at the touched rows this plan mentions, not the whole history", () => {
+    const touched = FUNCTION.slice(FUNCTION.indexOf("touched as ("));
+    const body = touched.slice(0, touched.indexOf("keep as ("));
+    expect(body).toContain("id in (select id from incoming)");
   });
 
   test("lands every row on p_date, so a plan is a plan for one day", () => {
     const insert = FUNCTION.slice(FUNCTION.indexOf("insert into public.v2_blocks"));
     expect(insert).toContain("select p_user, k.id, p_date,");
+  });
+
+  test("nothing but its own revokes and grant follows the function body", () => {
+    // Without this the "changes no existing object" check above has a blind
+    // spot: it stops at the function definition, so a data statement appended
+    // after these four lines would go unexamined.
+    expect(ENGINE.split("$$;").length, "0066 must hold exactly one dollar-quoted body").toBe(2);
+    const tail = ENGINE.slice(ENGINE.indexOf("$$;") + 3);
+    // Comments come off BEFORE the split, because a comment may itself hold a
+    // semicolon and would otherwise leak half a sentence into a "statement".
+    const statements = tail
+      .replace(/--[^\n]*/g, "")
+      .split(";")
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    for (const statement of statements) {
+      expect(
+        /^(revoke|grant)\b[\s\S]*\bon function\b/i.test(statement),
+        `unexpected statement after the function: ${statement}`,
+      ).toBe(true);
+    }
+    expect(statements.length, "three revokes and one grant").toBe(4);
   });
 });
 

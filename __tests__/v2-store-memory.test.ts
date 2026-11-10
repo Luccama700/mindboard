@@ -254,6 +254,42 @@ describe("memory blocks store", () => {
     expect(stored.map((b) => b.id)).toEqual([`${DATE}:focus:one`]);
   });
 
+  test("replacePlanned refuses the same id twice in one plan", async () => {
+    const stores = createMemoryStores();
+    await stores.blocks.replacePlanned(A, DATE, [aBlock()]);
+    // Postgres answers two incoming rows with one id with "ON CONFLICT DO
+    // UPDATE command cannot affect row a second time" and fails the WHOLE
+    // call, so a planner bug that emitted one id twice has to fail here too -
+    // otherwise it passes every engine test and breaks every replan in
+    // production.
+    await expect(
+      stores.blocks.replacePlanned(A, DATE, [
+        aBlock({ id: `${DATE}:focus:dup`, start: "2026-11-09T17:00:00.000Z" }),
+        aBlock({ id: `${DATE}:focus:dup`, start: "2026-11-09T19:00:00.000Z" }),
+      ]),
+    ).rejects.toThrow(RowShapeError);
+    expect((await stores.blocks.listForDate(A, DATE)).map((b) => b.id)).toEqual([
+      `${DATE}:focus:one`,
+    ]);
+  });
+
+  test("a plan cannot drag another day's planned block onto its own day", async () => {
+    const stores = createMemoryStores();
+    const shared = "2026-11-07:focus:a";
+    await stores.blocks.replacePlanned(A, "2026-11-07", [
+      aBlock({ id: shared, date: "2026-11-07" }),
+    ]);
+
+    // Same id, planned, but it belongs to the 7th. Planning the 9th must leave
+    // it there rather than moving it, which is what the date half of the
+    // DO UPDATE guard buys.
+    await stores.blocks.replacePlanned(A, DATE, [aBlock({ id: shared })]);
+    expect(await stores.blocks.listForDate(A, DATE)).toEqual([]);
+    const kept = await stores.blocks.listForDate(A, "2026-11-07");
+    expect(kept).toHaveLength(1);
+    expect(kept[0].state).toBe("planned");
+  });
+
   test("replacePlanned refuses a block dated somewhere else", async () => {
     const stores = createMemoryStores();
     await expect(

@@ -384,12 +384,14 @@ create policy "v2_alerts_select_own" on public.v2_alerts
 --      incoming plan are deleted. A dropped block leaves no tombstone, because
 --      a tombstone would hold its stable id hostage for the rest of the day.
 --   4. Everything left is inserted, or updates the plan columns of the row that
---      already holds that id while it is still 'planned'. `state` is never
---      written by a plan, so a block started between the lock and the write
---      keeps its state, and the guard on the DO UPDATE is what guarantees it.
+--      already holds that id while that row is still 'planned' AND already on
+--      p_date. `state` and `date` are never written to an existing row, so a
+--      block started between the lock and the write keeps its state, and a
+--      planned block belonging to another day is not dragged onto this one.
+--      An id held by any other row is simply not available to this plan.
 --   5. Every row lands on p_date. The per-block date is not read at all: a plan
---      is a plan for one day, and the store refuses a block dated elsewhere
---      before it ever gets here.
+--      is a plan for one day, and the store refuses a block dated elsewhere,
+--      and the same id twice, before it ever gets here.
 --
 -- SECURITY INVOKER (the default), where 0054's claim_urc_job needs DEFINER. The
 -- only caller is the service role, which already bypasses row security, so
@@ -426,10 +428,13 @@ begin
       from jsonb_array_elements(coalesce(p_blocks, '[]'::jsonb)) as block
   ),
   touched as (
+    -- Narrowed to the ids this plan actually mentions, so a replan reads a
+    -- handful of rows rather than the account's whole block history.
     select id
       from public.v2_blocks
      where user_id = p_user
        and state <> 'planned'
+       and id in (select id from incoming)
   ),
   keep as (
     select *
@@ -450,16 +455,21 @@ begin
   select p_user, k.id, p_date, k.starts_at, k.ends_at, k.kind, k.lane, k.task_id,
          k.title, 'planned', k.reason
     from keep k
+  -- `date` is absent from the assignments on purpose, and the guard says why:
+  -- an existing row is only ever updated when it is already on p_date, so a
+  -- planned block of another day with the same id is left where it is instead
+  -- of being dragged onto this one. `state` is absent for the same shape of
+  -- reason - a plan does not get to decide what he did.
   on conflict (user_id, id) do update
-     set date = excluded.date,
-         starts_at = excluded.starts_at,
+     set starts_at = excluded.starts_at,
          ends_at = excluded.ends_at,
          kind = excluded.kind,
          lane = excluded.lane,
          task_id = excluded.task_id,
          title = excluded.title,
          reason = excluded.reason
-   where public.v2_blocks.state = 'planned';
+   where public.v2_blocks.state = 'planned'
+     and public.v2_blocks.date = p_date;
 
   get diagnostics v_written = row_count;
   return v_written;
