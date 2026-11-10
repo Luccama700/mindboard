@@ -167,7 +167,7 @@ function candidates(): Candidate[] {
     },
     {
       id: "t-essay",
-      title: "Ethics essay (second draft, one more pass on the third section)",
+      title: "Field notes writeup (second draft, one more pass on the middle section)",
       lane: "study",
       kind: "step",
       due: at("23:59", "2026-04-16"),

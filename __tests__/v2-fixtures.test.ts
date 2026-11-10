@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createElement } from "react";
-import { hydrateRoot } from "react-dom/client";
+import { hydrateRoot, type Root } from "react-dom/client";
 
 import postcss from "postcss";
 
@@ -19,6 +19,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { TodayClient } from "@/app/v2/today/today-client";
+import { dayWindow } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { fixturesEnabled, sampleDay } from "@/app/lib/v2/fixtures/sample-day";
 import {
@@ -45,11 +46,24 @@ import {
   AppearanceRoot,
   AppearanceTrigger,
 } from "@/app/v2/_components/appearance-root";
+import { AllDayRow } from "@/app/v2/_components/all-day-row";
 import { FeedDots } from "@/app/v2/_components/feed-strip";
 import { NotTodayList } from "@/app/v2/_components/not-today-list";
 import type { Block, Energy, PlanInput } from "@/app/lib/v2/types";
+import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
 
 const LANE_LABELS = ["Study", "Work", "Money", "People", "Craft", "Body"];
+
+/**
+ * The instant the screen judges "past its date" from, exactly as today-client
+ * computes it: the later of the clock and the start of the planned day's window,
+ * which is the planner's own reference.
+ */
+function referenceOf(input: PlanInput): string {
+  return new Date(
+    Math.max(Date.parse(input.now), dayWindow(input.date, input.rules).startMs),
+  ).toISOString();
+}
 
 function viewOf(energy: Energy | null, existing: Block[] = []): TodayView {
   const sample = sampleDay();
@@ -58,6 +72,7 @@ function viewOf(energy: Energy | null, existing: Block[] = []): TodayView {
   return buildTodayView({
     date: input.date,
     now: input.now,
+    reference: referenceOf(input),
     timeZone: input.rules.timeZone,
     plan,
     fixed: input.fixed,
@@ -292,6 +307,7 @@ describe("the sample day replans", () => {
     const view = buildTodayView({
       date: input.date,
       now: input.now,
+      reference: referenceOf(input),
       timeZone: input.rules.timeZone,
       plan: first,
       fixed: input.fixed,
@@ -683,11 +699,33 @@ describe("the page is wired to the gate", () => {
     vi.unstubAllEnvs();
   });
 
+  /** notFound() works by throwing; this is the error it throws. */
+  const NOT_FOUND_DIGEST = "NEXT_HTTP_ERROR_FALLBACK;404";
+
+  const digestOf = (run: () => unknown): string => {
+    try {
+      run();
+    } catch (error) {
+      return String((error as { digest?: unknown }).digest ?? "no digest");
+    }
+    return "nothing was thrown";
+  };
+
+  // toBeTruthy() on the returned element passed whichever branch the page took,
+  // which is the one thing this test exists to tell apart: the page has a local
+  // snapshot branch now, and that returns an element too.
   test("renders the sample day with the flag on", async () => {
     vi.stubEnv("V2_FIXTURES", "1");
+    vi.stubEnv("V2_LOCAL_SNAPSHOT", "");
     vi.stubEnv("VERCEL_ENV", "preview");
     const { default: TodayPage } = await import("@/app/v2/today/page");
-    expect(TodayPage()).toBeTruthy();
+    const element = TodayPage() as { type?: { name?: string }; props?: unknown };
+    // The branch itself is an async component, so its own output cannot be
+    // inspected here. What tells the two branches apart is their props: the
+    // fixtures one takes nothing at all, and the snapshot one is always handed a
+    // folder. Its name is asserted too, as the weaker and more readable half.
+    expect(element.props).toEqual({});
+    expect(element.type?.name).toBe("SampleToday");
   });
 
   test("is not found with the flag off and no snapshot folder", async () => {
@@ -695,7 +733,9 @@ describe("the page is wired to the gate", () => {
     vi.stubEnv("V2_LOCAL_SNAPSHOT", "");
     vi.stubEnv("VERCEL_ENV", "preview");
     const { default: TodayPage } = await import("@/app/v2/today/page");
-    expect(() => TodayPage()).toThrow();
+    // The 404, and not merely "something was thrown": a bare toThrow() passed on
+    // any error at all, including one from the gate being misread.
+    expect(digestOf(TodayPage)).toBe(NOT_FOUND_DIGEST);
   });
 
   test("is not found in production, flag or no flag", async () => {
@@ -703,7 +743,7 @@ describe("the page is wired to the gate", () => {
     vi.stubEnv("V2_LOCAL_SNAPSHOT", "");
     vi.stubEnv("VERCEL_ENV", "production");
     const { default: TodayPage } = await import("@/app/v2/today/page");
-    expect(() => TodayPage()).toThrow();
+    expect(digestOf(TodayPage)).toBe(NOT_FOUND_DIGEST);
   });
 
   test("asks to be rendered per request, so the gate is never prerendered", async () => {
@@ -989,10 +1029,24 @@ describe("the appearance root and this browser's storage", () => {
       .mockImplementation((...args: unknown[]) => {
         seen.push(String(args[0]));
       });
+    let client: Root | null = null;
     await act(async () => {
-      hydrateRoot(host, element);
+      client = hydrateRoot(host, element);
     });
-    return { host, errors, seen };
+    return { host, errors, seen, client: client as unknown as Root };
+  };
+
+  /**
+   * Every hydrated root is unmounted and its host removed. They used to be left
+   * in the document, so these tests held live React roots over a module level
+   * store and the next test's result depended on the order they ran in.
+   * `cleanup()` does not help: these roots are not testing-library's.
+   */
+  const done = (held: { host: HTMLElement; client: Root }) => {
+    act(() => {
+      held.client.unmount();
+    });
+    held.host.remove();
   };
 
   test("applies a stored built in scheme after hydration, quietly", async () => {
@@ -1001,12 +1055,13 @@ describe("the appearance root and this browser's storage", () => {
       background: null,
       accent: null,
     };
-    const { host, errors, seen } = await hydrateWith(stored);
-    const root = host.querySelector("[data-v2-root]") as HTMLElement;
+    const held = await hydrateWith(stored);
+    const root = held.host.querySelector("[data-v2-root]") as HTMLElement;
     expect(root.getAttribute("data-v2-scheme")).toBe("paper-ink");
     expectTokens(root, stored);
-    expect(seen).toEqual([]);
-    expect(errors).not.toHaveBeenCalled();
+    expect(held.seen).toEqual([]);
+    expect(held.errors).not.toHaveBeenCalled();
+    done(held);
   });
 
   test("applies a stored custom pair after hydration, quietly", async () => {
@@ -1015,11 +1070,12 @@ describe("the appearance root and this browser's storage", () => {
       background: "#120A1F",
       accent: "#FF8A3D",
     };
-    const { host, errors } = await hydrateWith(stored);
-    const root = host.querySelector("[data-v2-root]") as HTMLElement;
+    const held = await hydrateWith(stored);
+    const root = held.host.querySelector("[data-v2-root]") as HTMLElement;
     expect(root.getAttribute("data-v2-scheme")).toBe(CUSTOM_SCHEME_ID);
     expectTokens(root, stored);
-    expect(errors).not.toHaveBeenCalled();
+    expect(held.errors).not.toHaveBeenCalled();
+    done(held);
   });
 });
 
@@ -1147,6 +1203,42 @@ describe("the desktop page fills the window", () => {
     expect(inTier(1360, ".v2-lists:empty", "display")).toBe("none");
   });
 
+  /** The last value one selector is given for one property OUTSIDE any query. */
+  const atRoot = (selector: string, prop: string) => {
+    let found: string | null = null;
+    sheet.walkRules((rule) => {
+      if (rule.parent?.type !== "root") return;
+      const own = rule.selectors.map((entry) => entry.trim());
+      if (!own.includes(`[data-v2-root] ${selector}`)) return;
+      rule.walkDecls(prop, (decl) => {
+        found = decl.value;
+      });
+    });
+    return found;
+  };
+
+  /**
+   * The columns below are only the OUTER half of this guard. The stop has a grid
+   * of its own whose content column is 1fr, and a 1fr track's automatic minimum
+   * is also its content, so a pasted URL in a title widened it: on the phone the
+   * lit card grew past the clipped frame and "Not today" went off screen, and on
+   * desktop the card ran under the context column and the page scrolled
+   * sideways. Both halves are needed, so both are pinned here: the inner
+   * min-width, and a break for the word itself.
+   */
+  test("lets one long unbroken word break instead of widening its stop", () => {
+    expect(atRoot(".v2-stop > *", "min-width")).toBe("0");
+    for (const kind of [
+      ".v2-stop h3",
+      ".v2-stop .v2-detail",
+      ".v2-row .v2-row-title",
+      ".v2-row .v2-detail",
+      ".v2-allday-chip",
+    ]) {
+      expect(atRoot(kind, "overflow-wrap")).toBe("anywhere");
+    }
+  });
+
   test("cannot be pushed sideways by a narrow column or one long word", () => {
     // A column narrower than the rows' own minimum would be overflowed by it.
     expect(inTier(1024, ".v2-list-rows", "grid-template-columns")).toContain("min(");
@@ -1253,5 +1345,155 @@ describe("the desktop page fills the window", () => {
     });
     expect(overflow).toBe("ellipsis");
     expect(minWidth).toBe("0");
+  });
+});
+
+// ===========================================================================
+// Round 3
+// ===========================================================================
+
+describe("the screen and the planner agree on past its date", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  /** The sample day, with the clock moved to before the window opens. */
+  const atDawn = (): TodayScreenData => {
+    const sample = sampleDay();
+    const dawn = `${sample.input.date}T05:00:00-07:00`;
+    return {
+      ...sample,
+      input: {
+        ...sample.input,
+        now: dawn,
+        candidates: [
+          ...sample.input.candidates,
+          {
+            id: "t-dawn",
+            title: "Kiln cools by six",
+            lane: "craft",
+            kind: "step" as const,
+            due: `${sample.input.date}T06:00:00-07:00`,
+            hard: false,
+            minutes: 25,
+            energyCost: 2,
+            expiresAt: null,
+            pinned: false,
+            earlyTouchDone: false,
+          },
+        ],
+      },
+    };
+  };
+
+  test("the reference is the window, not the clock, before wake", () => {
+    const { input } = atDawn();
+    expect(referenceOf(input)).not.toBe(input.now);
+    expect(Date.parse(referenceOf(input))).toBeGreaterThan(Date.parse(input.now));
+  });
+
+  // The screen is the thing under test here, not the helper: this renders the
+  // real client, which computes the reference itself.
+  test("the screen lists an item due before wake under its own heading", () => {
+    render(createElement(TodayClient, { data: atDawn() }));
+    const section = document
+      .getElementById("v2-past-due")
+      ?.closest("section") as HTMLElement;
+    expect(section.textContent).toContain("Kiln cools by six");
+
+    // And the lane it belongs to does not claim its date is still ahead. The
+    // craft lane holds it and one undated item, so it should name no date at
+    // all; the money lane still names one, because the grant form really is due
+    // tonight at 23:00.
+    const lanes = Array.from(document.querySelectorAll(".v2-lane-line")).map(
+      (line) => line.textContent ?? "",
+    );
+    const craft = lanes.find((line) => line.startsWith("Craft")) ?? "";
+    expect(craft).not.toBe("");
+    expect(craft).not.toContain("next");
+    expect(lanes.some((line) => line.startsWith("Money") && line.includes("next"))).toBe(
+      true,
+    );
+  });
+});
+
+// Two calendars can carry the same holiday, and the title alone then gives React
+// two children with one key.
+describe("the all day row", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  test("renders two events of the same name without a duplicate key", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      createElement(AllDayRow, {
+        items: ["Reading break", "Reading break", "Studio closed"],
+      }),
+    );
+    expect(screen.getAllByText("Reading break")).toHaveLength(2);
+    expect(errors).not.toHaveBeenCalled();
+  });
+});
+
+// Both triggers are always mounted and each is hidden at the other's width, so
+// a panel opened at phone width and closed after the window grew past 1024px
+// handed focus to a display:none button and lost it.
+describe("the appearance panel after a resize", () => {
+  afterEach(() => {
+    cleanup();
+    try {
+      localStorage.clear();
+    } catch {
+      // nothing to clean up
+    }
+  });
+
+  test("hands focus to a trigger that is on screen, not to a hidden one", async () => {
+    render(
+      createElement(
+        AppearanceRoot,
+        null,
+        createElement(AppearanceTrigger, { variant: "header" }),
+        createElement(AppearanceTrigger, { variant: "rail" }),
+      ),
+    );
+    const [phone, rail] = screen.getAllByRole("button", {
+      name: APPEARANCE_COPY.open,
+    });
+
+    await act(async () => {
+      fireEvent.click(phone);
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // The window grew: the control that opened the panel is now the hidden one.
+    phone.style.display = "none";
+
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(rail);
+  });
+
+  test("still returns focus to the opener while it is on screen", async () => {
+    render(
+      createElement(
+        AppearanceRoot,
+        null,
+        createElement(AppearanceTrigger, { variant: "header" }),
+        createElement(AppearanceTrigger, { variant: "rail" }),
+      ),
+    );
+    const [phone] = screen.getAllByRole("button", { name: APPEARANCE_COPY.open });
+    await act(async () => {
+      fireEvent.click(phone);
+    });
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    expect(document.activeElement).toBe(phone);
   });
 });

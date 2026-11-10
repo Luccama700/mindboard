@@ -139,6 +139,25 @@ describe("tasksToCandidates", () => {
     expect(only.kind).toBe("side");
   });
 
+  // A title of "" or of spaces is a title the user never wrote, and it reached
+  // the screen as an empty heading on the lit card and a status line that read
+  // " marked done." Blank counts as none, and the stored text is trimmed so the
+  // two levels of a name are not measuring padding.
+  test.each([
+    ["null", null],
+    ["empty", ""],
+    ["only spaces", "   "],
+    ["a tab", "	"],
+  ])("a %s title becomes the word for a row that has none", (_name, title) => {
+    const [only] = tasksToCandidates([row({ title })], user, new Set());
+    expect(only.title).toBe("untitled");
+  });
+
+  test("keeps a real title, trimmed", () => {
+    const [only] = tasksToCandidates([row({ title: "  Glaze the tiles  " })], user, new Set());
+    expect(only.title).toBe("Glaze the tiles");
+  });
+
   test("due is the due date at the due time, in the user's zone", () => {
     const [only] = tasksToCandidates(
       [row({ due_date: "2026-11-10", due_time: "14:30" })],

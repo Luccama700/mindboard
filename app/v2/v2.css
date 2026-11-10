@@ -46,9 +46,13 @@
   --v2-on-accent: #000000;
   --v2-signal: #A78BFA;
 
-  /* Feed health is a state, not a scheme: alive has to read as alive and not
-     answering as not answering on every palette, so these two are fixed. They
-     are dots with their own text labels, never text themselves. */
+  /* Feed health is STATE, not palette: alive has to read as alive and not
+     answering as not answering on every scheme, so the hue is fixed in
+     appearance.ts and only the lightness moves. These two are derived like
+     every other token (deriveTokens), which is why they are in this block: on
+     the dark schemes they come out exactly these values, and on Paper they
+     darken until the dot is visible on the card it sits in. They are dots with
+     their own text labels, never text themselves. */
   --v2-ok: #2FD6A3;
   --v2-warn: #FFB84D;
 
@@ -423,6 +427,26 @@ body:has([data-v2-root]) {
   padding: 0 var(--v2-gutter) 18px;
 }
 
+/* ONE LONG WORD MAY NOT WIDEN A STOP. The content column is 1fr, which means
+   minmax(auto, 1fr): its automatic minimum is its own content, so a pasted URL
+   in a task title made the track as wide as the word. On the phone the card grew
+   past the clipped frame and "Not today" went off screen; on desktop the lit
+   card ran under the sticky context column and the whole page scrolled
+   sideways. Two guards, and both are needed: min-width on the stop's children
+   lets the track be narrower than its content, and overflow-wrap lets the word
+   break so the content is not simply clipped. */
+[data-v2-root] .v2-stop > * {
+  min-width: 0;
+}
+
+[data-v2-root] .v2-stop h3,
+[data-v2-root] .v2-stop .v2-detail,
+[data-v2-root] .v2-row .v2-detail,
+[data-v2-root] .v2-row .v2-row-title,
+[data-v2-root] .v2-allday-chip {
+  overflow-wrap: anywhere;
+}
+
 /* The rail and its dot hang off one derived centre line, so the geometry stays
    right when the gutter and the time column change at a wider viewport. */
 [data-v2-root] .v2-stop::before {
@@ -664,6 +688,15 @@ body:has([data-v2-root]) {
   color: var(--v2-ink-2);
   margin-top: 6px;
   font-size: 14px;
+}
+
+/* The accent is a mark at 3:1 on the PAGE, and the lit card is not the page: on
+   a custom pair the ring dropped to 2.56:1 against that fill. Inside the card
+   the ring is the stop's own identity colour, which is held at 4.5:1 against
+   exactly this surface by construction (identityTokens), and the ring is drawn
+   outside the control, on the fill, so it never sits on the filled button. */
+[data-v2-root] .v2-lit button:focus-visible {
+  outline-color: var(--v2-ident);
 }
 
 [data-v2-root] .v2-acts {
@@ -1152,7 +1185,11 @@ body:has([data-v2-root]) {
 
   /* min-width: 0 on every column: a grid item's automatic minimum is its
      content, and one long unbroken word in a task title would otherwise widen
-     its track and push the page sideways. */
+     its track and push the page sideways. This is the OUTER half of that guard
+     only. The stop's own children carry the same min-width, and the four kinds
+     of text that can hold such a word carry overflow-wrap; see "ONE LONG WORD"
+     above. Without those two, these columns stayed the right width and the card
+     inside them overflowed instead. */
   [data-v2-root] .v2-main {
     display: flex;
     flex-direction: column;

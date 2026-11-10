@@ -637,6 +637,12 @@ describe("the whole range of custom pairs", () => {
         if (accentMark < 3) {
           fail(background, accent, null, "--v2-accent", "--v2-page", accentMark, 3);
         }
+        // The feed dots. They sit in a pill whose background is --v2-card and
+        // nowhere else, and they are marks with their own text labels.
+        for (const token of ["--v2-ok", "--v2-warn"] as const) {
+          const ratio = contrast(tokens[token], tokens["--v2-card"]);
+          if (ratio < 3) fail(background, accent, null, token, "--v2-card", ratio, 3);
+        }
 
         for (const identity of SWEEP_IDENTITIES) {
           const own = identityTokens(identity, tokens);
@@ -657,6 +663,15 @@ describe("the whole range of custom pairs", () => {
             if (ratio < 4.5) {
               fail(background, accent, identity, "--v2-ident", surface, ratio, 4.5);
             }
+          }
+
+          // The focus ring drawn INSIDE a lit card. It is the identity colour,
+          // which is held at 4.5:1 on exactly that fill, so 3:1 for a mark is
+          // covered twice over; it is named here because the ring is a separate
+          // use of the token and the bar for it is the mark's bar.
+          const ring = contrast(own["--v2-ident"], own["--v2-lit"]);
+          if (ring < 3) {
+            fail(background, accent, identity, "--v2-ident", "--v2-lit (ring)", ring, 3);
           }
 
           const onIdent = contrast(own["--v2-on-ident"], own["--v2-ident"]);
@@ -783,4 +798,42 @@ describe("readableOn, pinned at the edges", () => {
       expect(contrast(out, page)).toBeGreaterThanOrEqual(4.5);
     },
   );
+});
+
+// M4. The two feed-health colours are derived now rather than fixed, because on
+// Paper they measured 1.42:1 and 1.31:1 against the card they sit in. The hue is
+// still fixed: only the lightness is allowed to move, and only as far as it has
+// to, so the three dark schemes keep the exact colours they had.
+describe("the feed dots", () => {
+  const SEED = { "--v2-ok": "#2FD6A3", "--v2-warn": "#FFB84D" } as const;
+
+  test.each(["black-purple", "night-indigo", "graphite-teal"])(
+    "%s keeps the state colours exactly as they were",
+    (id) => {
+      const scheme = schemeById(id);
+      const tokens = deriveTokens(scheme!.background, scheme!.accent);
+      expect(tokens["--v2-ok"]).toBe(SEED["--v2-ok"]);
+      expect(tokens["--v2-warn"]).toBe(SEED["--v2-warn"]);
+    },
+  );
+
+  test("paper darkens them until the dot can be seen on its card", () => {
+    const paper = SCHEMES[3];
+    const tokens = deriveTokens(paper.background, paper.accent);
+    for (const token of ["--v2-ok", "--v2-warn"] as const) {
+      expect(tokens[token]).not.toBe(SEED[token]);
+      expect(contrast(tokens[token], tokens["--v2-card"])).toBeGreaterThanOrEqual(3);
+      // Darkened, not recoloured: it moved toward the scheme's own ink.
+      expect(contrast(tokens[token], "#FFFFFF")).toBeGreaterThan(
+        contrast(SEED[token], "#FFFFFF"),
+      );
+    }
+  });
+
+  test("are not text, so they are not in the text sweep", () => {
+    expect(TEXT_TOKENS).not.toContain("--v2-ok");
+    expect(TEXT_TOKENS).not.toContain("--v2-warn");
+    expect(TOKEN_NAMES).toContain("--v2-ok");
+    expect(TOKEN_NAMES).toContain("--v2-warn");
+  });
 });

@@ -121,6 +121,19 @@ export const SOURCE_QUERIES = [
 
 /** A title is the user's own text; this is only for a row that has none. */
 const UNTITLED = "untitled";
+
+/**
+ * The row's own title, or the word for a row that has none.
+ *
+ * Blank counts as none. A title of "" or of spaces is a title the user never
+ * wrote, and it reached the screen as an empty heading on the lit card and a
+ * status line that read " marked done." Trimmed as well, so the two levels of a
+ * name (view/today.ts splitTitle) are not measuring padding.
+ */
+function titleOf(value: string | null): string {
+  const text = (value ?? "").trim();
+  return text === "" ? UNTITLED : text;
+}
 /** A task with no due time closes at the end of its local day. */
 const END_OF_DAY = { hour: 23, minute: 59 };
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -216,7 +229,7 @@ export function tasksToCandidates(
     const due = row.due_date === null ? null : localIso(row.due_date, time.hour, time.minute, zone);
     out.push({
       id: row.id,
-      title: row.title ?? UNTITLED,
+      title: titleOf(row.title),
       lane: lane?.key ?? null,
       kind: lane === null ? "side" : "step",
       due,
@@ -320,7 +333,7 @@ export function toFixedEvents(
     const startMs = zonedWallTimeToUtcMs(task.due_date, time.hour, time.minute, timeZone);
     out.push({
       id: `${TASK_FIXED_PREFIX}${task.id}`,
-      title: task.title ?? UNTITLED,
+      title: titleOf(task.title),
       start: zonedIso(startMs, timeZone),
       end: zonedIso(startMs + minutes * 60_000, timeZone),
       allDay: false,

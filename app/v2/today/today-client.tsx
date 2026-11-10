@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 
+import { dayWindow } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { clockLabel } from "@/app/lib/v2/view/format";
 import { TODAY_COPY, actionLine, buildTodayView } from "@/app/lib/v2/view/today";
@@ -80,11 +81,30 @@ export function TodayClient({ data }: { data: TodayScreenData }) {
     [input],
   );
 
+  /**
+   * The instant "past its date" is judged from: the later of the clock and the
+   * start of the planned day's window.
+   *
+   * It is the planner's own reference (plan/planner.ts takes exactly this), and
+   * the screen has to use the same one. Before wake the two differ: at 05:00 the
+   * planner already ranks an item due at 06:00 as overdue, and a screen reading
+   * the clock put that item in "Did not fit today" while its lane line said
+   * "next". The same split appeared for a day being viewed ahead of time.
+   */
+  const reference = useMemo(
+    () =>
+      new Date(
+        Math.max(Date.parse(input.now), dayWindow(input.date, input.rules).startMs),
+      ).toISOString(),
+    [input.now, input.date, input.rules],
+  );
+
   const viewFor = useCallback(
     (energy: Energy | null, plan: PlanOutput) =>
       buildTodayView({
         date: input.date,
         now: input.now,
+        reference,
         timeZone: input.rules.timeZone,
         plan,
         fixed: input.fixed,
@@ -97,7 +117,7 @@ export function TodayClient({ data }: { data: TodayScreenData }) {
         notice: data.notice,
         energy,
       }),
-    [input, data],
+    [input, data, reference],
   );
 
   // The status line is composed here rather than in the render, because it is

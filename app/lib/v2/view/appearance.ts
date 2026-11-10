@@ -76,6 +76,8 @@ export const TOKEN_NAMES = [
   "--v2-accent",
   "--v2-on-accent",
   "--v2-signal",
+  "--v2-ok",
+  "--v2-warn",
 ] as const;
 
 /** Every token one stop sets from its own identity colour. */
@@ -286,6 +288,19 @@ const INK_MIN = { one: 11, two: 7, three: 4.5 } as const;
 const MARK_MIN = 3;
 
 /**
+ * The two feed-health colours, before the scheme gets to them.
+ *
+ * They are STATE, not palette: alive has to read as alive and not answering as
+ * not answering on every scheme, so the hue is fixed here and only the lightness
+ * is allowed to move. They used to be fixed outright in the stylesheet, and on
+ * Paper the dots measured 1.42:1 and 1.31:1 against the card they sit on, which
+ * is a mark nobody can see. Each now goes through the same derivation every
+ * other mark does: toward the scheme's own extreme until it clears 3:1 on that
+ * card, and no further, so on the dark schemes they do not move at all.
+ */
+const FEED = { ok: "#2FD6A3", warn: "#FFB84D" } as const;
+
+/**
  * The scheme inks the stylesheet prints INSIDE a lit card, and no others.
  *
  * Read off v2.css: `--v2-ink` by inheritance on the card's h3, `--v2-ink-2` on
@@ -492,6 +507,9 @@ export function deriveTokens(background: string, accent: string): Record<string,
     "--v2-accent": accentMark,
     "--v2-on-accent": inkOn(accentMark),
     "--v2-signal": towardExtreme(accentMark, worst, INK_MIN.three, extreme),
+    // The dots sit in a pill whose background is --v2-card, and nowhere else.
+    "--v2-ok": towardExtreme(FEED.ok, card, MARK_MIN, extreme),
+    "--v2-warn": towardExtreme(FEED.warn, card, MARK_MIN, extreme),
   };
 }
 

@@ -87,6 +87,25 @@ function read(): Appearance {
   return cached;
 }
 
+/**
+ * Whether an element is actually on screen, walking up for a hidden ancestor.
+ *
+ * Computed style rather than `offsetParent`, which is always null in a test
+ * environment that lays nothing out, and rather than `checkVisibility`, which
+ * not every engine has. It catches the case this exists for: the two appearance
+ * triggers hide each other by `display: none` at their own widths.
+ */
+function onScreen(element: HTMLElement | null): boolean {
+  if (element === null || !element.isConnected) return false;
+  let node: HTMLElement | null = element;
+  while (node !== null) {
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    node = node.parentElement;
+  }
+  return true;
+}
+
 /** What the server rendered, so hydration has nothing to disagree about. */
 function serverSnapshot(): Appearance {
   return DEFAULT_APPEARANCE;
@@ -137,6 +156,7 @@ export function AppearanceRoot({
   const appearance = useSyncExternalStore(subscribe, read, serverSnapshot);
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
+  const root = useRef<HTMLDivElement | null>(null);
 
   const choose = useCallback((next: Appearance) => {
     write(next);
@@ -147,11 +167,25 @@ export function AppearanceRoot({
     setOpen(true);
   }, []);
 
+  /**
+   * Close, and put focus back on a control the user can see.
+   *
+   * Normally that is the one that opened the panel. It is NOT always: both
+   * triggers are always mounted and each is hidden at the other's width, so a
+   * panel opened at phone width and closed after the window grew past 1024px
+   * handed focus to a `display: none` button, and focus was simply lost. So the
+   * opener is used while it is on screen, and otherwise whichever trigger is.
+   */
   const close = useCallback(() => {
     setOpen(false);
-    // The control that opened the panel is still mounted (one in the rail, one
-    // in the phone header), so focus goes back to whichever one it was.
-    opener.current?.focus();
+    if (onScreen(opener.current)) {
+      opener.current?.focus();
+      return;
+    }
+    const triggers = Array.from(
+      root.current?.querySelectorAll<HTMLElement>("[data-v2-appearance]") ?? [],
+    );
+    triggers.find(onScreen)?.focus();
   }, []);
 
   const tokens = useMemo(() => tokensFor(appearance), [appearance]);
@@ -162,6 +196,7 @@ export function AppearanceRoot({
 
   return (
     <div
+      ref={root}
       data-v2-root
       // Always present and always in step with the choice: a built-in scheme's
       // id, or "custom" for a pair the user picked. It is `data-v2-scheme`, with
@@ -195,6 +230,7 @@ export function AppearanceTrigger({ variant }: { variant: "rail" | "header" }) {
       <button
         type="button"
         className="v2-appearance-dot"
+        data-v2-appearance
         aria-label={APPEARANCE_COPY.open}
         title={APPEARANCE_COPY.open}
         onClick={(event) => openPanel(event.currentTarget)}
@@ -210,6 +246,7 @@ export function AppearanceTrigger({ variant }: { variant: "rail" | "header" }) {
     <button
       type="button"
       className="v2-rail-appearance"
+      data-v2-appearance
       onClick={(event) => openPanel(event.currentTarget)}
     >
       {APPEARANCE_COPY.open}

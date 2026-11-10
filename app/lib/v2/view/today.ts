@@ -36,6 +36,21 @@ import type {
 export interface TodayInput {
   date: DateKey;
   now: Instant;
+  /**
+   * The instant "past its date" is judged from, which is NOT always `now`.
+   *
+   * REQUIRED, because the planner judges it from the later of `now` and the
+   * start of the planned day's window (`dayWindow`, see plan/planner.ts), and
+   * the screen has to agree. At 05:00, before wake, the planner already treats
+   * an item due at 06:00 as overdue and ranks it last; the screen, reading
+   * `now`, listed that same item under "Did not fit today" while its lane line
+   * said "next 10 March". One of the two was lying and neither could tell.
+   *
+   * The caller computes it (today-client.tsx) rather than this function, because
+   * the window comes from the planner's own rules and the view model does not
+   * import the planner.
+   */
+  reference: Instant;
   timeZone: string;
   plan: PlanOutput;
   /** Everything already on the day. Timed events become stops, all day ones do not. */
@@ -82,10 +97,10 @@ export interface TodayInput {
  *
  * Real titles are long and keep their detail in a trailing parenthetical, so one
  * of them is a paragraph of display type on the lit card and fifteen wrapped
- * lines in a 340px side column. The split is the user's own punctuation, not a
- * truncation: the part before the first " (" is what the thing IS, and what is
- * inside the outer parentheses is the detail about it. `full` is the original,
- * kept whole so it can go in the element's title attribute and nothing is lost.
+ * lines in a narrow side column. The split is the user's own punctuation, not a
+ * truncation: what the thing IS, and the detail about it. `full` is the
+ * original, kept whole so it can go in the element's title attribute and
+ * nothing is lost.
  */
 export interface Titled {
   title: string;
@@ -94,18 +109,55 @@ export interface Titled {
 }
 
 /**
- * Behaviour: a title that ends with ")" and contains " (" splits at the FIRST
- * " ("; everything else is one title with no detail. A nested parenthetical
- * stays inside the detail, because the outer pair is the one that was closed.
- * An empty half on either side means it was not really a parenthetical.
+ * The split: the detail is what sits inside the LAST parenthetical, and the
+ * title is everything before the " (" that opens it.
+ *
+ * Found by counting back from the end, not forward from the first " (". Taking
+ * the first one was wrong for a title with two brackets side by side:
+ * "Fix (urgent) the build (CI)" came out as the title "Fix" with the detail
+ * "urgent) the build (CI", which is the wrong name on the lit card and a line of
+ * nonsense under it. Counting back finds the bracket that actually opens the
+ * final ")", so that title is "Fix (urgent) the build" and that detail is "CI",
+ * and a nested pair still belongs to the detail ("A (b (c))" is "A" and
+ * "b (c)").
+ *
+ * Brackets that do not balance are not two levels of anything, so
+ * "Talk to A (B (C)" stays one title. So does a bracket that is not at the end,
+ * one with no space before it, and either half being empty.
  */
 export function splitTitle(raw: string): Titled {
   const full = raw.trim();
-  const open = full.indexOf(" (");
-  if (open < 0 || !full.endsWith(")")) return { title: full, detail: null, full };
-  const title = full.slice(0, open).trim();
-  const detail = full.slice(open + 2, -1).trim();
-  if (title === "" || detail === "") return { title: full, detail: null, full };
+  const whole: Titled = { title: full, detail: null, full };
+  if (!full.endsWith(")")) return whole;
+
+  let depth = 0;
+  for (const character of full) {
+    if (character === "(") depth += 1;
+    else if (character === ")") {
+      depth -= 1;
+      if (depth < 0) return whole;
+    }
+  }
+  if (depth !== 0) return whole;
+
+  let open = -1;
+  depth = 0;
+  for (let index = full.length - 1; index >= 0; index -= 1) {
+    const character = full[index];
+    if (character === ")") depth += 1;
+    else if (character === "(") {
+      depth -= 1;
+      if (depth === 0) {
+        open = index;
+        break;
+      }
+    }
+  }
+  if (open <= 0 || full[open - 1] !== " ") return whole;
+
+  const title = full.slice(0, open - 1).trim();
+  const detail = full.slice(open + 1, -1).trim();
+  if (title === "" || detail === "") return whole;
   return { title, detail, full };
 }
 
@@ -437,7 +489,7 @@ function dayAndMonth(date: DateKey): string {
  * it closes. Lanes keep the user's own order and a lane with nothing waiting is
  * left out rather than printed as a zero.
  */
-function laneLines(input: TodayInput, nowMs: number): LaneLine[] {
+function laneLines(input: TodayInput, referenceMs: number): LaneLine[] {
   /** The key the items with no lane at all are counted under. */
   const NO_LANE = "";
 
@@ -449,8 +501,9 @@ function laneLines(input: TodayInput, nowMs: number): LaneLine[] {
     if (candidate.due !== null) {
       const ms = Date.parse(candidate.due);
       // Only dates still ahead: the line says "next", and what has already gone
-      // by is reported by `pastDueLines` instead.
-      const ahead = Number.isFinite(ms) && ms >= nowMs;
+      // by is reported by `pastDueLines` instead. Ahead of the REFERENCE, which
+      // is the planner's own idea of now (see TodayInput.reference).
+      const ahead = Number.isFinite(ms) && ms >= referenceMs;
       if (ahead && (held.dueMs === null || ms < held.dueMs)) held.dueMs = ms;
     }
     counts.set(key, held);
@@ -505,7 +558,7 @@ function laneLines(input: TodayInput, nowMs: number): LaneLine[] {
  */
 function pastDueLines(
   input: TodayInput,
-  nowMs: number,
+  referenceMs: number,
   identityOf: (candidate: Candidate) => PastDueLine["identity"],
 ): PastDueLine[] {
   const planned = new Set(
@@ -518,7 +571,7 @@ function pastDueLines(
   for (const candidate of input.candidates) {
     if (candidate.due === null || planned.has(candidate.id)) continue;
     const dueMs = Date.parse(candidate.due);
-    if (!Number.isFinite(dueMs) || dueMs >= nowMs) continue;
+    if (!Number.isFinite(dueMs) || dueMs >= referenceMs) continue;
     overdue.push({
       dueMs,
       line: {
@@ -539,6 +592,9 @@ function pastDueLines(
 export function buildTodayView(input: TodayInput): TodayView {
   const { plan, timeZone, now } = input;
   const nowMs = msOf(now);
+  // What is lit and what is behind you is the clock. What is PAST ITS DATE is
+  // the planner's reference, which before wake is later than the clock.
+  const referenceMs = msOf(input.reference);
 
   const laneById = new Map(
     input.lanes.map((lane) => [
@@ -677,7 +733,7 @@ export function buildTodayView(input: TodayInput): TodayView {
   const energyAsk =
     input.openAsks.find((ask) => ask.kind === "energy" && ask.status === "open") ?? null;
 
-  const pastDue = pastDueLines(input, nowMs, (candidate) =>
+  const pastDue = pastDueLines(input, referenceMs, (candidate) =>
     identityOf(candidate.id, candidate.lane),
   );
   const overdueIds = new Set(pastDue.map((entry) => entry.id));
@@ -711,7 +767,7 @@ export function buildTodayView(input: TodayInput): TodayView {
     },
     notToday,
     pastDue,
-    lanes: laneLines(input, nowMs),
+    lanes: laneLines(input, referenceMs),
     feed: {
       line: feedLine(input.feeds, input.feedLabels, (at) =>
         sinceLabel(at, now, timeZone),

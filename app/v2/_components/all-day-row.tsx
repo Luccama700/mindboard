@@ -15,8 +15,11 @@ export function AllDayRow({ items }: { items: string[] }) {
   return (
     <div className="v2-allday">
       <span className="v2-allday-label">{TODAY_COPY.allDay}</span>
-      {items.map((title) => (
-        <span className="v2-allday-chip" key={title}>
+      {/* Keyed by position as well as title: two all-day events can carry the
+          same name (two calendars with the same holiday), and the title alone
+          then gives React two children with one key. */}
+      {items.map((title, index) => (
+        <span className="v2-allday-chip" key={`${index}-${title}`}>
           {title}
         </span>
       ))}

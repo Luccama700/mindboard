@@ -85,6 +85,10 @@ function input(over: Partial<TodayInput> = {}): TodayInput {
   return {
     date: DATE,
     now: NOW,
+    // The planner's reference, which on this fixture's day is the clock itself:
+    // NOW is mid morning, well after the window opens. The 05:00 case, where the
+    // two differ, has a test of its own.
+    reference: NOW,
     timeZone: ZONE,
     plan: plan(),
     fixed: [],
@@ -253,22 +257,22 @@ describe("splitTitle", () => {
   test("splits a title that ends in a parenthetical at the first bracket", () => {
     expect(
       splitTitle(
-        "PHIL 101 Short paper 2 (posted on the course site 26 Oct; one passage; 600 words)",
+        "Kiln log 7 (left in the studio pigeonhole 14 Mar; two firings; 450 words)",
       ),
     ).toEqual({
-      title: "PHIL 101 Short paper 2",
-      detail: "posted on the course site 26 Oct; one passage; 600 words",
-      full: "PHIL 101 Short paper 2 (posted on the course site 26 Oct; one passage; 600 words)",
+      title: "Kiln log 7",
+      detail: "left in the studio pigeonhole 14 Mar; two firings; 450 words",
+      full: "Kiln log 7 (left in the studio pigeonhole 14 Mar; two firings; 450 words)",
     });
   });
 
   // The OUTER pair is the one that was closed, so a nested bracket stays in the
   // detail rather than cutting it short.
   test("keeps a nested bracket inside the detail", () => {
-    expect(splitTitle("Read chapter 4 (the long one (pages 90 to 140) first)")).toEqual({
-      title: "Read chapter 4",
-      detail: "the long one (pages 90 to 140) first",
-      full: "Read chapter 4 (the long one (pages 90 to 140) first)",
+    expect(splitTitle("Trim the glaze list (the long one (forty two entries) first)")).toEqual({
+      title: "Trim the glaze list",
+      detail: "the long one (forty two entries) first",
+      full: "Trim the glaze list (the long one (forty two entries) first)",
     });
   });
 
@@ -1258,8 +1262,8 @@ describe("the work block", () => {
 
 describe("the status line", () => {
   test("says what the press did and what is next", () => {
-    expect(actionLine("done", "Ethics essay", "Stretch for ten minutes")).toBe(
-      "Ethics essay marked done. Next: Stretch for ten minutes.",
+    expect(actionLine("done", "Field notes writeup", "Stretch for ten minutes")).toBe(
+      "Field notes writeup marked done. Next: Stretch for ten minutes.",
     );
     expect(actionLine("skipped", "Glaze the test tiles", "Work block")).toBe(
       "Glaze the test tiles moved off today. Next: Work block.",
@@ -1273,17 +1277,17 @@ describe("the status line", () => {
   });
 
   // Starting something leaves it lit, so the caller's "next" IS the block that
-  // was pressed. Saying it would read "Ethics essay started. Next: Ethics
-  // essay." The tail is dropped whatever the caller passes, so the rule cannot
+  // was pressed. Saying it would read "Field notes writeup started. Next:
+  // Field notes writeup." The tail is dropped whatever the caller passes, so the rule cannot
   // be got wrong at a call site.
   test("says nothing about next after a start, because nothing moved on", () => {
-    expect(actionLine("started", "Ethics essay", "Ethics essay")).toBe(
-      "Ethics essay started.",
+    expect(actionLine("started", "Field notes writeup", "Field notes writeup")).toBe(
+      "Field notes writeup started.",
     );
-    expect(actionLine("started", "Ethics essay", "Ceramics workshop")).toBe(
-      "Ethics essay started.",
+    expect(actionLine("started", "Field notes writeup", "Ceramics workshop")).toBe(
+      "Field notes writeup started.",
     );
-    expect(actionLine("started", "Ethics essay", null)).toBe("Ethics essay started.");
+    expect(actionLine("started", "Field notes writeup", null)).toBe("Field notes writeup started.");
   });
 });
 
@@ -1444,5 +1448,106 @@ describe("the status words", () => {
     }
     expect(STOP_STATUS_COPY.skipped).toBe("Not today");
     expect(STOP_STATUS_COPY.done).toBe("Done");
+  });
+});
+
+// ===========================================================================
+// Round 3: two brackets, and two clocks
+// ===========================================================================
+
+// The split used to be made at the FIRST " (", which is the wrong bracket as
+// soon as a title has two of them: the lit card showed the wrong name and the
+// line under it was nonsense. It is found by counting back from the end now.
+describe("splitTitle with more than one bracket", () => {
+  test("splits at the bracket that opens the final one, not the first", () => {
+    expect(splitTitle("Fix (urgent) the build (CI)")).toEqual({
+      title: "Fix (urgent) the build",
+      detail: "CI",
+      full: "Fix (urgent) the build (CI)",
+    });
+  });
+
+  test("keeps a nested pair in the detail", () => {
+    expect(splitTitle("A (b (c))")).toEqual({
+      title: "A",
+      detail: "b (c)",
+      full: "A (b (c))",
+    });
+  });
+
+  test("takes the last of three", () => {
+    expect(splitTitle("Send (a) and (b) to the kiln (by Tuesday)")).toMatchObject({
+      title: "Send (a) and (b) to the kiln",
+      detail: "by Tuesday",
+    });
+  });
+
+  // Brackets that do not balance are not two levels of anything.
+  test.each([
+    ["one bracket left open", "Talk to A (B (C)"],
+    ["a close with no open", "Talk to A) (B)"],
+    ["a close before its open", "Talk to A) B (C)"],
+  ])("leaves %s as one whole title", (_name, raw) => {
+    expect(splitTitle(raw)).toEqual({ title: raw, detail: null, full: raw });
+  });
+});
+
+// ------------------------------------------------- the planner's own reference
+
+/**
+ * The planner judges "past its date" from the later of the clock and the start
+ * of the planned day's window, so before wake it already treats an item due at
+ * 06:00 as overdue and ranks it last. The screen read the clock, and the two
+ * disagreed on one screen: the item sat under "Did not fit today" while its lane
+ * line said "next 15 April". A day viewed ahead of time splits the same way.
+ */
+describe("past its date is judged from the planner's reference", () => {
+  const early: Candidate[] = [
+    candidate({
+      id: "t-dawn",
+      title: "Kiln cools by six",
+      lane: "study",
+      due: at("06:00"),
+    }),
+  ];
+  /** 05:00: before the window opens, so the clock and the reference differ. */
+  const dawn = "2026-04-15T05:00:00-07:00";
+  /** What dayWindow gives for this fixture's rules: wake at 08:30. */
+  const windowStart = "2026-04-15T08:30:00-07:00";
+
+  test("lists an item due before wake as past its date, and its lane says no date", () => {
+    const view = buildTodayView(
+      input({ now: dawn, reference: windowStart, candidates: early }),
+    );
+    expect(view.pastDue.map((entry) => entry.id)).toEqual(["t-dawn"]);
+    expect(view.lanes).toEqual([
+      { key: "study", label: "Study", color: "#7C9BFF", open: 1, due: null },
+    ]);
+  });
+
+  // The defect, pinned from the other side: reading the clock puts the same item
+  // nowhere and makes its lane claim a date that the planner has already passed.
+  test("would disagree with the planner if it read the clock instead", () => {
+    const view = buildTodayView(
+      input({ now: dawn, reference: dawn, candidates: early }),
+    );
+    expect(view.pastDue).toEqual([]);
+    expect(view.lanes[0].due).toBe("15 April");
+  });
+
+  test("still reads the clock for what is lit and what is behind you", () => {
+    const view = buildTodayView(
+      input({
+        now: dawn,
+        reference: windowStart,
+        plan: plan({
+          blocks: [block({ id: "b", start: at("09:00"), end: at("09:50") })],
+        }),
+      }),
+    );
+    // 09:00 is ahead of the clock, so it is the next stop, not a past one, even
+    // though the reference instant is 08:30.
+    expect(view.litStopId).toBe("b");
+    expect(view.stops[0].state).toBe("next");
   });
 });
