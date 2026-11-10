@@ -12,6 +12,7 @@ import {
   dayWindow,
   freeIntervals,
   leaveByFor,
+  planReference,
   planningDate,
 } from "@/app/lib/v2/plan/day";
 import type { FixedEvent } from "@/app/lib/v2/types";
@@ -175,6 +176,61 @@ describe("planningDate", () => {
     const spring = dayWindow("2026-03-07", rules).endMs;
     expect(planningDate(new Date(spring - 1).toISOString(), rules)).toBe("2026-03-07");
     expect(planningDate(new Date(spring).toISOString(), rules)).toBe("2026-03-08");
+  });
+});
+
+// The reference instant, which is the ONE input the ranking reads a date
+// against. It used to be computed inside planDay, and the Today screen and the
+// planner test helper each computed their own, so the three could drift: a
+// screen that ranked against a different instant would call a live item overdue,
+// or the other way round. One exported function, three callers.
+describe("planReference", () => {
+  const rules = parseRules({ timeZone: "UTC" });
+  const TOMORROW = "2026-03-11";
+  const YESTERDAY = "2026-03-09";
+
+  test("before wake it is the start of the planned day's window", () => {
+    expect(planReference(utc("06:00"), DATE, rules)).toEqual({
+      ms: at("09:00"),
+      instant: "2026-03-10T09:00:00+00:00",
+    });
+  });
+
+  test("inside the day it is now", () => {
+    expect(planReference(utc("14:00"), DATE, rules).ms).toBe(at("14:00"));
+  });
+
+  test("after lights out it is still now, not the window", () => {
+    // The window has ended, so clamping to it would walk the reference
+    // backwards as the clock went forward.
+    expect(planReference(utc("23:30"), DATE, rules).ms).toBe(at("23:30"));
+  });
+
+  test("for a date ahead it is that day's window start, not now", () => {
+    expect(planReference(utc("14:00"), TOMORROW, rules).ms).toBe(
+      at("09:00", TOMORROW),
+    );
+  });
+
+  test("for a date behind it is now, which is past that window already", () => {
+    expect(planReference(utc("14:00"), YESTERDAY, rules).ms).toBe(at("14:00"));
+  });
+
+  test("rounds now up to the whole minute, as the planner does", () => {
+    // A block start is formatted without milliseconds, so a plan fed its own
+    // output would read the start back a fraction earlier and report a move
+    // that never happened.
+    expect(planReference("2026-03-10T14:00:30.400Z", DATE, rules).ms).toBe(
+      at("14:01"),
+    );
+    expect(planReference(utc("14:00"), DATE, rules).ms).toBe(at("14:00"));
+  });
+
+  test("the instant is the ms, formatted in the user's zone", () => {
+    const zoned = parseRules({ timeZone: "America/Phoenix" });
+    const out = planReference("2026-03-10T21:00:00Z", DATE, zoned);
+    expect(out.instant).toBe("2026-03-10T14:00:00-07:00");
+    expect(Date.parse(out.instant)).toBe(out.ms);
   });
 });
 

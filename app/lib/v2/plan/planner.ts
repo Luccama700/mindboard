@@ -27,13 +27,13 @@ import {
   carveIntervals,
   compareText,
   dayDiff,
-  dayWindow,
   endWallTimeToMs,
   freeIntervals,
   instantMs,
   isoOf,
   leaveByFor,
   maybeInstantMs,
+  planReference,
   wallTimeToMs,
   type MsInterval,
 } from "@/app/lib/v2/plan/day";
@@ -243,20 +243,18 @@ export function planDay(input: PlanInput): PlanOutput {
     (candidate) => !skippedTaskIds.has(candidate.id),
   );
 
-  // Behaviour 11. Ranking is relative to the day being planned, not to the
-  // clock: the reference instant is the later of `now` and the start of the
-  // planned day's window, on every day. Taking `now` whenever it is the same
-  // day made a block vanish and come back across midnight — before wake, `now`
-  // is EARLIER than the window start the night-before draft used, so the hard
-  // window shrank at midnight and grew again at wake, and a lane's second item
-  // lost and regained its block.
+  // Behaviour 11, in one exported function so the screen and the planner read a
+  // date against the same instant (plan/day.ts says why).
+  //
   // `date` and not the reference instant's own day: once lights out is after
   // midnight the two differ, and "closes today" has to mean the day being
   // planned (plan/rank.ts says why).
-  const window = dayWindow(date, rules);
-  const referenceMs = Math.max(nowMs, window.startMs);
-  const reference = isoOf(referenceMs, rules);
+  const { ms: referenceMs, instant: reference } = planReference(input.now, date, rules);
   const ranked = rankCandidates(eligible, reference, rules, date);
+
+  /** Is this candidate's own date still ahead, or absent? */
+  const isLive = (candidate: Candidate) =>
+    ordinaryOrder(candidate, referenceMs).overdue === 0;
 
   let blocksLeft = capacity.blocks;
   let smallLeft = capacity.small;
@@ -375,14 +373,20 @@ export function planDay(input: PlanInput): PlanOutput {
     // 3. A hard item outside the window but closing within the early-touch
     //    days. Counted in calendar days, because in hours the default three
     //    days is the hard window itself and the step would be unreachable.
+    //
+    //    Only for a deadline that is COMING. An early touch is "open it and
+    //    read it", so that the day a thing closes is not the first day it is
+    //    opened; for an item already behind the reference instant there is no
+    //    such day left, and the block it asked for spent capacity before step 5
+    //    ran, which is how a closed item took a block off live work.
     for (const { candidate, tier } of ranked) {
       if (tier !== "lane-step" && tier !== "side") continue;
       if (!openFor(candidate)) continue;
       if (!candidate.hard || candidate.earlyTouchDone) continue;
       const dueMs = maybeInstantMs(candidate.due);
-      if (dueMs === null) continue;
+      if (dueMs === null || dueMs < referenceMs) continue;
       const days = dayDiff(date, zonedDateKey(dueMs, zone));
-      if (days < 0 || days > rules.earlyTouch.daysBefore) continue;
+      if (days > rules.earlyTouch.daysBefore) continue;
       if (laneFull(candidate.lane)) {
         drop(candidate.id, DROPPED.laneLimit);
         continue;
@@ -440,33 +444,9 @@ export function planDay(input: PlanInput): PlanOutput {
       }
     }
 
-    // 5. One focus block per lane for the remaining steps. A candidate with no
-    //    lane has no lane to limit, so capacity is the only thing bounding it.
-    // Re-sorted only to add the low-energy tie-break below, so the two ordering
-    // keys come from rank.ts rather than being spelled a second time here: an
-    // overdue item sorts after everything that is not, most recently overdue
-    // first. Keying on the due instant alone put the oldest lapsed item at the
-    // head of the demand list, which is where it decided the day's one block
-    // per lane.
-    const steps = inTier("lane-step").sort((a, b) => {
-      const orderA = ordinaryOrder(a.candidate, referenceMs);
-      const orderB = ordinaryOrder(b.candidate, referenceMs);
-      if (orderA.overdue !== orderB.overdue) return orderA.overdue - orderB.overdue;
-      if (orderA.at !== orderB.at) return orderA.at < orderB.at ? -1 : 1;
-      // Behaviour 4.5: a low day prefers the cheapest work. An unknown cost is
-      // not evidence of a cheap task, so it sorts last.
-      if (energyUsed === "low") {
-        const costA = a.candidate.energyCost ?? Number.POSITIVE_INFINITY;
-        const costB = b.candidate.energyCost ?? Number.POSITIVE_INFINITY;
-        if (costA !== costB) return costA < costB ? -1 : 1;
-      }
-      return compareText(a.candidate.id, b.candidate.id);
-    });
-    for (const { candidate } of steps) {
-      if (laneFull(candidate.lane)) {
-        drop(candidate.id, DROPPED.laneLimit);
-        continue;
-      }
+    // One lane step's demand. A candidate with no lane has no lane to limit, so
+    // capacity is the only thing bounding it.
+    const demandLaneStep = (candidate: Candidate) => {
       demand({
         taskId: candidate.id,
         title: candidate.title,
@@ -485,14 +465,9 @@ export function planDay(input: PlanInput): PlanOutput {
         mandatory: false,
         allowProtected: false,
       });
-    }
+    };
 
-    // 6. Side quests, soonest to expire first, pinned ones last.
-    for (const { candidate } of inTier("side")) {
-      if (laneFull(candidate.lane)) {
-        drop(candidate.id, DROPPED.laneLimit);
-        continue;
-      }
+    const demandSide = (candidate: Candidate) => {
       const small = candidate.minutes !== null && candidate.minutes <= 10;
       demand({
         taskId: candidate.id,
@@ -511,6 +486,64 @@ export function planDay(input: PlanInput): PlanOutput {
         mandatory: false,
         allowProtected: false,
       });
+    };
+
+    /** The lane limit first, then the demand its own tier asks for. */
+    const ask = ({ candidate, tier }: RankedCandidate) => {
+      if (laneFull(candidate.lane)) {
+        drop(candidate.id, DROPPED.laneLimit);
+        return;
+      }
+      if (tier === "side") demandSide(candidate);
+      else demandLaneStep(candidate);
+    };
+
+    // 5. One focus block per lane for the remaining LIVE steps.
+    //
+    // Sorted only to add the low-energy tie-break, so the date ordering comes
+    // from rank.ts rather than being spelled a second time here. The overdue
+    // key is a belt: this list is filtered to live items.
+    const steps = inTier("lane-step").sort((a, b) => {
+      const orderA = ordinaryOrder(a.candidate, referenceMs);
+      const orderB = ordinaryOrder(b.candidate, referenceMs);
+      if (orderA.overdue !== orderB.overdue) return orderA.overdue - orderB.overdue;
+      if (orderA.at !== orderB.at) return orderA.at < orderB.at ? -1 : 1;
+      // Behaviour 4.5: a low day prefers the cheapest work. An unknown cost is
+      // not evidence of a cheap task, so it sorts last.
+      if (energyUsed === "low") {
+        const costA = a.candidate.energyCost ?? Number.POSITIVE_INFINITY;
+        const costB = b.candidate.energyCost ?? Number.POSITIVE_INFINITY;
+        if (costA !== costB) return costA < costB ? -1 : 1;
+      }
+      return compareText(a.candidate.id, b.candidate.id);
+    });
+    for (const entry of steps) {
+      if (isLive(entry.candidate)) ask(entry);
+    }
+
+    // 6. Live side quests, soonest to expire first, pinned ones last.
+    for (const entry of inTier("side")) {
+      if (isLive(entry.candidate)) ask(entry);
+    }
+
+    // 6b. The overdue items of BOTH kinds, last, in the ranking's own overdue
+    //     order (freshest lapse first, the kind only as a tie break).
+    //
+    //     Ranking them after live work was not enough on its own. Every lane
+    //     step was demanded before any side quest, so a lapsed lane step still
+    //     took the block a live errand needed: an OK day with two blocks, one
+    //     live lane step, one lapsed lane step and an errand due tomorrow spent
+    //     both blocks on the two lane steps and dropped the errand for capacity.
+    //     The rule is "planned only when nothing live is left", which is a
+    //     property of the demand ORDER and not only of the ranking.
+    //
+    //     This amends PLAN.md behaviour 4: steps 5 and 6 are the live half, and
+    //     the overdue items of either kind come after both.
+    for (const entry of ranked) {
+      if (entry.tier !== "lane-step" && entry.tier !== "side") continue;
+      if (!openFor(entry.candidate)) continue;
+      if (isLive(entry.candidate)) continue;
+      ask(entry);
     }
 
     // 7. The gym, when the day's capacity allows one and the week has room.

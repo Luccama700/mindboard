@@ -1371,8 +1371,7 @@ describe("an overdue hard item does not flood the day", () => {
   });
 
   // The consequence that matters: the day's guaranteed 25 minutes go to live
-  // work. On real data the engine put them on a homework three weeks past its
-  // date, ahead of a paper due in three days.
+  // work, not to the longest-dead item in the pile. Every date here is invented.
   //
   // This case is two LANE STEPS, which is all the first version of the rule
   // covered: it ordered overdue items inside each tier, and a side quest ranks
@@ -1410,10 +1409,10 @@ describe("an overdue hard item does not flood the day", () => {
 
   // R1, the reviewer's probe. A task with no lane becomes a side quest
   // (engine/sources.ts), and a side quest ranks after every lane step, so
-  // ordering overdue items only INSIDE each tier left the dead lane step ahead
-  // of the live errand: the floor block went to the three-week-old homework and
-  // the thing due tomorrow was dropped for capacity. An item whose date has gone
-  // by ranks after every item whose date has not, whatever kind either is.
+  // ordering overdue items only INSIDE each tier left the lapsed lane step
+  // ahead of the live errand: the floor block went to the lapsed one and the
+  // errand was dropped for capacity. An item whose date has gone by ranks after
+  // every item whose date has not, whatever kind either is. Invented dates.
   test("the floor block does not go to an overdue lane step while a live side quest exists", () => {
     const out = planDay(
       input({
@@ -1445,8 +1444,8 @@ describe("an overdue hard item does not flood the day", () => {
             hard: true,
             due: utc("23:59", "2026-02-17"),
           }),
-          // A week old against three weeks old, and a side quest, which ranks
-          // after every lane step while its date is still ahead.
+          // The fresher lapse of the two, and a side quest, which would rank
+          // after every lane step while its date was still ahead.
           candidate({ id: "errand", kind: "side", due: utc("18:00", "2026-03-03") }),
         ],
       }),
@@ -1481,11 +1480,13 @@ describe("an overdue hard item does not flood the day", () => {
     expect(out.dropped.map((d) => d.candidateId)).toEqual(["older"]);
   });
 
-  // Not changed by F4, and pinned so it is a decision rather than an accident:
-  // an item that closed EARLIER TODAY is a day's-worth overdue, not a deadline
-  // the day can still meet, and step 3 still offers it one short block. Step 3
-  // is optional and respects the lane limit, so it cannot flood anything.
-  test("an item that closed earlier today still gets one touch block", () => {
+  // THIS RULING REPLACES AN EARLIER ONE. F4 left step 3 alone and this test
+  // pinned the result: an item that closed at 08:00 still got an early touch at
+  // 14:00. An early touch is for a deadline that is COMING ("open it and read
+  // it", so the day it closes is not the first time it is opened), and it spends
+  // a block of capacity before step 5 runs, which is how a closed item took a
+  // block off live work. An item already behind the reference instant gets none.
+  test("an item that closed earlier today gets no early touch", () => {
     const out = planDay(
       input({
         now: utc("14:00"),
@@ -1494,9 +1495,101 @@ describe("an overdue hard item does not flood the day", () => {
         ],
       }),
     );
+    // It is still the only candidate, so nothing live is left and it is planned
+    // as an ordinary step. What it does not get is the early touch.
     expect(out.blocks.map((b) => [b.kind, b.reason])).toEqual([
-      ["touch", "early-touch"],
+      ["focus", "lane-next"],
     ]);
+    expect(out.blocks[0].taskId).toBe("missed");
+  });
+
+  // The reviewer's second probe. The early touch ran before step 5, so the
+  // closed item's touch block spent capacity that live work then did not have.
+  test("a closed item's touch does not take a block from live work", () => {
+    const out = planDay(
+      input({
+        now: utc("14:00"),
+        energy: "ok", // two blocks
+        candidates: [
+          candidate({ id: "closed-08", lane: "lane-a", hard: true, due: utc("08:00") }),
+          candidate({ id: "live-b", lane: "lane-b", due: utc("23:59", "2026-03-20") }),
+          candidate({ id: "live-c", lane: "lane-c", due: utc("23:59", "2026-03-21") }),
+        ],
+      }),
+    );
+
+    expect(out.blocks.map((b) => b.taskId)).toEqual(["live-b", "live-c"]);
+    expect(out.blocks.every((b) => b.kind !== "touch")).toBe(true);
+    expect(out.dropped.map((d) => [d.candidateId, d.reason])).toEqual([
+      ["closed-08", "capacity"],
+    ]);
+  });
+
+  // The reviewer's first probe. The ranking was right and the demand steps
+  // undid it: step 5 asked for every lane step, overdue or not, before step 6
+  // asked for any side quest, so the dead lane step took the block the live
+  // errand needed.
+  test("an overdue lane step is demanded after every live side quest", () => {
+    const out = planDay(
+      input({
+        energy: "ok", // two blocks
+        candidates: [
+          candidate({ id: "live-a", lane: "lane-a", due: utc("23:59", "2026-03-20") }),
+          candidate({ id: "dead-b", lane: "lane-b", hard: true, due: utc("23:59", "2026-02-17") }),
+          candidate({ id: "errand", kind: "side", due: utc("18:00", "2026-03-11") }),
+        ],
+      }),
+    );
+
+    expect(out.blocks.map((b) => b.taskId)).toEqual(["live-a", "errand"]);
+    expect(out.dropped.map((d) => [d.candidateId, d.reason])).toEqual([
+      ["dead-b", "capacity"],
+    ]);
+  });
+
+  test("with nothing live to plan, the day takes the freshest lapse", () => {
+    const out = planDay(
+      input({
+        energy: "ok",
+        candidates: [
+          candidate({ id: "older", lane: "lane-a", hard: true, due: utc("23:59", "2026-02-17") }),
+          candidate({ id: "fresher", lane: "lane-b", hard: true, due: utc("23:59", "2026-03-08") }),
+          candidate({ id: "oldest", kind: "side", due: utc("12:00", "2026-01-30") }),
+        ],
+      }),
+    );
+    expect(out.blocks.map((b) => b.taskId)).toEqual(["fresher", "older"]);
+    expect(out.dropped.map((d) => [d.candidateId, d.reason])).toEqual([
+      ["oldest", "capacity"],
+    ]);
+  });
+
+  // Ruling 3: the deadline tiers are untouched by any of this. They are
+  // mandatory and exempt from the per-lane limit, so an overdue item beside
+  // them cannot cost them their blocks however the ordinary steps are ordered.
+  test("an overdue item never costs a deadline item its block", () => {
+    const out = planDay(
+      input({
+        energy: "low", // zero ordinary blocks
+        candidates: [
+          candidate({ id: "today", lane: "lane-a", hard: true, due: utc("22:00") }),
+          candidate({
+            id: "soon",
+            lane: "lane-b",
+            hard: true,
+            due: utc("12:00", "2026-03-12"),
+            earlyTouchDone: true,
+          }),
+          candidate({ id: "dead", lane: "lane-c", hard: true, due: utc("23:59", "2026-02-17") }),
+        ],
+      }),
+    );
+
+    expect(out.blocks.map((b) => [b.kind, b.reason, b.taskId])).toEqual([
+      ["focus", "hard-window", "soon"],
+      ["session", "closes-today", "today"],
+    ]);
+    expect(out.dropped.map((d) => d.candidateId)).toEqual(["dead"]);
   });
 });
 
@@ -1751,6 +1844,8 @@ describe("whole-day invariants", () => {
       incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
       capacity: { good: { blocks: 3, small: 1 } },
     });
+    // Two blocks for four candidates, so something has to be dropped.
+    const scarceRules = parseRules({ capacity: { good: { blocks: 2, small: 1 } } });
     const beforeSwitch = parseRules({});
     const afterSwitch = parseRules({
       incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
@@ -1819,6 +1914,40 @@ describe("whole-day invariants", () => {
         // The top candidate must hold a block of at least floor length at every
         // step, before and after the switch.
         floorTaskId: "a",
+      },
+      // Overdue work beside live work, on a day with less capacity than
+      // candidates, so the overdue items are genuinely competing for the
+      // blocks. Both lapsed dates are before the walk begins, so they are
+      // overdue at every one of its steps. Without this the sweep said nothing
+      // about the overdue rule at all: the other scenarios have no soft dates,
+      // their hard dates are all after the walk ends, and an item that is never
+      // overdue never reaches the paths this rule changed.
+      {
+        name: "overdue work beside live work",
+        rulesAt: () => scarceRules,
+        candidates: [
+          candidate({ id: "live-a", lane: "lane-a" }),
+          // 50 minutes, so it competes for a block rather than the small budget.
+          candidate({ id: "live-q", kind: "side", minutes: 50 }),
+          candidate({ id: "lapsed-soft", lane: "lane-b", due: utc("17:00", "2026-03-01") }),
+          candidate({
+            id: "lapsed-hard",
+            lane: "lane-c",
+            hard: true,
+            due: utc("23:59", "2026-03-05"),
+          }),
+        ],
+        fixed: [
+          event({ id: "evening-10b", start: utc("12:50"), end: utc("23:30") }),
+          event({
+            id: "evening-11b",
+            start: utc("12:50", "2026-03-11"),
+            end: utc("23:30", "2026-03-11"),
+          }),
+        ],
+        // The live lane step is the top candidate at every step of the walk, so
+        // the guaranteed block is never handed to a lapsed one.
+        floorTaskId: "live-a",
       },
     ];
 

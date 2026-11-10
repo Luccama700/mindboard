@@ -219,6 +219,43 @@ export function planningDate(now: string, rules: PlannerRules): DateKey {
   return nowMs < dayWindow(yesterday, rules).endMs ? yesterday : calendar;
 }
 
+/** The one instant a candidate's date is read against. See `planReference`. */
+export interface PlanReference {
+  /** Epoch milliseconds, which is what the planner does its arithmetic in. */
+  ms: number;
+  /** The same instant in the user's zone, which is what `rankCandidates` takes. */
+  instant: string;
+}
+
+/**
+ * The reference instant for planning `date`: the later of `now` (rounded UP to
+ * the whole minute) and the start of that day's window.
+ *
+ * Behaviour 11. It is not the clock. Taking `now` whenever it was the same day
+ * made a block vanish and come back across midnight: before wake `now` is
+ * EARLIER than the window start the night-before draft used, so the hard window
+ * shrank at midnight and grew again at wake. It is NOT clamped to the window's
+ * end either, because the reference may only ever move forward.
+ *
+ * The rounding is the planner's own: a block start is formatted without
+ * milliseconds, so a plan fed its own output would read the start back a
+ * fraction earlier and report a move that never happened.
+ *
+ * It lives here, exported, because three callers need the same answer: the
+ * planner, the Today screen (which decides what to call overdue) and the test
+ * helper. Each computing its own is how a screen comes to call a live item
+ * overdue, or the other way round.
+ */
+export function planReference(
+  now: string,
+  date: DateKey,
+  rules: PlannerRules,
+): PlanReference {
+  const nowMs = Math.ceil(instantMs(now) / MINUTE_MS) * MINUTE_MS;
+  const ms = Math.max(nowMs, dayWindow(date, rules).startMs);
+  return { ms, instant: isoOf(ms, rules) };
+}
+
 /**
  * The instants a planning day can hold anything at all: from its own local
  * midnight to the later of the next local midnight and lights out.

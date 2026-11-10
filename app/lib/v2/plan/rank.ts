@@ -82,9 +82,9 @@ function isOrdinary(tier: CandidateTier): boolean {
  * An overdue item's `at` is the NEGATED instant, so the most recently overdue
  * comes first. A pile of lapsed items holds some that are dead and some that
  * are still alive and the planner cannot tell which, so the oldest is the worst
- * possible guess: ordering by it put the day's guaranteed floor block on a
- * homework three weeks past its date, ahead of a paper due in three days, every
- * day. Last, and freshest first, is the honest default.
+ * possible guess: ordering by it hands the day's guaranteed floor block to the
+ * longest-dead item and keeps it there, every day, while whatever is actually
+ * coming waits. Last, and freshest first, is the honest default.
  *
  * Exported because planner.ts re-sorts the lane-step tier to add its low-energy
  * tie-break, and a second spelling of this rule there is how the two come apart.
