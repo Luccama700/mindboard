@@ -193,9 +193,11 @@
 2. `morningMessage`: at most four lines. Line 1 `Morning.` Line 2 `` `First thing: ${title} at ${time}, leave by ${leaveBy}.` `` (without the leave-by clause when null, and `Nothing fixed today.` when there is no fixed event). Line 3 the top block as `` `Then: ${title} at ${time}.` `` when present. Last line the feed line. With an `energyAsk` the text ends with `Energy today?` and the buttons are that ask's options.
 3. `replanMessage`: `` `Moved ${moved}. Next is ${title} at ${time}.` `` With removals, `` ` Dropped ${removed}.` `` is appended. With no next: `Moved ${moved}. Nothing else today.`
 4. `alertMessage`: `` `${causeLabel}. ${affected} things affected, day ${days + 1}.` `` followed by the fix on its own line when present. One affected thing reads `1 thing affected`.
-5. No output of any function in `messages.ts` contains U+2014 or U+2013, for every fixture in the test file.
-6. Button `callback_data` is `` `a:${askId}:${optionId}` ``. `toSendMessagePayload` throws when one exceeds 64 bytes.
-7. `parseUpdate`: a `callback_query` with matching data gives `answer`. A message `/start` or `/start <code>` gives `start`. Any other text message gives `text`. Everything else, including a callback with unknown data, gives `null`. `chatId` is always a string.
+5. `planMessage`: line 1 is `` `${energyLabel} day.` ``, or `` `${energyLabel} day, assumed.` `` when `assumed` is true. Then one line per entry, `` `${time} ${title}` ``. With a `startAsk` the buttons are that ask's options.
+6. `askMessage`: the text is `ask.text` and the buttons are the ask's options in order. `answeredText`: `` `Got it: ${label}.` `` for an answered ask, `` `No answer, so I went with ${label}.` `` for an assumed one, where `label` is the label of `answeredOptionId` (or of the default option when assumed).
+7. No output of any function in `messages.ts` contains U+2014 or U+2013, for every fixture in the test file.
+8. Button `callback_data` is `` `a:${askId}:${optionId}` ``. `toSendMessagePayload` throws when one exceeds 64 bytes.
+9. `parseUpdate`: a `callback_query` with matching data gives `answer`. A message `/start` or `/start <code>` gives `start`. Any other text message gives `text`. Everything else, including a callback with unknown data, gives `null`. `chatId` is always a string.
 
 - [ ] **Step 1: Write the failing tests**, one per behaviour.
 - [ ] **Step 2: Run them and see them fail.**
