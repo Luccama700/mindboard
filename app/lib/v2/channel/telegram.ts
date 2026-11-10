@@ -14,10 +14,40 @@ export interface TelegramClient {
 
 const CALLBACK_DATA_MAX_BYTES = 64;
 
+/** A request that has not answered by then is given up on. */
+export const TELEGRAM_TIMEOUT_MS = 10_000;
+
+/**
+ * What a Bot API call failed with, in the two fields the engine classifies on:
+ * the method and the HTTP status (null when the request never got a response).
+ * The token is not a field and never appears in the message.
+ */
+export class TelegramError extends Error {
+  readonly method: string;
+  readonly status: number | null;
+
+  constructor(method: string, status: number | null) {
+    super(
+      status === null
+        ? `Telegram ${method} request failed before a response`
+        : `Telegram ${method} failed with HTTP ${status}`,
+    );
+    this.name = "TelegramError";
+    this.method = method;
+    this.status = status;
+  }
+}
+
 export function toSendMessagePayload(chatId: string, msg: OutgoingMessage): Record<string, unknown> {
   const payload: Record<string, unknown> = { chat_id: chatId, text: msg.text };
   if (msg.buttons.length > 0) {
     const row = msg.buttons.map((button) => {
+      // CALLBACK_DATA splits on the LAST colon, so an option id carrying one
+      // would come back as part of the ask id and answer nothing. Refused here,
+      // where it is a programming error, rather than silently at the tap.
+      if (button.optionId.includes(":")) {
+        throw new Error(`Option id must not contain a colon: ${button.optionId}`);
+      }
       const callbackData = `a:${button.askId}:${button.optionId}`;
       if (Buffer.byteLength(callbackData, "utf8") > CALLBACK_DATA_MAX_BYTES) {
         throw new Error(`Callback data is over ${CALLBACK_DATA_MAX_BYTES} bytes for ask ${button.askId}`);
@@ -93,16 +123,24 @@ export function verifySecret(headerValue: string | null, expected: string): bool
 
 export function createTelegramClient(token: string, fetchImpl: typeof fetch = fetch): TelegramClient {
   async function call(method: string, body: Record<string, unknown>): Promise<unknown> {
+    // An explicit controller rather than AbortSignal.timeout: the tick runs
+    // inside a 60 second function, so a channel that never answers must not be
+    // what spends it, and a plain timer is the one shape a test can advance.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
     let response: Response;
     try {
       response = await fetchImpl(`https://api.telegram.org/bot${token}/${method}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch {
       // The underlying error can echo the request URL, which contains the token.
-      throw new Error(`Telegram ${method} request failed before a response`);
+      throw new TelegramError(method, null);
+    } finally {
+      clearTimeout(timer);
     }
 
     let parsed: unknown = null;
@@ -113,7 +151,7 @@ export function createTelegramClient(token: string, fetchImpl: typeof fetch = fe
     }
     const ok = typeof parsed === "object" && parsed !== null && (parsed as { ok?: unknown }).ok === true;
     if (!response.ok || !ok) {
-      throw new Error(`Telegram ${method} failed with HTTP ${response.status}`);
+      throw new TelegramError(method, response.status);
     }
     return (parsed as { result?: unknown }).result;
   }

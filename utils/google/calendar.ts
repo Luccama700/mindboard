@@ -136,9 +136,31 @@ async function fetchCalendarEvents(
 }
 
 export class GoogleCalendarConnectionError extends Error {
-  constructor(message = "google calendar connection failed — sign out and back in to refresh permissions") {
+  /**
+   * Google's own error code for a refused token refresh ("invalid_grant",
+   * "invalid_client", ...), or "unknown" when the body carried none and for
+   * every other way this connection can be broken. It is a short stable code,
+   * never provider free text, so an unattended caller can classify the failure
+   * (the v2 watchdog stores it as a feed run's error class).
+   */
+  readonly code: string;
+
+  constructor(
+    message = "google calendar connection failed — sign out and back in to refresh permissions",
+    code = "unknown",
+  ) {
     super(message);
+    this.code = code;
   }
+}
+
+/** Google's token endpoint answers with a snake_case code. Anything else is free text. */
+const GOOGLE_ERROR_CODE = /^[a-z][a-z0-9_]{0,39}$/;
+
+async function refreshErrorCode(response: Response): Promise<string> {
+  const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
+  const code = payload?.error;
+  return typeof code === "string" && GOOGLE_ERROR_CODE.test(code) ? code : "unknown";
 }
 
 type LoadedTokens = {
@@ -242,7 +264,13 @@ async function getValidAccessToken(userId: string): Promise<string> {
     }),
   });
 
-  if (!response.ok) throw new GoogleCalendarConnectionError();
+  if (!response.ok) {
+    const code = await refreshErrorCode(response);
+    // One line, the code and nothing else: the body can name the account and
+    // the request carried the refresh token.
+    console.warn(`google token refresh failed: ${code}`);
+    throw new GoogleCalendarConnectionError(undefined, code);
+  }
 
   const refreshed = (await response.json()) as {
     access_token?: string;

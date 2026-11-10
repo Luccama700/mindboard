@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OutgoingMessage } from "@/app/lib/v2/types";
 import { FakeTelegram } from "@/app/lib/v2/channel/fake-telegram";
 import {
+  TELEGRAM_TIMEOUT_MS,
+  TelegramError,
   createTelegramClient,
   parseUpdate,
   toSendMessagePayload,
@@ -51,6 +53,18 @@ describe("toSendMessagePayload", () => {
     const optionId = "x".repeat(64 - "a:".length - "ask:".length + 1);
     const msg: OutgoingMessage = { text: "t", buttons: [{ label: "B", askId: "ask", optionId }] };
     expect(() => toSendMessagePayload("1", msg)).toThrow();
+  });
+
+  it("throws on an option id that carries a colon, which the parser would misread", () => {
+    const msg: OutgoingMessage = {
+      text: "t",
+      buttons: [{ label: "B", askId: "ask", optionId: "did:it" }],
+    };
+    expect(() => toSendMessagePayload("1", msg)).toThrow();
+    // An ask id may hold one: the parser takes the last colon as the split.
+    expect(() =>
+      toSendMessagePayload("1", { text: "t", buttons: [{ label: "B", askId: "a:b", optionId: "ok" }] }),
+    ).not.toThrow();
   });
 
   it("counts bytes, not characters, for the 64 byte limit", () => {
@@ -257,6 +271,49 @@ describe("createTelegramClient", () => {
     expect((err as Error).message).toContain("answerCallbackQuery");
     expect((err as Error).message).toContain("200");
     expect((err as Error).message).not.toContain(TOKEN);
+  });
+
+  it("throws a TelegramError carrying the method and the status", async () => {
+    const { fetchImpl } = recorder({ status: 403, body: { ok: false, description: "bot blocked" } });
+    const client = createTelegramClient(TOKEN, fetchImpl);
+    const err = await client.sendMessage("42", { text: "x", buttons: [] }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(TelegramError);
+    expect(err).toMatchObject({ method: "sendMessage", status: 403 });
+    expect((err as TelegramError).message).not.toContain(TOKEN);
+  });
+
+  it("gives up on a request that hangs past ten seconds", async () => {
+    expect(TELEGRAM_TIMEOUT_MS).toBe(10_000);
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = ((_url: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal | undefined;
+          signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        })) as unknown as typeof fetch;
+      const client = createTelegramClient(TOKEN, fetchImpl);
+      const pending = client.sendMessage("42", { text: "x", buttons: [] });
+      const assertion = expect(pending).rejects.toBeInstanceOf(TelegramError);
+      await vi.advanceTimersByTimeAsync(TELEGRAM_TIMEOUT_MS);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves no timer behind once a request has answered", async () => {
+    vi.useFakeTimers();
+    try {
+      const { fetchImpl } = recorder({ body: { ok: true, result: { message_id: 1 } } });
+      const client = createTelegramClient(TOKEN, fetchImpl);
+      await client.sendMessage("42", { text: "x", buttons: [] });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the token out of the error when the network call itself fails", async () => {
