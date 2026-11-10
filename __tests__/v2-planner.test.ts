@@ -1264,6 +1264,42 @@ describe("behaviour 11: the day being planned, not the clock", () => {
       [utc("09:30", TOMORROW), "focus 10:00-10:50"],
     ]);
   });
+
+  // F3, at the call site. planDay passes `date` to rankCandidates, not the
+  // reference instant's own day, and once lights out is after midnight the two
+  // are different days. Taking the reference's day made tomorrow's deadline
+  // read as "closes today" at 00:05, and the deadline session, which cannot fit
+  // between earliestStart and latestEnd on a day that is nearly over, was then
+  // crammed into the ninety minutes left before lights out by the
+  // before-closing fallback.
+  test("a tick after midnight does not give tomorrow's deadline tonight's session", () => {
+    const rules = parseRules({ lightsOut: "01:30" });
+    const out = planDay(
+      input({
+        rules,
+        // Still planning the 10th: its window runs to 01:30 on the 11th.
+        date: DATE,
+        now: utc("00:05", TOMORROW),
+        candidates: [candidate({ id: "paper", hard: true, due: utc("23:59", TOMORROW) })],
+      }),
+    );
+
+    expect(out.blocks.map((b) => [b.kind, b.reason])).toEqual([["touch", "hard-window"]]);
+    expect(out.blocks.map(shape)).toEqual(["touch 00:05-00:30"]);
+
+    // On the day it actually closes, it is a session as it always was.
+    const onTheDay = planDay(
+      input({
+        rules,
+        date: TOMORROW,
+        now: utc("00:05", TOMORROW),
+        candidates: [candidate({ id: "paper", hard: true, due: utc("23:59", TOMORROW) })],
+      }),
+    );
+    expect(onTheDay.blocks.map((b) => [b.kind, b.reason])).toEqual([
+      ["session", "closes-today"],
+    ]);
+  });
 });
 
 // F4. An overdue hard item used to rank as hard-window, and step 2 is mandatory
