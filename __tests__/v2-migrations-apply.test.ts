@@ -927,3 +927,501 @@ describe("catalog mode", () => {
     expect(policies.every((p) => typeof p.name === "string" && ["SELECT", "INSERT", "UPDATE", "DELETE", "ALL"].includes(p.cmd))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0066 (the v2 engine's tables and function) and 0067 (its cron tick).
+// These are newer than the 0065 bound used everywhere above, so they get a
+// block of their own, on a database with everything through 0067 applied over
+// the two-tenant seed. One prepared database, cloned per test.
+// ---------------------------------------------------------------------------
+const V2_TABLES = [
+  "v2_rules",
+  "v2_days",
+  "v2_blocks",
+  "v2_asks",
+  "v2_outbox",
+  "v2_feed_expectations",
+  "v2_feed_runs",
+  "v2_alerts",
+  "v2_channels",
+] as const;
+type V2Table = (typeof V2_TABLES)[number];
+const V2_READABLE = V2_TABLES.filter((t) => t !== "v2_outbox" && t !== "v2_channels");
+const V2_FN = "public.v2_replace_planned_blocks(uuid,date,jsonb)";
+const TASK_OF_A = "aaaaaaaa-0000-4000-8000-000000000201";
+const TASK_OF_B = "bbbbbbbb-0000-4000-8000-000000000201";
+
+const v2uuid = (n: number) => `eeeeeeee-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const day = (n: number) => `2026-11-${String(n).padStart(2, "0")}`;
+
+// One valid row per table for user `u`; `n` varies the keys so two rows of one user do not collide.
+const v2Insert: Record<V2Table, (u: string, n: number) => string> = {
+  v2_rules: (u) => `insert into public.v2_rules (user_id) values ('${u}')`,
+  v2_days: (u, n) => `insert into public.v2_days (user_id, date) values ('${u}', '${day(n)}')`,
+  v2_blocks: (u, n) =>
+    `insert into public.v2_blocks (user_id, id, date, starts_at, ends_at, kind, title) values ('${u}', 'blk-${n}', '${day(n)}', '${day(n)}T09:00:00Z', '${day(n)}T10:00:00Z', 'focus', 'title')`,
+  v2_asks: (u, n) =>
+    `insert into public.v2_asks (user_id, id, kind, topic, text, options, default_option_id, opened_at, expires_at, dedupe_key) values ('${u}', '${v2uuid(n)}', 'k', 't', 'hello', '[]'::jsonb, 'o', now(), now() + interval '1 hour', 'ask-${n}')`,
+  v2_outbox: (u, n) =>
+    `insert into public.v2_outbox (user_id, id, kind, dedupe_key, delivery, message, created_at) values ('${u}', '${v2uuid(n)}', 'ask', 'out-${n}', 'interrupt', '{}'::jsonb, now())`,
+  v2_feed_expectations: (u, n) =>
+    `insert into public.v2_feed_expectations (user_id, feed, label, every_minutes) values ('${u}', 'feed-${n}', 'Feed', 60)`,
+  v2_feed_runs: (u, n) =>
+    `insert into public.v2_feed_runs (user_id, feed, started_at, status) values ('${u}', 'feed-${n}', now(), 'ok')`,
+  v2_alerts: (u, n) =>
+    `insert into public.v2_alerts (user_id, id, cause, since) values ('${u}', '${v2uuid(n)}', 'cause-${n}', now())`,
+  v2_channels: (u, n) => `insert into public.v2_channels (user_id, chat_id) values ('${u}', 'chat-${u.slice(0, 4)}-${n}')`,
+};
+const v2Update: Record<V2Table, string> = {
+  v2_rules: "enabled = true",
+  v2_days: "energy_assumed = true",
+  v2_blocks: "title = 'changed'",
+  v2_asks: "status = 'cancelled'",
+  v2_outbox: "error = 'changed'",
+  v2_feed_expectations: "label = 'changed'",
+  v2_feed_runs: "item_count = 1",
+  v2_alerts: "step = 1",
+  v2_channels: "linked_at = now()",
+};
+
+async function asRole<T>(db: Db, role: "anon" | "authenticated" | "service_role", userId: string | null, fn: () => Promise<T>): Promise<T> {
+  await db.exec(`set role ${role}`);
+  await db.query("select set_config('request.jwt.claim.sub', $1, false)", [userId ?? ""]);
+  try {
+    return await fn();
+  } finally {
+    await db.exec("reset role");
+    await db.query("select set_config('request.jwt.claim.sub', '', false)");
+  }
+}
+
+// Everything in public that is not a v2 object, in a form two snapshots can be compared in.
+async function publicStructure(db: Db) {
+  const q = async (sql: string) => rows(db, sql);
+  return {
+    columns: await q(
+      "select table_name, column_name, data_type, is_nullable, column_default, ordinal_position from information_schema.columns where table_schema = 'public' and table_name !~ '^v2_' order by 1, 6",
+    ),
+    constraints: await q(
+      `select cl.relname as t, c.conname, c.contype::text as type, pg_get_constraintdef(c.oid) as def
+         from pg_constraint c join pg_class cl on cl.oid = c.conrelid join pg_namespace n on n.oid = cl.relnamespace
+        where n.nspname = 'public' and cl.relname !~ '^v2_' order by 1, 2`,
+    ),
+    policies: await q(
+      "select tablename, policyname, cmd, roles::text as roles, qual, with_check from pg_policies where schemaname = 'public' and tablename !~ '^v2_' order by 1, 2",
+    ),
+    indexes: await q(
+      "select tablename, indexname, indexdef from pg_indexes where schemaname = 'public' and tablename !~ '^v2_' order by 1, 2",
+    ),
+    triggers: await q(
+      `select cl.relname as t, tg.tgname, pg_get_triggerdef(tg.oid) as def
+         from pg_trigger tg join pg_class cl on cl.oid = tg.tgrelid join pg_namespace n on n.oid = cl.relnamespace
+        where not tg.tgisinternal and n.nspname = 'public' and cl.relname !~ '^v2_' order by 1, 2`,
+    ),
+    privileges: await q(
+      `select c.relname, c.relacl::text as acl
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'public' and c.relkind in ('r', 'p') and c.relname !~ '^v2_' order by 1`,
+    ),
+    functions: await q(
+      `select p.proname, pg_get_function_identity_arguments(p.oid) as args, md5(pg_get_functiondef(p.oid)) as def, p.proacl::text as acl
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname !~ '^v2_' order by 1, 2`,
+    ),
+  };
+}
+
+describe("0066 and 0067, the v2 engine", () => {
+  let seeded55: Db; // 0001..0055 with the two tenants loaded
+  let after65: Db; // ... and 0056..0065
+  let with66: Db; // ... and 0066
+  let with67: Db; // ... and 0067
+  let applied66: string[];
+  let applied67: string[];
+  let beforeStructure: Awaited<ReturnType<typeof publicStructure>>;
+  let before65Counts: Record<string, number>;
+
+  beforeAll(async () => {
+    seeded55 = await open();
+    await applyMigrations(seeded55, { upTo: "0055" });
+    await loadSeed(seeded55);
+    after65 = await clone(seeded55);
+    await applyMigrations(after65, { from: "0056", upTo: LAST });
+    beforeStructure = await publicStructure(after65);
+    before65Counts = await rowCounts(after65);
+    with66 = await clone(after65);
+    applied66 = await applyMigrations(with66, { from: "0066", upTo: "0066" });
+    with67 = await clone(with66);
+    applied67 = await applyMigrations(with67, { from: "0067", upTo: "0067" });
+  });
+
+  // ---- 1 ------------------------------------------------------------------
+  it("applies after 0065", () => {
+    expect(applied66).toEqual(["0066_v2_engine.sql"]);
+    expect(applied67).toEqual(["0067_v2_tick_schedule.sql"]);
+    expect(listMigrations()).toEqual(expect.arrayContaining([...applied66, ...applied67]));
+  });
+
+  it("fails cleanly, by file name and without leaving anything behind, on a database that lacks 0064", async () => {
+    const no64 = await clone(seeded55);
+    await applyMigrations(no64, { from: "0056", upTo: LAST, skip: ["0064"] });
+    const failure = await applyMigrations(no64, { from: "0066", upTo: "0066" }).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure!.message).toContain("0066_v2_engine.sql");
+    expect(failure!.message).toMatch(/unique constraint/i);
+    const left = await rows<{ n: number }>(no64, "select count(*)::int as n from pg_class where relname ~ '^v2_'");
+    expect(left[0].n).toBe(0);
+    expect(await rows(no64, "select 1 as ok")).toEqual([{ ok: 1 }]);
+  });
+
+  // ---- 2 ------------------------------------------------------------------
+  it("changes nothing that existed: every table, column, constraint, policy, index, trigger, privilege and function is as it was, and no row moved", async () => {
+    const afterStructure = await publicStructure(with66);
+    expect(beforeStructure.columns.length).toBeGreaterThan(300);
+    expect(beforeStructure.policies.length).toBeGreaterThan(50);
+    for (const part of Object.keys(beforeStructure) as (keyof typeof beforeStructure)[]) {
+      expect(afterStructure[part], part).toEqual(beforeStructure[part]);
+    }
+
+    const counts = await rowCounts(with66);
+    const existing = Object.fromEntries(Object.entries(counts).filter(([t]) => !t.startsWith("public.v2_")));
+    expect(existing).toEqual(before65Counts);
+    expect(Object.entries(counts).filter(([t]) => t.startsWith("public.v2_"))).toEqual(
+      [...V2_TABLES].sort().map((t) => [`public.${t}`, 0]),
+    );
+
+    // and what is new is exactly the nine tables and the one function
+    const tables = await rows<{ relname: string }>(
+      with66,
+      "select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r','p') and c.relname ~ '^v2_' order by 1",
+    );
+    expect(tables.map((t) => t.relname)).toEqual([...V2_TABLES].sort());
+    const fns = await rows<{ proname: string }>(
+      with66,
+      "select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname ~ '^v2_' order by 1",
+    );
+    expect(fns).toEqual([{ proname: "v2_replace_planned_blocks" }]);
+  });
+
+  // ---- 3 ------------------------------------------------------------------
+  describe("security shape of the nine tables, under real role switches", () => {
+    let sec: Db;
+    beforeAll(async () => {
+      sec = await clone(with66);
+      for (const t of V2_TABLES) {
+        await sec.exec(v2Insert[t](A, 1));
+        await sec.exec(v2Insert[t](B, 1));
+      }
+    });
+
+    it("lets anon select from none of them", async () => {
+      for (const t of V2_TABLES) {
+        await asRole(sec, "anon", null, async () => {
+          await expect(sec.query(`select count(*) from public.${t}`), t).rejects.toThrow(/permission denied/);
+        });
+      }
+    });
+
+    it("lets a signed-in user read only their own rows from the seven read tables", async () => {
+      for (const t of V2_READABLE) {
+        for (const [who, other] of [[A, B], [B, A]]) {
+          const seen = await asRole(sec, "authenticated", who, () => rows<{ user_id: string }>(sec, `select user_id from public.${t}`));
+          expect(seen, `${t} as ${who}`).toEqual([{ user_id: who }]);
+          expect(seen.some((r) => r.user_id === other)).toBe(false);
+        }
+      }
+    });
+
+    it("lets a signed-in user read nothing from v2_outbox or v2_channels", async () => {
+      for (const t of ["v2_outbox", "v2_channels"]) {
+        await asRole(sec, "authenticated", A, async () => {
+          await expect(sec.query(`select * from public.${t}`), t).rejects.toThrow(/permission denied/);
+        });
+      }
+    });
+
+    it("lets a signed-in user insert, update and delete nothing, even their own rows", async () => {
+      for (const t of V2_TABLES) {
+        await asRole(sec, "authenticated", A, async () => {
+          await expect(sec.query(v2Insert[t](A, 2)), `insert ${t}`).rejects.toThrow(/permission denied/);
+          await expect(sec.query(`update public.${t} set ${v2Update[t]} where user_id = '${A}'`), `update ${t}`).rejects.toThrow(/permission denied/);
+          await expect(sec.query(`delete from public.${t} where user_id = '${A}'`), `delete ${t}`).rejects.toThrow(/permission denied/);
+        });
+      }
+      for (const t of V2_TABLES) {
+        const n = await rows<{ n: number }>(sec, `select count(*)::int as n from public.${t}`);
+        expect(n[0].n, t).toBe(2); // nothing added, nothing removed
+      }
+    });
+
+    it("holds even if the privileges were handed back: row level security alone still refuses (the 'twice over' claim)", async () => {
+      const rlsOnly = await clone(sec);
+      for (const t of V2_TABLES) await rlsOnly.exec(`grant all on table public.${t} to anon, authenticated`);
+
+      for (const t of V2_TABLES) {
+        await asRole(rlsOnly, "authenticated", A, async () => {
+          await expect(rlsOnly.query(v2Insert[t](A, 3)), `insert ${t}`).rejects.toThrow(/row-level security/);
+          expect((await rlsOnly.query(`update public.${t} set ${v2Update[t]} where user_id = '${A}' returning user_id`)).rows, `update ${t}`).toEqual([]);
+          expect((await rlsOnly.query(`delete from public.${t} where user_id = '${A}' returning user_id`)).rows, `delete ${t}`).toEqual([]);
+        });
+        await asRole(rlsOnly, "anon", null, async () => {
+          expect((await rlsOnly.query(`select * from public.${t}`)).rows, `anon select ${t}`).toEqual([]);
+          await expect(rlsOnly.query(v2Insert[t](A, 3)), `anon insert ${t}`).rejects.toThrow(/row-level security/);
+        });
+      }
+      for (const t of ["v2_outbox", "v2_channels"]) {
+        await asRole(rlsOnly, "authenticated", A, async () => {
+          expect((await rlsOnly.query(`select * from public.${t}`)).rows, `${t} select`).toEqual([]);
+        });
+      }
+      for (const t of V2_TABLES) {
+        const n = await rows<{ n: number }>(rlsOnly, `select count(*)::int as n from public.${t}`);
+        expect(n[0].n, t).toBe(2);
+      }
+    });
+  });
+
+  // ---- 4 ------------------------------------------------------------------
+  describe("v2_replace_planned_blocks", () => {
+    const D1 = day(12);
+    const D2 = day(13);
+    let fn: Db;
+    const plan = (id: string, title: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      starts_at: `${D1}T09:00:00Z`,
+      ends_at: `${D1}T10:00:00Z`,
+      kind: "focus",
+      lane: "l",
+      task_id: null,
+      title,
+      reason: "r",
+      ...extra,
+    });
+    const call = (db: Db, user: string, date: string, blocks: unknown[]) =>
+      db.query("select public.v2_replace_planned_blocks($1::uuid, $2::date, $3::jsonb) as n", [user, date, JSON.stringify(blocks)]);
+    const asService = <T,>(f: () => Promise<T>) => asRole(fn, "service_role", null, f);
+    const snapshot = () =>
+      rows(fn, "select user_id, id, date::text as date, state, title from public.v2_blocks order by user_id, id");
+
+    beforeAll(async () => {
+      fn = await clone(with66);
+      const block = (u: string, id: string, date: string, state: string) =>
+        `insert into public.v2_blocks (user_id, id, date, starts_at, ends_at, kind, title, state) values ('${u}', '${id}', '${date}', '${date}T09:00:00Z', '${date}T10:00:00Z', 'focus', 'old ${id}', '${state}')`;
+      for (const sql of [
+        block(A, "p1", D1, "planned"),
+        block(A, "p2", D1, "planned"),
+        block(A, "s1", D1, "started"),
+        block(A, "d1", D1, "done"),
+        block(A, "k1", D1, "skipped"),
+        block(A, "p3", D2, "planned"),
+        block(B, "bp1", D1, "planned"),
+      ]) {
+        await fn.exec(sql);
+      }
+    });
+
+    it("cannot be executed by anon or authenticated, and can by service_role", async () => {
+      const priv = await rows<{ role: string; ok: boolean }>(
+        fn,
+        `select r as role, has_function_privilege(r, '${V2_FN}', 'execute') as ok from unnest(array['anon','authenticated','service_role']) r order by 1`,
+      );
+      expect(Object.fromEntries(priv.map((p) => [p.role, p.ok]))).toEqual({ anon: false, authenticated: false, service_role: true });
+
+      await asRole(fn, "anon", null, async () => {
+        await expect(call(fn, A, D1, [])).rejects.toThrow(/permission denied/);
+      });
+      await asRole(fn, "authenticated", A, async () => {
+        await expect(call(fn, A, D1, [])).rejects.toThrow(/permission denied/);
+      });
+      expect(await snapshot()).toHaveLength(7); // the refused calls changed nothing
+    });
+
+    it("replaces only the planned rows of that user and date", async () => {
+      const result = await asService(() =>
+        call(fn, A, D1, [
+          plan("p1", "new p1"), // planned, on this date: updated
+          plan("n1", "new n1"), // new: inserted
+          plan("s1", "hijack s1"), // started: not the planner's to rewrite
+          plan("d1", "hijack d1"), // done
+          plan("k1", "hijack k1"), // skipped
+          plan("p3", "hijack p3"), // planned, but on another day: left where it is
+        ]),
+      );
+      expect(result.rows).toEqual([{ n: 2 }]); // p1 and n1
+      expect(await snapshot()).toEqual([
+        { user_id: A, id: "d1", date: D1, state: "done", title: "old d1" },
+        { user_id: A, id: "k1", date: D1, state: "skipped", title: "old k1" },
+        { user_id: A, id: "n1", date: D1, state: "planned", title: "new n1" },
+        { user_id: A, id: "p1", date: D1, state: "planned", title: "new p1" },
+        { user_id: A, id: "p3", date: D2, state: "planned", title: "old p3" },
+        { user_id: A, id: "s1", date: D1, state: "started", title: "old s1" },
+        { user_id: B, id: "bp1", date: D1, state: "planned", title: "old bp1" },
+      ]); // p2 was planned, on D1, and absent from the plan: deleted
+    });
+
+    it("is all or nothing when one element is malformed", async () => {
+      const before = await snapshot();
+      const malformed: [string, Record<string, unknown>, RegExp][] = [
+        ["unknown kind", { kind: "bogus" }, /check constraint|v2_blocks_kind_check/i],
+        ["ends before it starts", { ends_at: `${D1}T08:00:00Z` }, /check constraint|v2_blocks_window/i],
+        ["not a time", { starts_at: "not-a-time" }, /./],
+        ["no title", { title: null }, /not-null|null value/i],
+      ];
+      for (const [label, bad, expected] of malformed) {
+        await asService(async () => {
+          await expect(call(fn, A, D1, [plan("good", "good one"), plan("p1", "another p1"), plan("bad", "bad one", bad)]), label).rejects.toThrow(expected);
+        });
+        expect(await snapshot(), label).toEqual(before);
+      }
+    });
+
+    it("refuses the same id twice, and changes nothing", async () => {
+      const before = await snapshot();
+      await asService(async () => {
+        await expect(call(fn, A, D1, [plan("dup", "one"), plan("dup", "two")])).rejects.toThrow();
+        await expect(call(fn, A, D1, [plan("p1", "one"), plan("p1", "two")])).rejects.toThrow();
+      });
+      expect(await snapshot()).toEqual(before);
+    });
+  });
+
+  // ---- 5 ------------------------------------------------------------------
+  describe("database facts the engine relies on", () => {
+    let facts: Db;
+    beforeAll(async () => {
+      facts = await clone(with66);
+    });
+    const refused = (sql: string, what: RegExp) => expect(facts.query(sql)).rejects.toThrow(what);
+
+    it("refuses a second ask with the same (user, dedupe key), and allows it for another user", async () => {
+      await facts.exec(v2Insert.v2_asks(A, 1));
+      await refused(
+        v2Insert.v2_asks(A, 1).replace(`'${v2uuid(1)}'`, `'${v2uuid(2)}'`), // new id, same dedupe key 'ask-1'
+        /v2_asks_user_id_dedupe_key_key|duplicate key/i,
+      );
+      await facts.exec(v2Insert.v2_asks(B, 1));
+    });
+
+    it("refuses a second outbox row with the same (user, dedupe key)", async () => {
+      await facts.exec(v2Insert.v2_outbox(A, 1));
+      await refused(
+        v2Insert.v2_outbox(A, 1).replace(`'${v2uuid(1)}'`, `'${v2uuid(2)}'`),
+        /v2_outbox_user_id_dedupe_key_key|duplicate key/i,
+      );
+    });
+
+    it("refuses two open alerts with one cause for a user, allows a closed one beside an open one", async () => {
+      const alert = (u: string, id: number, status: string) =>
+        `insert into public.v2_alerts (user_id, id, cause, since, status) values ('${u}', '${v2uuid(id)}', 'feed-late', now(), '${status}')`;
+      await facts.exec(alert(A, 10, "closed"));
+      await facts.exec(alert(A, 11, "closed"));
+      await facts.exec(alert(A, 12, "open"));
+      await refused(alert(A, 13, "open"), /v2_alerts_open_cause_idx|duplicate key/i);
+      await facts.exec(alert(B, 14, "open")); // another user's open alert with the same cause is fine
+      await facts.exec(`update public.v2_alerts set status = 'closed' where user_id = '${A}' and id = '${v2uuid(12)}'`);
+      await facts.exec(alert(A, 15, "open")); // once closed, a new one may open
+    });
+
+    it("links one chat id to at most one user, and stores only a hash as the pairing code", async () => {
+      await facts.exec(`insert into public.v2_channels (user_id, chat_id) values ('${A}', 'chat-shared')`);
+      await refused(`insert into public.v2_channels (user_id, chat_id) values ('${B}', 'chat-shared')`, /v2_channels_chat_idx|duplicate key/i);
+      await facts.exec(`insert into public.v2_channels (user_id) values ('${B}')`); // unlinked rows do not collide
+      const hash = "a".repeat(64);
+      await refused(`update public.v2_channels set pairing_hash = 'raw-code-123', pairing_expires_at = now() where user_id = '${B}'`, /pairing_hash_check|check constraint/i);
+      await refused(`update public.v2_channels set pairing_hash = '${hash}' where user_id = '${B}'`, /v2_channels_pairing|check constraint/i); // hash without an expiry
+      await facts.exec(`update public.v2_channels set pairing_hash = '${hash}', pairing_expires_at = now() where user_id = '${B}'`);
+      await refused(`update public.v2_channels set pairing_hash = '${hash}', pairing_expires_at = now() where user_id = '${A}'`, /v2_channels_pairing_idx|duplicate key/i);
+    });
+
+    it("refuses a block that points at another tenant's task, and an outbox row that points at another tenant's ask", async () => {
+      const block = (u: string, task: string) =>
+        `insert into public.v2_blocks (user_id, id, date, starts_at, ends_at, kind, title, task_id) values ('${u}', 'with-${task.slice(0, 4)}', '${day(5)}', '${day(5)}T09:00:00Z', '${day(5)}T10:00:00Z', 'focus', 't', '${task}')`;
+      await refused(block(A, TASK_OF_B), /v2_blocks_task_id_fkey/);
+      await facts.exec(block(A, TASK_OF_A));
+
+      await facts.exec(v2Insert.v2_asks(B, 5));
+      const outbox = (u: string, ask: string, n: number) =>
+        `insert into public.v2_outbox (user_id, id, kind, dedupe_key, delivery, message, created_at, ask_id) values ('${u}', '${v2uuid(n)}', 'ask', 'o-${n}', 'digest', '{}'::jsonb, now(), '${ask}')`;
+      await refused(outbox(A, v2uuid(5), 20), /v2_outbox_ask_id_fkey/); // B's ask
+      await facts.exec(v2Insert.v2_asks(A, 5));
+      await facts.exec(outbox(A, v2uuid(5), 21));
+    });
+
+    it("keeps the owner when a referenced task or ask goes away: only the reference is cleared", async () => {
+      await facts.exec(`insert into public.v2_blocks (user_id, id, date, starts_at, ends_at, kind, title, task_id) values ('${A}', 'own-task', '${day(6)}', '${day(6)}T09:00:00Z', '${day(6)}T10:00:00Z', 'focus', 't', '${TASK_OF_A}')`);
+      await facts.exec(v2Insert.v2_asks(A, 7));
+      await facts.exec(`insert into public.v2_outbox (user_id, id, kind, dedupe_key, delivery, message, created_at, ask_id) values ('${A}', '${v2uuid(30)}', 'ask', 'o-30', 'digest', '{}'::jsonb, now(), '${v2uuid(7)}')`);
+
+      await facts.exec(`delete from public.tasks where id = '${TASK_OF_A}'`);
+      expect(await rows(facts, "select user_id, task_id from public.v2_blocks where id = 'own-task'")).toEqual([{ user_id: A, task_id: null }]);
+      await facts.exec(`delete from public.v2_asks where user_id = '${A}' and id = '${v2uuid(7)}'`);
+      expect(await rows(facts, `select user_id, ask_id from public.v2_outbox where id = '${v2uuid(30)}'`)).toEqual([{ user_id: A, ask_id: null }]);
+    });
+  });
+
+  // ---- 6 ------------------------------------------------------------------
+  describe("0067, the tick schedule", () => {
+    const tickJobs = (db: Db) =>
+      rows<{ jobname: string; schedule: string; command: string }>(db, "select jobname, schedule, command from cron.job where jobname = 'mindboard-v2-tick'");
+    const requests = (db: Db) =>
+      rows<{ method: string; url: string; headers: Record<string, string>; body: unknown }>(db, "select method, url, headers, body from net.requests order by id");
+
+    it("registers one job every ten minutes whose command text holds no URL and no secret", async () => {
+      const jobs = await tickJobs(with67);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].schedule).toBe("*/10 * * * *");
+      const command = jobs[0].command;
+      expect(command).not.toMatch(/https?:|:\/\//i);
+      expect(command).not.toMatch(/[A-Za-z0-9_-]{32,}/); // no long literal token
+      expect(command).not.toMatch(/bearer\s+['"]?[A-Za-z0-9]/i); // the only 'Bearer ' is concatenated with a column
+      expect(command).toContain("v2_tick_url");
+      expect(command).toContain("v2_cron_secret");
+      // the prune job from 0061 is still there, untouched
+      expect(await rows(with67, "select count(*)::int as n from cron.job")).toEqual([{ n: 2 }]);
+    });
+
+    it("applying it again replaces the job instead of stacking a second", async () => {
+      const again = await clone(with67);
+      await applyMigrations(again, { from: "0067", upTo: "0067" });
+      expect(await tickJobs(again)).toHaveLength(1);
+    });
+
+    it("does nothing, and raises nothing, while either secret is missing", async () => {
+      const db = await clone(with67);
+      const [{ command }] = await tickJobs(db);
+      await db.exec(command); // neither secret
+      expect(await requests(db)).toEqual([]);
+      await db.exec("select vault.create_secret('https://example.test/api/v2/tick', 'v2_tick_url')");
+      await db.exec(command); // url only
+      expect(await requests(db)).toEqual([]);
+      await db.exec("delete from vault.secrets");
+      await db.exec("select vault.create_secret('token-one', 'v2_cron_secret')");
+      await db.exec(command); // token only
+      expect(await requests(db)).toEqual([]);
+    });
+
+    it("posts exactly once to the stored URL with the stored bearer when both are present, and reads them afresh each run", async () => {
+      const db = await clone(with67);
+      const [{ command }] = await tickJobs(db);
+      await db.exec("select vault.create_secret('https://example.test/api/v2/tick', 'v2_tick_url')");
+      await db.exec("select vault.create_secret('token-one', 'v2_cron_secret')");
+      await db.exec(command);
+      const first = await requests(db);
+      expect(first).toHaveLength(1);
+      expect(first[0].method).toBe("POST");
+      expect(first[0].url).toBe("https://example.test/api/v2/tick");
+      expect(first[0].headers.Authorization).toBe("Bearer token-one");
+      expect(first[0].headers["Content-Type"]).toBe("application/json");
+      expect(first[0].body).toEqual({});
+
+      await db.exec("update vault.secrets set secret = 'token-two' where name = 'v2_cron_secret'");
+      await db.exec(command);
+      const second = await requests(db);
+      expect(second).toHaveLength(2);
+      expect(second[1].headers.Authorization).toBe("Bearer token-two");
+    });
+  });
+});
