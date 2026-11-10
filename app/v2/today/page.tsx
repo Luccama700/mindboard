@@ -26,25 +26,43 @@
 // to be absolute (`localSnapshotDir`). Nothing a visitor sends takes part in
 // any path: the file names inside the folder are literals.
 //
-// Both checks are pure functions, so each is testable on its own.
+// WHAT "LOCAL" DOES NOT MEAN. Neither mode asks who is asking, so both show
+// whatever they are built from to ANYONE WHO CAN REACH THIS SERVER. In snapshot
+// mode that is every open task title, the planner rules and the account's id, in
+// the page payload. `next dev` and `next start` bind to 0.0.0.0 by default,
+// which is every interface on the machine, so the server has to be started on
+// the loopback address instead (`-H 127.0.0.1`). NOTHING IN THIS FILE CAN
+// ENFORCE THAT: by the time a request arrives it has already been accepted, and
+// the address it came from is the proxy's business, not the page's.
 //
-// WHY THIS PAGE IS NOT ASYNC. Reading the `date` parameter means awaiting
-// `searchParams` (Next 16: both props are promises), and reading the folder is
-// asynchronous as well, but `notFound()` has to throw where the gate is decided
-// rather than inside a promise nobody awaits. So the gate stays synchronous and
-// the one branch that needs to wait is a component of its own.
+// So there is a speed bump, and it is labelled as one: both modes answer
+// `notFound()` unless the request's Host header names the loopback address
+// (`isLoopbackHost`). A Host header is sent by the client and can say anything,
+// so this stops an accident (a phone on the same network opening the dev URL, a
+// scanner walking the subnet) and stops nobody who is trying. Production is
+// refused before this check ever runs.
+//
+// The three checks are pure functions, so each is testable on its own.
+//
+// WHY THIS PAGE IS NOT ASYNC. Everything the two modes need is asynchronous:
+// `searchParams` and `headers()` are promises in Next 16, and so is reading the
+// folder. But `notFound()` has to throw where the mode is decided rather than
+// inside a promise nobody awaits, so the mode switch stays synchronous and each
+// mode is a component of its own.
 //
 // Server and client: the server decides the mode and builds the day (that parses
 // the planner rules and, for a snapshot, reads the folder), then hands plain
 // data to one client component. The planner itself then runs in the browser, so
 // Start, Done, Not today and the energy options are real replans.
 
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
 import { fixturesEnabled, sampleDay } from "@/app/lib/v2/fixtures/sample-day";
 import {
   LocalSnapshotError,
+  isLoopbackHost,
   loadLocalToday,
   localSnapshotDir,
 } from "@/app/lib/v2/local/snapshot";
@@ -70,7 +88,7 @@ export default function TodayPage(props?: { searchParams?: Promise<Search> }) {
       VERCEL_ENV: process.env.VERCEL_ENV,
     })
   ) {
-    return <TodayClient data={sampleDay()} />;
+    return <SampleToday />;
   }
 
   const dir = localSnapshotDir({
@@ -80,6 +98,23 @@ export default function TodayPage(props?: { searchParams?: Promise<Search> }) {
   if (dir === null) notFound();
 
   return <LocalToday dir={dir} searchParams={props?.searchParams} />;
+}
+
+/**
+ * The speed bump described at the top of this file. A request whose Host is not
+ * the loopback address gets the same 404 as a route that is switched off: it is
+ * told nothing about what it nearly reached, and the header it sent is not
+ * repeated anywhere.
+ */
+async function requireLoopback(): Promise<void> {
+  const host = (await headers()).get("host");
+  if (!isLoopbackHost(host)) notFound();
+}
+
+/** The invented day. Behind the same speed bump, so one rule covers both modes. */
+async function SampleToday() {
+  await requireLoopback();
+  return <TodayClient data={sampleDay()} />;
 }
 
 /**
@@ -111,6 +146,7 @@ async function LocalToday({
   dir: string;
   searchParams?: Promise<Search>;
 }) {
+  await requireLoopback();
   const asked = searchParams === undefined ? {} : await searchParams;
   // A repeated parameter arrives as a list, which is not a date. The loader
   // ignores anything that is not a real day near today.

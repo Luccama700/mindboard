@@ -28,6 +28,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import { safeTimeZone } from "@/app/_components/date-utils";
+import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import type { EngineCalendarEvent, EngineTaskRow } from "@/app/lib/v2/engine/sources";
 import { parseRules } from "@/app/lib/v2/rules";
 import { RowShapeError, parseRulesDocument } from "@/app/lib/v2/store/mappers";
@@ -60,12 +61,10 @@ export class LocalSnapshotError extends Error {
   }
 }
 
-/** The byte order mark, U+FEFF, written out so no source file carries one. */
-const BYTE_ORDER_MARK = String.fromCodePoint(0xfeff);
-
 const MISSING = "is missing from the snapshot folder.";
 const UNREADABLE = "could not be read.";
 const NOT_JSON = "is not valid JSON.";
+const NOT_UTF8 = "is not UTF-8 text. Save it as UTF-8.";
 const BAD_SHAPE = "does not have the shape this screen needs";
 
 function shapeDetail(at: string): string {
@@ -77,23 +76,45 @@ function isAbsent(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-/** The file's text, or null when it is not there at all. */
+/**
+ * The file's text, or null when it is not there at all.
+ *
+ * The bytes are decoded here rather than by `readFile`, because what a Windows
+ * shell writes is the whole problem. `>` and `Out-File` in Windows PowerShell
+ * 5.1 produce UTF-16LE with a byte order mark, which decodes as UTF-8 into
+ * replacement characters and reads as "is not valid JSON" however good the JSON
+ * is; the encoding is named instead, so the answer is to save the file again
+ * rather than to go looking for a comma. A UTF-8 mark, which the same shell's
+ * `Set-Content -Encoding utf8` writes, is stripped: JSON.parse refuses it.
+ */
 async function readText(dir: string, file: string): Promise<string | null> {
+  let bytes: Buffer;
   try {
-    return await readFile(path.join(dir, file), "utf8");
+    bytes = await readFile(path.join(dir, file));
   } catch (error) {
     if (isAbsent(error)) return null;
     throw new LocalSnapshotError(file, UNREADABLE);
   }
+  if (startsWith(bytes, UTF16_LE_MARK) || startsWith(bytes, UTF16_BE_MARK)) {
+    throw new LocalSnapshotError(file, NOT_UTF8);
+  }
+  const body = startsWith(bytes, UTF8_MARK) ? bytes.subarray(UTF8_MARK.length) : bytes;
+  return body.toString("utf8");
 }
 
-// A leading byte order mark is what a file saved from PowerShell on Windows
-// normally starts with, and JSON.parse refuses it. Stripping it here is the
-// difference between "is not valid JSON" and a folder that just works.
+const UTF8_MARK = [0xef, 0xbb, 0xbf];
+const UTF16_LE_MARK = [0xff, 0xfe];
+const UTF16_BE_MARK = [0xfe, 0xff];
+
+function startsWith(bytes: Buffer, mark: number[]): boolean {
+  return bytes.length >= mark.length && mark.every((byte, index) => bytes[index] === byte);
+}
+
+// The parse error is swallowed rather than reported: its own message quotes the
+// text around the problem, which is a value out of the file.
 function parseJson(file: string, text: string): unknown {
   try {
-    const body = text.startsWith(BYTE_ORDER_MARK) ? text.slice(1) : text;
-    return JSON.parse(body) as unknown;
+    return JSON.parse(text) as unknown;
   } catch {
     throw new LocalSnapshotError(file, NOT_JSON);
   }
@@ -121,14 +142,41 @@ const text = z
   .string()
   .nullish()
   .transform((value) => value ?? null);
-const count = z
+/**
+ * A column of minutes.
+ *
+ * Positive and whole, because the two things that read one build a block out of
+ * it: zero or less gives a block that ends at or before it starts, which the
+ * planner would then try to place. Postgres cannot hold a fraction in these
+ * columns and nothing sensible holds a negative one, so a file that says
+ * otherwise was edited by hand and is malformed.
+ */
+const minutes = z
   .number()
+  .int()
+  .positive()
   .nullish()
   .transform((value) => value ?? null);
 const flag = z
   .boolean()
   .nullish()
   .transform((value) => value ?? false);
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * A date key that names a day that exists.
+ *
+ * The shape is not enough. "2026-13-45" matches it and every piece of date
+ * arithmetic downstream would quietly carry it forward as 2027-02-14, so the
+ * day has to survive the round trip. Exported because the `date` parameter is
+ * judged by the same rule.
+ */
+export function isRealDateKey(value: string): boolean {
+  if (!DATE_ONLY.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  return zonedDateKey(Date.UTC(year, month - 1, day), "UTC") === value;
+}
 
 /**
  * A `date` column, as a date key.
@@ -139,7 +187,7 @@ const flag = z
  */
 const dayColumn = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine(isRealDateKey)
   .nullish()
   .transform((value) => value ?? null);
 
@@ -229,8 +277,8 @@ const taskRowSchema = z.object({
     .string()
     .nullish()
     .transform((value) => value ?? ""),
-  estimated_minutes: count,
-  duration_min: count,
+  estimated_minutes: minutes,
+  duration_min: minutes,
   gcal_event_id: text,
   gcal_calendar_id: text,
 });
@@ -293,6 +341,13 @@ const eventSchema = z.object({
  * The week's events, or null when the file is not there. Null is not an empty
  * calendar: the notice says the calendar is not included, so a day with nothing
  * on it cannot be mistaken for a day that is free.
+ *
+ * THIS FILE CARRIES NO ACCOUNT. Every other row file has a `user_id` and is
+ * scoped to the snapshot's owner here, at the door. A calendar event has no
+ * such column (the shape is the engine's `EngineCalendarEvent`), so this reader
+ * cannot filter one out and does not pretend to: whoever writes the folder must
+ * put only the owner's own calendars in it. An event from somebody else's
+ * calendar would be shown on the day like any other.
  */
 export async function readCalendarEvents(dir: string): Promise<EngineCalendarEvent[] | null> {
   const file = SNAPSHOT_FILES.calendar;

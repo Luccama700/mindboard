@@ -17,10 +17,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 import {
   LocalSnapshotError,
+  isLoopbackHost,
   loadLocalToday,
   localSnapshotDir,
 } from "@/app/lib/v2/local/snapshot";
@@ -38,6 +39,30 @@ vi.mock("@/app/v2/today/today-client", () => ({
     return null;
   },
 }));
+
+// The page reads one request header. There is no request in a test, so the one
+// header it reads is stood in for; `sentHost` is what the client claimed to have
+// asked for.
+const sentHost = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock("next/headers", () => ({
+  headers: () =>
+    Promise.resolve({
+      get: (name: string) => (name.toLowerCase() === "host" ? sentHost.value : null),
+    }),
+}));
+
+/** What `notFound()` throws, as Next spells it (http-access-fallback.js). */
+const NOT_FOUND_DIGEST = "NEXT_HTTP_ERROR_FALLBACK;404";
+
+/** The error of something that should have answered 404, or a failure. */
+async function refusal(run: () => unknown): Promise<{ digest?: unknown; message: string }> {
+  try {
+    await run();
+  } catch (error) {
+    return error as { digest?: unknown; message: string };
+  }
+  throw new Error("it answered when it should not have");
+}
 
 const ROOT = path.resolve(__dirname, "..");
 
@@ -351,8 +376,14 @@ const DEFAULT_FILES: Record<string, string> = {
 
 const made: string[] = [];
 
-/** A snapshot folder. `null` leaves that file out; a string replaces it. */
-async function folder(overrides: Record<string, string | null> = {}): Promise<string> {
+/**
+ * A snapshot folder. `null` leaves that file out, a string or a buffer replaces
+ * it. Buffers are how the encoding cases are written, since the encoding is the
+ * thing under test.
+ */
+async function folder(
+  overrides: Record<string, string | Buffer | null> = {},
+): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "v2-local-snapshot-"));
   made.push(dir);
   for (const [name, body] of Object.entries({ ...DEFAULT_FILES, ...overrides })) {
@@ -363,10 +394,23 @@ async function folder(overrides: Record<string, string | null> = {}): Promise<st
 }
 
 async function load(
-  overrides: Record<string, string | null> = {},
+  overrides: Record<string, string | Buffer | null> = {},
   dateParam: string | null = null,
 ): Promise<TodayScreenData> {
   return loadLocalToday(await folder(overrides), NOW, dateParam);
+}
+
+/** U+FEFF, as a string, so this test file carries no byte order mark itself. */
+const MARK = String.fromCodePoint(0xfeff);
+
+/** The bytes Windows PowerShell 5.1 writes: UTF-16 with a byte order mark. */
+function utf16(json: string, order: "le" | "be"): Buffer {
+  const bytes = Buffer.from(`${MARK}${json}`, "utf16le");
+  if (order === "le") return bytes;
+  // Node has no UTF-16BE encoder, so the pairs are swapped by hand.
+  const swapped = Buffer.from(bytes);
+  swapped.swap16();
+  return swapped;
 }
 
 /** Every string anywhere in a value, so the copy rules can be walked. */
@@ -380,7 +424,7 @@ function strings(value: unknown, into: string[] = []): string[] {
 }
 
 async function thrown(
-  overrides: Record<string, string | null>,
+  overrides: Record<string, string | Buffer | null>,
 ): Promise<LocalSnapshotError> {
   try {
     await load(overrides);
@@ -671,14 +715,32 @@ describe("how the screen dresses it", () => {
   });
 });
 
-describe("the other account", () => {
-  test("never reaches the day", () => {
+// Three of the four row files carry a `user_id` and are scoped by it at the
+// door. The fourth, calendar-events.json, carries no account at all (it is a
+// list of `EngineCalendarEvent`), so the loader cannot filter it and does not
+// pretend to: see the comment on `readCalendarEvents`. A stray calendar in that
+// file is the snapshot writer's problem, which is why this names the three it
+// really covers rather than claiming the calendar as well.
+describe("the other account's tasks, groups and income sources", () => {
+  test("never reach the screen", () => {
     const everything = strings(data).join("|");
     expect(everything).not.toContain("Not yours");
-    expect(everything).not.toContain("cal-theirs");
     expect(everything).not.toContain(OTHER);
     expect(everything).not.toContain(GROUP_THEIRS);
     expect(data.input.candidates.map((candidate) => candidate.id)).not.toContain("ta-theirs");
+    expect(Object.values(data.tags).map((tag) => tag.label)).toEqual(["Reading", "Shop"]);
+  });
+
+  // The income sources ARE scoped, and this is what that buys: the other
+  // account's income calendar has eight hours on another day of this week, and
+  // none of them count. A loader that read every account's income sources would
+  // report 11 here, not 3.
+  test("do not make their calendar count toward this account's cap", () => {
+    expect(data.input.week.capHoursElsewhere).toBe(3);
+    const capped = data.input.fixed
+      .filter((event) => event.countsTowardCap)
+      .map((event) => event.calendarId);
+    expect(capped).not.toContain("cal-theirs");
   });
 });
 
@@ -754,9 +816,58 @@ describe("a folder that is wrong", () => {
     expect(error.message).not.toContain("a-secret-value");
   });
 
+  test("refuses a date that names a day nothing has", async () => {
+    // "2026-13-45" passes a shape check and every piece of date arithmetic
+    // downstream would carry it forward as 2027-02-14.
+    const error = await thrown({
+      "tasks.json": JSON.stringify([
+        { id: "ta-bad", user_id: MINE, status: "todo", due_date: "2026-13-45" },
+      ]),
+    });
+    expect(error.file).toBe("tasks.json");
+    expect(error.message).toContain("due_date");
+    expect(error.message).not.toContain("2026-13-45");
+  });
+
+  test("refuses minutes that cannot make a block", async () => {
+    const negative = await thrown({
+      "tasks.json": JSON.stringify([
+        { id: "ta-bad", user_id: MINE, status: "todo", estimated_minutes: -30 },
+      ]),
+    });
+    expect(negative.file).toBe("tasks.json");
+    expect(negative.message).toContain("estimated_minutes");
+
+    const zero = await thrown({
+      "tasks.json": JSON.stringify([
+        { id: "ta-bad", user_id: MINE, status: "todo", duration_min: 0 },
+      ]),
+    });
+    expect(zero.message).toContain("duration_min");
+
+    const fraction = await thrown({
+      "tasks.json": JSON.stringify([
+        { id: "ta-bad", user_id: MINE, status: "todo", duration_min: 12.5 },
+      ]),
+    });
+    expect(fraction.message).toContain("duration_min");
+  });
+
+  // What `>` and `Out-File` write in Windows PowerShell 5.1. Read as UTF-8 it
+  // decodes into replacement characters, so the generic answer would be "is not
+  // valid JSON" about a file whose JSON is perfect.
+  test("names the encoding when the file is UTF-16", async () => {
+    for (const order of ["le", "be"] as const) {
+      const error = await thrown({ "tasks.json": utf16(JSON.stringify(TASK_ROWS), order) });
+      expect(error.file).toBe("tasks.json");
+      expect(error.message).toContain("UTF-8");
+      expect(error.message).not.toContain("JSON");
+    }
+  });
+
   test("reads a file a Windows editor wrote with a byte order mark", async () => {
     const withMark = await load({
-      "snapshot.json": `\uFEFF${JSON.stringify(SNAPSHOT)}`,
+      "snapshot.json": `${MARK}${JSON.stringify(SNAPSHOT)}`,
     });
     expect(withMark.input.rules.timeZone).toBe(ZONE);
   });
@@ -830,8 +941,60 @@ describe("the copy rules", () => {
 // The pure gate is only half of it: the page has to read the right variables,
 // take the branches in the right order, and show a bad folder rather than
 // crashing on it.
+// The loopback check is a speed bump and nothing more (a Host header is the
+// client's own claim), so what is pinned is exactly that: the three spellings a
+// real loopback request carries are served, everything else is a 404, and the
+// value a stranger sent never comes back out anywhere.
+describe("the loopback speed bump", () => {
+  test("knows the three spellings, with or without a port", () => {
+    for (const host of [
+      "localhost",
+      "localhost:3111",
+      "LOCALHOST:3111",
+      "127.0.0.1",
+      "127.0.0.1:3111",
+      "[::1]",
+      "[::1]:3111",
+      "::1",
+      " localhost:3111 ",
+    ]) {
+      expect(isLoopbackHost(host)).toBe(true);
+    }
+  });
+
+  test("refuses every other host, and no host at all", () => {
+    for (const host of [
+      null,
+      undefined,
+      "",
+      "   ",
+      "192.168.1.24:3111",
+      "10.0.0.5",
+      "172.16.3.9:3111",
+      "0.0.0.0:3111",
+      "[::]:3111",
+      "[fe80::1]:3111",
+      "127.0.0.2:3111",
+      // The name is the whole value, not a prefix or a suffix of it.
+      "localhost.example.com",
+      "notlocalhost",
+      "127.0.0.1.example.com",
+      "localhost:not-a-port",
+      "mindboard.example.com",
+    ]) {
+      expect(isLoopbackHost(host)).toBe(false);
+    }
+  });
+});
+
 describe("the page is wired to both sources", () => {
   type Element = { type: unknown; props: Record<string, unknown> };
+
+  // Every case starts from a request that came from this machine and says so,
+  // and the cases that are about the host say otherwise themselves.
+  beforeEach(() => {
+    sentHost.value = "127.0.0.1:3111";
+  });
 
   // Unstubbed here rather than at the end of each case, so a failed assertion
   // cannot leave a stubbed VERCEL_ENV behind for the cases after it.
@@ -843,15 +1006,38 @@ describe("the page is wired to both sources", () => {
     return import("@/app/v2/today/page");
   }
 
+  async function sample(dir?: string) {
+    vi.stubEnv("V2_FIXTURES", "1");
+    vi.stubEnv("V2_LOCAL_SNAPSHOT", dir ?? (await folder()));
+    vi.stubEnv("VERCEL_ENV", "preview");
+  }
+
+  async function local(dir?: string) {
+    vi.stubEnv("V2_FIXTURES", "");
+    vi.stubEnv("V2_LOCAL_SNAPSHOT", dir ?? (await folder()));
+    vi.stubEnv("VERCEL_ENV", "preview");
+  }
+
+  /**
+   * The page, rendered one level deep. Both modes return a component of their
+   * own (the mode switch is synchronous, everything after it is not), so the
+   * element it returns is called to get the one the browser would see. The
+   * branch is read off the notice, which each source writes in its own words.
+   */
   async function render(search: Record<string, string | string[]> = {}) {
     const { default: TodayPage } = await page();
     const { TodayClient } = await import("@/app/v2/today/today-client");
-    const element = TodayPage({ searchParams: Promise.resolve(search) }) as unknown as Element;
-    if (element.type === TodayClient) return { branch: "sample", element };
-    const inner = (await (element.type as (props: unknown) => Promise<unknown>)(
-      element.props,
+    const outer = TodayPage({ searchParams: Promise.resolve(search) }) as unknown as Element;
+    const element = (await (outer.type as (props: unknown) => Promise<unknown>)(
+      outer.props,
     )) as Element;
-    return { branch: inner.type === TodayClient ? "local" : "panel", element: inner };
+    if (element.type !== TodayClient) return { branch: "panel", element };
+    const screen = element.props.data as TodayScreenData;
+    return {
+      branch: screen.notice?.startsWith("Your data as of") === true ? "local" : "sample",
+      element,
+      screen,
+    };
   }
 
   test("asks to be rendered per request, so the gate is never prerendered", async () => {
@@ -859,42 +1045,33 @@ describe("the page is wired to both sources", () => {
   });
 
   test("shows the sample day when the fixtures flag is on", async () => {
-    vi.stubEnv("V2_FIXTURES", "1");
-    vi.stubEnv("V2_LOCAL_SNAPSHOT", await folder());
-    vi.stubEnv("VERCEL_ENV", "preview");
+    await sample();
     const { branch, element } = await render();
     expect(branch).toBe("sample");
     expect(element.props.data).toBeTruthy();
   });
 
   test("falls to the local snapshot when the fixtures flag is off", async () => {
-    vi.stubEnv("V2_FIXTURES", "");
-    vi.stubEnv("V2_LOCAL_SNAPSHOT", await folder());
-    vi.stubEnv("VERCEL_ENV", "preview");
-    const { branch, element } = await render();
+    await local();
+    const { branch, screen } = await render();
     expect(branch).toBe("local");
-    const screen = element.props.data as TodayScreenData;
-    expect(screen.notice).toContain("Your data as of");
-    expect(screen.lanes).toHaveLength(2);
+    expect(screen?.notice).toContain("Your data as of");
+    expect(screen?.lanes).toHaveLength(2);
   });
 
   test("passes the date parameter through", async () => {
-    vi.stubEnv("V2_FIXTURES", "");
-    vi.stubEnv("V2_LOCAL_SNAPSHOT", await folder());
-    vi.stubEnv("VERCEL_ENV", "preview");
+    await local();
     const tomorrow = shiftDateKey(zonedDateKey(Date.now(), ZONE), 1);
-    const { element } = await render({ date: tomorrow });
-    expect((element.props.data as TodayScreenData).input.date).toBe(tomorrow);
+    const { screen } = await render({ date: tomorrow });
+    expect(screen?.input.date).toBe(tomorrow);
 
     // A repeated parameter arrives as a list, which is not a date.
     const listed = await render({ date: [tomorrow, tomorrow] });
-    expect((listed.element.props.data as TodayScreenData).input.date).not.toBe(tomorrow);
+    expect(listed.screen?.input.date).not.toBe(tomorrow);
   });
 
   test("shows a panel naming the file when the folder is wrong", async () => {
-    vi.stubEnv("V2_FIXTURES", "");
-    vi.stubEnv("V2_LOCAL_SNAPSHOT", await folder({ "tasks.json": null }));
-    vi.stubEnv("VERCEL_ENV", "preview");
+    await local(await folder({ "tasks.json": null }));
     const { branch, element } = await render();
     expect(branch).toBe("panel");
     const html = renderToStaticMarkup(element as never);
@@ -902,18 +1079,60 @@ describe("the page is wired to both sources", () => {
   });
 
   test("is not found with no fixtures and no snapshot", async () => {
-    vi.stubEnv("V2_FIXTURES", "");
-    vi.stubEnv("V2_LOCAL_SNAPSHOT", "");
-    vi.stubEnv("VERCEL_ENV", "preview");
+    await local("");
     const { default: TodayPage } = await page();
-    expect(() => TodayPage({ searchParams: Promise.resolve({}) })).toThrow();
+    const error = await refusal(() => TodayPage({ searchParams: Promise.resolve({}) }));
+    expect(error.digest).toBe(NOT_FOUND_DIGEST);
   });
 
   test("is not found in production, whatever is set", async () => {
-    vi.stubEnv("V2_FIXTURES", "1");
-    vi.stubEnv("V2_LOCAL_SNAPSHOT", await folder());
+    await sample();
     vi.stubEnv("VERCEL_ENV", "production");
     const { default: TodayPage } = await page();
-    expect(() => TodayPage({ searchParams: Promise.resolve({}) })).toThrow();
+    const error = await refusal(() => TodayPage({ searchParams: Promise.resolve({}) }));
+    expect(error.digest).toBe(NOT_FOUND_DIGEST);
+  });
+
+  test("is not found for a host on the house network, in both modes", async () => {
+    sentHost.value = "192.168.1.24:3111";
+    await local();
+    expect((await refusal(() => render())).digest).toBe(NOT_FOUND_DIGEST);
+
+    sentHost.value = "192.168.1.24:3111";
+    await sample();
+    expect((await refusal(() => render())).digest).toBe(NOT_FOUND_DIGEST);
+  });
+
+  test("is not found when the request sent no host at all", async () => {
+    sentHost.value = null;
+    await local();
+    expect((await refusal(() => render())).digest).toBe(NOT_FOUND_DIGEST);
+  });
+
+  test("serves each spelling of the loopback address", async () => {
+    for (const host of ["localhost:3111", "127.0.0.1:3111", "[::1]:3111"]) {
+      sentHost.value = host;
+      await local();
+      expect((await render()).branch).toBe("local");
+      vi.unstubAllEnvs();
+    }
+  });
+
+  test("never repeats the host it refused, in a log or in the answer", async () => {
+    const forged = "Host-From-A-Stranger.example.com";
+    sentHost.value = forged;
+    await local();
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation(() => {}),
+    );
+    try {
+      const error = await refusal(() => render());
+      expect(error.digest).toBe(NOT_FOUND_DIGEST);
+      expect(error.message).not.toContain(forged);
+      expect(JSON.stringify(error.digest)).not.toContain(forged);
+      for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 });
