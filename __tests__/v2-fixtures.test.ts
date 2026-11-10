@@ -19,7 +19,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { TodayClient } from "@/app/v2/today/today-client";
-import { dayWindow } from "@/app/lib/v2/plan/day";
+import { planReference } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { fixturesEnabled, sampleDay } from "@/app/lib/v2/fixtures/sample-day";
 import {
@@ -55,14 +55,12 @@ import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
 const LANE_LABELS = ["Study", "Work", "Money", "People", "Craft", "Body"];
 
 /**
- * The instant the screen judges "past its date" from, exactly as today-client
- * computes it: the later of the clock and the start of the planned day's window,
- * which is the planner's own reference.
+ * The instant the screen judges "past its date" from: the planner's own
+ * reference, through the one exported function the planner, the screen and
+ * this helper all call.
  */
 function referenceOf(input: PlanInput): string {
-  return new Date(
-    Math.max(Date.parse(input.now), dayWindow(input.date, input.rules).startMs),
-  ).toISOString();
+  return planReference(input.now, input.date, input.rules).instant;
 }
 
 function viewOf(energy: Energy | null, existing: Block[] = []): TodayView {
@@ -719,13 +717,17 @@ describe("the page is wired to the gate", () => {
     vi.stubEnv("V2_LOCAL_SNAPSHOT", "");
     vi.stubEnv("VERCEL_ENV", "preview");
     const { default: TodayPage } = await import("@/app/v2/today/page");
-    const element = TodayPage() as { type?: { name?: string }; props?: unknown };
-    // The branch itself is an async component, so its own output cannot be
-    // inspected here. What tells the two branches apart is their props: the
-    // fixtures one takes nothing at all, and the snapshot one is always handed a
-    // folder. Its name is asserted too, as the weaker and more readable half.
-    expect(element.props).toEqual({});
-    expect(element.type?.name).toBe("SampleToday");
+    const element = TodayPage() as {
+      type?: { name?: string };
+      props?: { data?: unknown; dir?: unknown };
+    };
+    // What tells the two branches apart is what they are handed: the sample
+    // branch gives the screen the sample day itself, with no request check in
+    // front of it (the sample is invented data and exists to be shown on a
+    // preview), and the snapshot branch is always handed a folder.
+    expect(element.type?.name).toBe("TodayClient");
+    expect(element.props?.data).toEqual(sampleDay());
+    expect(element.props?.dir).toBeUndefined();
   });
 
   test("is not found with the flag off and no snapshot folder", async () => {
@@ -1228,14 +1230,33 @@ describe("the desktop page fills the window", () => {
    */
   test("lets one long unbroken word break instead of widening its stop", () => {
     expect(atRoot(".v2-stop > *", "min-width")).toBe("0");
+    // Every line of text a stop or a row can print, because any of them can
+    // carry a string with no place to break: a fixed event prints its location
+    // under the title, and a location is often a long meeting link.
     for (const kind of [
       ".v2-stop h3",
+      ".v2-stop p",
       ".v2-stop .v2-detail",
       ".v2-row .v2-row-title",
       ".v2-row .v2-detail",
+      ".v2-row .v2-row-reason",
       ".v2-allday-chip",
     ]) {
       expect(atRoot(kind, "overflow-wrap")).toBe("anywhere");
+    }
+  });
+
+  // The accent ring is held at 3 to 1 on the page, and a lit card is not the
+  // page. Whatever takes focus inside a lit card (its buttons, and the heading
+  // that receives focus after a press) wears the stop's own identity colour,
+  // which is held against exactly that fill.
+  test("draws every focus ring inside a lit card in the colour held against its fill", () => {
+    for (const target of [
+      ".v2-lit button:focus-visible",
+      ".v2-lit [tabindex]:focus-visible",
+      ".v2-lit:focus-visible",
+    ]) {
+      expect(atRoot(target, "outline-color")).toBe("var(--v2-ident)");
     }
   });
 

@@ -439,10 +439,16 @@ body:has([data-v2-root]) {
   min-width: 0;
 }
 
+/* Every line of text in a stop, not only its title: a fixed event prints its
+   location under the title, and a location is often a meeting link 200
+   characters long with no place to break. Held to its column by the min-width
+   above, it would spill out of the card instead of widening it. */
 [data-v2-root] .v2-stop h3,
+[data-v2-root] .v2-stop p,
 [data-v2-root] .v2-stop .v2-detail,
 [data-v2-root] .v2-row .v2-detail,
 [data-v2-root] .v2-row .v2-row-title,
+[data-v2-root] .v2-row .v2-row-reason,
 [data-v2-root] .v2-allday-chip {
   overflow-wrap: anywhere;
 }
@@ -695,7 +701,9 @@ body:has([data-v2-root]) {
    the ring is the stop's own identity colour, which is held at 4.5:1 against
    exactly this surface by construction (identityTokens), and the ring is drawn
    outside the control, on the fill, so it never sits on the filled button. */
-[data-v2-root] .v2-lit button:focus-visible {
+[data-v2-root] .v2-lit button:focus-visible,
+[data-v2-root] .v2-lit [tabindex]:focus-visible,
+[data-v2-root] .v2-lit:focus-visible {
   outline-color: var(--v2-ident);
 }
 
