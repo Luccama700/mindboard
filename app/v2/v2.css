@@ -1,0 +1,662 @@
+/* The v2 look, ported from docs/rebuild/mockups/prototype.html.
+ *
+ * SCOPING IS LOAD BEARING. This app's root layout owns <html> and <body>, sets a
+ * monospace font and a theme class, and loads app/globals.css (Tailwind v4 with
+ * preflight). This file may not edit any of that, so:
+ *
+ *   - every selector starts at [data-v2-root], including the resets, so nothing
+ *     here can reach a page outside app/v2;
+ *   - [data-v2-root] paints its own background and sets its own fonts and
+ *     colours, because it cannot style the elements above it;
+ *   - every keyframe name is prefixed v2-, so it cannot collide with globals.css.
+ *
+ * LANE COLOURS ARE DATA. The prototype had a token per lane (--degree, --arena
+ * and so on). Lanes are a per-user row, so there are no lane tokens here: each
+ * stop sets --v2-lane and --v2-accent inline from its own lane (stop-card.tsx),
+ * and everything tinted reads one of those two.
+ */
+
+[data-v2-root] {
+  /* surfaces and ink */
+  --v2-page: #0f1230;
+  --v2-night: #171a3d;
+  --v2-deck: #222757;
+  --v2-deck-2: #2a3068;
+  --v2-rail: #3a4080;
+  --v2-ink: #eef0ff;
+  --v2-ink-2: #a9aedb;
+  --v2-ink-3: #7c82b8;
+  --v2-signal: #ffffff;
+  /* feed states, named for what they mean rather than for a lane */
+  --v2-ok: #2fd6a3;
+  --v2-warn: #ffb84d;
+  /* Fallbacks for anything with no lane of its own. A stop sets both inline
+     (see stop-card.tsx): --v2-lane colours the rail and the dot, --v2-accent
+     the lit card. They differ on purpose: the rail's own grey blue is right for
+     a dot and unreadable as a card's label. */
+  --v2-lane: var(--v2-rail);
+  --v2-accent: var(--v2-ink-2);
+
+  /* motion: one easing family, three durations */
+  --v2-ease: cubic-bezier(0.2, 0, 0, 1);
+  --v2-ease-in: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --v2-pop: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --v2-quick: 140ms;
+  --v2-std: 280ms;
+  --v2-slow: 520ms;
+
+  --v2-display: var(--font-v2-display), "Trebuchet MS", system-ui, sans-serif;
+  --v2-text: var(--font-v2-text), system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* the line's geometry: one set of numbers the rail and the dots derive from */
+  --v2-gutter: 16px;
+  --v2-time: 50px;
+  --v2-rail-gap: 26px;
+
+  display: block;
+  min-height: 100dvh;
+  background: var(--v2-page);
+  color: var(--v2-ink);
+  font: 400 15px/1.45 var(--v2-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (min-width: 420px) {
+  [data-v2-root] {
+    --v2-gutter: 20px;
+    --v2-time: 62px;
+    --v2-rail-gap: 36px;
+  }
+}
+
+@media (min-width: 520px) {
+  [data-v2-root] {
+    padding: 24px 0;
+  }
+}
+
+[data-v2-root] *,
+[data-v2-root] *::before,
+[data-v2-root] *::after {
+  box-sizing: border-box;
+}
+
+[data-v2-root] button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[data-v2-root] button:disabled {
+  cursor: default;
+}
+
+[data-v2-root] button:focus-visible,
+[data-v2-root] [tabindex]:focus-visible {
+  outline: 2px solid var(--v2-signal);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+[data-v2-root] h1,
+[data-v2-root] h2,
+[data-v2-root] h3,
+[data-v2-root] p {
+  margin: 0;
+}
+
+/* ----------------------------------------------------------------- the frame */
+
+[data-v2-root] .v2-phone {
+  position: relative;
+  max-width: 430px;
+  min-height: 100dvh;
+  margin: 0 auto;
+  background: var(--v2-night);
+  overflow: hidden;
+  padding-bottom: 92px;
+}
+
+@media (min-width: 520px) {
+  [data-v2-root] .v2-phone {
+    min-height: 880px;
+    border-radius: 34px;
+    box-shadow: 0 30px 80px rgba(5, 7, 30, 0.6);
+  }
+}
+
+/* ---------------------------------------------------------------- the header */
+
+[data-v2-root] .v2-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 22px var(--v2-gutter) 6px;
+}
+
+[data-v2-root] .v2-top h1 {
+  font: 600 clamp(18px, 5.4vw, 21px) / 1.15 var(--v2-display);
+  letter-spacing: 0.2px;
+}
+
+[data-v2-root] .v2-top p {
+  color: var(--v2-ink-2);
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+[data-v2-root] .v2-feeds {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 22px;
+  background: var(--v2-deck);
+}
+
+[data-v2-root] .v2-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--v2-ok);
+  transition: background var(--v2-std) var(--v2-ease);
+}
+
+[data-v2-root] .v2-dot[data-state="late"] {
+  background: var(--v2-warn);
+}
+
+[data-v2-root] .v2-dot[data-state="failing"],
+[data-v2-root] .v2-dot[data-state="blind"] {
+  background: var(--v2-warn);
+  box-shadow: 0 0 0 4px rgba(255, 184, 77, 0.18);
+}
+
+/* ----------------------------------------------------------------- all day */
+
+[data-v2-root] .v2-allday {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px var(--v2-gutter) 0;
+}
+
+[data-v2-root] .v2-allday-label {
+  font: 500 10px/14px var(--v2-display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-allday-chip {
+  padding: 6px 11px;
+  border-radius: 12px;
+  background: var(--v2-deck);
+  color: var(--v2-ink-2);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ energy */
+
+[data-v2-root] .v2-energy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px var(--v2-gutter) 4px;
+}
+
+[data-v2-root] .v2-energy > span {
+  color: var(--v2-ink-2);
+  font-size: 14px;
+}
+
+[data-v2-root] .v2-seg {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  flex: 1;
+  background: var(--v2-deck);
+  border-radius: 14px;
+  padding: 4px;
+}
+
+[data-v2-root] .v2-seg button {
+  position: relative;
+  z-index: 1;
+  min-height: 44px;
+  border-radius: 10px;
+  font: 600 14px/1 var(--v2-display);
+  color: var(--v2-ink-2);
+  transition: color var(--v2-std) var(--v2-ease);
+}
+
+[data-v2-root] .v2-seg button[aria-pressed="true"] {
+  color: var(--v2-night);
+}
+
+[data-v2-root] .v2-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px) / 3);
+  border-radius: 10px;
+  background: var(--v2-ink);
+  transition:
+    transform var(--v2-std) var(--v2-ease),
+    opacity var(--v2-std) var(--v2-ease);
+}
+
+[data-v2-root] .v2-thumb[data-answered="no"] {
+  opacity: 0;
+}
+
+[data-v2-root] .v2-said {
+  min-height: 22px;
+  padding: 8px var(--v2-gutter) 0;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------- the line */
+
+[data-v2-root] .v2-line {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+[data-v2-root] .v2-stop {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--v2-time) 1fr;
+  column-gap: var(--v2-rail-gap);
+  padding: 0 var(--v2-gutter) 18px;
+}
+
+/* The rail and its dot hang off one derived centre line, so the geometry stays
+   right when the gutter and the time column change at a wider viewport. */
+[data-v2-root] .v2-stop::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap) / 2 - 2px);
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--v2-rail);
+}
+
+[data-v2-root] .v2-stop::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap) / 2 - 8px);
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--v2-night);
+  border: 3px solid var(--v2-lane);
+}
+
+[data-v2-root] .v2-stop:last-child::before {
+  bottom: 18px;
+}
+
+[data-v2-root] .v2-stop time {
+  font: 600 15px/22px var(--v2-display);
+  font-variant-numeric: tabular-nums;
+  color: var(--v2-ink-2);
+  text-align: right;
+}
+
+[data-v2-root] .v2-stop h3 {
+  font: 600 16px/22px var(--v2-display);
+  text-wrap: pretty;
+}
+
+[data-v2-root] .v2-stop p {
+  color: var(--v2-ink-3);
+  font-size: 14px;
+}
+
+[data-v2-root] .v2-stop .v2-leave {
+  color: var(--v2-ink-2);
+}
+
+/* A time the planner changed. `layout` only animates a stop that changed PLACE,
+   so a block that keeps its position and moves by twenty minutes needs its own
+   cue. The prototype holds the flash for 1.2s; this holds it for the standard
+   520ms, so the screen keeps to the three durations.
+   No 100% keyframe on purpose: the implicit end value is the element's own
+   computed colour, which differs between a stop's time and the lit card's label
+   and would otherwise have to be hard coded twice. */
+@keyframes v2-moved {
+  0%,
+  60% {
+    color: var(--v2-signal);
+  }
+}
+
+[data-v2-root] .v2-moved {
+  animation: v2-moved var(--v2-slow) var(--v2-ease);
+}
+
+[data-v2-root] .v2-stop .v2-tag {
+  display: inline-block;
+  margin-top: 4px;
+  font: 500 10px/14px var(--v2-display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-stop[data-state="past"] {
+  opacity: 0.62;
+}
+
+[data-v2-root] .v2-stop[data-state="past"]::before,
+[data-v2-root] .v2-stop[data-state="done"]::before {
+  background: var(--v2-lane);
+  opacity: 0.7;
+}
+
+[data-v2-root] .v2-stop[data-state="past"]::after,
+[data-v2-root] .v2-stop[data-state="done"]::after {
+  background: var(--v2-lane);
+}
+
+[data-v2-root] .v2-stop[data-state="done"] {
+  opacity: 0.72;
+}
+
+[data-v2-root] .v2-stop[data-state="done"] h3 {
+  text-decoration: line-through;
+  text-decoration-color: var(--v2-ink-3);
+}
+
+/* A skipped stop is NOT a stop any more. The planner keeps it in the day's
+   blocks but its time is free again, so another stop can be placed over the
+   same minutes: drawing it with a dot on the rail would put two markers at one
+   point on the line. It reads as a struck-through line item hanging off the
+   rail instead, so the day still shows what was dropped without claiming it
+   occupies the time. */
+[data-v2-root] .v2-stop[data-state="skipped"] {
+  opacity: 0.55;
+  padding-bottom: 10px;
+}
+
+[data-v2-root] .v2-stop[data-state="skipped"]::after {
+  display: none;
+}
+
+[data-v2-root] .v2-stop[data-state="skipped"] time,
+[data-v2-root] .v2-stop[data-state="skipped"] h3 {
+  font-weight: 500;
+  color: var(--v2-ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-stop[data-state="skipped"] h3 {
+  display: inline;
+  font-size: 15px;
+}
+
+/* The lit stop: the one thing in hand, a filled tinted card on the line.
+   A flat fill and a 1.5px edge, no coloured bloom. */
+[data-v2-root] .v2-lit {
+  /* The card is the content column of its own stop: the rail and the dot still
+     draw beside it, and the time column stays blank because the card says the
+     time itself. */
+  grid-column: 2;
+  position: relative;
+  margin-top: -6px;
+  padding: 14px 16px 16px 18px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--v2-accent) 17%, var(--v2-deck));
+  border: 1.5px solid var(--v2-accent);
+  box-shadow: 0 18px 28px -14px rgba(4, 6, 26, 0.75);
+  transition:
+    background var(--v2-slow) var(--v2-ease),
+    border-color var(--v2-slow) var(--v2-ease);
+}
+
+[data-v2-root] .v2-lit::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: var(--v2-accent);
+}
+
+[data-v2-root] .v2-lit .v2-when {
+  font: 600 14px/1 var(--v2-display);
+  font-variant-numeric: tabular-nums;
+  color: var(--v2-accent);
+}
+
+[data-v2-root] .v2-lit h3 {
+  font: 600 clamp(18px, 5.2vw, 21px) / 1.2 var(--v2-display);
+  margin-top: 8px;
+  text-wrap: balance;
+}
+
+[data-v2-root] .v2-lit p {
+  color: var(--v2-ink-2);
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+[data-v2-root] .v2-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+[data-v2-root] .v2-go {
+  min-height: 48px;
+  padding: 0 22px;
+  border-radius: 14px;
+  background: var(--v2-accent);
+  color: #0d1030;
+  font: 700 16px/1 var(--v2-display);
+  transition:
+    transform var(--v2-quick) var(--v2-ease),
+    filter var(--v2-quick) var(--v2-ease);
+}
+
+[data-v2-root] .v2-go:active {
+  transform: scale(0.96);
+  filter: brightness(0.92);
+}
+
+[data-v2-root] .v2-quiet {
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 14px;
+  color: var(--v2-ink-2);
+  font-size: 15px;
+}
+
+[data-v2-root] .v2-quiet:active {
+  background: var(--v2-deck-2);
+}
+
+/* "You are here": the clock on the rail, between what is behind and what is not. */
+[data-v2-root] .v2-now {
+  position: relative;
+  height: 34px;
+  margin: -6px 0 12px;
+  list-style: none;
+}
+
+[data-v2-root] .v2-now::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap) / 2 - 2px);
+  top: -12px;
+  bottom: -12px;
+  width: 4px;
+  background: linear-gradient(var(--v2-rail), var(--v2-signal) 50%, var(--v2-rail));
+  opacity: 0.9;
+}
+
+[data-v2-root] .v2-now::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap) / 2 - 10px);
+  top: 7px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--v2-signal);
+  box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.2);
+  animation: v2-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes v2-breathe {
+  50% {
+    box-shadow: 0 0 0 11px rgba(255, 255, 255, 0.06);
+  }
+}
+
+[data-v2-root] .v2-now em {
+  position: absolute;
+  left: var(--v2-gutter);
+  top: 6px;
+  width: var(--v2-time);
+  text-align: right;
+  font: 700 15px/22px var(--v2-display);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-v2-root] .v2-now span {
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap));
+  top: 6px;
+  font: 600 14px/22px var(--v2-display);
+  color: var(--v2-signal);
+}
+
+/* --------------------------------------------------------- quiet statements */
+
+[data-v2-root] .v2-sub {
+  padding: 26px var(--v2-gutter) 4px;
+  font: 600 16px/1 var(--v2-display);
+  color: var(--v2-ink-2);
+}
+
+[data-v2-root] .v2-empty {
+  margin: 20px var(--v2-gutter) 0;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px dashed var(--v2-rail);
+  color: var(--v2-ink-2);
+}
+
+/* Title left, reason right, and at 375px the reason drops to its own line
+   rather than squeezing the title into a two-word column. */
+[data-v2-root] .v2-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 8px var(--v2-gutter) 0;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: var(--v2-deck);
+}
+
+[data-v2-root] .v2-row b {
+  flex: 1 1 8rem;
+  font: 600 15px/1.3 var(--v2-display);
+}
+
+[data-v2-root] .v2-row span {
+  flex: 0 1 auto;
+  margin-left: auto;
+  color: var(--v2-ink-3);
+  font-size: 13px;
+  text-align: right;
+}
+
+[data-v2-root] .v2-note {
+  padding: 20px var(--v2-gutter) 0;
+  color: var(--v2-ink-3);
+  font-size: 12px;
+}
+
+/* -------------------------------------------------------------------- nav */
+
+/* Pinned to the viewport, as in the prototype: the day is taller than a phone
+   screen, so a bar at the bottom of the frame would scroll away. The frame
+   reserves the space for it with its own padding-bottom. */
+[data-v2-root] .v2-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: min(430px, 100%);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  padding: 0 10px calc(8px + env(safe-area-inset-bottom));
+  background: var(--v2-night);
+  border-top: 1px solid var(--v2-rail);
+  z-index: 10;
+}
+
+@media (min-width: 520px) {
+  [data-v2-root] .v2-nav {
+    bottom: 24px;
+    border-radius: 0 0 34px 34px;
+  }
+}
+
+[data-v2-root] .v2-nav button {
+  position: relative;
+  min-height: 52px;
+  font: 600 15px/1 var(--v2-display);
+  color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-nav button[aria-current="page"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-ind {
+  position: absolute;
+  top: -2px;
+  left: 10px;
+  height: 3px;
+  width: calc((100% - 20px) / 4);
+  background: var(--v2-signal);
+  border-radius: 2px;
+}
+
+/* -------------------------------------------------------- reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  [data-v2-root],
+  [data-v2-root] *,
+  [data-v2-root] *::before,
+  [data-v2-root] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
