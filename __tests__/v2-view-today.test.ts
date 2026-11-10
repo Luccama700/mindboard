@@ -14,6 +14,7 @@ import {
   actionLine,
   buildTodayView,
   droppedTitles,
+  splitTitle,
   type TodayInput,
 } from "@/app/lib/v2/view/today";
 // The tick's own reasons, imported so the view's copy for them cannot drift.
@@ -88,11 +89,35 @@ function input(over: Partial<TodayInput> = {}): TodayInput {
     plan: plan(),
     fixed: [],
     lanes: LANES,
+    candidates: [],
     feeds: [],
     feedLabels: {},
     openAsks: [],
+    tags: {},
+    notice: null,
     energy: "ok",
-    titles: {},
+    ...over,
+  };
+}
+
+/** The two-level name shape, for a title that has no parenthetical. */
+function titled(title: string) {
+  return { title, detail: null, full: title };
+}
+
+function candidate(
+  over: Partial<Candidate> & { id: string; title: string },
+): Candidate {
+  return {
+    lane: null,
+    kind: "step",
+    due: null,
+    hard: false,
+    minutes: 50,
+    energyCost: null,
+    expiresAt: null,
+    pinned: false,
+    earlyTouchDone: false,
     ...over,
   };
 }
@@ -167,9 +192,13 @@ describe("the stops", () => {
         }),
       }),
     );
-    expect(view.stops[0].lane).toEqual({ label: "Study", color: "#7C9BFF" });
-    expect(view.stops[1].lane).toBeNull();
-    expect(view.stops[2].lane).toBeNull();
+    expect(view.stops[0].identity).toEqual({
+      label: "Study",
+      color: "#7C9BFF",
+      source: "lane",
+    });
+    expect(view.stops[1].identity).toBeNull();
+    expect(view.stops[2].identity).toBeNull();
   });
 
   // A skipped block's minutes go back to the planner, so the next plan can put
@@ -211,6 +240,199 @@ describe("the stops", () => {
       }),
     );
     expect(view.stops.map((stop) => stop.kind)).toEqual(["fixed", "session"]);
+  });
+});
+
+// ------------------------------------------------------------ two level names
+
+// Round 2, from the first render on real data: titles are long and keep their
+// detail in a trailing parenthetical, which as one run of display type was five
+// lines on a phone and fifteen wrapped lines in a 340px side column. The split
+// is the user's own punctuation, never a truncation.
+describe("splitTitle", () => {
+  test("splits a title that ends in a parenthetical at the first bracket", () => {
+    expect(
+      splitTitle(
+        "PHIL 101 Short paper 2 (posted on the course site 26 Oct; one passage; 600 words)",
+      ),
+    ).toEqual({
+      title: "PHIL 101 Short paper 2",
+      detail: "posted on the course site 26 Oct; one passage; 600 words",
+      full: "PHIL 101 Short paper 2 (posted on the course site 26 Oct; one passage; 600 words)",
+    });
+  });
+
+  // The OUTER pair is the one that was closed, so a nested bracket stays in the
+  // detail rather than cutting it short.
+  test("keeps a nested bracket inside the detail", () => {
+    expect(splitTitle("Read chapter 4 (the long one (pages 90 to 140) first)")).toEqual({
+      title: "Read chapter 4",
+      detail: "the long one (pages 90 to 140) first",
+      full: "Read chapter 4 (the long one (pages 90 to 140) first)",
+    });
+  });
+
+  test.each([
+    ["no bracket at all", "Glaze the test tiles"],
+    ["a bracket that is not at the end", "Call (urgent) the studio back"],
+    ["a bracket with no space before it", "Invoice(final)"],
+    ["nothing before the bracket", "(no idea what this is)"],
+    ["nothing inside the bracket", "Send the form ()"],
+  ])("leaves %s as one whole title", (_name, raw) => {
+    expect(splitTitle(raw)).toEqual({ title: raw, detail: null, full: raw });
+  });
+
+  test("trims, so the two halves are never padded", () => {
+    expect(splitTitle("  Send it back  ( by Friday )  ")).toEqual({
+      title: "Send it back",
+      detail: "by Friday",
+      full: "Send it back  ( by Friday )",
+    });
+  });
+});
+
+describe("the two levels reach every list", () => {
+  const raw = "Grant form (the last three answers, due Friday)";
+
+  test("a stop carries both halves and the whole string", () => {
+    const view = buildTodayView(
+      input({
+        plan: plan({
+          blocks: [block({ id: "b", title: raw, start: at("10:35"), end: at("11:25") })],
+        }),
+      }),
+    );
+    expect(view.stops[0].title).toBe("Grant form");
+    expect(view.stops[0].detail).toBe("the last three answers, due Friday");
+    expect(view.stops[0].full).toBe(raw);
+  });
+
+  test("a fixed event does too", () => {
+    const view = buildTodayView(
+      input({ fixed: [event({ id: "fx", title: raw, start: at("13:00"), end: at("15:00") })] }),
+    );
+    expect(view.stops[0]).toMatchObject({ title: "Grant form", full: raw });
+  });
+
+  test("so does a drop, and an item past its date", () => {
+    const view = buildTodayView(
+      input({
+        candidates: [
+          candidate({ id: "t-drop", title: raw }),
+          candidate({ id: "t-old", title: raw, due: at("09:00", "2026-04-08") }),
+        ],
+        plan: plan({ dropped: [{ candidateId: "t-drop", reason: "no-room" }] }),
+      }),
+    );
+    expect(view.notToday[0]).toMatchObject({ title: "Grant form", full: raw });
+    expect(view.pastDue[0]).toMatchObject({ title: "Grant form", full: raw });
+  });
+
+  // The status line names what was pressed, so it takes the short half: the
+  // whole parenthetical read out after "marked done" is not a sentence.
+  test("leaves the status line naming the short half", () => {
+    expect(actionLine("done", "Grant form", null)).toBe(
+      "Grant form marked done. Nothing left on the line.",
+    );
+  });
+});
+
+// --------------------------------------------------------- identity and notice
+
+// Task 11. A task's own group is the name and the colour the user chose for
+// THAT task; a lane is the planner's grouping. The group wins, and only the
+// group is named on screen.
+describe("a stop's identity", () => {
+  const tags = {
+    "t-essay": { label: "Coursework", color: "#4A0E3A" },
+    "t-blank": { label: "   ", color: "#123456" },
+  };
+
+  test("is the task's own group when it has one, and says so", () => {
+    const view = buildTodayView(
+      input({
+        tags,
+        plan: plan({
+          blocks: [
+            block({
+              id: "b-essay",
+              taskId: "t-essay",
+              lane: "study",
+              start: at("10:35"),
+              end: at("11:25"),
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(view.stops[0].identity).toEqual({
+      label: "Coursework",
+      color: "#4A0E3A",
+      source: "tag",
+    });
+  });
+
+  test("falls back to the lane when the task has no group", () => {
+    const view = buildTodayView(
+      input({
+        tags,
+        plan: plan({
+          blocks: [
+            block({
+              id: "b-other",
+              taskId: "t-other",
+              lane: "study",
+              start: at("10:35"),
+              end: at("11:25"),
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(view.stops[0].identity).toEqual({
+      label: "Study",
+      color: "#7C9BFF",
+      source: "lane",
+    });
+  });
+
+  // A group with no name would print an empty line and tint a card with a
+  // colour the user cannot name, which is worse than the lane.
+  test("ignores a group with a blank name", () => {
+    const view = buildTodayView(
+      input({
+        tags,
+        plan: plan({
+          blocks: [
+            block({
+              id: "b-blank",
+              taskId: "t-blank",
+              lane: "work",
+              start: at("10:35"),
+              end: at("11:25"),
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(view.stops[0].identity?.source).toBe("lane");
+  });
+
+  test("is nothing at all for a fixed event, which belongs to a calendar", () => {
+    const view = buildTodayView(
+      input({
+        tags,
+        fixed: [event({ id: "fx", start: at("13:00"), end: at("15:00") })],
+      }),
+    );
+    expect(view.stops[0].identity).toBeNull();
+  });
+});
+
+describe("the notice", () => {
+  test("passes through, whatever the source said", () => {
+    expect(buildTodayView(input({ notice: "Sample day." })).notice).toBe("Sample day.");
+    expect(buildTodayView(input()).notice).toBeNull();
   });
 });
 
@@ -684,15 +906,14 @@ describe("energy", () => {
 
 describe("not today", () => {
   const candidates: Candidate[] = [
-    { id: "t-ledger", title: "Reconcile last week's ledger", lane: "work", kind: "step", due: null, hard: false, minutes: 50, energyCost: null, expiresAt: null, pinned: false, earlyTouchDone: false },
-    { id: "t-letters", title: "Reply to the two open letters", lane: null, kind: "step", due: null, hard: false, minutes: 50, energyCost: null, expiresAt: null, pinned: false, earlyTouchDone: false },
+    candidate({ id: "t-ledger", title: "Reconcile last week's ledger", lane: "work" }),
+    candidate({ id: "t-letters", title: "Reply to the two open letters" }),
   ];
-  const titles = droppedTitles(candidates);
 
   test("names each dropped candidate and says why in plain words", () => {
     const view = buildTodayView(
       input({
-        titles,
+        candidates,
         plan: plan({
           dropped: [
             { candidateId: "t-ledger", reason: "capacity" },
@@ -702,15 +923,15 @@ describe("not today", () => {
       }),
     );
     expect(view.notToday).toEqual([
-      { title: "Reconcile last week's ledger", reason: "Past today's capacity" },
-      { title: "Reply to the two open letters", reason: "No room today" },
+      { ...titled("Reconcile last week's ledger"), reason: "Past today's capacity" },
+      { ...titled("Reply to the two open letters"), reason: "No room today" },
     ]);
   });
 
   test("spells out the three reasons the brief names", () => {
     const view = buildTodayView(
       input({
-        titles,
+        candidates,
         plan: plan({
           dropped: [
             { candidateId: "t-ledger", reason: "no-room" },
@@ -730,7 +951,7 @@ describe("not today", () => {
   test("names the income and gym blocks the planner owns itself", () => {
     const view = buildTodayView(
       input({
-        titles,
+        candidates,
         plan: plan({
           dropped: [
             { candidateId: "income", reason: "cap" },
@@ -742,12 +963,12 @@ describe("not today", () => {
     expect(view.notToday.map((entry) => entry.title)).toEqual(["Work block", "Gym"]);
   });
 
-  // The ids are the planner's, not a caller's, so the view names them whether or
-  // not the caller's map covers them.
-  test("names them even when the titles map is empty", () => {
+  // The ids are the planner's, not a task's, so the view names them whether or
+  // not the candidates cover them.
+  test("names them even when there are no candidates at all", () => {
     const view = buildTodayView(
       input({
-        titles: {},
+        candidates: [],
         plan: plan({
           dropped: [
             { candidateId: "income", reason: "cap" },
@@ -757,15 +978,15 @@ describe("not today", () => {
       }),
     );
     expect(view.notToday).toEqual([
-      { title: "Work block", reason: "Would go over your weekly hours" },
-      { title: "Gym", reason: "No room today" },
+      { ...titled("Work block"), reason: "Would go over your weekly hours" },
+      { ...titled("Gym"), reason: "No room today" },
     ]);
   });
 
   test("gives every reason the planner writes plain words", () => {
     const view = buildTodayView(
       input({
-        titles: { ...titles, "t-x": "Something" },
+        candidates: [...candidates, candidate({ id: "t-x", title: "Something" })],
         plan: plan({
           dropped: ["no-room", "capacity", "cap", "lane-limit", "mode"].map((reason) => ({
             candidateId: "t-x",
@@ -785,7 +1006,7 @@ describe("not today", () => {
   test("shows a drop it cannot name under a generic name", () => {
     const view = buildTodayView(
       input({
-        titles,
+        candidates,
         plan: plan({
           dropped: [
             { candidateId: "t-unknown", reason: "capacity" },
@@ -795,18 +1016,19 @@ describe("not today", () => {
       }),
     );
     expect(view.notToday).toEqual([
-      { title: "Another task", reason: "Past today's capacity" },
-      { title: "Reconcile last week's ledger", reason: "Past today's capacity" },
+      { ...titled("Another task"), reason: "Past today's capacity" },
+      { ...titled("Reconcile last week's ledger"), reason: "Past today's capacity" },
     ]);
   });
 
-  // `titles` is a required argument on purpose: an omitted map used to make this
-  // list silently short. The compiler is the guard, so this only has to prove
-  // that an empty map still lists everything.
-  test("never drops a row, whatever the titles map holds", () => {
+  // `candidates` is a required argument on purpose: the titles used to come in
+  // a map of their own, and a caller who forgot it got a list that was silently
+  // short. The compiler is the guard, so this only has to prove that an unnamed
+  // id still gets a row.
+  test("never drops a row, whatever the candidates hold", () => {
     const view = buildTodayView(
       input({
-        titles: {},
+        candidates: [],
         plan: plan({
           dropped: [
             { candidateId: "a", reason: "capacity" },
@@ -817,6 +1039,180 @@ describe("not today", () => {
       }),
     );
     expect(view.notToday).toHaveLength(3);
+  });
+});
+
+// ------------------------------------------------------------- the lane lines
+
+describe("the lane summary", () => {
+  const candidates: Candidate[] = [
+    candidate({ id: "t-a", title: "A", lane: "study", due: at("23:00", "2026-04-18") }),
+    candidate({ id: "t-b", title: "B", lane: "study", due: at("23:00", "2026-04-16") }),
+    candidate({ id: "t-c", title: "C", lane: "study", due: null }),
+    candidate({ id: "t-d", title: "D", lane: "work" }),
+    candidate({ id: "t-e", title: "E", lane: null }),
+  ];
+
+  test("counts what is waiting in each lane and names the nearest date", () => {
+    const view = buildTodayView(input({ candidates }));
+    expect(view.lanes).toEqual([
+      { key: "study", label: "Study", color: "#7C9BFF", open: 3, due: "16 April" },
+      { key: "work", label: "Work", color: "#2FD6A3", open: 1, due: null },
+      { key: "", label: "No lane", color: null, open: 1, due: null },
+    ]);
+  });
+
+  test("leaves out a lane with nothing waiting", () => {
+    const view = buildTodayView(
+      input({ candidates: [candidate({ id: "t", title: "T", lane: "work" })] }),
+    );
+    expect(view.lanes.map((lane) => lane.key)).toEqual(["work"]);
+  });
+
+  // In a real account half the open tasks belong to no lane. Before this row
+  // they appeared nowhere on the screen: not on the line, not in the summary.
+  test("counts what belongs to no lane at all, last, and only when there is any", () => {
+    const loose = buildTodayView(
+      input({ candidates: [candidate({ id: "t", title: "T" })] }),
+    );
+    expect(loose.lanes).toEqual([
+      { key: "", label: "No lane", color: null, open: 1, due: null },
+    ]);
+    expect(buildTodayView(input({ candidates: [] })).lanes).toEqual([]);
+    expect(
+      buildTodayView(input({ candidates: [candidate({ id: "t", title: "T", lane: "study" })] }))
+        .lanes.map((lane) => lane.label),
+    ).toEqual(["Study"]);
+  });
+
+  // The line reads "next 16 April". A date already gone by is not next, and it
+  // has a section of its own.
+  test("does not report a date that has already gone by as the next one", () => {
+    const view = buildTodayView(
+      input({
+        candidates: [
+          candidate({ id: "t-old", title: "Old", lane: "study", due: at("09:00", "2026-04-02") }),
+          candidate({ id: "t-new", title: "New", lane: "study", due: at("23:00", "2026-04-20") }),
+        ],
+      }),
+    );
+    expect(view.lanes[0]).toMatchObject({ open: 2, due: "20 April" });
+  });
+
+  test("reads the date in the user's zone, not the process clock's", () => {
+    // 18:00 on the 16th in Phoenix (UTC-7) is already the 17th in UTC.
+    const over = { candidates: [candidate({ id: "t", title: "T", lane: "study", due: at("18:00", "2026-04-16") })] };
+    expect(buildTodayView(input(over)).lanes[0].due).toBe("16 April");
+    expect(buildTodayView(input({ ...over, timeZone: "UTC" })).lanes[0].due).toBe("17 April");
+  });
+});
+
+// --------------------------------------------------------------- past the date
+
+// Task 11, folded in after the engine met the owner's real data: an account that
+// has been running a while has open items from days or weeks ago. Some are dead
+// and some are still alive, and nothing on this screen can tell which, so they
+// go in one place instead of among fifty rows of what did not fit.
+describe("past their date", () => {
+  const overdue: Candidate[] = [
+    candidate({ id: "t-old", title: "Oldest", lane: "study", due: at("17:00", "2026-04-02") }),
+    candidate({ id: "t-mid", title: "Middle", lane: "work", due: at("09:00", "2026-04-09") }),
+    candidate({ id: "t-new", title: "Newest", due: at("08:00", "2026-04-15") }),
+  ];
+
+  test("lists the most recently overdue first, with the date it was for", () => {
+    const view = buildTodayView(input({ candidates: overdue }));
+    expect(view.pastDue).toEqual([
+      { id: "t-new", ...titled("Newest"), identity: null, date: "15 April" },
+      {
+        id: "t-mid",
+        ...titled("Middle"),
+        identity: { label: "Work", color: "#2FD6A3", source: "lane" },
+        date: "9 April",
+      },
+      {
+        id: "t-old",
+        ...titled("Oldest"),
+        identity: { label: "Study", color: "#7C9BFF", source: "lane" },
+        date: "2 April",
+      },
+    ]);
+  });
+
+  test("resolves a group over a lane, exactly as a stop does", () => {
+    const view = buildTodayView(
+      input({
+        candidates: [overdue[1]],
+        tags: { "t-mid": { label: "Print shop", color: "#0B1026" } },
+      }),
+    );
+    expect(view.pastDue[0].identity).toEqual({
+      label: "Print shop",
+      color: "#0B1026",
+      source: "tag",
+    });
+  });
+
+  test("leaves out an item due later today, which is not past anything", () => {
+    const view = buildTodayView(
+      input({
+        candidates: [
+          candidate({ id: "t-tonight", title: "Tonight", due: at("23:00") }),
+          candidate({ id: "t-earlier", title: "Earlier", due: at("08:00") }),
+          candidate({ id: "t-none", title: "No date", due: null }),
+        ],
+      }),
+    );
+    expect(view.pastDue.map((entry) => entry.id)).toEqual(["t-earlier"]);
+  });
+
+  // The section says these are not planned, so one that IS planned must not be
+  // in it: it is on the line, where it can be pressed.
+  test("leaves out an item the planner did place today", () => {
+    const view = buildTodayView(
+      input({
+        candidates: overdue,
+        plan: plan({
+          blocks: [
+            block({ id: "b", taskId: "t-mid", start: at("10:35"), end: at("11:25") }),
+          ],
+        }),
+      }),
+    );
+    expect(view.pastDue.map((entry) => entry.id)).toEqual(["t-new", "t-old"]);
+  });
+
+  test("keeps them out of what did not fit, so nothing is listed twice", () => {
+    const view = buildTodayView(
+      input({
+        candidates: [...overdue, candidate({ id: "t-live", title: "Live one" })],
+        plan: plan({
+          dropped: [
+            { candidateId: "t-old", reason: "no-room" },
+            { candidateId: "t-live", reason: "capacity" },
+            { candidateId: "income", reason: "cap" },
+          ],
+        }),
+      }),
+    );
+    expect(view.notToday.map((entry) => entry.title)).toEqual(["Live one", "Work block"]);
+    expect(view.pastDue.map((entry) => entry.title)).toEqual(["Newest", "Middle", "Oldest"]);
+  });
+
+  test("ties break on the title in code point order, not the locale's", () => {
+    const view = buildTodayView(
+      input({
+        candidates: [
+          candidate({ id: "t-b", title: "beta", due: at("09:00", "2026-04-09") }),
+          candidate({ id: "t-a", title: "Alpha", due: at("09:00", "2026-04-09") }),
+        ],
+      }),
+    );
+    expect(view.pastDue.map((entry) => entry.title)).toEqual(["Alpha", "beta"]);
+  });
+
+  test("says nothing when nothing is overdue", () => {
+    expect(buildTodayView(input()).pastDue).toEqual([]);
   });
 });
 

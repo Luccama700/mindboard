@@ -1,4 +1,4 @@
-/* The v2 look, ported from docs/rebuild/mockups/prototype.html.
+/* The v2 look.
  *
  * SCOPING IS LOAD BEARING. This app's root layout owns <html> and <body>, sets a
  * monospace font and a theme class, and loads app/globals.css (Tailwind v4 with
@@ -10,32 +10,54 @@
  *     colours, because it cannot style the elements above it;
  *   - every keyframe name is prefixed v2-, so it cannot collide with globals.css.
  *
- * LANE COLOURS ARE DATA. The prototype had a token per lane (--degree, --arena
- * and so on). Lanes are a per-user row, so there are no lane tokens here: each
- * stop sets --v2-lane and --v2-accent inline from its own lane (stop-card.tsx),
- * and everything tinted reads one of those two.
+ * COLOUR IS NOT WRITTEN HERE. The block below is the ONLY place a colour is
+ * spelled out, and those ten values are not hand picked: they are exactly
+ * deriveTokens("#000000", "#A78BFA") from app/lib/v2/view/appearance.ts, the
+ * black and purple scheme. __tests__/v2-appearance.test.ts asserts that value
+ * for value, and asserts that nothing else in this file contains a hex, an rgb()
+ * or an hsl(). The reason for both: the scheme is a runtime choice, so the
+ * stylesheet's job is to say which token each thing uses, and the module's job
+ * is to say what colour each token is for the scheme that is on. These defaults
+ * exist so the server's first paint is already right, before any script runs.
+ *
+ * IDENTITY COLOURS ARE DATA. There is no token per lane and none per group:
+ * every stop sets --v2-lane, --v2-ident, --v2-on-ident and --v2-lit inline from
+ * its own colour (see stop-card.tsx and identityTokens), and everything tinted
+ * reads one of those four. The raw colour marks; the derived one carries text.
+ *
+ * TWO LAYOUTS, ONE DOCUMENT. Below 1024px this is the phone screen, unchanged.
+ * From 1024px up it is a desktop page: a rail, the day, and a side column. The
+ * document order is rail, main, side, which is the desktop reading order; the
+ * phone's own order is restored with `order` on the leaves, which is what the
+ * `display: contents` on the two wrappers is for. See THE DESKTOP PAGE at the
+ * foot of this file: it is one block, so what differs is readable in one place.
  */
 
 [data-v2-root] {
-  /* surfaces and ink */
-  --v2-page: #0f1230;
-  --v2-night: #171a3d;
-  --v2-deck: #222757;
-  --v2-deck-2: #2a3068;
-  --v2-rail: #3a4080;
-  --v2-ink: #eef0ff;
-  --v2-ink-2: #a9aedb;
-  --v2-ink-3: #7c82b8;
-  --v2-signal: #ffffff;
-  /* feed states, named for what they mean rather than for a lane */
-  --v2-ok: #2fd6a3;
-  --v2-warn: #ffb84d;
-  /* Fallbacks for anything with no lane of its own. A stop sets both inline
-     (see stop-card.tsx): --v2-lane colours the rail and the dot, --v2-accent
-     the lit card. They differ on purpose: the rail's own grey blue is right for
-     a dot and unreadable as a card's label. */
-  --v2-lane: var(--v2-rail);
-  --v2-accent: var(--v2-ink-2);
+  /* ---- the scheme: deriveTokens("#000000", "#A78BFA"). Do not hand edit. ---- */
+  --v2-page: #000000;
+  --v2-card: #131216;
+  --v2-card-2: #211F25;
+  --v2-edge: #44414C;
+  --v2-ink: #FAF8FF;
+  --v2-ink-2: #ACA7BE;
+  --v2-ink-3: #898594;
+  --v2-accent: #A78BFA;
+  --v2-on-accent: #000000;
+  --v2-signal: #A78BFA;
+
+  /* Feed health is a state, not a scheme: alive has to read as alive and not
+     answering as not answering on every palette, so these two are fixed. They
+     are dots with their own text labels, never text themselves. */
+  --v2-ok: #2FD6A3;
+  --v2-warn: #FFB84D;
+
+  /* Fallbacks for anything with no identity of its own: the panel's primary
+     action, and any card not inside a stop. A stop always sets all four. */
+  --v2-lane: var(--v2-edge);
+  --v2-ident: var(--v2-accent);
+  --v2-on-ident: var(--v2-on-accent);
+  --v2-lit: var(--v2-card-2);
 
   /* motion: one easing family, three durations */
   --v2-ease: cubic-bezier(0.2, 0, 0, 1);
@@ -51,6 +73,11 @@
   --v2-gutter: 16px;
   --v2-time: 50px;
   --v2-rail-gap: 26px;
+  /* the desktop page's two fixed columns */
+  --v2-rail-w: 96px;
+  /* 340px of content plus the 6px either side that the side column needs for a
+     focus ring to be drawn rather than clipped by its own overflow. */
+  --v2-side-w: 352px;
 
   display: block;
   min-height: 100dvh;
@@ -65,12 +92,6 @@
     --v2-gutter: 20px;
     --v2-time: 62px;
     --v2-rail-gap: 36px;
-  }
-}
-
-@media (min-width: 520px) {
-  [data-v2-root] {
-    padding: 24px 0;
   }
 }
 
@@ -95,8 +116,9 @@
 }
 
 [data-v2-root] button:focus-visible,
+[data-v2-root] input:focus-visible,
 [data-v2-root] [tabindex]:focus-visible {
-  outline: 2px solid var(--v2-signal);
+  outline: 2px solid var(--v2-accent);
   outline-offset: 3px;
   border-radius: 10px;
 }
@@ -120,6 +142,12 @@
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* The side column's own blocks carry no shape on the phone: there, each of them
+   is simply the next thing down the screen. The desktop page gives them one. */
+[data-v2-root] .v2-desk-only {
+  display: none;
 }
 
 /* ------------------------------------------------- the old app's own chrome
@@ -146,21 +174,67 @@ body:has([data-v2-root]) {
 
 /* ----------------------------------------------------------------- the frame */
 
-[data-v2-root] .v2-phone {
-  position: relative;
-  max-width: 430px;
-  min-height: 100dvh;
-  margin: 0 auto;
-  background: var(--v2-night);
-  overflow: hidden;
-  padding-bottom: 92px;
+/* The two wrappers exist for the desktop page. Here they are nothing at all, so
+   their children are the frame's own children and the phone's order below can
+   interleave them: the energy control belongs between the header and the line
+   on a phone, and in the side column on a desktop. */
+[data-v2-root] .v2-main,
+[data-v2-root] .v2-side {
+  display: contents;
 }
 
-@media (min-width: 520px) {
-  [data-v2-root] .v2-phone {
+@media (max-width: 1023.98px) {
+  [data-v2-root] .v2-shell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    max-width: 430px;
+    min-height: 100dvh;
+    margin: 0 auto;
+    overflow: hidden;
+    padding-bottom: 92px;
+  }
+
+  /* The phone's own reading order, restored over the document's rail, main,
+     side. The nav is out of flow (it is pinned to the viewport) so it takes no
+     order of its own. */
+  [data-v2-root] .v2-top {
+    order: 1;
+  }
+  [data-v2-root] .v2-allday {
+    order: 2;
+  }
+  [data-v2-root] .v2-energy {
+    order: 3;
+  }
+  [data-v2-root] .v2-said {
+    order: 4;
+  }
+  [data-v2-root] .v2-day {
+    order: 5;
+  }
+  [data-v2-root] .v2-side-block {
+    order: 6;
+  }
+}
+
+/* A window between a phone and a laptop: the screen reads as the device it was
+   designed for, framed and centred. A hairline rather than the drop shadow it
+   had, because this palette lifts a surface by a step and not by a shadow. */
+@media (min-width: 520px) and (max-width: 1023.98px) {
+  [data-v2-root] {
+    padding: 24px 0;
+  }
+
+  [data-v2-root] .v2-shell {
     min-height: 880px;
+    border: 1px solid var(--v2-edge);
     border-radius: 34px;
-    box-shadow: 0 30px 80px rgba(5, 7, 30, 0.6);
+  }
+
+  [data-v2-root] .v2-nav {
+    bottom: 24px;
+    border-radius: 0 0 34px 34px;
   }
 }
 
@@ -179,10 +253,21 @@ body:has([data-v2-root]) {
   letter-spacing: 0.2px;
 }
 
-[data-v2-root] .v2-top p {
+[data-v2-root] .v2-notice,
+[data-v2-root] .v2-feedline {
   color: var(--v2-ink-2);
   margin-top: 4px;
   font-size: 14px;
+  text-wrap: pretty;
+}
+
+/* Kept as narrow as it can be: the date beside it is the page's h1, and at
+   375px every pixel this takes is a pixel that makes "Wednesday 15 April" wrap. */
+[data-v2-root] .v2-top-aside {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
 }
 
 [data-v2-root] .v2-feeds {
@@ -193,7 +278,7 @@ body:has([data-v2-root]) {
   min-height: 44px;
   padding: 0 12px;
   border-radius: 22px;
-  background: var(--v2-deck);
+  background: var(--v2-card);
 }
 
 [data-v2-root] .v2-dot {
@@ -211,7 +296,28 @@ body:has([data-v2-root]) {
 [data-v2-root] .v2-dot[data-state="failing"],
 [data-v2-root] .v2-dot[data-state="blind"] {
   background: var(--v2-warn);
-  box-shadow: 0 0 0 4px rgba(255, 184, 77, 0.18);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--v2-warn) 18%, transparent);
+}
+
+/* The phone's way in to the appearance panel: the accent itself, as a mark. 44px
+   of target around a 16px swatch. */
+[data-v2-root] .v2-appearance-dot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  /* 44px of target in the direction the brief measures, and as little width as
+     the swatch needs, so the date keeps its line. */
+  width: 30px;
+  height: 44px;
+  border-radius: 10px;
+}
+
+[data-v2-root] .v2-appearance-dot span {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--v2-edge);
 }
 
 /* ----------------------------------------------------------------- all day */
@@ -234,7 +340,7 @@ body:has([data-v2-root]) {
 [data-v2-root] .v2-allday-chip {
   padding: 6px 11px;
   border-radius: 12px;
-  background: var(--v2-deck);
+  background: var(--v2-card);
   color: var(--v2-ink-2);
   font-size: 13px;
 }
@@ -258,7 +364,7 @@ body:has([data-v2-root]) {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   flex: 1;
-  background: var(--v2-deck);
+  background: var(--v2-card);
   border-radius: 14px;
   padding: 4px;
 }
@@ -274,7 +380,7 @@ body:has([data-v2-root]) {
 }
 
 [data-v2-root] .v2-seg button[aria-pressed="true"] {
-  color: var(--v2-night);
+  color: var(--v2-on-accent);
 }
 
 [data-v2-root] .v2-thumb {
@@ -284,7 +390,7 @@ body:has([data-v2-root]) {
   left: 4px;
   width: calc((100% - 8px) / 3);
   border-radius: 10px;
-  background: var(--v2-ink);
+  background: var(--v2-accent);
   transition:
     transform var(--v2-std) var(--v2-ease),
     opacity var(--v2-std) var(--v2-ease);
@@ -327,7 +433,7 @@ body:has([data-v2-root]) {
   bottom: 0;
   width: 4px;
   border-radius: 2px;
-  background: var(--v2-rail);
+  background: var(--v2-edge);
 }
 
 [data-v2-root] .v2-stop::after {
@@ -338,7 +444,7 @@ body:has([data-v2-root]) {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--v2-night);
+  background: var(--v2-page);
   border: 3px solid var(--v2-lane);
 }
 
@@ -358,6 +464,40 @@ body:has([data-v2-root]) {
   text-wrap: pretty;
 }
 
+/* ---- two levels of name ----
+ *
+ * A real title is long and keeps its detail in a trailing parenthetical, which
+ * as one run of display type was five lines on a phone. The view model splits it
+ * at the user's own punctuation (see splitTitle); these clamps are what keep
+ * either half from taking the screen. The whole original string is on the
+ * element as a `title` attribute, so nothing is actually lost.
+ *
+ * -webkit-line-clamp with -webkit-box is the spelling every current engine
+ * accepts; the unprefixed `line-clamp` is declared beside it for the ones that
+ * have moved on. A skipped stop sets `display: inline` further down and so opts
+ * out of clamping, which is right: it is already one struck line.
+ */
+[data-v2-root] .v2-row .v2-row-title,
+[data-v2-root] .v2-stop h3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+[data-v2-root] .v2-stop .v2-detail,
+[data-v2-root] .v2-row .v2-detail {
+  margin-top: 3px;
+  color: var(--v2-ink-3);
+  font: 400 13px/1.35 var(--v2-text);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
 [data-v2-root] .v2-stop p {
   color: var(--v2-ink-3);
   font-size: 14px;
@@ -365,6 +505,16 @@ body:has([data-v2-root]) {
 
 [data-v2-root] .v2-stop .v2-leave {
   color: var(--v2-ink-2);
+}
+
+/* The quiet line of identity: the name of the group this task lives in, in that
+   group's own colour, lifted until it reads on whatever is behind it. */
+[data-v2-root] .v2-stop .v2-ident,
+[data-v2-root] .v2-lit .v2-ident {
+  margin-top: 2px;
+  color: var(--v2-ident);
+  font: 500 12px/16px var(--v2-display);
+  letter-spacing: 0.02em;
 }
 
 /* A time the planner changed. `layout` only animates a stop that changed PLACE,
@@ -396,9 +546,9 @@ body:has([data-v2-root]) {
 
 /* A row behind you is muted with COLOUR, never with opacity on the whole row:
    opacity multiplies every pixel, so a word that carries meaning ("Not today",
-   "Done") would drop to about 2.3:1 against the page. Every colour below clears
-   4.5:1 on --v2-night. Opacity is still fine on the rail and the dot, which
-   carry no text. */
+   "Done") would drop to about 2.3:1 against the page. Every ink token clears
+   4.5:1 on every surface by construction (see appearance.ts). Opacity is still
+   fine on the rail and the dot, which carry no text. */
 [data-v2-root] .v2-stop[data-state="past"] h3,
 [data-v2-root] .v2-stop[data-state="done"] h3 {
   color: var(--v2-ink-2);
@@ -456,7 +606,17 @@ body:has([data-v2-root]) {
 }
 
 /* The lit stop: the one thing in hand, a filled tinted card on the line.
-   A flat fill and a 1.5px edge, no coloured bloom. */
+ *
+ * Its fill is --v2-lit, which is the stop's own colour mixed into the card
+ * surface by identityTokens rather than by color-mix here: the ink on this card
+ * had its contrast measured against that exact mix, and a percentage written in
+ * two places is a percentage that ends up different in two places.
+ *
+ * There is no band down its left edge. The card is already marked by its fill,
+ * its edge, its label and its button, and a coloured stripe on one side of a
+ * card is a generic device that adds nothing. There is no shadow either: this
+ * palette lifts a surface by a step.
+ */
 [data-v2-root] .v2-lit {
   /* The card is the content column of its own stop: the rail and the dot still
      draw beside it, and the time column stays blank because the card says the
@@ -464,37 +624,40 @@ body:has([data-v2-root]) {
   grid-column: 2;
   position: relative;
   margin-top: -6px;
-  padding: 14px 16px 16px 18px;
+  padding: 14px 16px 16px;
   border-radius: 20px;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--v2-accent) 17%, var(--v2-deck));
-  border: 1.5px solid var(--v2-accent);
-  box-shadow: 0 18px 28px -14px rgba(4, 6, 26, 0.75);
+  background: var(--v2-lit);
+  border: 1.5px solid var(--v2-ident);
   transition:
     background var(--v2-slow) var(--v2-ease),
     border-color var(--v2-slow) var(--v2-ease);
 }
 
-[data-v2-root] .v2-lit::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  background: var(--v2-accent);
-}
-
 [data-v2-root] .v2-lit .v2-when {
   font: 600 14px/1 var(--v2-display);
   font-variant-numeric: tabular-nums;
-  color: var(--v2-accent);
+  color: var(--v2-ident);
 }
 
+/* The card has the room for a third line of either half, and it is the one thing
+   in hand, so it is the one place the whole name is worth the space. */
 [data-v2-root] .v2-lit h3 {
   font: 600 clamp(18px, 5.2vw, 21px) / 1.2 var(--v2-display);
   margin-top: 8px;
   text-wrap: balance;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+[data-v2-root] .v2-lit .v2-detail {
+  margin-top: 6px;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
 [data-v2-root] .v2-lit p {
@@ -515,8 +678,8 @@ body:has([data-v2-root]) {
   min-height: 48px;
   padding: 0 22px;
   border-radius: 14px;
-  background: var(--v2-accent);
-  color: #0d1030;
+  background: var(--v2-ident);
+  color: var(--v2-on-ident);
   font: 700 16px/1 var(--v2-display);
   transition:
     transform var(--v2-quick) var(--v2-ease),
@@ -537,10 +700,12 @@ body:has([data-v2-root]) {
 }
 
 [data-v2-root] .v2-quiet:active {
-  background: var(--v2-deck-2);
+  background: var(--v2-card-2);
 }
 
-/* "You are here": the clock on the rail, between what is behind and what is not. */
+/* "You are here": the clock on the rail, between what is behind and what is not.
+   It is the one thing on the page that moves by itself, and the one place the
+   accent appears without being asked for. */
 [data-v2-root] .v2-now {
   position: relative;
   height: 34px;
@@ -555,8 +720,7 @@ body:has([data-v2-root]) {
   top: -12px;
   bottom: -12px;
   width: 4px;
-  background: linear-gradient(var(--v2-rail), var(--v2-signal) 50%, var(--v2-rail));
-  opacity: 0.9;
+  background: linear-gradient(var(--v2-edge), var(--v2-accent) 50%, var(--v2-edge));
 }
 
 [data-v2-root] .v2-now::after {
@@ -567,14 +731,14 @@ body:has([data-v2-root]) {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: var(--v2-signal);
-  box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.2);
+  background: var(--v2-accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--v2-accent) 20%, transparent);
   animation: v2-breathe 3.2s ease-in-out infinite;
 }
 
 @keyframes v2-breathe {
   50% {
-    box-shadow: 0 0 0 11px rgba(255, 255, 255, 0.06);
+    box-shadow: 0 0 0 11px color-mix(in srgb, var(--v2-accent) 7%, transparent);
   }
 }
 
@@ -587,6 +751,7 @@ body:has([data-v2-root]) {
   font: 700 15px/22px var(--v2-display);
   font-style: normal;
   font-variant-numeric: tabular-nums;
+  color: var(--v2-signal);
 }
 
 [data-v2-root] .v2-now span {
@@ -609,68 +774,151 @@ body:has([data-v2-root]) {
   margin: 20px var(--v2-gutter) 0;
   padding: 18px;
   border-radius: 18px;
-  border: 1px dashed var(--v2-rail);
+  border: 1px dashed var(--v2-edge);
   color: var(--v2-ink-2);
 }
 
-/* Title left, reason right, and at 375px the reason drops to its own line
-   rather than squeezing the title into a two-word column. */
+/* STACKED, not a table. Side by side in a 340px column the title got about
+   110px and wrapped into fifteen lines, so the name owns the full width and one
+   quiet line sits under it: what it belongs to at the left, when or why at the
+   right. Opposite ends of that line separate them, with no glyph between. */
 [data-v2-root] .v2-row {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 12px;
+  flex-direction: column;
+  gap: 2px;
   margin: 8px var(--v2-gutter) 0;
   padding: 12px 16px;
   border-radius: 16px;
-  background: var(--v2-deck);
+  background: var(--v2-card);
 }
 
-[data-v2-root] .v2-row b {
-  flex: 1 1 8rem;
+[data-v2-root] .v2-row .v2-row-title {
   font: 600 15px/1.3 var(--v2-display);
+  text-wrap: pretty;
 }
 
-/* ink-2, not ink-3: this text sits on --v2-deck rather than on the page, where
-   ink-3 is about 3.8:1 and ink-2 is about 6.5:1. */
-[data-v2-root] .v2-row span {
-  flex: 0 1 auto;
-  margin-left: auto;
-  color: var(--v2-ink-2);
+[data-v2-root] .v2-row-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
   font-size: 13px;
+}
+
+/* Which group or lane this row belongs to. On the line a dot on the rail says
+   that; in a flat list nothing does, so the row names it. */
+[data-v2-root] .v2-row .v2-row-ident {
+  color: var(--v2-ident);
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-row .v2-row-reason {
+  color: var(--v2-ink-2);
   text-align: right;
 }
 
-[data-v2-root] .v2-note {
-  padding: 20px var(--v2-gutter) 0;
+[data-v2-root] .v2-row .v2-row-ident::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+/* The rest of a long list of drops. One press, no count that keeps changing. */
+[data-v2-root] .v2-more {
+  min-height: 44px;
+  margin: 8px var(--v2-gutter) 0;
+  padding: 0 16px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+  color: var(--v2-signal);
+  font: 600 14px/1 var(--v2-display);
+}
+
+/* --------------------------------------------------- the side column's parts */
+
+[data-v2-root] .v2-side-head {
+  padding: 0 var(--v2-gutter) 8px;
+  font: 600 13px/1.2 var(--v2-display);
   color: var(--v2-ink-3);
-  font-size: 12px;
+}
+
+[data-v2-root] .v2-side-line {
+  padding: 0 var(--v2-gutter) 8px;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  text-wrap: pretty;
+}
+
+[data-v2-root] .v2-lanes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+[data-v2-root] .v2-lane-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--v2-card);
+}
+
+[data-v2-root] .v2-lane-name {
+  font: 600 14px/1.2 var(--v2-display);
+}
+
+/* The same dot the line uses, so one colour vocabulary covers both. */
+[data-v2-root] .v2-lane-name::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+[data-v2-root] .v2-lane-count {
+  margin-left: auto;
+  color: var(--v2-ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-v2-root] .v2-lane-due {
+  color: var(--v2-ink-3);
+  font-size: 13px;
 }
 
 /* -------------------------------------------------------------------- nav */
 
-/* Pinned to the viewport, as in the prototype: the day is taller than a phone
-   screen, so a bar at the bottom of the frame would scroll away. The frame
-   reserves the space for it with its own padding-bottom. */
+/* On the phone: pinned to the viewport, as in the prototype. The day is taller
+   than a phone screen, so a bar at the bottom of the frame would scroll away,
+   and the frame reserves the space for it with its own padding-bottom. */
 [data-v2-root] .v2-nav {
   position: fixed;
   left: 50%;
   bottom: 0;
   transform: translateX(-50%);
   width: min(430px, 100%);
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
   padding: 0 10px calc(8px + env(safe-area-inset-bottom));
-  background: var(--v2-night);
-  border-top: 1px solid var(--v2-rail);
+  background: var(--v2-card);
+  border-top: 1px solid var(--v2-edge);
   z-index: 10;
 }
 
-@media (min-width: 520px) {
-  [data-v2-root] .v2-nav {
-    bottom: 24px;
-    border-radius: 0 0 34px 34px;
-  }
+[data-v2-root] .v2-nav-items {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
 }
 
 [data-v2-root] .v2-nav button {
@@ -690,8 +938,394 @@ body:has([data-v2-root]) {
   left: 10px;
   height: 3px;
   width: calc((100% - 20px) / 4);
-  background: var(--v2-signal);
+  background: var(--v2-accent);
   border-radius: 2px;
+}
+
+/* The rail's foot. Shown only on the desktop page, where the rail has one. */
+[data-v2-root] .v2-rail-appearance {
+  display: none;
+}
+
+/* ------------------------------------------------------- the appearance panel */
+
+/* A VEIL, NOT A BLACKOUT. The page behind the panel is the preview for the two
+   colours being chosen, so blacking it out defeats the control. It stays visible
+   and the layer still catches the clicks, which is what keeps the panel modal.
+   On the phone the sheet sits at the bottom and is short enough that the top of
+   the day stays in view. */
+[data-v2-root] .v2-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 12px;
+  background: color-mix(in srgb, var(--v2-page) 30%, transparent);
+}
+
+[data-v2-root] .v2-panel {
+  width: min(430px, 100%);
+  max-height: 68dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 20px;
+  background: var(--v2-card);
+}
+
+/* The panel takes focus itself so its heading is read out, and it carries a
+   tabindex, which means the shared [tabindex]:focus-visible reset above would
+   otherwise put a ring on the whole panel and flatten its corners to 10px. */
+[data-v2-root] .v2-panel:focus,
+[data-v2-root] .v2-panel:focus-visible {
+  outline: none;
+  border-radius: 20px;
+}
+
+[data-v2-root] .v2-panel-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+[data-v2-root] .v2-panel-top h2 {
+  font: 600 18px/1.2 var(--v2-display);
+}
+
+[data-v2-root] .v2-panel-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+[data-v2-root] .v2-panel-label {
+  color: var(--v2-ink-2);
+  font-size: 13px;
+}
+
+[data-v2-root] .v2-swatches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+[data-v2-root] .v2-swatch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+  background: var(--v2-card-2);
+  text-align: left;
+}
+
+[data-v2-root] .v2-swatch[aria-pressed="true"] {
+  border-color: var(--v2-accent);
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-swatch-colours {
+  display: inline-flex;
+  flex: none;
+}
+
+[data-v2-root] .v2-swatch-colours span {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid var(--v2-edge);
+}
+
+[data-v2-root] .v2-swatch-colours span + span {
+  margin-left: -6px;
+}
+
+[data-v2-root] .v2-swatch-name {
+  font: 500 13px/1.2 var(--v2-display);
+}
+
+[data-v2-root] .v2-fields {
+  display: flex;
+  gap: 10px;
+}
+
+[data-v2-root] .v2-field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--v2-ink-2);
+  font-size: 13px;
+}
+
+[data-v2-root] .v2-field input {
+  width: 100%;
+  height: 44px;
+  padding: 3px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 10px;
+  background: var(--v2-card-2);
+  cursor: pointer;
+}
+
+[data-v2-root] .v2-panel-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+[data-v2-root] .v2-panel-note {
+  color: var(--v2-ink-3);
+  font-size: 12px;
+}
+
+/* ============================================================================
+ * THE DESKTOP PAGE
+ *
+ * From 1024px up this is not a wider phone. It is a rail down the left edge, the
+ * day as the main column (up to 640px, so a line of text stays under about 80
+ * characters), and a side column that holds the day's context and stays in view
+ * while the line scrolls.
+ *
+ * The three tracks are rail / flexible / 340px. The middle one is the flexible
+ * one on purpose: at 1024px it has to give way, and a definite track would
+ * overflow the window sideways instead. The page is left anchored rather than
+ * centred, because the rail belongs to the edge of the screen.
+ *
+ * Nothing below animates a layout property, and nothing below is a new motion:
+ * the three durations and the one easing family are unchanged.
+ * ==========================================================================*/
+
+@media (min-width: 1024px) {
+  [data-v2-root] {
+    /* Each column carries its own padding from here on, so the shared gutter
+       inside a row goes to nothing. It must stay a LENGTH: it is read inside
+       calc() by the line's rail and dot offsets. */
+    --v2-gutter: 0px;
+    padding: 0;
+  }
+
+  /* align-items is left at `stretch` ON PURPOSE. A sticky element can only move
+     inside its own containing block, which for a grid item is its grid area, so
+     with `start` the side column's area would be exactly as tall as its content
+     and `position: sticky` below would never stick. Stretched, both the rail and
+     the side column own the full height of the row and slide inside it; their
+     own heights are capped at the viewport. */
+  [data-v2-root] .v2-shell {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) var(--v2-side-w);
+    column-gap: clamp(20px, 2.6vw, 44px);
+    max-width: 1140px;
+    min-height: 100dvh;
+    padding-right: 28px;
+  }
+
+  [data-v2-root] .v2-main {
+    display: flex;
+    flex-direction: column;
+    max-width: 640px;
+    padding: 30px 0 64px;
+  }
+
+  /* Stays in view while the day scrolls, and scrolls on its own when the energy
+     control, the lanes and eight drops together outrun the window.
+     The inline padding is not decoration: `overflow-y: auto` clips the inline
+     axis too, so without it the focus ring on a row or on Show more is cut off
+     at the column's edge. The track carries those 12px (see --v2-side-w).
+     The scrollbar is given the scheme's own colours rather than the platform's
+     grey bar, which on a black page is the loudest thing on the screen. */
+  [data-v2-root] .v2-side {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-height: 100dvh;
+    overflow-y: auto;
+    padding: 30px 6px 32px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--v2-edge) transparent;
+  }
+
+  /* A pill around six dots, not a control: it shrink wraps and it is not 44px
+     tall here, because nothing in it is pressable. */
+  [data-v2-root] .v2-side .v2-feeds {
+    display: inline-flex;
+    align-self: flex-start;
+    min-height: 28px;
+    padding: 0 10px;
+  }
+
+  /* Small caps over every block is the look this screen is not. */
+  [data-v2-root] .v2-side .v2-allday-label {
+    text-transform: none;
+    letter-spacing: 0.01em;
+    font-size: 12px;
+  }
+
+  [data-v2-root] .v2-desk-only {
+    display: block;
+  }
+
+  /* ---- the rail ---- */
+
+  [data-v2-root] .v2-nav {
+    position: sticky;
+    top: 0;
+    left: auto;
+    bottom: auto;
+    transform: none;
+    display: flex;
+    flex-direction: column;
+    width: var(--v2-rail-w);
+    height: 100dvh;
+    padding: 30px 14px 24px;
+    background: none;
+    border-top: 0;
+    border-right: 1px solid var(--v2-edge);
+    z-index: 1;
+  }
+
+  /* The phone bar's sliding indicator. The rail marks its own item instead. */
+  [data-v2-root] .v2-ind {
+    display: none;
+  }
+
+  [data-v2-root] .v2-nav-items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  [data-v2-root] .v2-nav button {
+    min-height: 36px;
+    padding: 0 8px;
+    border-radius: 8px;
+    text-align: left;
+    font-size: 14px;
+  }
+
+  [data-v2-root] .v2-nav button[aria-current="page"] {
+    color: var(--v2-signal);
+  }
+
+  [data-v2-root] .v2-nav button[aria-current="page"]::before {
+    content: "";
+    position: absolute;
+    left: -14px;
+    top: 7px;
+    bottom: 7px;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: var(--v2-accent);
+  }
+
+  [data-v2-root] .v2-rail-appearance {
+    display: block;
+    margin-top: auto;
+    min-height: 36px;
+    padding: 0 8px;
+    border-radius: 8px;
+    text-align: left;
+    color: var(--v2-ink-3);
+    font: 500 13px/1.2 var(--v2-display);
+  }
+
+  /* ---- the main column ---- */
+
+  [data-v2-root] .v2-top {
+    display: block;
+    padding: 0;
+  }
+
+  [data-v2-root] .v2-top h1 {
+    font-size: 30px;
+    letter-spacing: 0;
+  }
+
+  [data-v2-root] .v2-notice {
+    max-width: 64ch;
+    margin-top: 8px;
+  }
+
+  /* Both belong to the side column at this width: the feed line is shown there
+     with its dots, and the appearance control lives at the rail's foot. */
+  [data-v2-root] .v2-feedline,
+  [data-v2-root] .v2-top-aside {
+    display: none;
+  }
+
+  [data-v2-root] .v2-line {
+    margin-top: 26px;
+  }
+
+  [data-v2-root] .v2-lit h3 {
+    font-size: 21px;
+  }
+
+  /* ---- the side column's blocks ---- */
+
+  /* Each block is a block of information rather than a box: a quiet heading and
+     its rows, separated by space. The one surface in here is the row itself. */
+  [data-v2-root] .v2-side .v2-energy,
+  [data-v2-root] .v2-side .v2-said {
+    padding: 0;
+  }
+
+  [data-v2-root] .v2-side .v2-said {
+    min-height: 20px;
+  }
+
+  [data-v2-root] .v2-side .v2-allday {
+    padding: 0;
+  }
+
+  [data-v2-root] .v2-side .v2-sub {
+    padding: 0 0 6px;
+    font-size: 13px;
+    color: var(--v2-ink-3);
+  }
+
+  [data-v2-root] .v2-side .v2-row {
+    margin: 4px 0 0;
+    padding: 9px 12px;
+    border-radius: 12px;
+  }
+
+  [data-v2-root] .v2-side .v2-row b {
+    font-size: 14px;
+  }
+
+  [data-v2-root] .v2-side .v2-more {
+    margin: 8px 0 0;
+    min-height: 36px;
+  }
+
+  /* ---- the panel opens from the rail ---- */
+
+  /* Attached to the control that opened it: the rail's foot. Bottom left, beside
+     the rail, growing upward (align-items: flex-end pins its bottom edge). The
+     veil is lighter still here, because there is more page to see. */
+  [data-v2-root] .v2-sheet {
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 20px 20px 20px calc(var(--v2-rail-w) + 12px);
+    background: color-mix(in srgb, var(--v2-page) 12%, transparent);
+  }
+
+  [data-v2-root] .v2-panel {
+    width: 360px;
+    max-height: calc(100dvh - 40px);
+  }
 }
 
 /* -------------------------------------------------------- reduced motion */

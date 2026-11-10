@@ -22,9 +22,21 @@ import {
   STOP_STATUS_COPY,
   TODAY_COPY,
   buildTodayView,
-  droppedTitles,
+  showMoreLabel,
   type TodayView,
 } from "@/app/lib/v2/view/today";
+import {
+  APPEARANCE_COPY,
+  APPEARANCE_STORAGE_KEY,
+  CUSTOM_SCHEME_ID,
+  DEFAULT_SCHEME_ID,
+  SCHEMES,
+  TOKEN_NAMES,
+  deriveTokens,
+} from "@/app/lib/v2/view/appearance";
+import { AppearanceRoot } from "@/app/v2/_components/appearance-root";
+import { FeedDots } from "@/app/v2/_components/feed-strip";
+import { NotTodayList } from "@/app/v2/_components/not-today-list";
 import type { Block, Energy, PlanInput } from "@/app/lib/v2/types";
 
 const LANE_LABELS = ["Study", "Work", "Money", "People", "Craft", "Body"];
@@ -40,11 +52,13 @@ function viewOf(energy: Energy | null, existing: Block[] = []): TodayView {
     plan,
     fixed: input.fixed,
     lanes: sample.lanes,
+    candidates: input.candidates,
     feeds: sample.feeds,
     feedLabels: sample.feedLabels,
     openAsks: sample.openAsks,
+    tags: sample.tags,
+    notice: sample.notice,
     energy,
-    titles: droppedTitles(input.candidates),
   });
 }
 
@@ -150,7 +164,7 @@ describe("the screen the sample produces", () => {
     const view = viewOf(null);
     expect(view.allDay.length).toBeGreaterThan(0);
     expect(view.stops.some((stop) => stop.leaveBy !== null)).toBe(true);
-    expect(view.stops.some((stop) => stop.lane !== null)).toBe(true);
+    expect(view.stops.some((stop) => stop.identity !== null)).toBe(true);
   });
 
   test("lists what it did not take, with a reason in words", () => {
@@ -173,6 +187,64 @@ describe("the screen the sample produces", () => {
     expect(view.feed.line).not.toBe("All feeds alive.");
     expect(view.feed.dots).toHaveLength(6);
     expect(view.feed.dots.filter((dot) => dot.state !== "alive")).toHaveLength(1);
+  });
+});
+
+// Task 11. The sample is now one shape with every other source, so the three
+// things that shape carries have to be true of it.
+describe("the sample is the one screen shape", () => {
+  test("carries a notice saying what it is, and no groups", () => {
+    const sample = sampleDay();
+    expect(sample.tags).toEqual({});
+    expect(sample.notice).toContain("Sample day");
+    expect(sample.notice).toContain("nothing you press is saved");
+    expect(viewOf(null).notice).toBe(sample.notice);
+  });
+
+  test("keeps the lane colours exactly as the prototype set them", () => {
+    expect(sampleDay().lanes.map((lane) => lane.color)).toEqual([
+      "#7C9BFF",
+      "#2FD6A3",
+      "#FFB84D",
+      "#FF7A8A",
+      "#C58BFF",
+      "#B8F15A",
+    ]);
+  });
+
+  test("has one item whose date has gone by, so the section is visible", () => {
+    const view = viewOf(null);
+    expect(view.pastDue).toHaveLength(1);
+    expect(view.pastDue[0].date).toMatch(/^\d{1,2} [A-Z][a-z]+$/);
+    // It is named by its lane, because the sample has no groups.
+    expect(view.pastDue[0].identity).toMatchObject({ source: "lane" });
+    // And it is not also in what did not fit.
+    expect(view.notToday.map((entry) => entry.title)).not.toContain(
+      view.pastDue[0].title,
+    );
+  });
+
+  test("summarises the lanes that have something waiting", () => {
+    const view = viewOf(null);
+    expect(view.lanes.length).toBeGreaterThan(0);
+    for (const lane of view.lanes) {
+      expect(lane.open).toBeGreaterThan(0);
+      expect(lane.label.length).toBeGreaterThan(0);
+      if (lane.due !== null) expect(lane.due).toMatch(/^\d{1,2} [A-Z][a-z]+$/);
+    }
+    // Every sample candidate has a lane, so there is nothing for the last row.
+    expect(view.lanes.map((lane) => lane.key)).not.toContain("");
+  });
+
+  // So the two levels of a name are visible on the sample screen too, not only
+  // on a real account. Invented, like every other string in the fixture.
+  test("has at least one title in two levels", () => {
+    const withDetail = viewOf(null).stops.filter((stop) => stop.detail !== null);
+    expect(withDetail.length).toBeGreaterThan(0);
+    for (const stop of withDetail) {
+      expect(stop.title.endsWith(")")).toBe(false);
+      expect(stop.full).toBe(`${stop.title} (${stop.detail})`);
+    }
   });
 });
 
@@ -214,11 +286,13 @@ describe("the sample day replans", () => {
       plan: first,
       fixed: input.fixed,
       lanes: sampleDay().lanes,
+      candidates: input.candidates,
       feeds: sampleDay().feeds,
       feedLabels: sampleDay().feedLabels,
       openAsks: sampleDay().openAsks,
+      tags: sampleDay().tags,
+      notice: sampleDay().notice,
       energy: input.energy,
-      titles: droppedTitles(input.candidates),
     });
     const litId = view.litStopId;
     expect(litId).not.toBeNull();
@@ -303,12 +377,20 @@ describe("ordering never depends on the locale", () => {
     "app/v2/layout.tsx",
     "app/v2/today/page.tsx",
     "app/v2/today/today-client.tsx",
+    "app/lib/v2/view/appearance.ts",
+    "app/v2/_components/all-day-row.tsx",
+    "app/v2/_components/appearance-panel.tsx",
+    "app/v2/_components/appearance-root.tsx",
     "app/v2/_components/day-header.tsx",
     "app/v2/_components/day-line.tsx",
     "app/v2/_components/energy-row.tsx",
+    "app/v2/_components/feed-strip.tsx",
+    "app/v2/_components/lane-summary.tsx",
+    "app/v2/_components/list-row.tsx",
     "app/v2/_components/stop-card.tsx",
     "app/v2/_components/not-today-list.tsx",
     "app/v2/_components/nav-bar.tsx",
+    "app/v2/_components/past-due-list.tsx",
   ];
 
   // Comments are stripped first: these files explain at length why they do not
@@ -342,7 +424,7 @@ describe("the screen keeps your place", () => {
     cleanup();
   });
 
-  const screenOf = () => render(createElement(TodayClient, { sample: sampleDay() }));
+  const screenOf = () => render(createElement(TodayClient, { data: sampleDay() }));
   const litHeadings = () =>
     Array.from(document.querySelectorAll("[data-lit-heading]")).map(
       (heading) => heading.textContent ?? "",
@@ -406,6 +488,160 @@ describe("the screen keeps your place", () => {
   });
 });
 
+// Task 11, on the real screen: the two controls that only exist in the DOM, and
+// the palette the server ships before any script has run.
+describe("the screen the sample renders", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("renders the sample through the one data prop", () => {
+    render(createElement(TodayClient, { data: sampleDay() }));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(
+      /^[A-Z][a-z]+ \d{1,2} [A-Z][a-z]+$/,
+    );
+    // The notice replaces the old fixed footer line.
+    expect(screen.getByText(sampleDay().notice ?? "")).toBeTruthy();
+  });
+
+  test("shows the items whose date has gone by, under their own heading", () => {
+    render(createElement(TodayClient, { data: sampleDay() }));
+    expect(screen.getByRole("heading", { name: TODAY_COPY.pastDueHeading })).toBeTruthy();
+    expect(screen.getByText(TODAY_COPY.pastDueLine)).toBeTruthy();
+    // Nothing on those rows presses, so the only buttons on the page are the
+    // ones that were there before.
+    const names = screen
+      .getAllByRole("button")
+      .map((button) => button.textContent ?? "");
+    expect(names).not.toContain(viewOf(null).pastDue[0].title);
+  });
+
+  // Eight rows, then one press. A real account has dozens of open tasks.
+  describe("the show more control", () => {
+    const rows = (count: number) =>
+      Array.from({ length: count }, (_, index) => {
+        const title = `Task ${index + 1}`;
+        return { title, detail: null, full: title, reason: "No room today" };
+      });
+
+    test("is absent at eight rows or fewer", () => {
+      render(createElement(NotTodayList, { entries: rows(8) }));
+      expect(screen.getAllByText(/^Task /)).toHaveLength(8);
+      expect(screen.queryByRole("button")).toBeNull();
+    });
+
+    test("appears past eight, counts the rest, and reveals them", async () => {
+      render(createElement(NotTodayList, { entries: rows(11) }));
+      expect(screen.getAllByText(/^Task /)).toHaveLength(8);
+      const button = screen.getByRole("button", { name: showMoreLabel(3) });
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(screen.getAllByText(/^Task /)).toHaveLength(11);
+      expect(screen.queryByRole("button")).toBeNull();
+    });
+  });
+
+  // Behaviour 13 and 14. With nothing stored, the first render IS black and
+  // purple: the attribute says which scheme, and the ten tokens are on the root
+  // so the page is painted before the stylesheet's defaults are even needed.
+  test("is black and purple on the first render, with nothing stored", () => {
+    render(createElement(AppearanceRoot, null, "day"));
+    const root = document.querySelector("[data-v2-root]") as HTMLElement | null;
+    expect(root).not.toBeNull();
+    expect(root?.getAttribute("data-v2-scheme")).toBe(DEFAULT_SCHEME_ID);
+    const derived = deriveTokens(SCHEMES[0].background, SCHEMES[0].accent);
+    for (const name of TOKEN_NAMES) {
+      expect(root?.style.getPropertyValue(name)).toBe(derived[name]);
+    }
+  });
+
+  // An account with no feeds connected drew an empty rounded pill where the dots
+  // would be, in the header and in the side column both.
+  test("draws no dot container at all when nothing is being watched", () => {
+    const { container } = render(createElement(FeedDots, { dots: [] }));
+    expect(container.innerHTML).toBe("");
+    cleanup();
+    render(createElement(FeedDots, { dots: [{ label: "Calendar", state: "alive" as const }] }));
+    expect(screen.getByRole("img", { name: "Calendar: Alive" })).toBeTruthy();
+  });
+
+  test("takes focus nowhere when it mounts", () => {
+    render(createElement(AppearanceRoot, null, "day"));
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  // Behaviours 14 and 15, end to end: nothing else exercises the panel, the
+  // store, or the write to this browser. It runs LAST in this describe and puts
+  // the scheme back, because the store is module level and would otherwise leak
+  // Paper into whatever runs after it.
+  test("opens from the rail, applies a scheme, stores it, and hands focus back", async () => {
+    render(
+      createElement(
+        AppearanceRoot,
+        null,
+        createElement(TodayClient, { data: sampleDay() }),
+      ),
+    );
+    const root = document.querySelector("[data-v2-root]") as HTMLElement;
+
+    // Two triggers, one per layout, each hidden at the other's width. The rail's
+    // comes first because the rail comes first in the document.
+    const triggers = screen.getAllByRole("button", { name: APPEARANCE_COPY.open });
+    expect(triggers).toHaveLength(2);
+    const rail = triggers[0];
+
+    await act(async () => {
+      fireEvent.click(rail);
+    });
+    const panel = screen.getByRole("dialog");
+    expect(panel.getAttribute("aria-modal")).toBe("true");
+    expect(document.activeElement).toBe(panel);
+
+    const paper = SCHEMES[3];
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: paper.name }));
+    });
+    expect(root.getAttribute("data-v2-scheme")).toBe(paper.id);
+    expect(root.style.getPropertyValue("--v2-page")).toBe(paper.background);
+    expect(root.style.getPropertyValue("--v2-ink")).toBe(
+      deriveTokens(paper.background, paper.accent)["--v2-ink"],
+    );
+    expect(JSON.parse(localStorage.getItem(APPEARANCE_STORAGE_KEY) ?? "null")).toEqual({
+      schemeId: paper.id,
+      background: null,
+      accent: null,
+    });
+
+    // A custom pair keeps the attribute in step too, under "custom".
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(APPEARANCE_COPY.background), {
+        target: { value: "#120a1f" },
+      });
+    });
+    expect(root.getAttribute("data-v2-scheme")).toBe(CUSTOM_SCHEME_ID);
+    expect(root.style.getPropertyValue("--v2-page")).toBe("#120A1F");
+    // The accent came from the scheme that was on, not from a reset to black.
+    expect(JSON.parse(localStorage.getItem(APPEARANCE_STORAGE_KEY) ?? "null")).toEqual({
+      schemeId: CUSTOM_SCHEME_ID,
+      background: "#120A1F",
+      accent: paper.accent,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: APPEARANCE_COPY.reset }));
+    });
+    expect(root.getAttribute("data-v2-scheme")).toBe(DEFAULT_SCHEME_ID);
+    expect(root.style.getPropertyValue("--v2-page")).toBe(SCHEMES[0].background);
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(rail);
+  });
+});
+
 describe("the fixtures gate", () => {
   test("opens only when the flag is on", () => {
     expect(fixturesEnabled({ V2_FIXTURES: "1" })).toBe(true);
@@ -426,6 +662,12 @@ describe("the fixtures gate", () => {
 // The pure gate above is only half of it: the page has to read the right two
 // variables and actually refuse. notFound() works by throwing, so a page that
 // forgot to call it, or read the wrong name, returns an element instead.
+//
+// V2_LOCAL_SNAPSHOT is stubbed empty wherever a refusal is expected. The page
+// has a third mode now: with the fixtures flag off and that variable pointing at
+// a folder, it takes the local snapshot branch instead of refusing. Without the
+// stub these tests would pass or fail on whatever the developer's shell happens
+// to have exported, which is not a property of this code at all.
 describe("the page is wired to the gate", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -438,8 +680,9 @@ describe("the page is wired to the gate", () => {
     expect(TodayPage()).toBeTruthy();
   });
 
-  test("is not found with the flag off", async () => {
+  test("is not found with the flag off and no snapshot folder", async () => {
     vi.stubEnv("V2_FIXTURES", "");
+    vi.stubEnv("V2_LOCAL_SNAPSHOT", "");
     vi.stubEnv("VERCEL_ENV", "preview");
     const { default: TodayPage } = await import("@/app/v2/today/page");
     expect(() => TodayPage()).toThrow();
@@ -447,6 +690,7 @@ describe("the page is wired to the gate", () => {
 
   test("is not found in production, flag or no flag", async () => {
     vi.stubEnv("V2_FIXTURES", "1");
+    vi.stubEnv("V2_LOCAL_SNAPSHOT", "");
     vi.stubEnv("VERCEL_ENV", "production");
     const { default: TodayPage } = await import("@/app/v2/today/page");
     expect(() => TodayPage()).toThrow();

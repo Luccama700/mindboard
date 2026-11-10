@@ -15,9 +15,11 @@
 // Time: every clock comes from the formatters, which read the instant in the
 // given zone. The screen never looks at the process clock.
 
+import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import { feedLine } from "@/app/lib/v2/channel/messages";
 import { compareText } from "@/app/lib/v2/plan/day";
 import { clockLabel, dayLabel, minutesLabel, sinceLabel } from "@/app/lib/v2/view/format";
+import type { TaskTag } from "@/app/lib/v2/view/screen-data";
 import type {
   Ask,
   BlockKind,
@@ -39,35 +41,96 @@ export interface TodayInput {
   /** Everything already on the day. Timed events become stops, all day ones do not. */
   fixed: FixedEvent[];
   lanes: Array<{ key: LaneKey; label: string; color: string }>;
+  /**
+   * Everything the planner was offered, placed or not.
+   *
+   * REQUIRED, and the one source for three things the plan alone cannot say:
+   *
+   *  - the per-lane summary, a count of what is waiting in each lane and when
+   *    the nearest of it closes (`plan.dropped` holds only what the planner
+   *    wanted and could not fit, so a lane whose items never got ranked would
+   *    read as an empty lane);
+   *  - the items whose date has already gone by (`pastDue`);
+   *  - the NAMES in "Did not fit today", which the planner reports as ids and a
+   *    reason, never as titles.
+   *
+   * The last one used to be a separate `titles` map the caller built, and a
+   * caller who forgot it got a list that was silently short. Deriving it here
+   * from the candidates removes the second source rather than guarding it.
+   */
+  candidates: Candidate[];
   feeds: FeedStatus[];
   feedLabels: Record<string, string>;
   openAsks: Ask[];
+  /**
+   * How each task presents itself: the name and colour of the group it lives in.
+   *
+   * REQUIRED, and required on purpose. A tag is the user's own group, so a
+   * screen that quietly fell back to the lane's colour when the caller forgot
+   * the map would look right and be wrong, and nothing would say so. An empty
+   * map is the honest way to say "this source has no groups".
+   */
+  tags: Record<string, TaskTag>;
+  /** One plain sentence about what this data is, shown once near the top, or null. */
+  notice: string | null;
   /** The answer the caller holds. null means nobody has said yet. */
   energy: Energy | null;
-  /**
-   * Display names for the ids in `plan.dropped`.
-   *
-   * REQUIRED, and required on purpose. The planner reports a drop as an id and a
-   * reason, never a title, so the caller (which holds the candidates) has to
-   * supply the names; `droppedTitles` builds the map. Making it optional meant a
-   * caller who forgot it got a "Did not fit today" list that was silently short,
-   * which is exactly the class of defect AGENTS.md says to remove by making the
-   * argument required so the compiler lists the call sites. An id the map does
-   * not name still appears, under a generic name: the user needs to know
-   * something was dropped more than they need to know which thing.
-   */
-  titles: Record<string, string>;
 }
 
-export interface Stop {
+/**
+ * A name in two levels.
+ *
+ * Real titles are long and keep their detail in a trailing parenthetical, so one
+ * of them is a paragraph of display type on the lit card and fifteen wrapped
+ * lines in a 340px side column. The split is the user's own punctuation, not a
+ * truncation: the part before the first " (" is what the thing IS, and what is
+ * inside the outer parentheses is the detail about it. `full` is the original,
+ * kept whole so it can go in the element's title attribute and nothing is lost.
+ */
+export interface Titled {
+  title: string;
+  detail: string | null;
+  full: string;
+}
+
+/**
+ * Behaviour: a title that ends with ")" and contains " (" splits at the FIRST
+ * " ("; everything else is one title with no detail. A nested parenthetical
+ * stays inside the detail, because the outer pair is the one that was closed.
+ * An empty half on either side means it was not really a parenthetical.
+ */
+export function splitTitle(raw: string): Titled {
+  const full = raw.trim();
+  const open = full.indexOf(" (");
+  if (open < 0 || !full.endsWith(")")) return { title: full, detail: null, full };
+  const title = full.slice(0, open).trim();
+  const detail = full.slice(open + 2, -1).trim();
+  if (title === "" || detail === "") return { title: full, detail: null, full };
+  return { title, detail, full };
+}
+
+export interface Stop extends Titled {
   id: string;
   source: "fixed" | "block";
   kind: BlockKind | "fixed";
-  title: string;
   /** "HH:MM" in the user's zone. */
   start: string;
   end: string;
-  lane: { label: string; color: string } | null;
+  /**
+   * What this stop belongs to, in the user's own words and colour: the group the
+   * task lives in when it has one, otherwise the lane. null for a fixed event,
+   * which belongs to a calendar rather than to anything the planner owns.
+   *
+   * The colour is raw user data and may be anything at all, including a colour
+   * far too dark to read on a dark scheme. Only non-text marks may use it as it
+   * is; see `identityTokens` in app/lib/v2/view/appearance.ts.
+   *
+   * `source` is what decides whether the LABEL is printed. A tag is a name the
+   * user gave this very task, so it is worth a quiet line under the title; a
+   * lane is the planner's own grouping, which the colour on the line already
+   * says, so naming it on every stop would be noise on a phone screen.
+   */
+  identity: { label: string; color: string; source: "tag" | "lane" } | null;
   state: "done" | "skipped" | "past" | "now" | "next" | "later";
   /** "Leave by HH:MM" for a fixed event that carries travel time. */
   leaveBy: string | null;
@@ -75,13 +138,53 @@ export interface Stop {
   reason: string;
 }
 
+/** One lane, as the side column summarises it. */
+export interface LaneLine {
+  /** The lane's own key, or "" for the row that counts what has no lane. */
+  key: LaneKey;
+  label: string;
+  /** null for the "No lane" row, which has no colour of its own to wear. */
+  color: string | null;
+  /** How many of this lane's items are waiting, placed today or not. */
+  open: number;
+  /**
+   * The nearest date still ahead among them, as a day and a month. null when
+   * nothing in the lane has one. A date already gone by is NOT reported here:
+   * the line reads "next 18 April", and the items whose date has passed have a
+   * section of their own (`pastDue`).
+   */
+  due: string | null;
+}
+
+/**
+ * One item whose date has already gone by.
+ *
+ * Some are dead and some are still alive, and nothing on this screen can tell
+ * which. So they are listed, with the date they were for, and nothing presses
+ * them: deciding them is its own feature. They are kept out of "Did not fit
+ * today" so nothing appears twice.
+ */
+export interface PastDueLine extends Titled {
+  id: string;
+  /** The group or the lane it belongs to, resolved exactly as a stop's is. */
+  identity: { label: string; color: string; source: "tag" | "lane" } | null;
+  /** The date it was for, as a day and a month. */
+  date: string;
+}
+
 export interface TodayView {
   dateLabel: string;
+  /** `data.notice`, passed through. Shown once, near the top. */
+  notice: string | null;
   allDay: string[];
   stops: Stop[];
   litStopId: string | null;
   energy: { label: string; assumed: boolean; ask: Ask | null };
-  notToday: Array<{ title: string; reason: string }>;
+  notToday: Array<Titled & { reason: string }>;
+  /** Items whose date has gone by, most recently overdue first. */
+  pastDue: PastDueLine[];
+  /** One line per lane that has anything waiting, in the user's lane order. */
+  lanes: LaneLine[];
   feed: { line: string; dots: Array<{ label: string; state: FeedStatus["state"] }> };
   empty: boolean;
 }
@@ -193,10 +296,30 @@ export const TODAY_COPY = {
   /** The heading over the drops. Deliberately NOT "Not today": that is the
       button's words, and a heading that reads like an action invites a press. */
   notTodayHeading: "Did not fit today",
+  /** The control that reveals the rest of a long list. `{count}` is the number. */
+  showMore: "Show {count} more",
+  /** The heading over the items whose date has gone by. */
+  pastDueHeading: "Past their date",
+  /**
+   * The one line under it. It says what is true and promises nothing: there is
+   * no control on these rows in this slice, so a sentence inviting the user to
+   * say something would point at a tap that does not exist.
+   */
+  pastDueLine: "These are not planned. They wait for a decision.",
+  /** The heading over the per-lane summary. */
+  lanesHeading: "Lanes",
+  /** The last row of that summary: what belongs to no lane at all. */
+  noLane: "No lane",
+  /** How many items are waiting in one lane. `{count}` is the number. */
+  laneOpen: "{count} open",
+  /** When the nearest of them closes. `{day}` is a day and a month. */
+  laneDue: "next {day}",
   /** In the order the segmented control shows them: low, ok, good. */
   energyOptions: ["Low", "OK", "Good"],
   feeds: "Feed health",
-  sampleNote: "Sample day. Nothing here is connected.",
+  // There is no fixed "sample day" line any more: what this data is comes from
+  // the source itself, as `notice`, so a real account does not get told it is
+  // looking at a sample and the sample still says so.
   navLabel: "Main",
   navItems: ["Today", "Week", "Quests", "Money"],
   feedState: {
@@ -207,24 +330,46 @@ export const TODAY_COPY = {
   } satisfies Record<FeedStatus["state"], string>,
 } as const;
 
+/**
+ * How many drops are shown before the rest are behind a press. A real account
+ * has dozens of open tasks, and a list that long under the day is a wall rather
+ * than a statement.
+ */
+export const NOT_TODAY_VISIBLE = 8;
+
+/** The two copy templates that carry a number, filled. */
+export function showMoreLabel(count: number): string {
+  return TODAY_COPY.showMore.replace("{count}", String(count));
+}
+
+export function laneOpenLabel(count: number): string {
+  return TODAY_COPY.laneOpen.replace("{count}", String(count));
+}
+
+export function laneDueLabel(day: string): string {
+  return TODAY_COPY.laneDue.replace("{day}", day);
+}
+
 // --------------------------------------------------------------------- titles
 
 // `plan.dropped` can carry two ids that are NOT candidates: the income block
 // and the gym session come from the rules rather than from a task, so they are
 // dropped under their own token (plan/planner.ts INCOME_TOKEN and the gym's
 // kind). Looking those up in a candidate map finds nothing, and a drop the
-// screen cannot name is a drop the user cannot act on, so the names live here
-// and `buildTodayView` falls back to them whether or not the caller passed a
-// titles map.
+// screen cannot name is a drop the user cannot act on, so the names live here.
 const PLANNER_OWNED_TITLES: Record<string, string> = {
   income: "Work block",
   gym: "Gym",
 };
 
 /**
- * The map `TodayInput.titles` wants: every candidate by id, plus the two ids the
- * planner drops under its own name. A candidate wins a collision, because a task
- * the user actually wrote beats a default.
+ * Every candidate by id, plus the two ids the planner drops under its own name.
+ * A candidate wins a collision, because a task the user actually wrote beats a
+ * default.
+ *
+ * `buildTodayView` calls this itself on the candidates it is given: an id it
+ * still cannot name appears under a generic one, because the user needs to know
+ * something was dropped more than they need to know which thing.
  */
 export function droppedTitles(candidates: Candidate[]): Record<string, string> {
   const out: Record<string, string> = { ...PLANNER_OWNED_TITLES };
@@ -274,14 +419,147 @@ function sentence(parts: Array<string | null | undefined>): string {
     .join(". ");
 }
 
+/**
+ * "15 April": a date key without its weekday.
+ *
+ * Taken off `dayLabel` rather than written out again, because the month names
+ * live in format.ts for a reason (no Intl long format anywhere on this screen,
+ * since Node and the browser punctuate them differently and this screen renders
+ * in both). Two copies of the month list is how one of them ends up wrong.
+ */
+function dayAndMonth(date: DateKey): string {
+  const [, ...rest] = dayLabel(date).split(" ");
+  return rest.join(" ");
+}
+
+/**
+ * One line per lane that has anything waiting: how much, and when the nearest of
+ * it closes. Lanes keep the user's own order and a lane with nothing waiting is
+ * left out rather than printed as a zero.
+ */
+function laneLines(input: TodayInput, nowMs: number): LaneLine[] {
+  /** The key the items with no lane at all are counted under. */
+  const NO_LANE = "";
+
+  const counts = new Map<LaneKey, { open: number; dueMs: number | null }>();
+  for (const candidate of input.candidates) {
+    const key = candidate.lane ?? NO_LANE;
+    const held = counts.get(key) ?? { open: 0, dueMs: null };
+    held.open += 1;
+    if (candidate.due !== null) {
+      const ms = Date.parse(candidate.due);
+      // Only dates still ahead: the line says "next", and what has already gone
+      // by is reported by `pastDueLines` instead.
+      const ahead = Number.isFinite(ms) && ms >= nowMs;
+      if (ahead && (held.dueMs === null || ms < held.dueMs)) held.dueMs = ms;
+    }
+    counts.set(key, held);
+  }
+
+  // The zone is the user's, not the process's: a deadline at 23:30 local is that
+  // day, and on the UTC process clock it would read as the next one.
+  const day = (dueMs: number | null) =>
+    dueMs === null ? null : dayAndMonth(zonedDateKey(dueMs, input.timeZone));
+
+  const lines: LaneLine[] = [];
+  for (const lane of input.lanes) {
+    const held = counts.get(lane.key);
+    if (held === undefined || held.open === 0) continue;
+    lines.push({
+      key: lane.key,
+      label: lane.label,
+      color: lane.color,
+      open: held.open,
+      due: day(held.dueMs),
+    });
+  }
+
+  // Last, and only when there is something in it. Half of a real account's open
+  // tasks belong to no lane, and before this row they appeared nowhere on the
+  // screen at all: not on the line, not in the summary.
+  const loose = counts.get(NO_LANE);
+  if (loose !== undefined && loose.open > 0) {
+    lines.push({
+      key: NO_LANE,
+      label: TODAY_COPY.noLane,
+      color: null,
+      open: loose.open,
+      due: day(loose.dueMs),
+    });
+  }
+  return lines;
+}
+
+/**
+ * The items whose date has already gone by, most recently overdue first.
+ *
+ * An account that has been running a while has open items from days or weeks
+ * ago. Some are dead and some are still alive, and neither the planner nor this
+ * screen can tell which, so they are collected in one place instead of being
+ * buried among fifty rows of what did not fit today.
+ *
+ * An item that the planner DID place today is left out: it is on the line, and a
+ * section that says "these are not planned" must not name it. The tie-break is
+ * code point order on the title, never locale order, for the same reason the
+ * stops' is: this runs on the server and again in the browser.
+ */
+function pastDueLines(
+  input: TodayInput,
+  nowMs: number,
+  identityOf: (candidate: Candidate) => PastDueLine["identity"],
+): PastDueLine[] {
+  const planned = new Set(
+    input.plan.blocks
+      .map((block) => block.taskId)
+      .filter((taskId): taskId is string => taskId !== null),
+  );
+
+  const overdue: Array<{ line: PastDueLine; dueMs: number }> = [];
+  for (const candidate of input.candidates) {
+    if (candidate.due === null || planned.has(candidate.id)) continue;
+    const dueMs = Date.parse(candidate.due);
+    if (!Number.isFinite(dueMs) || dueMs >= nowMs) continue;
+    overdue.push({
+      dueMs,
+      line: {
+        id: candidate.id,
+        ...splitTitle(candidate.title),
+        identity: identityOf(candidate),
+        date: dayAndMonth(zonedDateKey(dueMs, input.timeZone)),
+      },
+    });
+  }
+
+  overdue.sort(
+    (a, b) => b.dueMs - a.dueMs || compareText(a.line.title, b.line.title),
+  );
+  return overdue.map((entry) => entry.line);
+}
+
 export function buildTodayView(input: TodayInput): TodayView {
   const { plan, timeZone, now } = input;
   const nowMs = msOf(now);
 
   const laneById = new Map(
-    input.lanes.map((lane) => [lane.key, { label: lane.label, color: lane.color }]),
+    input.lanes.map((lane) => [
+      lane.key,
+      { label: lane.label, color: lane.color, source: "lane" as const },
+    ]),
   );
   const leaveByFixedId = new Map(plan.leaveBy.map((entry) => [entry.fixedId, entry.at]));
+
+  // A tag with no label is no identity: it would print an empty line and tint a
+  // card with a colour the user cannot name.
+  const tagOf = (taskId: string | null): Stop["identity"] => {
+    if (taskId === null) return null;
+    const tag = input.tags[taskId];
+    if (tag === undefined || tag.label.trim() === "") return null;
+    return { label: tag.label, color: tag.color, source: "tag" };
+  };
+
+  /** The one identity rule: the task's own group, else its lane, else nothing. */
+  const identityOf = (taskId: string | null, lane: LaneKey | null): Stop["identity"] =>
+    tagOf(taskId) ?? (lane === null ? null : (laneById.get(lane) ?? null));
 
   const entries: Entry[] = [];
 
@@ -299,10 +577,10 @@ export function buildTodayView(input: TodayInput): TodayView {
         id: event.id,
         source: "fixed",
         kind: "fixed",
-        title: event.title,
+        ...splitTitle(event.title),
         start: clockLabel(event.start, timeZone),
         end: clockLabel(event.end, timeZone),
-        lane: null,
+        identity: null,
         leaveBy: leaveAt ? `Leave by ${clockLabel(leaveAt, timeZone)}` : null,
         reason: sentence([event.location, event.countsTowardCap ? "Paid work" : null]),
       },
@@ -320,10 +598,13 @@ export function buildTodayView(input: TodayInput): TodayView {
         id: block.id,
         source: "block",
         kind: block.kind,
-        title: KIND_TITLE[block.kind] ?? block.title,
+        ...splitTitle(KIND_TITLE[block.kind] ?? block.title),
         start: clockLabel(block.start, timeZone),
         end: clockLabel(block.end, timeZone),
-        lane: block.lane === null ? null : (laneById.get(block.lane) ?? null),
+        // The group the task lives in wins over the lane: it is the name and the
+        // colour the user chose for this very task, where the lane is the
+        // planner's own grouping. A task with no group keeps the lane, as before.
+        identity: identityOf(block.taskId, block.lane),
         leaveBy: null,
         reason: sentence([
           minutesLabel((endMs - startMs) / 60_000),
@@ -396,19 +677,30 @@ export function buildTodayView(input: TodayInput): TodayView {
   const energyAsk =
     input.openAsks.find((ask) => ask.kind === "energy" && ask.status === "open") ?? null;
 
-  // Nothing is ever dropped from this list. A name the caller did not supply
+  const pastDue = pastDueLines(input, nowMs, (candidate) =>
+    identityOf(candidate.id, candidate.lane),
+  );
+  const overdueIds = new Set(pastDue.map((entry) => entry.id));
+
+  // Nothing is dropped from this list except what the past due section already
+  // names, so nothing is listed twice. A name the candidates do not cover
   // becomes a generic one, because "something did not fit and here is why" is
   // the part the user acts on; which thing it was is the detail.
-  const notToday: TodayView["notToday"] = plan.dropped.map((drop) => ({
-    title:
-      input.titles[drop.candidateId] ??
-      PLANNER_OWNED_TITLES[drop.candidateId] ??
-      TODAY_COPY.unnamedDrop,
-    reason: DROP_REASON[drop.reason] ?? DROP_REASON_FALLBACK,
-  }));
+  const titles = droppedTitles(input.candidates);
+  const notToday: TodayView["notToday"] = plan.dropped
+    .filter((drop) => !overdueIds.has(drop.candidateId))
+    .map((drop) => ({
+      ...splitTitle(
+        titles[drop.candidateId] ??
+          PLANNER_OWNED_TITLES[drop.candidateId] ??
+          TODAY_COPY.unnamedDrop,
+      ),
+      reason: DROP_REASON[drop.reason] ?? DROP_REASON_FALLBACK,
+    }));
 
   return {
     dateLabel: dayLabel(input.date),
+    notice: input.notice,
     allDay,
     stops,
     litStopId,
@@ -418,6 +710,8 @@ export function buildTodayView(input: TodayInput): TodayView {
       ask: energyAsk,
     },
     notToday,
+    pastDue,
+    lanes: laneLines(input, nowMs),
     feed: {
       line: feedLine(input.feeds, input.feedLabels, (at) =>
         sinceLabel(at, now, timeZone),

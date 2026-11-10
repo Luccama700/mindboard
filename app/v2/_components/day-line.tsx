@@ -4,6 +4,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { TODAY_COPY, type Stop, type TodayView } from "@/app/lib/v2/view/today";
+import { useAppearance } from "./appearance-root";
 import { StopCard, stopStyle } from "./stop-card";
 
 /** The prototype's one easing and its three durations, in seconds for motion. */
@@ -70,6 +71,9 @@ export function DayLine({
 }) {
   const still = useReducedMotion() === true;
   const moves = still ? undefined : ("position" as const);
+  // A stop's identity colour is the user's data and the scheme is the user's
+  // choice, so what a stop paints is a function of both: see stopStyle.
+  const { tokens } = useAppearance();
 
   // Focus belongs to one effect, keyed on the token and on NOTHING else.
   //
@@ -128,10 +132,10 @@ export function DayLine({
         className="v2-stop"
         data-state={stop.state}
         data-lit={stop.id === litStopId ? "yes" : "no"}
-        // The lane goes on the li, not on the card inside it: the rail and the
-        // dot are this element's own pseudo elements, so they can only read a
-        // variable set here. The card inherits it.
-        style={stopStyle(stop)}
+        // The identity goes on the li, not on the card inside it: the rail and
+        // the dot are this element's own pseudo elements, so they can only read
+        // a variable set here. The card inherits it.
+        style={stopStyle(stop, tokens)}
         layout={moves}
         initial={still ? false : { opacity: 0, x: 28 }}
         animate={{ opacity: 1, x: 0 }}

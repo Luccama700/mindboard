@@ -19,12 +19,11 @@
 import { energyAsk } from "@/app/lib/v2/asks/builders";
 import { openAsk } from "@/app/lib/v2/asks/lifecycle";
 import { parseRules } from "@/app/lib/v2/rules";
+import type { ScreenLane, TodayScreenData } from "@/app/lib/v2/view/screen-data";
 import type {
-  Ask,
   Candidate,
   FeedStatus,
   FixedEvent,
-  LaneKey,
   PlanInput,
   PlannerRules,
 } from "@/app/lib/v2/types";
@@ -41,18 +40,13 @@ const CAMPUS = "campus-sample";
 
 const at = (clock: string, date: string = DATE) => `${date}T${clock}:00${OFFSET}`;
 
-export interface SampleLane {
-  key: LaneKey;
-  label: string;
-  color: string;
-}
-
 /**
  * The six lanes. Lane names and colours are DATA, never engine code, so they
  * live here with the rest of the sample. The colours are the six lane colours
- * from the approved prototype's tokens.
+ * from the approved prototype's tokens, and they stay exactly these: the screen
+ * derives a readable variant per scheme rather than changing the data.
  */
-const LANES: SampleLane[] = [
+const LANES: ScreenLane[] = [
   { key: "study", label: "Study", color: "#7C9BFF" },
   { key: "work", label: "Work", color: "#2FD6A3" },
   { key: "money", label: "Money", color: "#FFB84D" },
@@ -142,7 +136,7 @@ function candidates(): Candidate[] {
   return [
     {
       id: "t-grant",
-      title: "Grant form: the last three answers",
+      title: "Grant form (the last three answers, and the budget page signed)",
       lane: "money",
       kind: "step",
       due: at("23:00"),
@@ -153,9 +147,27 @@ function candidates(): Candidate[] {
       pinned: false,
       earlyTouchDone: false,
     },
+    // An item whose date went by last week, so the screen's "Past their date"
+    // section has something in it. Its lane already holds the grant form, which
+    // is this day's one money block, so the planner has nowhere to put it: it
+    // reads as what it is, something waiting for a decision rather than for a
+    // slot. Invented, like everything else here.
+    {
+      id: "t-studio",
+      title: "Studio deposit: send the form back",
+      lane: "money",
+      kind: "step",
+      due: at("17:00", "2026-04-09"),
+      hard: false,
+      minutes: 25,
+      energyCost: 2,
+      expiresAt: null,
+      pinned: false,
+      earlyTouchDone: false,
+    },
     {
       id: "t-essay",
-      title: "Ethics essay: second draft",
+      title: "Ethics essay (second draft, one more pass on the third section)",
       lane: "study",
       kind: "step",
       due: at("23:59", "2026-04-16"),
@@ -247,21 +259,23 @@ const FEED_LABELS: Record<string, string> = {
   "fd-weather": "Weather",
 };
 
-export interface SampleDay {
-  input: PlanInput;
-  lanes: SampleLane[];
-  feeds: FeedStatus[];
-  feedLabels: Record<string, string>;
-  /**
-   * Not in the task brief's return shape, added because the screen shows the
-   * energy question's three options and the brief's TodayInput takes the asks.
-   * Built with the real ask builder, so the options are the real ones.
-   */
-  openAsks: Ask[];
-}
+/**
+ * What this day is, in one sentence, shown once near the top of the screen.
+ *
+ * It replaces the old fixed footer line. The screen no longer knows it is
+ * looking at a sample: every source says what it is, so a real account is never
+ * told its own day is invented.
+ */
+const NOTICE = "Sample day. Nothing here is connected and nothing you press is saved.";
 
-/** The sample day. A fresh object every call, so nothing can be mutated into. */
-export function sampleDay(): SampleDay {
+/**
+ * The sample day, as the one shape the Today screen takes from any source. A
+ * fresh object every call, so nothing can be mutated into it.
+ *
+ * `tags` is empty: the sample has lanes and no groups, which is exactly the case
+ * the screen has to handle by keeping the lane's name and colour.
+ */
+export function sampleDay(): TodayScreenData {
   const planner = rules();
   const input: PlanInput = {
     date: DATE,
@@ -284,10 +298,12 @@ export function sampleDay(): SampleDay {
 
   return {
     input,
-    lanes: LANES,
+    lanes: LANES.map((lane) => ({ ...lane })),
     feeds: feeds(),
     feedLabels: { ...FEED_LABELS },
     openAsks: [ask],
+    tags: {},
+    notice: NOTICE,
   };
 }
 

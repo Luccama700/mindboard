@@ -1,55 +1,42 @@
 "use client";
 
-import { TODAY_COPY, type TodayView } from "@/app/lib/v2/view/today";
+import { type TodayView } from "@/app/lib/v2/view/today";
+import { AppearanceTrigger } from "./appearance-root";
+import { FeedDots } from "./feed-strip";
 
 /**
- * The day's name, what the watchdog can see, and anything that is true all day.
- * The feed sentence is the subtitle because it is already a sentence; the pill
- * is one dot per feed, so a glance says how many are answering.
+ * The day's name, what this data is, and (on the phone) what the watchdog can
+ * see.
+ *
+ * The notice sits directly under the date because it is the one thing that says
+ * whether what follows is real and whether pressing anything is kept. It is
+ * plain text, not a banner: it is a statement, and there is nothing to dismiss.
+ *
+ * The feed sentence and its dots are rendered here for the phone and again in
+ * the side column for desktop, each hidden at the other's width. Two copies of
+ * a passive line is the price of one document order that reads rail, main, side
+ * on desktop and still puts the feed pill beside the date on the phone.
  */
 export function DayHeader({
   dateLabel,
+  notice,
   feed,
-  allDay,
 }: {
   dateLabel: string;
+  notice: string | null;
   feed: TodayView["feed"];
-  allDay: string[];
 }) {
   return (
-    <>
-      <header className="v2-top">
-        <div>
-          <h1>{dateLabel}</h1>
-          <p>{feed.line}</p>
-        </div>
-        <div className="v2-feeds" role="group" aria-label={TODAY_COPY.feeds}>
-          {feed.dots.map((dot, index) => {
-            const name = `${dot.label}: ${TODAY_COPY.feedState[dot.state]}`;
-            return (
-              <span
-                key={`${dot.label}-${index}`}
-                className="v2-dot"
-                data-state={dot.state}
-                role="img"
-                aria-label={name}
-                title={name}
-              />
-            );
-          })}
-        </div>
-      </header>
-
-      {allDay.length > 0 && (
-        <div className="v2-allday">
-          <span className="v2-allday-label">{TODAY_COPY.allDay}</span>
-          {allDay.map((title) => (
-            <span className="v2-allday-chip" key={title}>
-              {title}
-            </span>
-          ))}
-        </div>
-      )}
-    </>
+    <header className="v2-top">
+      <div className="v2-top-text">
+        <h1>{dateLabel}</h1>
+        {notice !== null && <p className="v2-notice">{notice}</p>}
+        <p className="v2-feedline">{feed.line}</p>
+      </div>
+      <div className="v2-top-aside">
+        <FeedDots dots={feed.dots} />
+        <AppearanceTrigger variant="header" />
+      </div>
+    </header>
   );
 }

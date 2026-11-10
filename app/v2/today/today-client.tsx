@@ -4,22 +4,21 @@ import { useCallback, useMemo, useState } from "react";
 
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { clockLabel } from "@/app/lib/v2/view/format";
-import {
-  TODAY_COPY,
-  actionLine,
-  buildTodayView,
-  droppedTitles,
-} from "@/app/lib/v2/view/today";
-// Type only, so none of the fixture (and none of the schema it parses its rules
-// with) reaches the browser bundle: the server builds the sample and hands the
-// plain data down.
-import type { SampleDay } from "@/app/lib/v2/fixtures/sample-day";
+import { TODAY_COPY, actionLine, buildTodayView } from "@/app/lib/v2/view/today";
+// Type only, so none of the source that built this day (and none of the schema
+// it parsed its rules with) reaches the browser bundle: the server builds the
+// data and hands the plain shape down.
+import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
 import type { Block, Energy, PlanOutput } from "@/app/lib/v2/types";
+import { AllDayRow } from "../_components/all-day-row";
 import { DayHeader } from "../_components/day-header";
 import { DayLine } from "../_components/day-line";
 import { EnergyRow } from "../_components/energy-row";
+import { FeedStrip } from "../_components/feed-strip";
+import { LaneSummary } from "../_components/lane-summary";
 import { NavBar } from "../_components/nav-bar";
 import { NotTodayList } from "../_components/not-today-list";
+import { PastDueList } from "../_components/past-due-list";
 
 interface DayState {
   /** What the user has said. null until they say. */
@@ -42,7 +41,7 @@ interface DayState {
 }
 
 /**
- * The Today screen on the sample day.
+ * The Today screen, on whatever built the day it was handed.
  *
  * THE PLANNER IS THE ONE RUNNING HERE. Start, Done, Not today and the energy
  * options do not edit the screen: they set a block's state (or the energy) and
@@ -52,12 +51,19 @@ interface DayState {
  * held, a skipped task leaves the ranking and lets the next one in, and a stop
  * that moved animates to its new place.
  *
- * `now` never moves. It is the sample's fixed invented instant, which is what
- * makes the first render deterministic (the server and the browser plan the same
- * day) and what makes a screenshot reproducible.
+ * `now` never moves: it is whatever instant the source put in the input, which
+ * is what makes the first render deterministic (the server and the browser plan
+ * the same day) and a screenshot reproducible.
+ *
+ * ONE DOCUMENT, TWO LAYOUTS. The order below is rail, main, side, which is the
+ * reading and tab order on desktop. Below 1024px the two wrappers go
+ * `display: contents` and the leaves are ordered back into the phone's own
+ * sequence by the stylesheet (header, all day, energy, status, the line, what
+ * did not fit), so the phone screen is unchanged and there is only ever one copy
+ * of every control.
  */
-export function TodayClient({ sample }: { sample: SampleDay }) {
-  const { input } = sample;
+export function TodayClient({ data }: { data: TodayScreenData }) {
+  const { input } = data;
 
   const [state, setState] = useState<DayState>(() => ({
     energy: input.energy,
@@ -73,8 +79,6 @@ export function TodayClient({ sample }: { sample: SampleDay }) {
     [input],
   );
 
-  const titles = useMemo(() => droppedTitles(input.candidates), [input.candidates]);
-
   const viewFor = useCallback(
     (energy: Energy | null, plan: PlanOutput) =>
       buildTodayView({
@@ -83,14 +87,16 @@ export function TodayClient({ sample }: { sample: SampleDay }) {
         timeZone: input.rules.timeZone,
         plan,
         fixed: input.fixed,
-        lanes: sample.lanes,
-        feeds: sample.feeds,
-        feedLabels: sample.feedLabels,
-        openAsks: sample.openAsks,
+        lanes: data.lanes,
+        candidates: input.candidates,
+        feeds: data.feeds,
+        feedLabels: data.feedLabels,
+        openAsks: data.openAsks,
+        tags: data.tags,
+        notice: data.notice,
         energy,
-        titles,
       }),
-    [input, sample, titles],
+    [input, data],
   );
 
   // The status line is composed here rather than in the render, because it is
@@ -162,40 +168,55 @@ export function TodayClient({ sample }: { sample: SampleDay }) {
   const clock = clockLabel(input.now, input.rules.timeZone);
 
   return (
-    <div className="v2-phone">
-      <DayHeader dateLabel={view.dateLabel} feed={view.feed} allDay={view.allDay} />
-      <EnergyRow energy={view.energy} answered={state.energy} onPick={onEnergy} />
-
-      {/* The screen's one live region. Pressing Start, Done or Not today
-          unmounts the button that was pressed, so this sentence is the only
-          confirmation a keyboard or screen reader user gets; between presses it
-          falls back to the energy the plan ran on. */}
-      <p className="v2-said" role="status">
-        {state.said ?? view.energy.label}
-      </p>
-
-      {view.empty ? (
-        <p className="v2-empty">{TODAY_COPY.empty}</p>
-      ) : (
-        <>
-          <DayLine
-            stops={view.stops}
-            litStopId={view.litStopId}
-            clock={clock}
-            movedIds={movedIds}
-            revision={state.revision}
-            focusToken={state.focusToken}
-            onStart={onStart}
-            onDone={onDone}
-            onSkip={onSkip}
-          />
-          {view.litStopId === null && <p className="v2-empty">{TODAY_COPY.dayOver}</p>}
-        </>
-      )}
-
-      <NotTodayList entries={view.notToday} />
-      <p className="v2-note">{TODAY_COPY.sampleNote}</p>
+    <div className="v2-shell">
       <NavBar />
+
+      <div className="v2-main">
+        <DayHeader dateLabel={view.dateLabel} notice={view.notice} feed={view.feed} />
+
+        <div className="v2-day">
+          {view.empty ? (
+            <p className="v2-empty">{TODAY_COPY.empty}</p>
+          ) : (
+            <>
+              <DayLine
+                stops={view.stops}
+                litStopId={view.litStopId}
+                clock={clock}
+                movedIds={movedIds}
+                revision={state.revision}
+                focusToken={state.focusToken}
+                onStart={onStart}
+                onDone={onDone}
+                onSkip={onSkip}
+              />
+              {view.litStopId === null && (
+                <p className="v2-empty">{TODAY_COPY.dayOver}</p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="v2-side">
+        <EnergyRow energy={view.energy} answered={state.energy} onPick={onEnergy} />
+
+        {/* The screen's one live region. Pressing Start, Done or Not today
+            unmounts the button that was pressed, so this sentence is the only
+            confirmation a keyboard or screen reader user gets; between presses
+            it falls back to the energy the plan ran on. */}
+        <p className="v2-said" role="status">
+          {state.said ?? view.energy.label}
+        </p>
+
+        <AllDayRow items={view.allDay} />
+        <FeedStrip feed={view.feed} />
+        <LaneSummary lanes={view.lanes} />
+        {/* Above what did not fit today, on both layouts: an item whose date has
+            gone by is a decision waiting, where a drop is only today's news. */}
+        <PastDueList entries={view.pastDue} />
+        <NotTodayList entries={view.notToday} />
+      </div>
     </div>
   );
 }
