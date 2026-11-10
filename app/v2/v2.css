@@ -40,7 +40,6 @@
   /* motion: one easing family, three durations */
   --v2-ease: cubic-bezier(0.2, 0, 0, 1);
   --v2-ease-in: cubic-bezier(0.05, 0.7, 0.1, 1);
-  --v2-pop: cubic-bezier(0.175, 0.885, 0.32, 1.275);
   --v2-quick: 140ms;
   --v2-std: 280ms;
   --v2-slow: 520ms;
