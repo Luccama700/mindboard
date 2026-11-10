@@ -1239,11 +1239,14 @@ describe("the desktop page fills the window", () => {
       ".v2-stop .v2-detail",
       ".v2-row .v2-row-title",
       ".v2-row .v2-detail",
-      ".v2-row .v2-row-reason",
       ".v2-allday-chip",
     ]) {
       expect(atRoot(kind, "overflow-wrap")).toBe("anywhere");
     }
+    // Not the right hand end of a row: that is a date or a fixed sentence,
+    // never one long word, and letting it break anywhere let a date split in
+    // the middle when the group name beside it was long.
+    expect(atRoot(".v2-row .v2-row-reason", "overflow-wrap")).toBeNull();
   });
 
   // The accent ring is held at 3 to 1 on the page, and a lit card is not the

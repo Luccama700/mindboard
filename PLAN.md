@@ -407,6 +407,15 @@ Found by the whole-range review on 2026-11-10 and left open by ruling:
 - **With capacity to spare, an overdue lane step can still take an earlier slot than a live side quest.** Ranking and the guaranteed block are correct; the demand walk still asks for one focus block per lane before it asks for side quests.
 - **`postcss` is imported by two test files but is not a direct dev dependency.** It resolves through hoisting today.
 
+The calendar engine (`app/lib/v2/calendar`) is committed but nothing imports it. Its review approved it as an unused engine and named two things that MUST be fixed before any screen is built on it, and two smaller ones:
+
+- **A refused commit can write stale values back.** A revert is a copy of the whole event from the list the op was built on. After two edits of one event, settling the second edit's revert puts back a stale etag (every later edit of that event then conflicts until the range is read again), or shows a refused move as done. Fix: a revert carries only the fields the op changed, taken from the inverse op, and is applied to the event as it is now; and a queued op takes its expected etag from the current list when it is sent.
+- **A draft discarded while its create is in flight comes back as a real event.** `settle` adds a replacement for an id the list no longer holds. Fix: either a queue per draft id that replays onto the real id, or the rule that a draft cannot be edited or discarded through `commit` until its create has settled, enforced by whoever calls it.
+- **On a spring forward day the mapping from grid minute to instant goes backwards across the missing hour**, so an event's end jumps up while the pointer moves down, and a drop at 02:30 lands at 03:30. Fix: map a missing minute to the first minute that exists at or after it.
+- **On a fall back day** an event that starts before the repeated hour and ends inside it is still drawn short, and nudging an event inside the second pass of that hour moves it 45 minutes earlier. The second is inherent to a grid drawn in wall clock minutes; record it, do not fix it.
+- **Rules for the caller, by design:** `commit` takes the list from before the op; on a conflict, read the range again with the port's `list`; commit only when `applyOp` returned a new array (a move or rename to the same value sends nothing useful).
+- **What the real Google adapter must do** is written in the implementer's report (the existing client has no delete, returns only an id from a create, turns every 403 into a sign out error, reads no etag and sends no `If-Match`). Carry that list into the task that writes the adapter.
+
 The planner now also exports `planningDate(now, rules)`: the tick's "today" follows lights out, not midnight. `rankCandidates` takes the day being planned as a required fourth argument for the same reason.
 
 ## Next after this plan

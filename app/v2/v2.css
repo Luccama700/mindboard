@@ -448,7 +448,6 @@ body:has([data-v2-root]) {
 [data-v2-root] .v2-stop .v2-detail,
 [data-v2-root] .v2-row .v2-detail,
 [data-v2-root] .v2-row .v2-row-title,
-[data-v2-root] .v2-row .v2-row-reason,
 [data-v2-root] .v2-allday-chip {
   overflow-wrap: anywhere;
 }

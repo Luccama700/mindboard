@@ -1541,12 +1541,14 @@ describe("past its date is judged from the planner's reference", () => {
         now: dawn,
         reference: windowStart,
         plan: plan({
-          blocks: [block({ id: "b", start: at("09:00"), end: at("09:50") })],
+          blocks: [block({ id: "b", start: at("07:00"), end: at("07:50") })],
         }),
       }),
     );
-    // 09:00 is ahead of the clock, so it is the next stop, not a past one, even
-    // though the reference instant is 08:30.
+    // 07:00 is ahead of the clock (05:00) and BEHIND the reference instant
+    // (08:30), which is the only place the two can be told apart: read from the
+    // clock it is the next stop, read from the reference it would already be
+    // behind you. An early shift before the usual wake time is the real case.
     expect(view.litStopId).toBe("b");
     expect(view.stops[0].state).toBe("next");
   });
