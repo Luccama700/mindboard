@@ -16,7 +16,7 @@
 
 - **Never run this app against the production database.** No `next dev`, `next start` or script with a production `.env.local`. Use placeholder env values for builds: `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=placeholder-not-a-real-key`.
 - Do not read any `.env*` file, `worker/*.env`, or `overnight/.env`. Do not use any MCP data tool. Do not push, merge, deploy or apply a migration.
-- **New paths only:** `app/lib/v2/**`, `app/api/v2/**`, `app/v2/**`, `__tests__/v2-*.test.ts(x)`, `supabase/migrations/0066_*.sql` and up. Existing files change only where a task names them.
+- **New paths only:** `app/lib/v2/**`, `app/api/v2/**`, `app/v2/**`, `test/migrations/**`, `__tests__/v2-*.test.ts(x)`, `supabase/migrations/0066_*.sql` and up. Existing files change only where a task names them.
 - New migrations are written and reviewed, never applied.
 - No model call anywhere under `app/lib/v2/**`.
 - **Time:** every local time comes from an IANA `timeZone` string through the helpers in `app/lib/snapshots/zoned-time.ts`. No `Date` getters, no `toISOString().slice`, no time-zone math in SQL. Tests must not assert the winter UTC offset of `America/Vancouver` (runtimes disagree about it). Use `UTC`, `America/Phoenix`, `Asia/Tokyo`, and `America/New_York` for daylight-saving edges.
@@ -208,15 +208,180 @@
 
 ---
 
-## Wave 2 (detailed after Wave 1 is reviewed)
+## Wave 2
 
-### Task 6: Tables, stores and the tick
+Tasks 6, 8 and 9 own disjoint files and can run side by side. Task 7 needs Task 6. Task 8 needs Task 2.
 
-Migration `0066_v2_engine.sql` (additive, unapplied): plan runs and blocks, asks, signals, feeds and feed runs, alerts, outbound notifications, per-user planner rules, Telegram links with pairing codes, `user_settings.ui_version`, and the new task columns. Store interfaces with in-memory fakes and Supabase implementations. `runTick(userId, now, deps)` composes Tasks 2 to 5. Route handlers: `app/api/v2/cron/tick`, `app/api/v2/telegram/webhook`, `app/api/v2/status`. A change to `utils/google/calendar.ts` so a failed token refresh records Google's error code instead of discarding it.
+Environment names used from here on (values live in the host's settings, never in the repo): `V2_CRON_SECRET`, `V2_STATUS_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `V2_FIXTURES`.
 
-### Task 7: Today on fixtures, behind the account switch
+### Task 6: Tables and stores
 
-`app/v2/today` in the new visual system (reference: `docs/rebuild/mockups/prototype.html`, sample data there must not be copied). A pure view-model builder with tests. Fixture mode only when `V2_FIXTURES=1` and not in production.
+**Files:**
+- Create: `supabase/migrations/0066_v2_engine.sql`, `supabase/migrations/0067_v2_tick_schedule.sql`
+- Create: `app/lib/v2/store/types.ts`, `app/lib/v2/store/mappers.ts`, `app/lib/v2/store/memory.ts`, `app/lib/v2/store/supabase.ts`
+- Test: `__tests__/v2-store-mappers.test.ts`, `__tests__/v2-store-memory.test.ts`, `__tests__/v2-migration-sql.test.ts`
+- Modify: the allowlist in `__tests__/tenant-scope-invariant.test.ts`, only for behaviour 9
+- Read first: `supabase/migrations/0054_urc.sql` (server-only tables), `0064_same_tenant_fks.sql`, `0065_rls_hardening.sql`, `utils/supabase/service.ts`, and `app/lib/urc/` for how this codebase writes a service-client store
+
+**Interfaces:**
+- Consumes: Task 1 types.
+- Produces (in `store/types.ts`; you design the method lists, these names are fixed):
+  - `interface RulesDocument { planner: Partial<PlannerRules>; lanes: Array<{ key: LaneKey; label: string; color: string; groupIds: string[] }>; feedLabels: Record<string, string> }`
+  - `interface EngineUser { userId: string; timeZone: string; rules: RulesDocument }`
+  - `interface DayRecord { userId: string; date: DateKey; energy: Energy | null; energyAssumed: boolean; mode: PlanMode; plannedAt: Instant | null; morningSentAt: Instant | null; dropped: PlanOutput["dropped"]; leaveBy: PlanOutput["leaveBy"] }`
+  - `interface OutboxItem { id: string; userId: string; kind: "morning" | "ask" | "alert" | "note"; dedupeKey: string; delivery: "interrupt" | "digest"; message: OutgoingMessage; askId: string | null; createdAt: Instant; claimedAt: Instant | null; sentAt: Instant | null; chatMessageId: string | null; error: string | null }`
+  - `interface ChannelLink { userId: string; chatId: string | null; linkedAt: Instant | null }`
+  - `interface Stores { users; days; blocks; asks; outbox; feeds; alerts; channels }`, one small interface per member, every method taking `userId` first except `users.listEnabled()` and `channels.userForChat(chatId)`
+  - `createMemoryStores(): Stores` and `createSupabaseStores(client: SupabaseClient): Stores`
+
+**Tables (names fixed, columns follow the Task 1 types):** `v2_rules` (one row per user: the rules document and `enabled boolean not null default false`, the per-account switch), `v2_days`, `v2_blocks`, `v2_asks`, `v2_outbox`, `v2_feed_expectations`, `v2_feed_runs`, `v2_alerts`, `v2_channels`.
+
+**Behaviour the tests and the review pin:**
+
+1. `0066` creates new tables only. It changes no existing table, column, policy or row.
+2. Every table has `user_id uuid not null references auth.users (id) on delete cascade` and row level security enabled. `authenticated` may `select` its own rows, written as `(select auth.uid()) = user_id`, on every table except `v2_outbox` and `v2_channels`, which get no policy at all. There is no insert, update or delete policy anywhere: every write is the server's. `anon` gets nothing. Follow how `0065` handles grants.
+3. A foreign key to another user-owned table is composite, `(user_id, x_id)` to `(user_id, id)`, as `0064` does (`v2_blocks.task_id` to `tasks`, `v2_outbox.ask_id` to `v2_asks`).
+4. Rules that must hold even when two requests race are database facts: `v2_blocks` primary key `(user_id, id)`; `v2_days` primary key `(user_id, date)`; `v2_asks` unique `(user_id, dedupe_key)`, so a key can be asked once, ever; `v2_outbox` unique `(user_id, dedupe_key)`; `v2_alerts` unique `(user_id, cause)` where status is `open`; `v2_channels` unique chat id; `v2_feed_expectations` primary key `(user_id, feed)`.
+5. Every text column that mirrors a union in `types.ts` has a check constraint with exactly that union's values.
+6. Instants are `timestamptz`. Local dates are `date` columns filled by the app. No time-zone function appears in the SQL.
+7. `v2_channels` stores the chat id and, for pairing, a SHA-256 hash of a one-time code with an expiry. Never the code.
+8. `0067` schedules the tick: a `pg_cron` job every 10 minutes that calls the tick route with `net.http_post`, reading the URL and the bearer from Supabase Vault (`v2_tick_url`, `v2_cron_secret`). No URL and no secret appear in the file. Both files open with a comment: what it does, that it has NOT been applied, what must exist first, and the statements that remove it.
+9. Every Supabase query in `store/supabase.ts` filters on `user_id` or carries it in the payload, so the tenant-scope test passes. The two cross-user reads (`users.listEnabled`, `channels.userForChat`) return ids only and get one allowlist entry each that says why.
+10. `mappers.ts` is pure: row to domain and back, validated with zod on read. A malformed row throws `RowShapeError` naming the table and the column. `parseRulesDocument(input: unknown): RulesDocument` lives here.
+11. `asks.insert` returns the existing ask with `created: false` when the key exists. `asks.answer(userId, askId, optionId, at)` is one conditional update (`where status = 'open'`) and returns the updated ask, or `null` when it was not open. This is what makes a double tap or a retried webhook harmless.
+12. `outbox.enqueue` does nothing when the key exists. `outbox.claim(userId, id, at)` is one conditional update (`where claimed_at is null`) and returns the item or `null`: a message is sent at most once, even with two ticks overlapping.
+13. `blocks.replacePlanned(userId, date, blocks)` replaces only rows in state `planned`. Rows in `started`, `done` or `skipped` are never rewritten by a plan.
+14. `feeds.prune(userId, before)` deletes that user's feed runs older than the instant. Nothing else in the stores deletes.
+15. `memory.ts` has the same semantics as the Supabase stores, including 11 to 13, and `v2-store-memory.test.ts` pins them. Engine tests run on it.
+16. `v2-migration-sql.test.ts` reads the two files as text and checks: every `create table` is followed by `enable row level security` for that table; no policy for insert, update, delete or all; no grant to `anon`; no `at time zone` and no `timezone(`; ASCII only; no `http` literal in `0067`.
+
+- [ ] **Step 1: Write the failing tests.**
+- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 3: Write the migrations, then the mappers, the memory stores and the Supabase stores.**
+- [ ] **Step 4: Run your tests, the tenant-scope test (`npx vitest run __tests__/tenant-scope-invariant.test.ts`), eslint on your paths and `npx tsc --noEmit`.**
+
+---
+
+### Task 7: The tick, incoming answers and the routes
+
+**Files:**
+- Create: `app/lib/v2/engine/sources.ts`, `app/lib/v2/engine/tick.ts`, `app/lib/v2/engine/incoming.ts`, `app/lib/v2/engine/pairing.ts`, `app/lib/v2/engine/probes.ts`
+- Create: `app/api/v2/cron/tick/route.ts`, `app/api/v2/telegram/webhook/route.ts`, `app/api/v2/status/route.ts`
+- Modify: `utils/google/calendar.ts` (behaviour 12 only), `app/lib/v2/channel/telegram.ts` (behaviour 13 only)
+- Test: `__tests__/v2-engine-sources.test.ts`, `__tests__/v2-engine-tick.test.ts`, `__tests__/v2-engine-incoming.test.ts`, `__tests__/v2-engine-pairing.test.ts`, `__tests__/v2-api-routes.test.ts`
+- Read first: `app/api/worker/route.ts` (bearer check, runtime), the route handler guide under `node_modules/next/dist/docs/`, `app/lib/v2/store/types.ts`, `utils/google/calendar.ts`
+
+**Interfaces:**
+- Consumes: `planDay`, `parseRules` (Task 2); asks lifecycle, policy and builders (Task 3); `evaluateFeeds`, `planAlerts`, `daysSince` (Task 4); messages, `TelegramClient`, `parseUpdate`, `verifySecret` (Task 5); `Stores` (Task 6).
+- Produces:
+  - `interface TickDeps { stores: Stores; telegram: TelegramClient | null; loadFixed(userId: string, date: DateKey, user: EngineUser): Promise<{ fixed: FixedEvent[]; calendar: FeedRun }>; loadCandidates(userId: string, user: EngineUser, now: Instant): Promise<Candidate[]>; newId(): string }`
+  - `runTick(deps: TickDeps, userId: string, now: Instant): Promise<{ ok: boolean; steps: Record<string, "ok" | "error"> }>`
+  - `handleIncoming(deps: TickDeps, incoming: Incoming, now: Instant): Promise<void>`
+  - `createPairingCode(stores: Stores, userId: string, now: Instant, random: () => string): Promise<string>` and `redeemPairingCode(stores: Stores, code: string, chatId: string, now: Instant): Promise<string | null>`
+  - `tasksToCandidates(rows, user: EngineUser, touchedTaskIds: Set<string>): Candidate[]` and `toFixedEvents(events, timedTasks, capCalendarIds: Set<string>): FixedEvent[]`
+  - `SLIP_GRACE_MINUTES = 10`, `ALERT_REOPEN_QUIET_HOURS = 6`, `FEED_RUN_RETENTION_DAYS = 14`
+
+**Behaviour the tests pin:**
+
+1. The tick runs these steps in this order. A step that throws is recorded as `error` and the rest still run. The tick always writes its own feed run (`engine-tick`), `ok` only when every step was.
+   1. Expire asks that are due and apply each default effect.
+   2. A `started` block whose end has passed becomes `done`.
+   3. Slips. A `planned` block whose start is `SLIP_GRACE_MINUTES` or more in the past: when no ask exists for it, open a slip ask; when its ask is already resolved, the block becomes `skipped` with reason `slipped twice`.
+   4. Plan today with `planDay` and store it with `blocks.replacePlanned`. The plan is recomputed every tick: the planner is deterministic and keeps times that still fit.
+   5. Morning, once a day: at or after that weekday's wake target and before 12:00 local, when `morningSentAt` is empty. Open the energy ask unless energy is already set, enqueue the morning message (kind `morning`, key `` `morning:${date}` ``), set `morningSentAt`.
+   6. Watchdog: feed runs of the last 48 hours plus the probes, through `evaluateFeeds` and `planAlerts`. Every action is stored. `open` is announced unless an alert for the same cause was announced in the last `ALERT_REOPEN_QUIET_HOURS` hours. `escalate` is announced. `close` is announced only when that alert had been announced. `update` is never announced. An expectation is judged only once it has been enabled for longer than its interval plus grace.
+   7. Send: claim and send outbox items with delivery `interrupt`. Nothing is sent inside quiet hours except an ask of kind `night-guard`. A failed send stores a short error class on the item and writes a `telegram` feed run with that class (`bot-blocked` for HTTP 403).
+   8. Prune this user's feed runs older than `FEED_RUN_RETENTION_DAYS` days.
+2. Asks go through `decideDelivery`. `interrupt` is enqueued for sending and counts toward the day's budget. `digest` and `hold` are stored and shown on Today, not pushed. The morning message and alerts do not count toward the budget.
+3. With no Telegram link, or `telegram` null, every step still runs, nothing is sent, and the `telegram` feed reads cause `not-linked`.
+4. A calendar failure does not stop the plan. `loadFixed` returns what it has plus a `calendar` feed run with the error class, and the tick plans with it.
+5. `handleIncoming` for an `answer`: find the user for the chat (unknown chat: do nothing). `asks.answer` decides. When it changed: apply the effect, replan, then `answerCallback` with `answeredText` and `replaceButtons` with the original text, a new line, and `answeredText`. When it did not change (second tap, retry): `answerCallback` with the recorded answer and nothing else.
+6. Effects: `block.done` sets the block `done`. `block.reschedule later-today` leaves it `planned` and replans from now. `block.reschedule tomorrow` and `block.drop` set it `skipped` (reasons `moved to tomorrow`, `dropped`). `energy.set` stores the day's energy as given, not assumed. No effect touches the task row.
+7. `handleIncoming` for a `start`: a valid, unexpired code links the chat to that code's user, clears the code, and replies `Linked. I will message you here.` Anything else replies `That code is not valid any more. Make a new one in Mindboard.` Codes are 128 random bits, stored as a SHA-256 hash, valid 15 minutes, single use. A `text` from any chat is ignored in this slice.
+8. `tasksToCandidates`: open tasks only. `lane` is the lane whose `groupIds` contains the task's group, else null. `kind` is `step` with a lane, `side` without. `due` is the due date at the due time, or at 23:59 local when there is no time. `hard` is true for a dated task in a lane. `minutes` is `estimated_minutes`. `earlyTouchDone` is true when the id is in `touchedTaskIds`.
+9. `toFixedEvents`: timed calendar events (source `google`, `countsTowardCap` when the calendar id is in `capCalendarIds`), and tasks that have both a due time and a duration (source `task`). All-day events keep `allDay: true`.
+10. `POST /api/v2/cron/tick`: bearer `V2_CRON_SECRET`, compared in constant time. 503 when the variable is unset, 401 on a mismatch. It runs the tick for every enabled user, one failing user never stopping the next, and answers `{ users, failed }` and nothing else. `runtime = "nodejs"`, `maxDuration = 60`.
+11. `POST /api/v2/telegram/webhook`: the `x-telegram-bot-api-secret-token` header against `TELEGRAM_WEBHOOK_SECRET` with `verifySecret`, 401 on a mismatch. After that it always answers 200, whatever the update was. `GET /api/v2/status`: bearer `V2_STATUS_SECRET`, answers `{ ok, lastTickAt, staleMinutes }` across all users, `ok` false when the newest tick is older than 30 minutes. No per-user data.
+12. `utils/google/calendar.ts`: when a token refresh fails, the thrown `GoogleCalendarConnectionError` carries Google's error code (`invalid_grant`, `invalid_client` and so on, `unknown` when the body has none) and one line is logged with that code and no token. Existing callers keep working unchanged.
+13. `channel/telegram.ts`: requests time out after 10 seconds, errors are a `TelegramError` with `method` and `status` (still never the token), and `toSendMessagePayload` throws on an option id that contains a colon.
+14. Probes: `home-worker` reads the newest heartbeat in `worker_status` as a feed run. More probes arrive later.
+
+- [ ] **Step 1: Write the failing tests** on the memory stores and `FakeTelegram`, one per behaviour, plus: `two ticks at the same instant send one morning message`, `a retried webhook update changes nothing`, `an answer after the ask expired changes nothing`, `a tick with a failing calendar still plans`, `quiet hours hold an alert until the wake target`.
+- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run your tests, the tenant-scope test, eslint on your paths and `npx tsc --noEmit`.**
+
+---
+
+### Task 8: Today on sample data
+
+**Files:**
+- Create: `app/lib/v2/view/today.ts`, `app/lib/v2/view/format.ts`, `app/lib/v2/fixtures/sample-day.ts`
+- Create: `app/v2/layout.tsx`, `app/v2/v2.css`, `app/v2/today/page.tsx`, `app/v2/today/today-client.tsx`, and components under `app/v2/_components/`
+- Test: `__tests__/v2-view-today.test.ts`, `__tests__/v2-view-format.test.ts`, `__tests__/v2-fixtures.test.ts`
+- Read first: `docs/rebuild/mockups/prototype.html` (the approved look and motion; a local file, not in git), the pages and fonts guides under `node_modules/next/dist/docs/`, `app/lib/v2/plan/planner.ts`
+
+**Interfaces:**
+- Consumes: Task 1 types, `planDay` and `DEFAULT_RULES` (Task 2), `feedLine` (Task 5).
+- Produces:
+  - `buildTodayView(input: TodayInput): TodayView` where `TodayInput = { date: DateKey; now: Instant; timeZone: string; plan: PlanOutput; fixed: FixedEvent[]; lanes: Array<{ key: LaneKey; label: string; color: string }>; feeds: FeedStatus[]; feedLabels: Record<string, string>; openAsks: Ask[]; energy: Energy | null }`
+  - `TodayView = { dateLabel: string; allDay: string[]; stops: Stop[]; litStopId: string | null; energy: { label: string; assumed: boolean; ask: Ask | null }; notToday: Array<{ title: string; reason: string }>; feed: { line: string; dots: Array<{ label: string; state: FeedStatus["state"] }> }; empty: boolean }`
+  - `Stop = { id: string; source: "fixed" | "block"; kind: BlockKind | "fixed"; title: string; start: string; end: string; lane: { label: string; color: string } | null; state: "done" | "skipped" | "past" | "now" | "next" | "later"; leaveBy: string | null; reason: string }`
+  - `clockLabel(at: Instant, timeZone: string): string` (24-hour `HH:MM`) and `dayLabel(date: DateKey): string`
+  - `sampleDay(): { input: PlanInput; lanes: TodayInput["lanes"]; feeds: FeedStatus[]; feedLabels: Record<string, string> }`
+
+**Behaviour the tests pin:**
+
+1. Stops are the timed fixed events and the blocks, in start order. All-day events go in `allDay`.
+2. One stop is lit: the one in progress at `now`, else the next one that has not ended. A `done` or `skipped` block is never lit. Nothing is lit when the day is over.
+3. A fixed event with a leave-by time shows it as `Leave by HH:MM`.
+4. Energy reads `Low`, `OK` or `Good`, and `OK, assumed` when the plan assumed it. An open energy ask is passed through so the screen can show its three options.
+5. `notToday` lists dropped candidates with plain reasons: `no-room` is `No room today`, `capacity` is `Past today's capacity`, `cap` is `Would go over your weekly hours`.
+6. `empty` is true with no stops and no all-day events, and the screen then says `Nothing planned. Add a task and it lands here.`
+7. No output string of `view/` contains U+2014 or U+2013, for every fixture. No streak, point, level or penalty appears in data or copy.
+8. The sample day is fictional (invented titles, six lanes named Study, Work, Money, People, Craft, Body) and is a real `PlanInput`: the screen shows `planDay(sampleDay().input)`, not a hand-written plan.
+9. `app/v2/today/page.tsx` renders the sample day when `process.env.V2_FIXTURES === "1"` and `process.env.VERCEL_ENV !== "production"`. In that mode it reads no database and needs no sign-in. In every other case it calls `notFound()` (Task 7 adds the live branch).
+10. On the sample screen the buttons work on local state: Start, Done and Not today change the block and re-run `planDay` in the browser, so a replan is the real planner. Blocks that move animate to their new place (shared layout animation). The energy options replan too.
+11. The look follows the prototype: the day as one line of stops, one lit stop as a filled tinted card, no glow. Colour tokens live in `app/v2/v2.css` under `[data-v2-root]` and `app/globals.css` is not edited. Fonts are Chakra Petch for display and Atkinson Hyperlegible for text, loaded with `next/font/google` in `app/v2/layout.tsx`. Motion uses `motion`, with durations 140, 280 and 520 ms, and stops when the system asks for reduced motion.
+12. It works at 375 px wide with no sideways scroll, every control is at least 44 px tall, and keyboard focus is visible.
+
+- [ ] **Step 1: Write the failing tests** for the view model, the formatters and the fixtures.
+- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 3: Implement the view model, then the screen.**
+- [ ] **Step 4: Run your tests, eslint on your paths and `npx tsc --noEmit`.**
+
+---
+
+### Task 9: Migration rehearsal
+
+**Files:**
+- Create: `test/migrations/harness.mjs`, `test/migrations/supabase-stubs.sql`, `test/migrations/seed-two-tenants.sql`, `test/migrations/README.md`
+- Test: `__tests__/v2-migrations-apply.test.ts`
+- Read first: `supabase/migrations/` (all of it, quickly), `test/isolation/README.md`
+
+**Interfaces:**
+- Consumes: `@electric-sql/pglite` (already installed as a dev dependency).
+- Produces:
+  - `createDatabase(): Promise<PGlite>` (in memory, with the stubs loaded)
+  - `listMigrations(dir?: string): string[]` (file names in order)
+  - `applyMigrations(db, opts: { from?: string; upTo?: string; skip?: string[] }): Promise<string[]>` (each file in its own transaction; on failure it throws an error naming the file and Postgres's message)
+  - a command line: `node test/migrations/harness.mjs --data <export folder> [--from-applied 0055] [--skip 0061]`
+
+**Behaviour the tests pin:**
+
+1. The stubs give the migrations what Supabase gives them and nothing more: the roles `anon`, `authenticated` and `service_role`, an `auth` schema with `users` and `uid()`, a `storage` schema with `buckets`, `objects` and `foldername()`, and `cron`, `net` and `vault` stand-ins that record what they were asked to do. The migration files run unmodified.
+2. Every migration from `0001` to `0065` applies in order on an empty database.
+3. With `0001` to `0055` applied and a small invented two-tenant data set loaded, `0056` to `0065` apply. This is what catches a new constraint that existing rows would break.
+4. After `0065`: every table in `public` has row level security on; `jobs`, `ai_audit_log`, `urc_devices`, `urc_jobs`, `oauth_grants` and `oauth_used_codes` have no policy that lets a client write; `anon` holds no table privilege in `public`.
+5. A migration that fails reports its file name. The test for this uses a deliberately broken file in a temporary folder.
+6. The command line loads a JSON export (one `<table>.json` per table and `auth-users.json`, as the export tool writes them) after the already-applied migrations, fills columns the export leaves out with a placeholder, applies the rest, and prints one line per migration and the row count of every table before and after. It never prints a row. This mode is for local use on real data and has no test that needs real data.
+
+- [ ] **Step 1: Write the failing tests.**
+- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 3: Write the stubs and the harness.** If something in a migration cannot be made to run in this engine, stop and report which statement and why.
+- [ ] **Step 4: Run your test file, eslint on your paths and `npx tsc --noEmit`.**
+
+---
 
 ## Not in this plan
 
