@@ -66,7 +66,7 @@
   - `dayWindow(date: DateKey, rules: PlannerRules): { startMs: number; endMs: number }`
   - `freeIntervals(date: DateKey, fixed: FixedEvent[], rules: PlannerRules, opts: { fromMs: number; allowProtected: boolean }): Array<{ startMs: number; endMs: number }>`
   - `leaveByFor(fixed: FixedEvent[], rules: PlannerRules): PlanOutput["leaveBy"]`
-  - `rankCandidates(candidates: Candidate[], now: Instant, rules: PlannerRules): Array<{ candidate: Candidate; tier: "due-today" | "hard-window" | "lane-step" | "side"; }>`
+  - `rankCandidates(candidates: Candidate[], now: Instant, rules: PlannerRules, date: DateKey): Array<{ candidate: Candidate; tier: "due-today" | "hard-window" | "lane-step" | "side"; }>`
   - `weekStartKey(date: DateKey): DateKey` (the Monday of that week)
   - `capRoomHours(date: DateKey, fixed: FixedEvent[], week: WeekStats, rules: PlannerRules): number` (`Infinity` with no cap or inside an exempt range)
   - `planDay(input: PlanInput): PlanOutput`
@@ -389,6 +389,18 @@ Environment names used from here on (values live in the host's settings, never i
 - [ ] **Step 4: Run your test file, eslint on your paths and `npx tsc --noEmit`.**
 
 ---
+
+## Known open edges
+
+Found by the last review, after the single fix pass, and left open on purpose. Neither can run until the engine is switched on.
+
+- **The interrupt budget can count one ask twice.** With lights out after midnight, an ask sent at 00:20 counts against the day that is ending and again against the next one, because the count has a start and no end. Count within the planning day's bounds.
+- **A deadline after midnight never reads as "closes today".** A hard item due at 00:30, on a night whose lights out is 01:30, is compared by calendar date, so it gets an ordinary block on the day that is ending and is overdue on the next. Compare by planning date.
+- **An ask still open at lights out keeps its buttons.** A tap after the planning day has ended is acknowledged and does nothing.
+- **A "later today" move can be reverted** by a scheduled run that read the day just before the move. The next run applies it again.
+- **A calendar event dragged onto today while its task is dated another day** is planned twice.
+
+The planner now also exports `planningDate(now, rules)`: the tick's "today" follows lights out, not midnight. `rankCandidates` takes the day being planned as a required fourth argument for the same reason.
 
 ## Next after this plan
 

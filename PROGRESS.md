@@ -27,7 +27,10 @@ Read this first when resuming. Newest entry on top. `PLAN.md` is the current pla
 - Task 6 (tables and stores) built and reviewed. `0066` creates nine tables and one server-only function and touches nothing that exists. `0067` schedules the tick through Vault. Two fix rounds (replacing a day's plan is now one locked statement; the in-memory store mirrors the database's rules). Clean at `69f7fe4`. Neither migration has been applied anywhere real.
 - Task 9 (migration rehearsal) built and reviewed. Every migration runs in an in-memory Postgres as part of `npm run test`. It found no fault in `0056` to `0067`. The rehearsal on a local copy of real data and the comparison of constraint and policy names with the live database are written up outside git.
 - Task 8 (Today on sample data) built, rendered at phone width and reviewed. Fixture mode only (`V2_FIXTURES=1`, never in production). The first render caught a stylesheet that did not parse, which no test could see.
-- Task 7 (the tick, incoming answers, routes) in progress at the time of this entry. If its commit is missing from `git log`, it starts again from its brief plus `.superpowers/sdd/PLAN/task-7-context.md` (if that file is gone, the same facts are in the Task 2, 3, 4, 5 and 6 sections of `PLAN.md`).
+- Task 7 (the tick, incoming answers, routes) built and reviewed by a stronger reviewer. Its review found two serious defects before anything ran: a block whose answer had been recorded but whose effect had not landed was dropped as slipped twice, and the weekly paid-hours cap did not count shifts on the week's other days. Both fixed, with the cap failing closed. Clean after two fix rounds.
+- Whole-branch review, then one fix pass, then one re-check. It found what no per-task review could: a query on a column that does not exist (the tests had stubbed the same wrong name), a day cut at midnight when lights out is later, invalid offsets for instants with milliseconds east of UTC (a defect in an existing helper, also fixed), and overdue items treated as deadlines every day. All fixed. `__tests__/v2-schema-contract.test.ts` now checks every column name the engine sends against the migrated schema.
+- Verdict of the last re-check: fit to show as built and reviewed, not yet live. What is still open is listed in `PLAN.md` under "Known open edges" and "Next after this plan".
+- **Not built, and required before the engine can be switched on for anyone:** the live Today screen, a go-live script (nothing yet writes an account's rules, expectations or pairing code, or enables an account), and a first run of the storage code against a real database.
 
 ### How the build runs
 
@@ -40,6 +43,9 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 | When | Lint | Tests | Build |
 |---|---|---|---|
 | Baseline, `bd91c3e` | 0 errors, 2 warnings | 1902 of 1902 (94 files) | ok, placeholder env |
+| All nine tasks, before the whole-branch review, `4827115` | 0 errors, 2 warnings | 2646 of 2646 (118 files) | ok, placeholder env |
+| After the whole-branch fix pass, `2159f52` | 0 errors, 2 warnings | 2742 of 2742 (119 files) | ok, placeholder env |
+| Final, one test added after `2159f52` | 0 errors, 2 warnings | 2743 of 2743 (119 files) | not re-run: no code changed since the build above |
 
 ### Known traps
 
