@@ -33,7 +33,7 @@ import type { EngineCalendarEvent, EngineTaskRow } from "@/app/lib/v2/engine/sou
 import { parseRules } from "@/app/lib/v2/rules";
 import { RowShapeError, parseRulesDocument } from "@/app/lib/v2/store/mappers";
 import type { RulesDocument } from "@/app/lib/v2/store/types";
-import type { Instant, PlannerRules } from "@/app/lib/v2/types";
+import type { DateKey, Instant, PlannerRules } from "@/app/lib/v2/types";
 
 /** The folder's contents. Fixed names: nothing is ever derived from a request. */
 export const SNAPSHOT_FILES = {
@@ -44,6 +44,11 @@ export const SNAPSHOT_FILES = {
   income: "income_sources.json",
   /** Optional: without it the day is planned from the tasks alone. */
   calendar: "calendar-events.json",
+  /**
+   * Optional: without it the calendars are named after the groups they are
+   * linked to, and plainly where none is.
+   */
+  calendars: "calendars.json",
 } as const;
 
 /**
@@ -202,7 +207,21 @@ export interface SnapshotMeta {
   timeZone: string;
   takenAt: Instant;
   capCalendarIds: string[];
+  /**
+   * The days the calendar file can speak for, inclusive, or null when the
+   * folder does not say.
+   *
+   * It is not the same question as which days have an event on them: an export
+   * covering a fortnight with nothing on the Sunday says the Sunday is free,
+   * and without this it would have to say it knows nothing about it. A folder
+   * written before this field existed still loads, and then the range is taken
+   * from the events themselves.
+   */
+  calendarRange: { from: DateKey; to: DateKey } | null;
 }
+
+/** A day that exists, as a required column. */
+const dayKey = z.string().refine(isRealDateKey);
 
 const snapshotSchema = z.object({
   userId: z.string().min(1),
@@ -212,6 +231,10 @@ const snapshotSchema = z.object({
     .array(z.string())
     .nullish()
     .transform((ids) => (ids ?? []).filter((id) => id.length > 0)),
+  calendarRange: z
+    .object({ from: dayKey, to: dayKey })
+    .nullish()
+    .transform((range) => range ?? null),
 });
 
 export async function readSnapshotMeta(dir: string): Promise<SnapshotMeta> {
@@ -292,12 +315,18 @@ export async function readTaskRows(dir: string, userId: string): Promise<EngineT
   return shaped(file, z.array(taskRowSchema), await readRowsFor(dir, file, userId));
 }
 
-/** A group, as the screen's tags need it. */
+/** A group, as the screen's tags and the calendar's names need it. */
 export interface LocalGroup {
   id: string;
   name: string | null;
   color: string | null;
   archived: boolean;
+  /**
+   * The Google calendar this group is linked to (`groups.google_calendar_id`,
+   * migration 0003), or null. It is how a calendar in the export gets the name
+   * and the colour the user chose, when the folder carries no calendar list.
+   */
+  google_calendar_id: string | null;
 }
 
 const groupRowSchema = z.object({
@@ -305,6 +334,7 @@ const groupRowSchema = z.object({
   name: text,
   color: text,
   archived: flag,
+  google_calendar_id: text,
 });
 
 export async function readGroupRows(dir: string, userId: string): Promise<LocalGroup[]> {
@@ -358,7 +388,17 @@ const eventSchema = z.object({
         : value,
     ),
   location: text,
+  // Absent means no: an export written before the calendar window existed says
+  // nothing about series, and an occurrence wrongly marked as one would wear a
+  // repeating mark it has not earned.
+  recurring: flag,
 });
+
+/** An event of a snapshot: the engine's shape, plus what the window needs. */
+export interface LocalCalendarEvent extends EngineCalendarEvent {
+  /** One occurrence of a repeating series. */
+  recurring: boolean;
+}
 
 /**
  * The week's events, or null when the file is not there. Null is not an empty
@@ -372,9 +412,68 @@ const eventSchema = z.object({
  * put only the owner's own calendars in it. An event from somebody else's
  * calendar would be shown on the day like any other.
  */
-export async function readCalendarEvents(dir: string): Promise<EngineCalendarEvent[] | null> {
+export async function readCalendarEvents(
+  dir: string,
+): Promise<LocalCalendarEvent[] | null> {
   const file = SNAPSHOT_FILES.calendar;
   const body = await readText(dir, file);
   if (body === null) return null;
   return shaped(file, z.array(eventSchema), parseJson(file, body));
+}
+
+// ------------------------------------------------------------ calendars.json
+
+/** What a calendar with no name of its own is called. */
+const UNNAMED_CALENDAR = "Calendar";
+
+const HEX_COLOUR = /^#[0-9A-Fa-f]{6}$/;
+
+/** One calendar of the export, as the folder lists it. */
+export interface LocalCalendar {
+  id: string;
+  label: string;
+  color: string | null;
+  writable: boolean;
+}
+
+const calendarSchema = z.object({
+  id: z.string().min(1),
+  // A calendar with no name is still a calendar, so it is named plainly rather
+  // than refused: losing the whole list would leave every event on the week
+  // unnamed, which is a worse answer than one plain row.
+  label: z
+    .string()
+    .nullish()
+    .transform((value) =>
+      value === null || value === undefined || value.trim().length === 0
+        ? UNNAMED_CALENDAR
+        : value,
+    ),
+  // A colour reaches the screen as a colour, so it has to be one: anything else
+  // was edited by hand and the file is malformed. The value is never repeated.
+  color: z
+    .string()
+    .refine((value) => HEX_COLOUR.test(value))
+    .nullish()
+    .transform((value) => value ?? null),
+  writable: flag,
+});
+
+/**
+ * The calendars the folder lists, or null when it does not list any.
+ *
+ * Null is not an empty list: without this file the calendars are named after the
+ * groups they are linked to and plainly where none is, which is the best a
+ * folder written before this file existed can do.
+ *
+ * LIKE THE EVENTS, THIS CARRIES NO ACCOUNT. Every row file with a `user_id` is
+ * scoped to the snapshot's owner at the door; a calendar entry has no such
+ * column, so whoever builds the folder must put only the owner's own calendars
+ * in it.
+ */
+export async function readCalendars(dir: string): Promise<LocalCalendar[] | null> {
+  const file = SNAPSHOT_FILES.calendars;
+  const body = await readText(dir, file);
+  if (body === null) return null;
+  return shaped(file, z.array(calendarSchema), parseJson(file, body));
 }

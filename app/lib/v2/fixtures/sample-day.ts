@@ -18,6 +18,7 @@
 
 import { energyAsk } from "@/app/lib/v2/asks/builders";
 import { openAsk } from "@/app/lib/v2/asks/lifecycle";
+import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
 import { parseRules } from "@/app/lib/v2/rules";
 import type { ScreenLane, TodayScreenData } from "@/app/lib/v2/view/screen-data";
 import type {
@@ -40,6 +41,11 @@ const CAMPUS = "campus-sample";
 
 const at = (clock: string, date: string = DATE) => `${date}T${clock}:00${OFFSET}`;
 
+// The sample week (./sample-week.ts) is built from the four values below rather
+// than from a second copy of them, so the day and the calendar beside it cannot
+// disagree about which Wednesday this is or what is already on it.
+export { DATE as SAMPLE_DATE, NOW as SAMPLE_NOW, at as sampleInstant };
+
 /**
  * The six lanes. Lane names and colours are DATA, never engine code, so they
  * live here with the rest of the sample. The colours are the six lane colours
@@ -55,7 +61,7 @@ const LANES: ScreenLane[] = [
   { key: "body", label: "Body", color: "#B8F15A" },
 ];
 
-function rules(): PlannerRules {
+export function sampleRules(): PlannerRules {
   return parseRules({
     timeZone: ZONE,
     wakeByWeekday: ["07:30", "07:30", "07:30", "07:30", "07:30", "07:30", "07:30"],
@@ -83,7 +89,7 @@ function rules(): PlannerRules {
   });
 }
 
-function fixed(): FixedEvent[] {
+export function sampleFixed(): FixedEvent[] {
   return [
     {
       id: "fx-notice",
@@ -276,7 +282,7 @@ const NOTICE = "Sample day. Nothing here is connected and nothing you press is s
  * the screen has to handle by keeping the lane's name and colour.
  */
 export function sampleDay(): TodayScreenData {
-  const planner = rules();
+  const planner = sampleRules();
   const input: PlanInput = {
     date: DATE,
     now: NOW,
@@ -284,7 +290,7 @@ export function sampleDay(): TodayScreenData {
     // Nobody has answered yet, so the planner uses "ok" and says it assumed it.
     energy: null,
     mode: "normal",
-    fixed: fixed(),
+    fixed: sampleFixed(),
     candidates: candidates(),
     week: { capHoursElsewhere: 16, incomeHoursElsewhere: 6, gymSessionsDone: 0 },
     existing: [],
@@ -304,6 +310,9 @@ export function sampleDay(): TodayScreenData {
     openAsks: [ask],
     tags: {},
     notice: NOTICE,
+    // The week beside the day, built from the same fixed events and the same
+    // rules (./sample-week.ts), so the two halves of the screen agree.
+    calendar: sampleWeek(null),
   };
 }
 

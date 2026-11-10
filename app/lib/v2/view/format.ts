@@ -64,6 +64,40 @@ export function dayLabel(date: DateKey): string {
   return `${WEEKDAYS[weekdayOf(date)]} ${day} ${MONTHS[month - 1]}`;
 }
 
+/**
+ * "9 to 15 November", the week a calendar is showing.
+ *
+ * Each end carries only what the other does not already say: one month when the
+ * week sits inside one, both when it crosses one, and both years when it crosses
+ * a new year. The word is "to" rather than a dash, which the copy rules forbid.
+ */
+export function weekLabel(week: readonly DateKey[]): string {
+  const first = week[0];
+  const last = week[week.length - 1];
+  // A week with no days has no label. Never happens with `weekOf`, which always
+  // answers seven, and a crash here would take the whole screen with it.
+  if (first === undefined || last === undefined) return "";
+
+  const [fromYear, fromMonth, fromDay] = first.split("-").map(Number);
+  const [toYear, toMonth, toDay] = last.split("-").map(Number);
+  const sameYear = fromYear === toYear;
+
+  const from = !sameYear
+    ? `${fromDay} ${MONTHS[fromMonth - 1]} ${fromYear}`
+    : fromMonth === toMonth
+      ? `${fromDay}`
+      : `${fromDay} ${MONTHS[fromMonth - 1]}`;
+  const to = sameYear
+    ? `${toDay} ${MONTHS[toMonth - 1]}`
+    : `${toDay} ${MONTHS[toMonth - 1]} ${toYear}`;
+  return `${from} to ${to}`;
+}
+
+/** "13:00 to 14:00" in the zone given. Two clocks, never a dash. */
+export function timeRangeLabel(start: Instant, end: Instant, timeZone: string): string {
+  return `${clockLabel(start, timeZone)} to ${clockLabel(end, timeZone)}`;
+}
+
 /** "15 April", for a day that is not today. */
 function shortDayLabel(date: DateKey): string {
   const [, month, day] = date.split("-").map(Number);

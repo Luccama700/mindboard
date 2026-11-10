@@ -50,6 +50,8 @@ import type {
 import { clockLabel, dayLabel } from "@/app/lib/v2/view/format";
 import type { TaskTag, TodayScreenData } from "@/app/lib/v2/view/screen-data";
 
+import { loadLocalCalendar } from "./calendar";
+
 import {
   isRealDateKey,
   readCalendarEvents,
@@ -63,6 +65,11 @@ import {
 } from "./files";
 
 export { LocalSnapshotError, SNAPSHOT_FILES } from "./files";
+// The loopback speed bump lives with the rest of the gate now
+// (app/lib/v2/source.ts), because a second page needs it. Re-exported so this
+// loader's own callers did not have to change, and so there is still one
+// function rather than two.
+export { isLoopbackHost } from "@/app/lib/v2/source";
 
 /** How far the `date` parameter may move the day, in either direction. */
 const DATE_PARAM_DAYS = 14;
@@ -87,40 +94,6 @@ export function localSnapshotDir(env: {
   if (dir.length === 0) return null;
   const absolute = dir.startsWith("/") || /^[A-Za-z]:[\\/]/.test(dir) || dir.startsWith("\\\\");
   return absolute ? dir : null;
-}
-
-/**
- * Does the Host header of this request name the machine the server runs on?
- *
- * A SPEED BUMP, NOT A GATE, and the difference matters: a Host header is sent
- * by the client, so anyone who can reach the server can send
- * `Host: localhost`. The thing that actually keeps the owner's data off the
- * network is binding the server to the loopback address (`next dev -H
- * 127.0.0.1`), which nothing in this app can do or check. This only turns the
- * accident, a browser or a scanner elsewhere on the network reaching a server
- * someone started on 0.0.0.0, into a 404.
- *
- * The three spellings a loopback request carries, and nothing else: an IPv6
- * host is bracketed in a Host header, a port is optional, and the whole value
- * is compared in lower case. The value itself is never reported anywhere, so a
- * refused host cannot write a stranger's text into a log or onto the page.
- */
-export function isLoopbackHost(host: string | null | undefined): boolean {
-  if (host === null || host === undefined) return false;
-  const value = host.trim().toLowerCase();
-  if (value.length === 0) return false;
-
-  const bracketed = /^\[([0-9a-f:]+)\](?::\d+)?$/.exec(value);
-  if (bracketed !== null) return bracketed[1] === "::1";
-  if (value === "::1") return true;
-
-  const colon = value.indexOf(":");
-  if (colon === -1) return value === "localhost" || value === "127.0.0.1";
-  // A port is digits. Anything else is not a host this can read, so it is not
-  // one of the three.
-  if (!/^\d+$/.test(value.slice(colon + 1))) return false;
-  const name = value.slice(0, colon);
-  return name === "localhost" || name === "127.0.0.1";
 }
 
 /**
@@ -298,13 +271,13 @@ export async function loadLocalToday(
   const { document, planner } = await readRules(dir, meta.timeZone);
   const zone = planner.timeZone;
 
-  const [tasks, groups, incomeCalendarIds, calendar] = await Promise.all([
+  const [tasks, groups, incomeCalendarIds, calendarRows] = await Promise.all([
     readTaskRows(dir, meta.userId),
     readGroupRows(dir, meta.userId),
     readIncomeCalendarIds(dir, meta.userId),
     readCalendarEvents(dir),
   ]);
-  const events = calendar ?? [];
+  const events = calendarRows ?? [];
 
   const at = wholeSecond(now);
   const date = plannedDate(at, planner, dateParam);
@@ -353,6 +326,14 @@ export async function loadLocalToday(
     () => `energy-${date}`,
   );
 
+  // The week beside the day, from the same folder and the same clock. The
+  // PLANNED day is passed as the week asked for, not nothing: the `date`
+  // parameter can move the day into another week, and a calendar showing a
+  // different week from the day next to it is worse than no calendar. A week the
+  // folder cannot speak for falls back to the default week, which is exactly
+  // what the day does with the same parameter.
+  const calendar = await loadLocalCalendar(dir, at, date);
+
   return {
     input,
     lanes: document.lanes.map((lane) => ({
@@ -364,6 +345,7 @@ export async function loadLocalToday(
     feedLabels: { ...document.feedLabels },
     openAsks: [ask],
     tags: tagsFor(candidates, tasks, groups),
-    notice: noticeFor(meta, calendar !== null),
+    notice: noticeFor(meta, calendarRows !== null),
+    calendar,
   };
 }

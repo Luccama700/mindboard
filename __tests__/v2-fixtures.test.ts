@@ -22,6 +22,8 @@ import { TodayClient } from "@/app/v2/today/today-client";
 import { planReference } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { fixturesEnabled, sampleDay } from "@/app/lib/v2/fixtures/sample-day";
+import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
+import { CALENDAR_COPY, buildCalendarView } from "@/app/lib/v2/view/calendar";
 import {
   STOP_STATUS_COPY,
   TODAY_COPY,
@@ -363,6 +365,10 @@ describe("the copy rules", () => {
     ...strings(viewOf("good")),
     ...strings(TODAY_COPY),
     ...strings(STOP_STATUS_COPY),
+    // The calendar beside the day prints its own words, and every one of them is
+    // on the same screen as these.
+    ...strings(CALENDAR_COPY),
+    ...strings(buildCalendarView(sampleWeek(null), [])),
   ];
 
   test("has something to walk", () => {
@@ -396,8 +402,10 @@ describe("the copy rules", () => {
 describe("ordering never depends on the locale", () => {
   const owned = [
     "app/lib/v2/view/today.ts",
+    "app/lib/v2/view/calendar.ts",
     "app/lib/v2/view/format.ts",
     "app/lib/v2/fixtures/sample-day.ts",
+    "app/lib/v2/fixtures/sample-week.ts",
     "app/v2/layout.tsx",
     "app/v2/today/page.tsx",
     "app/v2/today/today-client.tsx",
@@ -717,17 +725,25 @@ describe("the page is wired to the gate", () => {
     vi.stubEnv("V2_LOCAL_SNAPSHOT", "");
     vi.stubEnv("VERCEL_ENV", "preview");
     const { default: TodayPage } = await import("@/app/v2/today/page");
-    const element = TodayPage() as {
-      type?: { name?: string };
-      props?: { data?: unknown; dir?: unknown };
+    // The page itself only decides the source, synchronously, so a route that
+    // is off can still answer a real 404; everything that has to wait is in the
+    // one child it returns. Which source it chose is what tells the branches
+    // apart, and the sample is handed over with no request check in front of it
+    // (it is invented data and exists to be shown on a preview).
+    const outer = TodayPage() as {
+      type?: unknown;
+      props?: { source?: unknown; dir?: unknown };
     };
-    // What tells the two branches apart is what they are handed: the sample
-    // branch gives the screen the sample day itself, with no request check in
-    // front of it (the sample is invented data and exists to be shown on a
-    // preview), and the snapshot branch is always handed a folder.
+    expect(outer.props?.source).toEqual({ kind: "sample" });
+    expect(outer.props?.dir).toBeUndefined();
+
+    const render = outer.type as (props: unknown) => Promise<unknown>;
+    const element = (await render(outer.props)) as {
+      type?: { name?: string };
+      props?: { data?: unknown };
+    };
     expect(element.type?.name).toBe("TodayClient");
     expect(element.props?.data).toEqual(sampleDay());
-    expect(element.props?.dir).toBeUndefined();
   });
 
   test("is not found with the flag off and no snapshot folder", async () => {

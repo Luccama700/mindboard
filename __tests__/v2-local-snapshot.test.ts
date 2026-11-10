@@ -1046,22 +1046,24 @@ describe("the page is wired to both sources", () => {
   }
 
   /**
-   * The page, rendered one level deep. Sample mode hands the screen straight
-   * back (nothing in it has to wait); snapshot mode returns a component of its
-   * own, which is called here to get the element the browser would see.
+   * The page, rendered one level deep.
+   *
+   * The page itself is synchronous and does one thing: it decides the source and
+   * hands it to a child that awaits everything (the request's host, the search
+   * parameters, the folder). So the branch is read off the source the page
+   * chose, and the child is then called to get the element the browser would
+   * see: the screen, or the panel naming a file that is wrong.
    */
   async function render(search: Record<string, string | string[]> = {}) {
     const { default: TodayPage } = await page();
     const { TodayClient } = await import("@/app/v2/today/today-client");
     const outer = TodayPage({ searchParams: Promise.resolve(search) }) as unknown as Element;
-    if (outer.type === TodayClient) {
-      return { branch: "sample", element: outer, screen: outer.props.data as TodayScreenData };
-    }
+    const branch = (outer.props.source as { kind: string }).kind;
     const element = (await (outer.type as (props: unknown) => Promise<unknown>)(
       outer.props,
     )) as Element;
     if (element.type !== TodayClient) return { branch: "panel", element, screen: undefined };
-    return { branch: "local", element, screen: element.props.data as TodayScreenData };
+    return { branch, element, screen: element.props.data as TodayScreenData };
   }
 
   test("asks to be rendered per request, so the gate is never prerendered", async () => {
