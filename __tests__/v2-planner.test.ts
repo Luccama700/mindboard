@@ -1321,7 +1321,15 @@ describe("whole-day invariants", () => {
 
   // A hand-written expectation can only be wrong in the same way the code is.
   // This sweep asserts the properties instead, over a seeded spread of days.
-  test("every generated day keeps the invariants, and replanning it changes nothing", () => {
+  //
+  // The timeout is explicit because the default 5 s is a measure of the machine,
+  // not of this test: it runs in well under a second alone, but the whole suite
+  // runs 100+ files at once and it has timed out there. 30 s leaves real
+  // headroom under that load without hiding a genuine hang.
+  test(
+    "every generated day keeps the invariants, and replanning it changes nothing",
+    { timeout: 30_000 },
+    () => {
     // Two rule sets, so the sweep reaches the early touch (which the default
     // 72 hour window hides) and days with no room at all.
     const ruleSets = [
@@ -1452,16 +1460,22 @@ describe("whole-day invariants", () => {
       expect(again.blocks, where).toEqual(out.blocks);
       expect(again.moved, where).toEqual([]);
       expect(again.removed, where).toEqual([]);
-      expect(JSON.stringify(planDay(base)), where).toBe(JSON.stringify(out));
-    }
-  });
+        expect(JSON.stringify(planDay(base)), where).toBe(JSON.stringify(out));
+      }
+    },
+  );
 
   // The sweep above varies the inputs at one instant. This one varies the
   // clock: it walks `now` across two days in ten minute steps, replanning the
   // current day and tomorrow's draft off their own last output. It is what
   // catches a classification that slips backwards as time passes, which is how
   // a block came to be removed at midnight and returned at wake.
-  test("replanning every ten minutes across two days never oscillates", () => {
+  //
+  // Same reason for the explicit timeout as the sweep above.
+  test(
+    "replanning every ten minutes across two days never oscillates",
+    { timeout: 30_000 },
+    () => {
     // Two scenarios, because they put different things at risk. The first has
     // hard items sharing a lane, where the hard-window exemption is the
     // classification that used to slip at midnight. The second has no hard item
@@ -1492,19 +1506,26 @@ describe("whole-day invariants", () => {
       floorTaskId?: string;
     };
 
+    // Parsed once, not per tick: every rule set below is constant except the
+    // mid-walk switch, which picks between two constants.
+    const deadlineRules = parseRules({
+      gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
+      incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
+      capacity: { good: { blocks: 4, small: 1 } },
+    });
+    const tightRules = parseRules({
+      incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
+      capacity: { good: { blocks: 3, small: 1 } },
+    });
+    const beforeSwitch = parseRules({});
+    const afterSwitch = parseRules({
+      incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
+    });
+
     const scenarios: Scenario[] = [
       {
         name: "deadlines on one lane",
-        rulesAt: () =>
-          parseRules({
-            gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
-            incomeTarget: {
-              lane: "lane-income",
-              weeklyHours: 10,
-              blockMinutes: 120,
-            },
-            capacity: { good: { blocks: 4, small: 1 } },
-          }),
+        rulesAt: () => deadlineRules,
         candidates: [
           candidate({
             id: "x",
@@ -1541,15 +1562,7 @@ describe("whole-day invariants", () => {
       },
       {
         name: "the floor live on a tight day",
-        rulesAt: () =>
-          parseRules({
-            incomeTarget: {
-              lane: "lane-income",
-              weeklyHours: 10,
-              blockMinutes: 120,
-            },
-            capacity: { good: { blocks: 3, small: 1 } },
-          }),
+        rulesAt: () => tightRules,
         candidates: [
           candidate({ id: "a", lane: "lane-a" }),
           candidate({ id: "b", lane: "lane-b" }),
@@ -1566,16 +1579,7 @@ describe("whole-day invariants", () => {
       },
       {
         name: "a target switched on mid-walk",
-        rulesAt: (ms) =>
-          ms < switchAt
-            ? parseRules({})
-            : parseRules({
-                incomeTarget: {
-                  lane: "lane-income",
-                  weeklyHours: 10,
-                  blockMinutes: 120,
-                },
-              }),
+        rulesAt: (ms) => (ms < switchAt ? beforeSwitch : afterSwitch),
         candidates: [candidate({ id: "a", lane: "lane-a" })],
         fixed: tightFixed,
         // The top candidate must hold a block of at least floor length at every
@@ -1640,10 +1644,11 @@ describe("whole-day invariants", () => {
 
           const owing = scenario.floorTaskId;
           if (owing !== undefined) {
+            const floorMs = rules.blockMinutes.floor * 60_000;
             const owed = out.blocks.some(
               (b) =>
                 b.taskId === owing &&
-                Date.parse(b.end) - Date.parse(b.start) >= 25 * 60_000,
+                Date.parse(b.end) - Date.parse(b.start) >= floorMs,
             );
             expect(owed, `${where}: ${owing} has no block`).toBe(true);
           }
@@ -1662,16 +1667,17 @@ describe("whole-day invariants", () => {
       }
     }
 
-    // The walk has to have produced something, or it proves nothing.
-    for (const scenario of scenarios) {
-      for (const date of [DATE, "2026-03-11"]) {
-        expect(
-          (state.get(`${scenario.name}|${date}`) ?? []).length,
-          `${scenario.name}|${date}`,
-        ).toBeGreaterThan(0);
+      // The walk has to have produced something, or it proves nothing.
+      for (const scenario of scenarios) {
+        for (const date of [DATE, "2026-03-11"]) {
+          expect(
+            (state.get(`${scenario.name}|${date}`) ?? []).length,
+            `${scenario.name}|${date}`,
+          ).toBeGreaterThan(0);
+        }
       }
-    }
-  });
+    },
+  );
 
   test("works in UTC, America/Phoenix and Asia/Tokyo", () => {
     const offsets = {
