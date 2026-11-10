@@ -44,6 +44,11 @@ const TABLES = [
 // grant to authenticated at all.
 const SERVER_ONLY = ["v2_outbox", "v2_channels"];
 
+/** The statements that applying 0066 actually runs, without the function body. */
+const FUNCTION_AT = ENGINE.search(/^\s*create\s+(or\s+replace\s+)?function/im);
+const STATEMENTS = ENGINE.slice(ENGINE.search(/^\s*create\s+table/im), FUNCTION_AT);
+const FUNCTION = ENGINE.slice(FUNCTION_AT);
+
 function createdTables(sql: string): string[] {
   return [...sql.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?public\.([a-z0-9_]+)/gi)].map(
     (m) => m[1],
@@ -114,13 +119,20 @@ describe("0066: new tables only", () => {
       /\bdelete\s+from\b/i,
       /\bdrop\s+(table|policy|constraint|index)\b/i,
       /\balter\s+policy\b/i,
-      /\bcreate\s+or\s+replace\s+function\b/i,
     ]) {
       // The header comment names the drop statements that undo the migration,
-      // so only the statement body is searched.
-      const body = ENGINE.slice(ENGINE.search(/^\s*create\s+table/im));
-      expect(forbidden.test(body), `0066 must not contain ${forbidden}`).toBe(false);
+      // and the function DEFINITION contains a delete and an update that run
+      // only when it is called, so neither is part of what applying this file
+      // does. Both are excluded; the function's own body is checked below.
+      expect(forbidden.test(STATEMENTS), `0066 must not contain ${forbidden}`).toBe(false);
     }
+  });
+
+  test("creates exactly one function, with a name that cannot replace an existing one", () => {
+    const functions = [
+      ...ENGINE.matchAll(/create\s+(?:or\s+replace\s+)?function\s+public\.([a-z0-9_]+)/gi),
+    ].map((m) => m[1]);
+    expect(functions).toEqual(["v2_replace_planned_blocks"]);
   });
 
   test("gives every table a cascading user_id and switches row level security on", () => {
@@ -279,12 +291,70 @@ describe("0066: new tables only", () => {
     expect(ENGINE).toContain("pairing_expires_at");
     expect(/pairing_code\b/i.test(ENGINE), "0066 must not store the code").toBe(false);
     expect(ENGINE.toLowerCase()).toContain("sha-256");
+    // The column takes a digest and nothing else, so a raw code cannot land
+    // there by mistake rather than merely by convention.
+    expect(ENGINE).toContain("check (pairing_hash ~ '^[0-9a-f]{64}$')");
   });
 
   test("gives feed runs an index that serves the newest runs for one user and feed", () => {
     expect(ENGINE).toMatch(
       /create index v2_feed_runs_[a-z_]*idx on public\.v2_feed_runs \(user_id, feed, started_at desc\)/,
     );
+  });
+});
+
+describe("0066: v2_replace_planned_blocks", () => {
+  const SIGNATURE = "public.v2_replace_planned_blocks(uuid, date, jsonb)";
+
+  test("exists, takes the user, the date and the plan, and returns a count", () => {
+    expect(ENGINE).toContain("create or replace function public.v2_replace_planned_blocks(");
+    for (const argument of ["p_user uuid", "p_date date", "p_blocks jsonb"]) {
+      expect(FUNCTION, `missing argument: ${argument}`).toContain(argument);
+    }
+    expect(FUNCTION).toContain("returns integer");
+  });
+
+  test("pins its search_path, with pg_temp last", () => {
+    expect(FUNCTION).toContain("set search_path = public, pg_temp");
+  });
+
+  test("is server-only: revoked from every client role, granted to service_role", () => {
+    for (const role of ["public", "anon", "authenticated"]) {
+      expect(
+        ENGINE.includes(`revoke all on function ${SIGNATURE} from ${role};`),
+        `must revoke execute from ${role}`,
+      ).toBe(true);
+    }
+    expect(ENGINE).toContain(`grant execute on function ${SIGNATURE} to service_role;`);
+  });
+
+  test("serialises replans of one day with a transaction-scoped advisory lock", () => {
+    // Transaction scoped, so it is released however the statement ends, and it
+    // is keyed on (user, date), so it blocks no other day and no other account.
+    expect(FUNCTION).toContain("pg_advisory_xact_lock(hashtext(p_user::text), hashtext(p_date::text))");
+    expect(/pg_advisory_lock\b/.test(FUNCTION), "a session lock would outlive the statement").toBe(
+      false,
+    );
+  });
+
+  test("deletes only planned rows of that account and that day", () => {
+    const deletion = FUNCTION.slice(FUNCTION.indexOf("delete from public.v2_blocks"));
+    const body = deletion.slice(0, deletion.indexOf("returning"));
+    expect(body).toContain("b.user_id = p_user");
+    expect(body).toContain("b.date = p_date");
+    expect(body).toContain("b.state = 'planned'");
+  });
+
+  test("never writes state on a row that already exists, and only touches planned ones", () => {
+    const update = FUNCTION.slice(FUNCTION.indexOf("on conflict (user_id, id) do update"));
+    const assignments = update.slice(0, update.indexOf("where"));
+    expect(/\bstate\s*=/.test(assignments), "a plan must never write state").toBe(false);
+    expect(update).toContain("where public.v2_blocks.state = 'planned'");
+  });
+
+  test("lands every row on p_date, so a plan is a plan for one day", () => {
+    const insert = FUNCTION.slice(FUNCTION.indexOf("insert into public.v2_blocks"));
+    expect(insert).toContain("select p_user, k.id, p_date,");
   });
 });
 

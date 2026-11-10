@@ -13,6 +13,11 @@ import { describe, expect, test } from "vitest";
 
 import {
   RowShapeError,
+  assertChatMessageId,
+  assertErrorClass,
+  assertOptionId,
+  assertPairingHash,
+  assertWindow,
   fromAlertRow,
   fromAskRow,
   fromBlockRow,
@@ -310,6 +315,67 @@ describe("v2 store mappers: malformed rows", () => {
       expect(error).toBeInstanceOf(RowShapeError);
       expect((error as RowShapeError).table).toBe("v2_alerts");
       expect((error as RowShapeError).column).toBe("cause");
+    }
+  });
+});
+
+describe("v2 store mappers: constraints the table also states", () => {
+  test("a block that ends before it starts is a row shape error on ends_at", () => {
+    // 0066's v2_blocks_window. Without it the memory store would accept a block
+    // Postgres answers with a 23514, and an engine test would pass on
+    // behaviour production does not have.
+    const row = { ...toBlockRow(USER, block), ends_at: "2026-11-09T16:00:00.000Z" };
+    try {
+      fromBlockRow(row);
+      throw new Error("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RowShapeError);
+      expect((error as RowShapeError).table).toBe("v2_blocks");
+      expect((error as RowShapeError).column).toBe("ends_at");
+    }
+  });
+
+  test("a zero length block is allowed, because the constraint is >=", () => {
+    const at = "2026-11-09T17:00:00.000Z";
+    expect(fromBlockRow({ ...toBlockRow(USER, block), starts_at: at, ends_at: at }).end).toBe(at);
+  });
+
+  test("assertWindow matches that constraint", () => {
+    expect(() => assertWindow("2026-11-09T17:00:00.000Z", "2026-11-09T17:50:00.000Z")).not.toThrow();
+    expect(() => assertWindow("2026-11-09T17:00:00.000Z", "2026-11-09T16:00:00.000Z")).toThrow(
+      RowShapeError,
+    );
+    expect(() => assertWindow("tomorrow", "2026-11-09T17:50:00.000Z")).toThrow(RowShapeError);
+  });
+
+  test("assertOptionId holds the twelve character contract", () => {
+    expect(assertOptionId("did")).toBe("did");
+    expect(assertOptionId("twelvechars!")).toBe("twelvechars!");
+    for (const bad of ["", "thirteenchars"]) {
+      expect(() => assertOptionId(bad), bad).toThrow(RowShapeError);
+    }
+  });
+
+  test("assertErrorClass and assertChatMessageId refuse the empty string", () => {
+    expect(assertErrorClass("bot-blocked")).toBe("bot-blocked");
+    expect(() => assertErrorClass("")).toThrow(RowShapeError);
+    expect(assertChatMessageId(null)).toBeNull();
+    expect(assertChatMessageId("991")).toBe("991");
+    expect(() => assertChatMessageId("")).toThrow(RowShapeError);
+  });
+
+  test("assertPairingHash takes a digest and nothing else", () => {
+    const digest = "a".repeat(64);
+    expect(assertPairingHash(digest)).toBe(digest);
+    for (const bad of ["", "hunter2", "A".repeat(64), "a".repeat(63), `${"a".repeat(63)}g`]) {
+      expect(() => assertPairingHash(bad), JSON.stringify(bad)).toThrow(RowShapeError);
+    }
+    try {
+      assertPairingHash("hunter2");
+      throw new Error("should have thrown");
+    } catch (error) {
+      expect((error as RowShapeError).table).toBe("v2_channels");
+      expect((error as RowShapeError).column).toBe("pairing_hash");
     }
   });
 });

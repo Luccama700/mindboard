@@ -26,6 +26,11 @@ const TASK_1 = "66666666-6666-4666-8666-666666666666";
 
 const DATE = "2026-11-09";
 
+// 0066 constrains pairing_hash to 64 lowercase hex characters, so a raw code
+// cannot be stored by mistake. The store refuses anything else.
+const HASH_1 = "a".repeat(64);
+const HASH_2 = `b${"c".repeat(63)}`;
+
 function anAsk(over: Partial<Ask> = {}): Ask {
   return {
     id: ASK_1,
@@ -104,6 +109,25 @@ describe("memory users store", () => {
     const user = await stores.users.get(A);
     expect(user).toEqual({ userId: A, timeZone: "Asia/Tokyo", rules: RULES });
     expect(await stores.users.get(B)).toBeNull();
+  });
+
+  test("save checks the envelope and leaves the planner opaque", async () => {
+    const stores = createMemoryStores();
+    // A lane missing its label is a malformed document, refused on the way in.
+    await expect(
+      stores.users.save(A, {
+        rules: { planner: {}, lanes: [{ key: "lane-a" }], feedLabels: {} } as never,
+        enabled: true,
+      }),
+    ).rejects.toThrow(RowShapeError);
+    expect(await stores.users.get(A)).toBeNull();
+
+    // The planner half keeps a key this code has never heard of.
+    await stores.users.save(A, {
+      rules: { planner: { newerThanThisCode: 7 }, lanes: [], feedLabels: {} } as never,
+      enabled: true,
+    });
+    expect((await stores.users.get(A))?.rules.planner).toEqual({ newerThanThisCode: 7 });
   });
 
   test("save replaces the stored document", async () => {
@@ -214,6 +238,65 @@ describe("memory blocks store", () => {
     expect(open.map((b) => b.id).sort()).toEqual(["2026-11-07:focus:a", "2026-11-07:focus:b"]);
   });
 
+  test("replacePlanned is all or nothing", async () => {
+    const stores = createMemoryStores();
+    await stores.blocks.replacePlanned(A, DATE, [aBlock()]);
+    // The second block is malformed. The Supabase store sends one statement in
+    // one transaction, so nothing lands; memory has to agree, which means
+    // checking everything before writing anything.
+    await expect(
+      stores.blocks.replacePlanned(A, DATE, [
+        aBlock({ id: `${DATE}:focus:two` }),
+        aBlock({ id: `${DATE}:focus:three`, kind: "nap" as Block["kind"] }),
+      ]),
+    ).rejects.toThrow(RowShapeError);
+    const stored = await stores.blocks.listForDate(A, DATE);
+    expect(stored.map((b) => b.id)).toEqual([`${DATE}:focus:one`]);
+  });
+
+  test("replacePlanned refuses a block dated somewhere else", async () => {
+    const stores = createMemoryStores();
+    await expect(
+      stores.blocks.replacePlanned(A, DATE, [aBlock({ date: "2026-11-10" })]),
+    ).rejects.toThrow(RowShapeError);
+    expect(await stores.blocks.listForDate(A, DATE)).toEqual([]);
+    expect(await stores.blocks.listForDate(A, "2026-11-10")).toEqual([]);
+  });
+
+  test("replacePlanned refuses a block that ends before it starts", async () => {
+    const stores = createMemoryStores();
+    await expect(
+      stores.blocks.replacePlanned(A, DATE, [
+        aBlock({ start: "2026-11-09T18:00:00.000Z", end: "2026-11-09T17:00:00.000Z" }),
+      ]),
+    ).rejects.toThrow(RowShapeError);
+    expect(await stores.blocks.listForDate(A, DATE)).toEqual([]);
+  });
+
+  test("a plan never writes state, not even the state it was handed", async () => {
+    const stores = createMemoryStores();
+    await stores.blocks.replacePlanned(A, DATE, [aBlock()]);
+    await stores.blocks.replacePlanned(A, DATE, [aBlock({ state: "done" })]);
+    expect((await stores.blocks.listForDate(A, DATE))[0].state).toBe("planned");
+  });
+
+  test("an id held by a touched row on another date is not available to a plan", async () => {
+    const stores = createMemoryStores();
+    const shared = "2026-11-07:focus:a";
+    await stores.blocks.replacePlanned(A, "2026-11-07", [
+      aBlock({ id: shared, date: "2026-11-07" }),
+    ]);
+    await stores.blocks.setState(A, shared, "started");
+
+    // Same id, new day. The started row records what he did, so the plan does
+    // not get to move it.
+    await stores.blocks.replacePlanned(A, DATE, [aBlock({ id: shared })]);
+    expect(await stores.blocks.listForDate(A, DATE)).toEqual([]);
+    const kept = await stores.blocks.listForDate(A, "2026-11-07");
+    expect(kept).toHaveLength(1);
+    expect(kept[0].state).toBe("started");
+  });
+
   test("setState stores a reason and honours a from guard", async () => {
     const stores = createMemoryStores();
     await stores.blocks.replacePlanned(A, DATE, [aBlock()]);
@@ -243,6 +326,20 @@ describe("memory blocks store", () => {
     await stores.blocks.setState(A, id, "started");
     expect(await stores.blocks.setTime(A, id, "2026-11-09T23:00:00.000Z", "2026-11-09T23:50:00.000Z")).toBeNull();
     expect((await stores.blocks.listForDate(A, DATE))[0].start).toBe("2026-11-09T22:00:00.000Z");
+  });
+
+  test("setTime refuses a window that ends before it starts", async () => {
+    const stores = createMemoryStores();
+    await stores.blocks.replacePlanned(A, DATE, [aBlock()]);
+    await expect(
+      stores.blocks.setTime(
+        A,
+        `${DATE}:focus:one`,
+        "2026-11-09T22:00:00.000Z",
+        "2026-11-09T21:00:00.000Z",
+      ),
+    ).rejects.toThrow(RowShapeError);
+    expect((await stores.blocks.listForDate(A, DATE))[0].start).toBe("2026-11-09T17:00:00.000Z");
   });
 });
 
@@ -354,6 +451,37 @@ describe("memory asks store", () => {
       stores.asks.insert(A, anAsk({ status: "whenever" as unknown as Ask["status"] })),
     ).rejects.toThrow(RowShapeError);
   });
+
+  test("a malformed ask is refused even when its dedupe key is already taken", async () => {
+    const stores = createMemoryStores();
+    await stores.asks.insert(A, anAsk());
+    // Postgres checks the row's shape whatever the conflict resolution is, so a
+    // malformed ask must not come back as a harmless created: false.
+    await expect(
+      stores.asks.insert(A, anAsk({ id: ASK_2, status: "whenever" as unknown as Ask["status"] })),
+    ).rejects.toThrow(RowShapeError);
+  });
+
+  test("an answer for an option the ask never had changes nothing", async () => {
+    const stores = createMemoryStores();
+    await stores.asks.insert(A, anAsk());
+    // A stale button from an older message, or a forged callback. Null, the
+    // same answer a second tap gets.
+    expect(await stores.asks.answer(A, ASK_1, "nope", "2026-11-09T17:10:00.000Z")).toBeNull();
+    expect((await stores.asks.get(A, ASK_1))?.status).toBe("open");
+    expect(await stores.asks.answer(A, ASK_1, "done", "2026-11-09T17:10:00.000Z")).not.toBeNull();
+  });
+
+  test("an option id that cannot be a real option is refused, not stored", async () => {
+    const stores = createMemoryStores();
+    await stores.asks.insert(A, anAsk());
+    for (const optionId of ["", "thirteenchars"]) {
+      await expect(
+        stores.asks.answer(A, ASK_1, optionId, "2026-11-09T17:10:00.000Z"),
+      ).rejects.toThrow(RowShapeError);
+    }
+    expect((await stores.asks.get(A, ASK_1))?.status).toBe("open");
+  });
 });
 
 describe("memory outbox store", () => {
@@ -460,6 +588,37 @@ describe("memory outbox store", () => {
     await stores.outbox.enqueue(A, anItem({ id: OUT_1, dedupeKey: "old", createdAt: "2026-11-01T08:00:00.000Z" }));
     await stores.outbox.enqueue(A, anItem({ id: OUT_2, dedupeKey: "new", createdAt: "2026-11-09T08:00:00.000Z" }));
     expect((await stores.outbox.listUnsent(A)).map((i) => i.id)).toEqual([OUT_2, OUT_1]);
+  });
+
+  test("a malformed item is refused even when its dedupe key is already taken", async () => {
+    const stores = createMemoryStores();
+    await stores.outbox.enqueue(A, anItem());
+    await expect(
+      stores.outbox.enqueue(
+        A,
+        anItem({ id: OUT_2, kind: "shout" as unknown as OutboxItem["kind"] }),
+      ),
+    ).rejects.toThrow(RowShapeError);
+  });
+
+  test("an empty error class or chat message id is refused, not written", async () => {
+    const stores = createMemoryStores();
+    await stores.outbox.enqueue(A, anItem());
+    await stores.outbox.claim(A, OUT_1, "2026-11-09T08:00:05.000Z");
+    // Postgres would take either happily, and then every later read of this
+    // account would throw on a row the store itself wrote.
+    await expect(
+      stores.outbox.markFailed(A, OUT_1, "2026-11-09T08:00:06.000Z", ""),
+    ).rejects.toThrow(RowShapeError);
+    await expect(
+      stores.outbox.markSent(A, OUT_1, "2026-11-09T08:00:06.000Z", ""),
+    ).rejects.toThrow(RowShapeError);
+    const unsent = await stores.outbox.listUnsent(A);
+    expect(unsent).toHaveLength(1);
+    expect(unsent[0].error).toBeNull();
+    // null is the normal "sent, no message id" case and stays allowed.
+    await stores.outbox.markSent(A, OUT_1, "2026-11-09T08:00:06.000Z", null);
+    expect(await stores.outbox.listUnsent(A)).toEqual([]);
   });
 
   test("countInterruptsSince counts interrupting asks by enqueue time, not by send", async () => {
@@ -626,10 +785,10 @@ describe("memory channels store", () => {
 
   test("a pairing hash is redeemed once and links the chat", async () => {
     const stores = createMemoryStores();
-    await stores.channels.setPairing(A, "hash-1", "2026-11-09T18:00:00.000Z");
+    await stores.channels.setPairing(A, HASH_1, "2026-11-09T18:00:00.000Z");
     expect((await stores.channels.get(A))?.chatId).toBeNull();
 
-    expect(await stores.channels.redeemPairing("hash-1", "4242", "2026-11-09T17:00:00.000Z")).toBe(A);
+    expect(await stores.channels.redeemPairing(HASH_1, "4242", "2026-11-09T17:00:00.000Z")).toBe(A);
     expect(await stores.channels.get(A)).toEqual({
       userId: A,
       chatId: "4242",
@@ -638,38 +797,48 @@ describe("memory channels store", () => {
     expect(await stores.channels.userForChat("4242")).toBe(A);
 
     // Single use: the hash is gone.
-    expect(await stores.channels.redeemPairing("hash-1", "9999", "2026-11-09T17:01:00.000Z")).toBeNull();
+    expect(await stores.channels.redeemPairing(HASH_1, "9999", "2026-11-09T17:01:00.000Z")).toBeNull();
     expect(await stores.channels.userForChat("9999")).toBeNull();
   });
 
   test("an expired hash is refused", async () => {
     const stores = createMemoryStores();
-    await stores.channels.setPairing(A, "hash-1", "2026-11-09T18:00:00.000Z");
-    expect(await stores.channels.redeemPairing("hash-1", "4242", "2026-11-09T18:00:01.000Z")).toBeNull();
+    await stores.channels.setPairing(A, HASH_1, "2026-11-09T18:00:00.000Z");
+    expect(await stores.channels.redeemPairing(HASH_1, "4242", "2026-11-09T18:00:01.000Z")).toBeNull();
     expect(await stores.channels.get(A)).toEqual({ userId: A, chatId: null, linkedAt: null });
+  });
+
+  test("a value that is not a sha-256 digest is refused, so a raw code cannot be stored", async () => {
+    const stores = createMemoryStores();
+    for (const bad of ["", "hunter2", "A".repeat(64), "a".repeat(63), "a".repeat(65)]) {
+      await expect(
+        stores.channels.setPairing(A, bad, "2026-11-09T18:00:00.000Z"),
+      ).rejects.toThrow(RowShapeError);
+    }
+    expect(await stores.channels.get(A)).toBeNull();
   });
 
   test("an unknown hash is refused", async () => {
     const stores = createMemoryStores();
-    await stores.channels.setPairing(A, "hash-1", "2026-11-09T18:00:00.000Z");
-    expect(await stores.channels.redeemPairing("hash-2", "4242", "2026-11-09T17:00:00.000Z")).toBeNull();
+    await stores.channels.setPairing(A, HASH_1, "2026-11-09T18:00:00.000Z");
+    expect(await stores.channels.redeemPairing(HASH_2, "4242", "2026-11-09T17:00:00.000Z")).toBeNull();
   });
 
   test("a chat already linked to another user is refused", async () => {
     const stores = createMemoryStores();
-    await stores.channels.setPairing(A, "hash-a", "2026-11-09T18:00:00.000Z");
-    await stores.channels.redeemPairing("hash-a", "4242", "2026-11-09T17:00:00.000Z");
-    await stores.channels.setPairing(B, "hash-b", "2026-11-09T18:00:00.000Z");
-    expect(await stores.channels.redeemPairing("hash-b", "4242", "2026-11-09T17:05:00.000Z")).toBeNull();
+    await stores.channels.setPairing(A, HASH_1, "2026-11-09T18:00:00.000Z");
+    await stores.channels.redeemPairing(HASH_1, "4242", "2026-11-09T17:00:00.000Z");
+    await stores.channels.setPairing(B, HASH_2, "2026-11-09T18:00:00.000Z");
+    expect(await stores.channels.redeemPairing(HASH_2, "4242", "2026-11-09T17:05:00.000Z")).toBeNull();
     expect(await stores.channels.userForChat("4242")).toBe(A);
   });
 
   test("setPairing replaces an earlier code and keeps an existing link", async () => {
     const stores = createMemoryStores();
-    await stores.channels.setPairing(A, "hash-1", "2026-11-09T18:00:00.000Z");
-    await stores.channels.redeemPairing("hash-1", "4242", "2026-11-09T17:00:00.000Z");
-    await stores.channels.setPairing(A, "hash-2", "2026-11-09T19:00:00.000Z");
+    await stores.channels.setPairing(A, HASH_1, "2026-11-09T18:00:00.000Z");
+    await stores.channels.redeemPairing(HASH_1, "4242", "2026-11-09T17:00:00.000Z");
+    await stores.channels.setPairing(A, HASH_2, "2026-11-09T19:00:00.000Z");
     expect((await stores.channels.get(A))?.chatId).toBe("4242");
-    expect(await stores.channels.redeemPairing("hash-2", "4242", "2026-11-09T18:30:00.000Z")).toBe(A);
+    expect(await stores.channels.redeemPairing(HASH_2, "4242", "2026-11-09T18:30:00.000Z")).toBe(A);
   });
 });

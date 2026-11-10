@@ -349,6 +349,20 @@ const ALLOWLIST: Allow[] = [
     count: 1,
     why: "Garbage-collects expired code hashes across all users; the table holds no user data.",
   },
+  // ---- the v2 engine ----
+  {
+    file: "app/lib/v2/store/supabase.ts",
+    table: "v2_replace_planned_blocks",
+    contains: "p_user: userId",
+    count: 1,
+    why:
+      "Scoped INSIDE the function, like claim_next_job and claim_urc_job: every statement in " +
+      "0066's v2_replace_planned_blocks filters on `user_id = p_user`, which is the caller's own " +
+      "id passed as the first argument. It exists because replacing a day's plan has to be one " +
+      "locked statement; EXECUTE is revoked from public, anon and authenticated and granted only " +
+      "to service_role, and it is SECURITY INVOKER, so a widened grant still could not write " +
+      "another tenant's rows.",
+  },
   // ---- the v2 engine's three identity lookups ----
   {
     file: "app/lib/v2/store/supabase.ts",

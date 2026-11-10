@@ -20,6 +20,7 @@
 // No clock and no id generator: every instant and every id arrives as an
 // argument, exactly as in the pure modules above.
 
+import { compareText } from "../plan/day";
 import {
   type AlertRow,
   type AskRow,
@@ -30,6 +31,12 @@ import {
   type FeedRunRow,
   type OutboxRow,
   type RulesRow,
+  RowShapeError,
+  assertChatMessageId,
+  assertErrorClass,
+  assertOptionId,
+  assertPairingHash,
+  assertWindow,
   dayPatchToRow,
   emptyDayRow,
   fromAlertRow,
@@ -41,6 +48,7 @@ import {
   fromFeedRunRow,
   fromOutboxRow,
   fromRulesRow,
+  parseRulesDocument,
   toAlertRow,
   toAskRow,
   toBlockRow,
@@ -130,9 +138,10 @@ export function createMemoryStores(): Stores {
         userId: string,
         input: { rules: RulesDocument; enabled: boolean },
       ): Promise<void> {
-        // Stored as given, like the jsonb column: the planner's own parser is
-        // what interprets the document, so nothing is validated on the way in.
-        rules.set(userId, toRulesRow(userId, input.rules, input.enabled));
+        // The envelope is checked and defaulted; the planner half stays opaque,
+        // because parseRules (app/lib/v2/rules.ts) is what interprets that and
+        // a key written by a newer version of the app has to survive.
+        rules.set(userId, toRulesRow(userId, parseRulesDocument(input.rules), input.enabled));
       },
     },
 
@@ -155,37 +164,55 @@ export function createMemoryStores(): Stores {
       async listForDate(userId: string, date: DateKey): Promise<Block[]> {
         return ownBlocks(userId)
           .filter((row) => row.date === date)
-          .sort((a, b) => ms(a.starts_at) - ms(b.starts_at) || a.id.localeCompare(b.id))
+          .sort((a, b) => ms(a.starts_at) - ms(b.starts_at) || compareText(a.id, b.id))
           .map(fromBlockRow);
       },
 
       async listOpenBefore(userId: string, date: DateKey): Promise<Block[]> {
         return ownBlocks(userId)
           .filter((row) => row.date < date && (row.state === "planned" || row.state === "started"))
-          .sort((a, b) => ms(a.starts_at) - ms(b.starts_at) || a.id.localeCompare(b.id))
+          .sort((a, b) => ms(a.starts_at) - ms(b.starts_at) || compareText(a.id, b.id))
           .map(fromBlockRow);
       },
 
+      // The contract is written out in 0066, above
+      // public.v2_replace_planned_blocks, which is the one statement the
+      // Supabase store issues for this. Every clause below is one of its five
+      // numbered promises; keep the two in step.
       async replacePlanned(userId: string, date: DateKey, next: Block[]): Promise<void> {
-        const existing = ownBlocks(userId).filter((row) => row.date === date);
-        const locked = new Set(
-          existing.filter((row) => row.state !== "planned").map((row) => row.id),
-        );
-        const planned = new Set(
-          existing.filter((row) => row.state === "planned").map((row) => row.id),
-        );
-        // A block the user has already started, finished or skipped is not the
-        // planner's to rewrite, so an incoming block with that id is dropped.
-        const incoming = next.filter((block) => !locked.has(block.id));
-        const incomingIds = new Set(incoming.map((block) => block.id));
-
-        for (const id of planned) {
-          if (!incomingIds.has(id)) blocks.delete(key(userId, id));
-        }
-        for (const block of incoming) {
+        // (1) and (5): everything is checked before anything is written, so a
+        // bad block leaves the stored plan exactly as it was, and a block
+        // belonging to another day is a caller mistake rather than a row that
+        // quietly lands where no later replan will find it.
+        const rows = next.map((block) => {
+          if (block.date !== date) {
+            throw new RowShapeError("v2_blocks", "date", `is ${block.date}, not ${date}`);
+          }
           const row = toBlockRow(userId, block);
           fromBlockRow(row);
-          blocks.set(key(userId, block.id), row);
+          return row;
+        });
+
+        // (2) A row recording what he did is not the planner's to rewrite, on
+        // this date or any other, so its id is simply not available to a plan.
+        const touched = new Set(
+          ownBlocks(userId).filter((row) => row.state !== "planned").map((row) => row.id),
+        );
+        const keep = rows.filter((row) => !touched.has(row.id));
+        const keepIds = new Set(keep.map((row) => row.id));
+
+        // (3) Planned rows of this day that the new plan does not mention.
+        for (const row of ownBlocks(userId)) {
+          if (row.date === date && row.state === "planned" && !keepIds.has(row.id)) {
+            blocks.delete(key(userId, row.id));
+          }
+        }
+
+        // (4) `state` is never written by a plan: a new row starts 'planned'
+        // and an existing one keeps whatever it has.
+        for (const row of keep) {
+          const current = blocks.get(key(userId, row.id));
+          blocks.set(key(userId, row.id), { ...row, state: current?.state ?? "planned" });
         }
       },
 
@@ -214,6 +241,7 @@ export function createMemoryStores(): Stores {
         start: Instant,
         end: Instant,
       ): Promise<Block | null> {
+        assertWindow(start, end);
         const current = blocks.get(key(userId, blockId));
         if (!current || current.state !== "planned") return null;
         const next: BlockRow = { ...current, starts_at: start, ends_at: end };
@@ -225,11 +253,14 @@ export function createMemoryStores(): Stores {
 
     asks: {
       async insert(userId: string, ask: Ask): Promise<{ ask: Ask; created: boolean }> {
-        const sameKey = ownAsks(userId).find((row) => row.dedupe_key === ask.dedupeKey);
-        if (sameKey) return { ask: fromAskRow(sameKey), created: false };
-        if (asks.has(key(userId, ask.id))) throw new DuplicateIdError("v2_asks", ask.id);
+        // Validated BEFORE the duplicate key is looked at, because Postgres
+        // checks the row's shape whatever the conflict resolution is: a
+        // malformed ask must not come back as a harmless `created: false`.
         const row = toAskRow(userId, ask);
         const stored = fromAskRow(row);
+        const sameKey = ownAsks(userId).find((candidate) => candidate.dedupe_key === ask.dedupeKey);
+        if (sameKey) return { ask: fromAskRow(sameKey), created: false };
+        if (asks.has(key(userId, ask.id))) throw new DuplicateIdError("v2_asks", ask.id);
         asks.set(key(userId, ask.id), row);
         return { ask: stored, created: true };
       },
@@ -242,7 +273,7 @@ export function createMemoryStores(): Stores {
       async listOpen(userId: string): Promise<Ask[]> {
         return ownAsks(userId)
           .filter((row) => row.status === "open")
-          .sort((a, b) => ms(a.opened_at) - ms(b.opened_at) || a.id.localeCompare(b.id))
+          .sort((a, b) => ms(a.opened_at) - ms(b.opened_at) || compareText(a.id, b.id))
           .map(fromAskRow);
       },
 
@@ -252,8 +283,14 @@ export function createMemoryStores(): Stores {
         optionId: string,
         at: Instant,
       ): Promise<Ask | null> {
+        assertOptionId(optionId);
         const current = asks.get(key(userId, askId));
         if (!current || current.status !== "open") return null;
+        // The option has to be one this ask offered, checked in the same step
+        // as the status, so a stale or forged callback cannot record an answer
+        // the ask never had. Null, not an error: it is the same "nothing
+        // changed" answer a second tap gets.
+        if (!current.options.some((option) => option.id === optionId)) return null;
         const next: AskRow = {
           ...current,
           status: "answered",
@@ -297,9 +334,11 @@ export function createMemoryStores(): Stores {
 
     outbox: {
       async enqueue(userId: string, item: OutboxItem): Promise<boolean> {
-        const sameKey = ownOutbox(userId).find((row) => row.dedupe_key === item.dedupeKey);
-        if (sameKey) return false;
-        if (outbox.has(key(userId, item.id))) throw new DuplicateIdError("v2_outbox", item.id);
+        // Shape first, then the references, then the duplicate key: Postgres
+        // checks all of them whatever the conflict resolution is, so a
+        // malformed item must not come back as a harmless `false`.
+        const row = toOutboxRow(userId, item);
+        fromOutboxRow(row);
         // The composite foreign key on (user_id, ask_id). It matters because
         // asks.insert can hand back an EXISTING ask with a different id than
         // the one the caller made, and a message built from the caller's id
@@ -307,8 +346,11 @@ export function createMemoryStores(): Stores {
         if (item.askId !== null && !asks.has(key(userId, item.askId))) {
           throw new MissingReferenceError("v2_outbox.ask_id", item.askId);
         }
-        const row = toOutboxRow(userId, item);
-        fromOutboxRow(row);
+        const sameKey = ownOutbox(userId).find(
+          (candidate) => candidate.dedupe_key === item.dedupeKey,
+        );
+        if (sameKey) return false;
+        if (outbox.has(key(userId, item.id))) throw new DuplicateIdError("v2_outbox", item.id);
         outbox.set(key(userId, item.id), row);
         return true;
       },
@@ -321,7 +363,7 @@ export function createMemoryStores(): Stores {
           .filter(
             (row) => row.sent_at === null && row.claimed_at === null && row.delivery === delivery,
           )
-          .sort((a, b) => ms(a.created_at) - ms(b.created_at) || a.id.localeCompare(b.id))
+          .sort((a, b) => ms(a.created_at) - ms(b.created_at) || compareText(a.id, b.id))
           .map(fromOutboxRow);
       },
 
@@ -331,7 +373,7 @@ export function createMemoryStores(): Stores {
         // showing today's.
         return ownOutbox(userId)
           .filter((row) => row.sent_at === null)
-          .sort((a, b) => ms(b.created_at) - ms(a.created_at) || a.id.localeCompare(b.id))
+          .sort((a, b) => ms(b.created_at) - ms(a.created_at) || compareText(a.id, b.id))
           .map(fromOutboxRow);
       },
 
@@ -350,6 +392,7 @@ export function createMemoryStores(): Stores {
         at: Instant,
         chatMessageId: string | null,
       ): Promise<void> {
+        assertChatMessageId(chatMessageId);
         const current = outbox.get(key(userId, id));
         if (!current) return;
         const next: OutboxRow = {
@@ -363,6 +406,7 @@ export function createMemoryStores(): Stores {
       },
 
       async markFailed(userId: string, id: string, at: Instant, error: string): Promise<void> {
+        assertErrorClass(error);
         const current = outbox.get(key(userId, id));
         if (!current) return;
         // The claim stays, so a message that the provider refused is not retried
@@ -386,7 +430,7 @@ export function createMemoryStores(): Stores {
       async listExpectations(userId: string): Promise<StoredExpectation[]> {
         return [...expectations.values()]
           .filter((row) => row.user_id === userId)
-          .sort((a, b) => a.feed.localeCompare(b.feed))
+          .sort((a, b) => compareText(a.feed, b.feed))
           .map(fromExpectationRow);
       },
 
@@ -425,7 +469,7 @@ export function createMemoryStores(): Stores {
       async listOpen(userId: string): Promise<Alert[]> {
         return ownAlerts(userId)
           .filter((row) => row.status === "open")
-          .sort((a, b) => ms(a.since) - ms(b.since) || a.id.localeCompare(b.id))
+          .sort((a, b) => ms(a.since) - ms(b.since) || compareText(a.id, b.id))
           .map(fromAlertRow);
       },
 
@@ -458,6 +502,10 @@ export function createMemoryStores(): Stores {
       },
 
       async setPairing(userId: string, codeHash: string, expiresAt: Instant): Promise<void> {
+        // 0066's check constraint: 64 lowercase hex characters. The column
+        // takes a digest and nothing else, so a raw code cannot land here even
+        // by mistake.
+        assertPairingHash(codeHash);
         const current = channels.get(userId) ?? {
           user_id: userId,
           chat_id: null,

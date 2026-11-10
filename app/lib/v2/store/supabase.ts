@@ -2,7 +2,12 @@ import "server-only";
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js";
 
 import {
-  type BlockRow,
+  RowShapeError,
+  assertChatMessageId,
+  assertErrorClass,
+  assertOptionId,
+  assertPairingHash,
+  assertWindow,
   dayPatchToRow,
   emptyDayRow,
   fromAlertRow,
@@ -14,6 +19,7 @@ import {
   fromFeedRunRow,
   fromOutboxRow,
   fromRulesRow,
+  parseRulesDocument,
   toAlertRow,
   toAskRow,
   toBlockRow,
@@ -108,26 +114,6 @@ function raise(what: string, error: PostgrestError): never {
   throw new Error(`v2 store: ${what} failed (${error.code ?? "unknown"}): ${error.message}`);
 }
 
-/**
- * The columns a plan may rewrite. `state` is not one of them, which is the
- * point: the update that uses this is guarded on `state = 'planned'` and must
- * leave that state alone. The mapper is borrowed for the column names only, so
- * the empty user id it is handed is dropped before the statement is built.
- */
-function plannedFields(block: Block): Omit<BlockRow, "user_id" | "id" | "state"> {
-  const row = toBlockRow("", block);
-  return {
-    date: row.date,
-    starts_at: row.starts_at,
-    ends_at: row.ends_at,
-    kind: row.kind,
-    lane: row.lane,
-    task_id: row.task_id,
-    title: row.title,
-    reason: row.reason,
-  };
-}
-
 export function createSupabaseStores(client: SupabaseClient): Stores {
   return {
     users: {
@@ -154,9 +140,13 @@ export function createSupabaseStores(client: SupabaseClient): Stores {
         userId: string,
         input: { rules: RulesDocument; enabled: boolean },
       ): Promise<void> {
+        // The envelope is checked and defaulted; the planner half stays opaque,
+        // because parseRules (app/lib/v2/rules.ts) is what interprets that and
+        // a key written by a newer version of the app has to survive.
+        const row = toRulesRow(userId, parseRulesDocument(input.rules), input.enabled);
         const { error } = await client
           .from("v2_rules")
-          .upsert({ ...toRulesRow(userId, input.rules, input.enabled), user_id: userId }, { onConflict: "user_id" });
+          .upsert({ ...row, user_id: userId }, { onConflict: "user_id" });
         if (error) raise("users.save", error);
       },
     },
@@ -217,56 +207,28 @@ export function createSupabaseStores(client: SupabaseClient): Stores {
       },
 
       async replacePlanned(userId: string, date: DateKey, next: Block[]): Promise<void> {
-        for (const block of next) fromBlockRow(toBlockRow(userId, block));
-        // Read what is there, then issue only statements a block the user has
-        // touched cannot match. Nothing here is a blanket delete-and-reinsert:
-        // a row that flips to 'started' between the read and the writes is
-        // protected by the `state = 'planned'` guard on every one of them.
-        const current = await client
-          .from("v2_blocks")
-          .select("id, state")
-          .eq("user_id", userId)
-          .eq("date", date);
-        if (current.error) raise("blocks.replacePlanned read", current.error);
-        const rows = (current.data ?? []) as Array<{ id: string; state: string }>;
-        const locked = new Set(rows.filter((row) => row.state !== "planned").map((row) => row.id));
-        const planned = new Set(rows.filter((row) => row.state === "planned").map((row) => row.id));
-
-        const incoming = next.filter((block) => !locked.has(block.id));
-        const incomingIds = new Set(incoming.map((block) => block.id));
-        const stale = [...planned].filter((id) => !incomingIds.has(id));
-
-        if (stale.length > 0) {
-          // `.in` quotes each id, which matters: a block id is
-          // <date>:<kind>:<task> and a hand-built `not.in.(...)` would break on
-          // the colons.
-          const { error } = await client
-            .from("v2_blocks")
-            .delete()
-            .eq("user_id", userId)
-            .eq("date", date)
-            .eq("state", "planned")
-            .in("id", stale);
-          if (error) raise("blocks.replacePlanned delete", error);
-        }
-
-        const fresh = incoming.filter((block) => !planned.has(block.id));
-        if (fresh.length > 0) {
-          const { error } = await client
-            .from("v2_blocks")
-            .upsert(fresh.map((block) => ({ ...toBlockRow(userId, block), user_id: userId })), { onConflict: "user_id,id", ignoreDuplicates: true });
-          if (error) raise("blocks.replacePlanned insert", error);
-        }
-
-        for (const block of incoming.filter((candidate) => planned.has(candidate.id))) {
-          const { error } = await client
-            .from("v2_blocks")
-            .update(plannedFields(block))
-            .eq("user_id", userId)
-            .eq("id", block.id)
-            .eq("state", "planned");
-          if (error) raise("blocks.replacePlanned update", error);
-        }
+        // One call, because a plan is not a set of independent rows: "one block
+        // per lane" and "nothing overlaps" are properties of the whole day. The
+        // contract is written out in 0066 above v2_replace_planned_blocks,
+        // which takes an advisory lock on (user, date) and does the delete and
+        // the upsert in one statement. Two overlapping replans - the tick and
+        // an energy answer through the webhook, seconds apart - therefore
+        // cannot interleave into half of each plan, and a block that trips a
+        // constraint leaves the stored plan exactly as it was.
+        //
+        // Issued from here as read, then delete, then insert, it could be
+        // neither: both callers would read the same snapshot and each would
+        // delete only what ITS snapshot called stale.
+        const rows = next.map((block) => {
+          if (block.date !== date) {
+            throw new RowShapeError("v2_blocks", "date", `is ${block.date}, not ${date}`);
+          }
+          const row = toBlockRow(userId, block);
+          fromBlockRow(row);
+          return row;
+        });
+        const { error } = await client.rpc("v2_replace_planned_blocks", { p_user: userId, p_date: date, p_blocks: rows });
+        if (error) raise("blocks.replacePlanned", error);
       },
 
       async setState(
@@ -294,6 +256,8 @@ export function createSupabaseStores(client: SupabaseClient): Stores {
         start: Instant,
         end: Instant,
       ): Promise<Block | null> {
+        // v2_blocks_window, before the write rather than as a 23514 after it.
+        assertWindow(start, end);
         const { data, error } = await client
           .from("v2_blocks")
           .update({ starts_at: start, ends_at: end })
@@ -363,12 +327,19 @@ export function createSupabaseStores(client: SupabaseClient): Stores {
         optionId: string,
         at: Instant,
       ): Promise<Ask | null> {
+        assertOptionId(optionId);
+        // The option has to be one this ask offered, checked in the SAME
+        // statement as the status, so a stale or forged callback cannot record
+        // an answer the ask never had. `contains` is given a string because
+        // supabase-js renders an array argument as a Postgres array literal,
+        // which is not what a jsonb @> needs.
         const { data, error } = await client
           .from("v2_asks")
           .update({ status: "answered", answered_option_id: optionId, answered_at: at })
           .eq("user_id", userId)
           .eq("id", askId)
           .eq("status", "open")
+          .contains("options", JSON.stringify([{ id: optionId }]))
           .select(ASK_COLUMNS)
           .maybeSingle();
         if (error) raise("asks.answer", error);
@@ -487,6 +458,7 @@ export function createSupabaseStores(client: SupabaseClient): Stores {
         at: Instant,
         chatMessageId: string | null,
       ): Promise<void> {
+        assertChatMessageId(chatMessageId);
         const { error } = await client
           .from("v2_outbox")
           .update({ sent_at: at, chat_message_id: chatMessageId, error: null })
@@ -496,6 +468,7 @@ export function createSupabaseStores(client: SupabaseClient): Stores {
       },
 
       async markFailed(userId: string, id: string, at: Instant, message: string): Promise<void> {
+        assertErrorClass(message);
         // The claim deliberately stays, so a message the provider refused is
         // not retried on every tick for the rest of the day.
         void at;
@@ -642,6 +615,9 @@ export function createSupabaseStores(client: SupabaseClient): Stores {
       },
 
       async setPairing(userId: string, codeHash: string, expiresAt: Instant): Promise<void> {
+        // 0066's check constraint: 64 lowercase hex characters, a digest and
+        // never a code. Checked here so the refusal names the column.
+        assertPairingHash(codeHash);
         // Only the pairing columns, so an account that is already linked keeps
         // its chat while a new code is outstanding.
         const { error } = await client

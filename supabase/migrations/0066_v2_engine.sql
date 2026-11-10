@@ -16,12 +16,15 @@
 --   database that stops at 0063. Nothing else is needed: auth.users and
 --   gen_random_uuid() have been there since 0001.
 --
--- This file creates tables and nothing else. It alters no existing table, adds
--- no column, policy or constraint to one, and writes no row. The one existing
--- table it names is `tasks`, as the TARGET of a foreign key, which adds nothing
--- to `tasks` itself.
+-- This file creates tables, one function, and nothing else. It alters no
+-- existing table, adds no column, policy or constraint to one, replaces no
+-- existing function, and writes no row. The one existing table it names is
+-- `tasks`, as the TARGET of a foreign key, which adds nothing to `tasks`
+-- itself. The function name is new, so `create or replace` here cannot replace
+-- anything.
 --
 -- TO REMOVE IT, in this order (the outbox references the asks):
+--   drop function if exists public.v2_replace_planned_blocks(uuid, date, jsonb);
 --   drop table if exists public.v2_outbox;
 --   drop table if exists public.v2_asks;
 --   drop table if exists public.v2_blocks;
@@ -254,14 +257,17 @@ create index v2_alerts_cause_idx on public.v2_alerts (user_id, cause, last_sent_
 --
 -- pairing_hash is the SHA-256 hex of a one-time pairing code; the code itself
 -- is shown once in the app and never stored, here or anywhere else, so a dump
--- of this table cannot be replayed into a link. pairing_expires_at is what
--- makes it short lived, and redeeming it clears both columns in the same
--- statement that writes chat_id, which is what makes it single use.
+-- of this table cannot be replayed into a link. The check constraint is what
+-- makes that a fact rather than a convention: 64 lowercase hex characters is a
+-- digest and nothing else, so a raw code cannot be stored here by mistake.
+-- pairing_expires_at is what makes it short lived, and redeeming it clears both
+-- columns in the same statement that writes chat_id, which is what makes it
+-- single use.
 create table public.v2_channels (
   user_id uuid not null references auth.users (id) on delete cascade,
   chat_id text,
   linked_at timestamptz,
-  pairing_hash text,
+  pairing_hash text check (pairing_hash ~ '^[0-9a-f]{64}$'),
   pairing_expires_at timestamptz,
   created_at timestamptz not null default now(),
   primary key (user_id),
@@ -348,3 +354,123 @@ create policy "v2_alerts_select_own" on public.v2_alerts
 -- security on and no policy, a session JWT reads and writes nothing, not even
 -- its own rows, so a stolen token cannot read a live pairing hash, point a
 -- chat id at itself, or clear the claim that keeps a send single.
+
+-- ----------------------------------------------------------------------------
+-- Storing a plan, atomically.
+--
+-- A plan is not a set of independent rows. "One block per lane per day" and
+-- "nothing overlaps" are properties of the whole day, so replacing a plan has
+-- to be one operation. Two overlapping replans are entirely plausible: the ten
+-- minute tick and an energy answer arriving through the Telegram webhook can
+-- both replan today, seconds apart. Done as a read, then a delete, then an
+-- insert from the application, each would read the same snapshot, delete only
+-- the rows ITS snapshot called stale, and insert its own new ones - and the day
+-- could end holding half of each plan, with two blocks in one lane or two
+-- blocks over the same hour. A row tripping a constraint midway would leave the
+-- day half rewritten in the same way.
+--
+-- So the whole replacement is one statement inside one transaction, behind an
+-- advisory lock on (user, date). The lock is transaction scoped, so it is
+-- released however the statement ends, and it blocks nothing except another
+-- replan of the same day for the same account.
+--
+-- The contract, which both Stores implementations promise and
+-- __tests__/v2-store-memory.test.ts pins:
+--   1. All or nothing. One block that breaks a constraint and nothing lands.
+--   2. An incoming block whose id belongs to a row of this account in state
+--      'started', 'done' or 'skipped' is ignored - on this date or any other.
+--      Those rows record what he did; they are not the planner's to rewrite.
+--   3. Rows for (user, date) still in state 'planned' whose id is not in the
+--      incoming plan are deleted. A dropped block leaves no tombstone, because
+--      a tombstone would hold its stable id hostage for the rest of the day.
+--   4. Everything left is inserted, or updates the plan columns of the row that
+--      already holds that id while it is still 'planned'. `state` is never
+--      written by a plan, so a block started between the lock and the write
+--      keeps its state, and the guard on the DO UPDATE is what guarantees it.
+--   5. Every row lands on p_date. The per-block date is not read at all: a plan
+--      is a plan for one day, and the store refuses a block dated elsewhere
+--      before it ever gets here.
+--
+-- SECURITY INVOKER (the default), where 0054's claim_urc_job needs DEFINER. The
+-- only caller is the service role, which already bypasses row security, so
+-- definer would buy nothing - and if this function's EXECUTE were ever widened
+-- by accident, an invoker call still cannot write another account's blocks,
+-- because v2_blocks has no client write policy. search_path is pinned anyway,
+-- with pg_temp last, so a temp object cannot shadow a referenced table.
+-- ----------------------------------------------------------------------------
+create or replace function public.v2_replace_planned_blocks(
+  p_user uuid,
+  p_date date,
+  p_blocks jsonb
+)
+returns integer
+language plpgsql
+set search_path = public, pg_temp
+as $$
+declare
+  v_written integer;
+begin
+  -- Serialises replans of one account's one day, and nothing else.
+  perform pg_advisory_xact_lock(hashtext(p_user::text), hashtext(p_date::text));
+
+  with incoming as (
+    select
+      block->>'id' as id,
+      (block->>'starts_at')::timestamptz as starts_at,
+      (block->>'ends_at')::timestamptz as ends_at,
+      block->>'kind' as kind,
+      block->>'lane' as lane,
+      (block->>'task_id')::uuid as task_id,
+      block->>'title' as title,
+      coalesce(block->>'reason', '') as reason
+      from jsonb_array_elements(coalesce(p_blocks, '[]'::jsonb)) as block
+  ),
+  touched as (
+    select id
+      from public.v2_blocks
+     where user_id = p_user
+       and state <> 'planned'
+  ),
+  keep as (
+    select *
+      from incoming i
+     where not exists (select 1 from touched t where t.id = i.id)
+  ),
+  dropped as (
+    delete from public.v2_blocks b
+     where b.user_id = p_user
+       and b.date = p_date
+       and b.state = 'planned'
+       and not exists (select 1 from keep k where k.id = b.id)
+    returning b.id
+  )
+  insert into public.v2_blocks (
+    user_id, id, date, starts_at, ends_at, kind, lane, task_id, title, state, reason
+  )
+  select p_user, k.id, p_date, k.starts_at, k.ends_at, k.kind, k.lane, k.task_id,
+         k.title, 'planned', k.reason
+    from keep k
+  on conflict (user_id, id) do update
+     set date = excluded.date,
+         starts_at = excluded.starts_at,
+         ends_at = excluded.ends_at,
+         kind = excluded.kind,
+         lane = excluded.lane,
+         task_id = excluded.task_id,
+         title = excluded.title,
+         reason = excluded.reason
+   where public.v2_blocks.state = 'planned';
+
+  get diagnostics v_written = row_count;
+  return v_written;
+end;
+$$;
+
+-- Service role only, stated rather than inherited. Postgres grants EXECUTE on a
+-- new function to PUBLIC, and Supabase's default privileges add anon and
+-- authenticated on top, so the revokes are what make this server-only; the
+-- explicit grant is what keeps it working if those defaults ever change.
+revoke all on function public.v2_replace_planned_blocks(uuid, date, jsonb) from public;
+revoke all on function public.v2_replace_planned_blocks(uuid, date, jsonb) from anon;
+revoke all on function public.v2_replace_planned_blocks(uuid, date, jsonb) from authenticated;
+grant execute on function public.v2_replace_planned_blocks(uuid, date, jsonb) to service_role;

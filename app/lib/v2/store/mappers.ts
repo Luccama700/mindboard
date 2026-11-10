@@ -294,18 +294,26 @@ export interface BlockRow {
   reason: string;
 }
 
-const blockRowSchema = z.object({
-  id: z.string().min(1),
-  date: dateKey,
-  starts_at: instant,
-  ends_at: instant,
-  kind: blockKind,
-  lane: z.string().min(1).nullable(),
-  task_id: uuid.nullable(),
-  title: z.string(),
-  state: blockState,
-  reason: z.string(),
-});
+const blockRowSchema = z
+  .object({
+    id: z.string().min(1),
+    date: dateKey,
+    starts_at: instant,
+    ends_at: instant,
+    kind: blockKind,
+    lane: z.string().min(1).nullable(),
+    task_id: uuid.nullable(),
+    title: z.string(),
+    state: blockState,
+    reason: z.string(),
+  })
+  // 0066's v2_blocks_window check constraint. Without this the memory store
+  // would accept a block that ends before it starts and the engine tests would
+  // pass on behaviour production answers with a 23514.
+  .refine((row) => Date.parse(row.ends_at) >= Date.parse(row.starts_at), {
+    message: "ends before it starts",
+    path: ["ends_at"],
+  });
 
 export function toBlockRow(userId: string, block: Block): BlockRow {
   return {
@@ -673,4 +681,57 @@ export function toChannelRow(userId: string, link: ChannelLink): ChannelRow {
 export function fromChannelRow(row: unknown): ChannelLink {
   const parsed = parse(channelRowSchema, "v2_channels", row);
   return { userId: parsed.user_id, chatId: parsed.chat_id, linkedAt: parsed.linked_at };
+}
+
+// ------------------------------------------------- single column arguments
+//
+// A conditional update writes one or two columns and never builds a whole row,
+// so there is nothing for a row schema to check. Postgres would take an empty
+// error class or a 13 character option id quite happily, the write would land,
+// and then EVERY later read of that account would throw a RowShapeError on a
+// row the store itself wrote. These are what the callers check first, in both
+// implementations, so the two stores refuse the same arguments.
+
+function assertColumn<S extends z.ZodTypeAny>(
+  schema: S,
+  table: string,
+  column: string,
+  value: unknown,
+): z.infer<S> {
+  const result = schema.safeParse(value);
+  if (result.success) return result.data;
+  throw new RowShapeError(table, column, result.error.issues[0].message);
+}
+
+/** At most 12 characters, by the AskOption contract in types.ts. */
+export function assertOptionId(optionId: string): string {
+  return assertColumn(z.string().min(1).max(12), "v2_asks", "answered_option_id", optionId);
+}
+
+/** A short stable class such as "bot-blocked", never empty, never a provider message. */
+export function assertErrorClass(value: string): string {
+  return assertColumn(z.string().min(1), "v2_outbox", "error", value);
+}
+
+export function assertChatMessageId(value: string | null): string | null {
+  return assertColumn(z.string().min(1).nullable(), "v2_outbox", "chat_message_id", value);
+}
+
+/** 64 lowercase hex characters, matching 0066's check: a digest, never a code. */
+export function assertPairingHash(value: string): string {
+  return assertColumn(
+    z.string().regex(/^[0-9a-f]{64}$/, { message: "is not a sha-256 hex digest" }),
+    "v2_channels",
+    "pairing_hash",
+    value,
+  );
+}
+
+/** 0066's v2_blocks_window check, for the one write that sets the times alone. */
+export function assertWindow(start: string, end: string): void {
+  assertColumn(instant, "v2_blocks", "starts_at", start);
+  const parsedEnd = assertColumn(instant, "v2_blocks", "ends_at", end);
+  if (Date.parse(parsedEnd) < Date.parse(start)) {
+    throw new RowShapeError("v2_blocks", "ends_at", "ends before it starts");
+  }
 }
