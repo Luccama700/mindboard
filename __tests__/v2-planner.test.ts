@@ -15,6 +15,7 @@ import type {
   FixedEvent,
   PlanInput,
   PlanOutput,
+  PlannerRules,
   WeekStats,
 } from "@/app/lib/v2/types";
 
@@ -779,6 +780,46 @@ describe("behaviour 6: the floor", () => {
     expect(out.dropped).toEqual([]);
   });
 
+  test("a newly demanded optional block cannot take the top candidate's reserved slot on a replan", () => {
+    // 09:00 to 11:10 is all the day has. The income block needs 120 minutes, so
+    // it only fits by taking the top candidate's slot, and that slot is not
+    // available to it: a replan has to come out the same as a fresh plan.
+    const rules = parseRules({
+      incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
+    });
+    const fixed = [event({ start: utc("11:20"), end: utc("23:30") })];
+    const candidates = [candidate({ id: "a", lane: "lane-a" })];
+    // Before the window opens, so the block is a future one holding a slot
+    // rather than a held one. A held block would be busy time instead, which
+    // is a different rule and would not exercise this at all.
+    const now = utc("08:00");
+
+    // What the day looked like before the income target existed.
+    const before = planDay(input({ now, fixed, candidates }));
+    expect(before.blocks.map((b) => [b.kind, b.taskId, shape(b)])).toEqual([
+      ["focus", "a", "focus 09:00-09:50"],
+    ]);
+
+    const fresh = planDay(input({ now, rules, fixed, candidates }));
+    const replan = planDay(
+      input({ now, rules, fixed, candidates, existing: before.blocks }),
+    );
+
+    for (const [label, out] of [
+      ["fresh", fresh],
+      ["replan", replan],
+    ] as const) {
+      expect(out.blocks.map((b) => [b.kind, b.taskId, shape(b)]), label).toEqual(
+        [["focus", "a", "focus 09:00-09:50"]],
+      );
+      expect(out.dropped, label).toEqual([
+        { candidateId: "income", reason: "no-room" },
+      ]);
+    }
+    expect(replan.moved).toEqual([]);
+    expect(replan.removed).toEqual([]);
+  });
+
   test("a tight day stays put as the clock advances", () => {
     // One free stretch, 09:00 to 12:40, holding income and the lane step with
     // nothing to spare. Walking the clock up to the first block's start must
@@ -1427,18 +1468,43 @@ describe("whole-day invariants", () => {
     // at all, so the top-ranked candidate is an ordinary lane step and the floor
     // is live the whole way: that is the shape in which setting a span aside in
     // advance made the other blocks drift as the clock moved.
-    const scenarios = [
+    // A target switched on partway through the walk, which is what an energy
+    // answer or a changed income target does: a demand appears between two
+    // calls, against a day that is already planned. Nothing may be taken from
+    // the top candidate to make room for it.
+    const switchAt = Date.parse(utc("08:30"));
+    const tightFixed = [
+      event({ id: "late-10", start: utc("11:20"), end: utc("23:30") }),
+      event({
+        id: "late-11",
+        start: utc("11:20", "2026-03-11"),
+        end: utc("23:30", "2026-03-11"),
+      }),
+    ];
+
+    type Scenario = {
+      name: string;
+      /** Rules may change mid-walk, which is how a new demand appears. */
+      rulesAt: (ms: number) => PlannerRules;
+      candidates: Candidate[];
+      fixed: FixedEvent[];
+      /** When set, this task must hold a floor-length block at every step. */
+      floorTaskId?: string;
+    };
+
+    const scenarios: Scenario[] = [
       {
         name: "deadlines on one lane",
-        rules: parseRules({
-          gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
-          incomeTarget: {
-            lane: "lane-income",
-            weeklyHours: 10,
-            blockMinutes: 120,
-          },
-          capacity: { good: { blocks: 4, small: 1 } },
-        }),
+        rulesAt: () =>
+          parseRules({
+            gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
+            incomeTarget: {
+              lane: "lane-income",
+              weeklyHours: 10,
+              blockMinutes: 120,
+            },
+            capacity: { good: { blocks: 4, small: 1 } },
+          }),
         candidates: [
           candidate({
             id: "x",
@@ -1475,14 +1541,15 @@ describe("whole-day invariants", () => {
       },
       {
         name: "the floor live on a tight day",
-        rules: parseRules({
-          incomeTarget: {
-            lane: "lane-income",
-            weeklyHours: 10,
-            blockMinutes: 120,
-          },
-          capacity: { good: { blocks: 3, small: 1 } },
-        }),
+        rulesAt: () =>
+          parseRules({
+            incomeTarget: {
+              lane: "lane-income",
+              weeklyHours: 10,
+              blockMinutes: 120,
+            },
+            capacity: { good: { blocks: 3, small: 1 } },
+          }),
         candidates: [
           candidate({ id: "a", lane: "lane-a" }),
           candidate({ id: "b", lane: "lane-b" }),
@@ -1496,6 +1563,24 @@ describe("whole-day invariants", () => {
             end: utc("23:30", "2026-03-11"),
           }),
         ],
+      },
+      {
+        name: "a target switched on mid-walk",
+        rulesAt: (ms) =>
+          ms < switchAt
+            ? parseRules({})
+            : parseRules({
+                incomeTarget: {
+                  lane: "lane-income",
+                  weeklyHours: 10,
+                  blockMinutes: 120,
+                },
+              }),
+        candidates: [candidate({ id: "a", lane: "lane-a" })],
+        fixed: tightFixed,
+        // The top candidate must hold a block of at least floor length at every
+        // step, before and after the switch.
+        floorTaskId: "a",
       },
     ];
 
@@ -1515,7 +1600,8 @@ describe("whole-day invariants", () => {
       const now = new Date(ms).toISOString();
       const todayKey = zonedDateKey(ms, "UTC");
       for (const scenario of scenarios) {
-        const { rules, candidates, fixed } = scenario;
+        const { candidates, fixed } = scenario;
+        const rules = scenario.rulesAt(ms);
         for (const date of [todayKey, zonedDateKey(ms + 86_400_000, "UTC")]) {
           const key = `${scenario.name}|${date}`;
           const existing = state.get(key) ?? [];
@@ -1550,6 +1636,16 @@ describe("whole-day invariants", () => {
             expect(Date.parse(block.end), where).toBeGreaterThan(
               Date.parse(block.start),
             );
+          }
+
+          const owing = scenario.floorTaskId;
+          if (owing !== undefined) {
+            const owed = out.blocks.some(
+              (b) =>
+                b.taskId === owing &&
+                Date.parse(b.end) - Date.parse(b.start) >= 25 * 60_000,
+            );
+            expect(owed, `${where}: ${owing} has no block`).toBe(true);
           }
 
           const history = gone.get(key) ?? new Set<string>();

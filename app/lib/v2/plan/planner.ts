@@ -630,25 +630,23 @@ export function planDay(input: PlanInput): PlanOutput {
     requests.map((request) => [request.blockId, request]),
   );
 
-  /** The top candidate is holding a slot of its own that would serve it. */
-  const topHoldsReservation = () => {
-    if (top === undefined) return false;
+  /** The slot the top candidate is holding for itself, when it would serve it. */
+  const topReservation = (): MsInterval | null => {
+    if (top === undefined) return null;
     for (const [id, span] of reserved) {
       if (requestById.get(id)?.taskId !== top.id) continue;
-      if (span.endMs - span.startMs >= topEnough) return true;
+      if (span.endMs - span.startMs >= topEnough) return span;
     }
-    return false;
+    return null;
   };
 
   // The guard is off unless the floor is genuinely at risk: the top candidate
-  // has nothing yet, is not holding a slot of its own, and no floor block of
-  // its own is already on the day.
+  // has nothing yet and no floor block of its own is already on the day.
   const floorAtRisk = () =>
     top !== undefined &&
     floorBlockId !== null &&
     !spokenFor.has(floorBlockId) &&
-    !topServed() &&
-    !topHoldsReservation();
+    !topServed();
 
   /** Would a floor block still fit somewhere once this span is taken? */
   const leavesFloorRoom = (span: MsInterval) =>
@@ -674,22 +672,34 @@ export function planDay(input: PlanInput): PlanOutput {
     let span = reserved.get(request.blockId) ?? null;
     if (span === null) {
       // Behaviour 6's priority half. An optional block that is not the top
-      // candidate's own may not take the last space a floor block could use;
-      // it moves to its next fit, and is dropped when none leaves room. The
-      // check is skipped entirely when the floor is not at risk, so a normal
-      // day is placed exactly as it would be without it, and no reservation is
-      // ever evicted on the floor's behalf.
+      // candidate's own may not take what the top candidate still needs; it
+      // moves to its next fit, and is dropped when none leaves room. What it
+      // needs is the slot it is already holding if it has one, otherwise room
+      // for a floor block anywhere in its pool. The check is skipped entirely
+      // when the floor is not at risk, so a normal day is placed exactly as it
+      // would be without it.
       const guarded =
         !request.mandatory &&
         request.taskId !== (top?.id ?? null) &&
         floorAtRisk();
+      // A slot the top candidate holds is off limits in BOTH rounds, so the
+      // second one cannot land on it and delete the reservation. Deciding this
+      // once, before anything is placed, also keeps a replan identical to a
+      // fresh plan of the same day.
+      const sacred = guarded ? topReservation() : null;
+      const offLimits = sacred === null ? [] : [pad(sacred)];
 
       // First try around the slots other blocks are holding; only if nothing
       // fits does this request take space one of them was keeping, and that
       // block then re-places and shows up in `moved`.
-      for (const candidatePool of [carveIntervals(pool, pending), pool]) {
+      for (const candidatePool of [
+        carveIntervals(pool, [...pending, ...offLimits]),
+        carveIntervals(pool, offLimits),
+      ]) {
         for (const fit of fitsFor(request, candidatePool)) {
-          if (guarded && !leavesFloorRoom(fit)) continue;
+          // With a slot of its own already protected, the floor's room is that
+          // slot: the two are alternatives, not both.
+          if (guarded && sacred === null && !leavesFloorRoom(fit)) continue;
           span = fit;
           break;
         }
