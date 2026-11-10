@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Ask, FeedStatus, OutgoingMessage } from "@/app/lib/v2/types";
 import {
+  NOTHING_WATCHED,
   alertMessage,
   answeredText,
   askMessage,
@@ -9,6 +10,8 @@ import {
   planMessage,
   replanMessage,
 } from "@/app/lib/v2/channel/messages";
+import { REASON, clearedMessage } from "@/app/lib/v2/engine/tick";
+import { CODE_REFUSED_TEXT, LINKED_TEXT } from "@/app/lib/v2/engine/incoming";
 
 function makeAsk(over: Partial<Ask> = {}): Ask {
   return {
@@ -49,6 +52,14 @@ function status(feed: string, state: FeedStatus["state"], lastGoodAt: string | n
 }
 
 describe("feedLine", () => {
+  // F5. An empty list is not a healthy one: an account with no expectations
+  // yet has nothing to report, and "All feeds alive." about nothing is the one
+  // false claim a watchdog must not make.
+  it("says nothing is watched yet when there are no feeds at all", () => {
+    expect(feedLine([], labels, sinceLabel)).toBe("Nothing is being watched yet.");
+    expect(feedLine([], labels, sinceLabel)).toBe(NOTHING_WATCHED);
+  });
+
   it("says all feeds are alive when none is down", () => {
     const line = feedLine(
       [status("cal", "alive", "2030-01-15T07:00:00Z"), status("mail", "alive", null)],
@@ -310,6 +321,25 @@ describe("no dashes in user-facing copy", () => {
     for (const out of outputs) {
       const text = typeof out === "string" ? out : out.text;
       expect(text).not.toMatch(/[—–]/);
+    }
+  });
+
+  // F6. messages.ts is not the only file that writes copy. The engine writes
+  // the "back to normal" lines, the pairing replies and the reasons a skipped
+  // stop wears on Today, and none of them was walked before.
+  it("never emits an em dash or en dash in anything the engine writes", () => {
+    const outputs: Array<string | OutgoingMessage> = [
+      clearedMessage(["the calendar"]),
+      clearedMessage(["the calendar", "the inbox"]),
+      clearedMessage([]),
+      LINKED_TEXT,
+      CODE_REFUSED_TEXT,
+      ...Object.values(REASON),
+    ];
+    for (const out of outputs) {
+      const text = typeof out === "string" ? out : out.text;
+      expect(text, text).not.toMatch(/[—–]/);
+      expect(text.length, "an empty user-facing string").toBeGreaterThan(0);
     }
   });
 });

@@ -1,4 +1,4 @@
-// The weekly hour cap. It exists because the limit it models is a legal one, so
+// The weekly hour cap. It exists because the limit it models is a hard one, so
 // it is a wall rather than a warning: the planner will not place a block that
 // would cross it.
 //

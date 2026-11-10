@@ -7,7 +7,13 @@ import { describe, expect, test } from "vitest";
 
 import { zonedIso, zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import { parseRules } from "@/app/lib/v2/rules";
-import { dayWindow, freeIntervals, leaveByFor } from "@/app/lib/v2/plan/day";
+import {
+  dayBounds,
+  dayWindow,
+  freeIntervals,
+  leaveByFor,
+  planningDate,
+} from "@/app/lib/v2/plan/day";
 import type { FixedEvent } from "@/app/lib/v2/types";
 
 const HOUR = 3_600_000;
@@ -99,6 +105,107 @@ describe("dayWindow (behaviour 1)", () => {
       expect(window.startMs).toBe(zonedWallTimeToUtcMs(DATE, 9, 0, zone));
       expect(window.endMs - window.startMs).toBe(14 * HOUR);
     }
+  });
+});
+
+// F3. The tick works on the planning day, not on the calendar day: with lights
+// out after midnight the calendar date flips at 00:00 and the day it belongs to
+// does not. Before this, the 00:00 tick closed out the blocks the 23:20 tick had
+// just planned for 00:10, with the reason "day ended", every night.
+describe("planningDate", () => {
+  const iso = (clock: string, date: string, zone: string) =>
+    new Date(
+      zonedWallTimeToUtcMs(
+        date,
+        Number(clock.slice(0, 2)),
+        Number(clock.slice(3, 5)),
+        zone,
+      ),
+    ).toISOString();
+
+  test("with lights out before midnight it is simply the date in the zone", () => {
+    const rules = parseRules({ timeZone: "America/Phoenix", lightsOut: "23:00" });
+    const at = (clock: string, date = DATE) => iso(clock, date, "America/Phoenix");
+    expect(planningDate(at("09:00"), rules)).toBe(DATE);
+    expect(planningDate(at("22:59"), rules)).toBe(DATE);
+    expect(planningDate(at("23:30"), rules)).toBe(DATE);
+    expect(planningDate(at("00:05", "2026-03-11"), rules)).toBe("2026-03-11");
+  });
+
+  describe("with lights out at 01:30", () => {
+    const zone = "America/Phoenix";
+    const rules = parseRules({ timeZone: zone, lightsOut: "01:30" });
+    const at = (clock: string, date: string) => iso(clock, date, zone);
+
+    test("00:05 still belongs to the day before", () => {
+      expect(planningDate(at("00:05", "2026-03-11"), rules)).toBe(DATE);
+    });
+
+    test("01:29 still belongs to the day before", () => {
+      expect(planningDate(at("01:29", "2026-03-11"), rules)).toBe(DATE);
+    });
+
+    test("01:30 is the new day: the window has ended", () => {
+      expect(planningDate(at("01:30", "2026-03-11"), rules)).toBe("2026-03-11");
+    });
+
+    test("the wake target is the new day", () => {
+      expect(planningDate(at("08:00", "2026-03-11"), rules)).toBe("2026-03-11");
+    });
+
+    test("it flips exactly where the previous day's window ends", () => {
+      const end = dayWindow(DATE, rules).endMs;
+      expect(planningDate(new Date(end - 1).toISOString(), rules)).toBe(DATE);
+      expect(planningDate(new Date(end).toISOString(), rules)).toBe("2026-03-11");
+    });
+  });
+
+  test("a daylight-saving night in America/New_York flips at the window's own end", () => {
+    // Fall back: 2026-11-01, 02:00 EDT becomes 01:00 EST, so 01:30 happens
+    // twice. The window end resolves to one of the two instants, and the
+    // planning day has to flip at THAT instant rather than at either wall
+    // clock reading, or the night gets two days or none.
+    const rules = parseRules({ timeZone: "America/New_York", lightsOut: "01:30" });
+    const end = dayWindow("2026-10-31", rules).endMs;
+    expect(end).toBe(Date.parse("2026-11-01T01:30:00-04:00"));
+    expect(planningDate("2026-11-01T04:00:00.000Z", rules)).toBe("2026-10-31");
+    expect(planningDate(new Date(end - 1).toISOString(), rules)).toBe("2026-10-31");
+    expect(planningDate(new Date(end).toISOString(), rules)).toBe("2026-11-01");
+    // And the spring-forward night, where 02:30 does not exist at all.
+    const spring = dayWindow("2026-03-07", rules).endMs;
+    expect(planningDate(new Date(spring - 1).toISOString(), rules)).toBe("2026-03-07");
+    expect(planningDate(new Date(spring).toISOString(), rules)).toBe("2026-03-08");
+  });
+});
+
+// The interval a calendar read covers for a planning day. Wider than the
+// window at both ends: an event before wake still has to be seen, and one at
+// 00:30 on a day whose lights out is 01:30 is on that day, not the next.
+describe("dayBounds", () => {
+  test("midnight to midnight when lights out is before midnight", () => {
+    const rules = parseRules({ timeZone: "UTC", lightsOut: "23:00" });
+    expect(dayBounds(DATE, rules)).toEqual({
+      startMs: at("00:00"),
+      endMs: at("00:00", "2026-03-11"),
+    });
+  });
+
+  test("midnight to lights out when lights out is after midnight", () => {
+    const rules = parseRules({ timeZone: "UTC", lightsOut: "01:30" });
+    expect(dayBounds(DATE, rules)).toEqual({
+      startMs: at("00:00"),
+      endMs: at("01:30", "2026-03-11"),
+    });
+  });
+
+  test("it starts at midnight even when the window starts much later", () => {
+    const rules = parseRules({
+      timeZone: "UTC",
+      noFocusBefore: "11:00",
+      wakeByWeekday: ["11:00", "11:00", "11:00", "11:00", "11:00", "11:00", "11:00"],
+    });
+    expect(dayBounds(DATE, rules).startMs).toBe(at("00:00"));
+    expect(dayWindow(DATE, rules).startMs).toBe(at("11:00"));
   });
 });
 

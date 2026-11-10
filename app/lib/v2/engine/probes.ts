@@ -17,6 +17,20 @@ import type { FeedRun, Instant } from "../types";
 /** The feed a probe reports under. */
 export const HOME_WORKER_FEED = "home-worker";
 
+/** The home worker's heartbeat (0027_worker_jobs.sql). */
+const WORKER_STATUS_COLUMNS = "last_seen_at";
+
+/**
+ * Every table and column this file sends to Postgres. Checked against the
+ * migrated schema by `__tests__/v2-schema-contract.test.ts`, which also asserts
+ * that this is exactly what the probes send. The shape matches `QueryShape` in
+ * ./sources, declared again here rather than imported because sources imports
+ * this file.
+ */
+export const PROBE_QUERIES = [
+  { table: "worker_status", select: WORKER_STATUS_COLUMNS, where: ["user_id"] },
+] as const;
+
 /**
  * One look at one system. Returns null when there is nothing to report, which
  * the watchdog reads as "this feed has no run" and therefore as blind.
@@ -40,7 +54,7 @@ export function homeWorkerProbe(client: SupabaseClient): Probe {
   return async (userId, now) => {
     const { data, error } = await client
       .from("worker_status")
-      .select("last_seen_at")
+      .select(WORKER_STATUS_COLUMNS)
       .eq("user_id", userId)
       .maybeSingle();
 

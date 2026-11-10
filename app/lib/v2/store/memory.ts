@@ -82,8 +82,27 @@ function key(userId: string, rest: string): string {
   return `${userId}|${rest}`;
 }
 
+/**
+ * Stands in for Postgres refusing a malformed timestamptz (22007 / 22009).
+ *
+ * The two stores have to agree on what a bad instant is. `Date.parse` answers
+ * NaN, and NaN makes every comparison false, so an unreadable `since` read as
+ * "no runs" and an unreadable `before` pruned nothing - quietly, and only in
+ * the memory store, while Postgres refused the same value outright. That is how
+ * `+08:60` (zonedIso's old output for an instant with milliseconds at a
+ * positive offset) passed every test and failed every tick east of UTC.
+ */
+class InvalidInstantError extends Error {
+  constructor(instant: string) {
+    super(`v2 store: ${instant} is not an instant`);
+    this.name = "InvalidInstantError";
+  }
+}
+
 function ms(instant: Instant): number {
-  return Date.parse(instant);
+  const parsed = Date.parse(instant);
+  if (!Number.isFinite(parsed)) throw new InvalidInstantError(instant);
+  return parsed;
 }
 
 /** Stands in for a unique violation on a primary key. Never a normal answer. */
@@ -499,6 +518,9 @@ export function createMemoryStores(): Stores {
         // takes a digest and nothing else, so a raw code cannot land here even
         // by mistake.
         assertPairingHash(codeHash);
+        // The column is a timestamptz, so Postgres refuses a malformed instant
+        // at the write rather than at the read; this store does the same.
+        ms(expiresAt);
         const current = channels.get(userId) ?? {
           user_id: userId,
           chat_id: null,

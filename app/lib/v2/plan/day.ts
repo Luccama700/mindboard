@@ -197,6 +197,53 @@ export function dayWindow(
   };
 }
 
+/**
+ * The planning day a moment belongs to: yesterday's date while `now` is still
+ * before the END of yesterday's window, otherwise today's date in the zone.
+ *
+ * A lights out earlier than 06:00 belongs to the day before (types.ts), so with
+ * lights out at 01:30 the day that began yesterday morning is still running at
+ * 00:30 and only ends at 01:30. The calendar date flips at midnight and the
+ * planning day does not, and everything the tick calls "today" means this one:
+ * a plan, a close-out or a slip that used the calendar date would end the day
+ * an hour and a half early, skip the blocks it had just planned for 00:10, and
+ * do it again every night.
+ *
+ * With a lights out at or after 06:00 this is simply the date in the zone: the
+ * previous day's window ended before midnight, so `now` is never inside it.
+ */
+export function planningDate(now: string, rules: PlannerRules): DateKey {
+  const nowMs = instantMs(now);
+  const calendar = zonedDateKey(nowMs, rules.timeZone);
+  const yesterday = shiftDateKey(calendar, -1);
+  return nowMs < dayWindow(yesterday, rules).endMs ? yesterday : calendar;
+}
+
+/**
+ * The instants a planning day can hold anything at all: from its own local
+ * midnight to the later of the next local midnight and lights out.
+ *
+ * Wider than `dayWindow` at both ends, on purpose. It is what a calendar read
+ * covers and what "does this event belong to that day" is judged by, so an
+ * event before the wake target is still seen (the morning message names the
+ * first fixed thing of the day, and a shift before wake still counts toward the
+ * weekly cap), and an event at 00:30 on a day whose lights out is 01:30 is not
+ * invisible to the plan that may be placed over it.
+ *
+ * The lower bound is local midnight rather than the window start so that
+ * widening the end cannot narrow the beginning.
+ */
+export function dayBounds(date: DateKey, rules: PlannerRules): MsInterval {
+  const zone = rules.timeZone;
+  return {
+    startMs: minutesToMs(date, 0, zone),
+    endMs: Math.max(
+      minutesToMs(shiftDateKey(date, 1), 0, zone),
+      endWallTimeToMs(date, rules.lightsOut, zone),
+    ),
+  };
+}
+
 function matchesTravel(
   event: FixedEvent,
   rule: PlannerRules["travel"][number],

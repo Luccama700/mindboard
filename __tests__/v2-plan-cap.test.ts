@@ -56,16 +56,16 @@ describe("capRoomHours", () => {
 
   test("is Infinity inside an exempt range, inclusive of both ends", () => {
     const rules = parseRules({
-      weeklyHourCap: 24,
+      weeklyHourCap: 30,
       capExemptRanges: [{ from: "2026-03-09", to: "2026-03-15" }],
     });
     expect(capRoomHours("2026-03-09", [], week(), rules)).toBe(Infinity);
     expect(capRoomHours("2026-03-15", [], week(), rules)).toBe(Infinity);
-    expect(capRoomHours("2026-03-16", [], week(), rules)).toBe(24);
+    expect(capRoomHours("2026-03-16", [], week(), rules)).toBe(30);
   });
 
   test("subtracts the rest of the week and this day's capped hours", () => {
-    const rules = parseRules({ weeklyHourCap: 24 });
+    const rules = parseRules({ weeklyHourCap: 30 });
     const fixed = [
       shift({
         start: `${DATE}T13:00:00+00:00`,
@@ -73,12 +73,12 @@ describe("capRoomHours", () => {
       }),
     ];
     expect(
-      capRoomHours(DATE, fixed, week({ capHoursElsewhere: 16 }), rules),
+      capRoomHours(DATE, fixed, week({ capHoursElsewhere: 22 }), rules),
     ).toBe(3.5);
   });
 
   test("ignores events that do not count and all-day events", () => {
-    const rules = parseRules({ weeklyHourCap: 24 });
+    const rules = parseRules({ weeklyHourCap: 30 });
     const fixed = [
       shift({
         id: "class",
@@ -93,13 +93,13 @@ describe("capRoomHours", () => {
         end: "2026-03-11T00:00:00+00:00",
       }),
     ];
-    expect(capRoomHours(DATE, fixed, week(), rules)).toBe(24);
+    expect(capRoomHours(DATE, fixed, week(), rules)).toBe(30);
   });
 
   test("never goes below zero", () => {
-    const rules = parseRules({ weeklyHourCap: 24 });
+    const rules = parseRules({ weeklyHourCap: 30 });
     expect(
-      capRoomHours(DATE, [], week({ capHoursElsewhere: 30 }), rules),
+      capRoomHours(DATE, [], week({ capHoursElsewhere: 36 }), rules),
     ).toBe(0);
   });
 });

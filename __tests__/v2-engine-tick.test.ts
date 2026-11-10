@@ -16,6 +16,7 @@ import {
   FEED_RUN_RETENTION_DAYS,
   SLIP_GRACE_MINUTES,
   TELEGRAM_FEED,
+  createEngineContext,
   runTick,
   tickStatus,
   type TickDeps,
@@ -72,12 +73,12 @@ const RULES: RulesDocument = {
   feedLabels: { "home-worker": "the home pc" },
 };
 
-/** An account with a legal weekly cap and an income lane to spend it on. */
+/** An account with a hard weekly cap and an income lane to spend it on. */
 const CAPPED_RULES: RulesDocument = {
   ...RULES,
   planner: {
     ...RULES.planner,
-    weeklyHourCap: 20,
+    weeklyHourCap: 30,
     incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
   },
 };
@@ -390,7 +391,7 @@ describe("runTick, planning", () => {
 
     const full = await harness({
       rules: CAPPED_RULES,
-      deps: { loadWeekCapHours: async () => ({ hours: 20, ok: true }) },
+      deps: { loadWeekCapHours: async () => ({ hours: 30, ok: true }) },
     });
     await runTick(full.deps, USER, local("09:30"));
     expect(
@@ -420,6 +421,34 @@ describe("runTick, planning", () => {
     ).toBe(true);
     // The rest of the day was still planned.
     expect((await stores.blocks.listForDate(USER, DATE)).length).toBeGreaterThan(0);
+  });
+
+  // F1. The cap CALENDARS are a different read from the week's hours, and it
+  // used to sit outside loadFixed's try: one unreadable income_sources row
+  // threw out of fixedToday and took the plan, the morning message and "later
+  // today" down with it, on every tick. Now the plan runs and the cap, not
+  // knowing which calendars count, fails closed exactly as an unknown week does.
+  test("an unreadable set of cap calendars still plans the day, with the cap closed", async () => {
+    const { stores, deps } = await harness({
+      rules: CAPPED_RULES,
+      deps: {
+        // The week's hours are known. Only the cap calendars are not.
+        loadWeekCapHours: async () => ({ hours: 0, ok: true }),
+        loadFixed: async () => ({
+          fixed: [],
+          calendar: okRun(local("09:00")),
+          capUnknown: true,
+        }),
+      },
+    });
+
+    const result = await runTick(deps, USER, local("09:30"));
+
+    const blocks = await stores.blocks.listForDate(USER, DATE);
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks.some((block) => block.kind === "income")).toBe(false);
+    expect(result.steps.plan).toBe("error");
+    expect((await runsOf(stores, USER, ENGINE_TICK_FEED))[0].errorClass).toBe("cap-unknown");
   });
 
   test("an unknown week is not a problem for an account with no cap at all", async () => {
@@ -487,6 +516,179 @@ describe("runTick, closing out", () => {
     });
     expect(blocks.find((block) => block.taskId === TASK_B)?.state).toBe("done");
     expect(await stores.blocks.listOpenBefore(USER, DATE)).toEqual([]);
+  });
+});
+
+// ------------------------------------------------------ lights out after midnight
+
+// F3. The tick worked on the CALENDAR day, so at 00:00 a day whose lights out
+// is 01:30 had already "ended": close-out skipped the blocks the 23:20 tick had
+// just planned for after midnight, with the reason "day ended", before they
+// started, and then the plan step put them back. Every night.
+describe("runTick, a day whose lights out is after midnight", () => {
+  const LATE_RULES: RulesDocument = {
+    ...RULES,
+    planner: { ...RULES.planner, lightsOut: "01:30" },
+  };
+  const TOMORROW = "2026-11-10";
+  /** Fills 23:00 to midnight, so the evening's first free slot is 00:10. */
+  const evening: FixedEvent = {
+    id: "cal-1:evening",
+    title: "Shift",
+    start: local("23:00"),
+    end: local("00:00", TOMORROW),
+    allDay: false,
+    calendarId: "cal-1",
+    location: null,
+    countsTowardCap: false,
+    source: "google",
+  };
+
+  async function lateHarness() {
+    return harness({
+      rules: LATE_RULES,
+      deps: {
+        loadFixed: async () => ({ fixed: [evening], calendar: okRun(local("09:00")) }),
+      },
+    });
+  }
+
+  test("the 23:20 tick plans into the small hours", async () => {
+    const { stores, deps } = await lateHarness();
+    await runTick(deps, USER, local("23:20"));
+    expect(await stores.blocks.listForDate(USER, DATE)).toMatchObject([
+      { state: "planned", start: local("00:10", TOMORROW), end: local("01:00", TOMORROW) },
+    ]);
+  });
+
+  test("the 00:00 tick leaves that block alone: the day has not ended", async () => {
+    const { stores, deps } = await lateHarness();
+    await runTick(deps, USER, local("23:20"));
+    const result = await runTick(deps, USER, local("00:00", TOMORROW));
+
+    expect(result.ok).toBe(true);
+    expect(await stores.blocks.listForDate(USER, DATE)).toMatchObject([
+      { state: "planned", start: local("00:10", TOMORROW) },
+    ]);
+    // Still planning the day that is running, so the next day has no record yet.
+    expect((await stores.days.get(USER, DATE))?.plannedAt).toBe(local("00:00", TOMORROW));
+    expect(await stores.days.get(USER, TOMORROW)).toBeNull();
+  });
+
+  test("the block is closed off once lights out has actually passed", async () => {
+    const { stores, deps } = await lateHarness();
+    await runTick(deps, USER, local("23:20"));
+    await runTick(deps, USER, local("01:40", TOMORROW));
+
+    expect(await stores.blocks.listForDate(USER, DATE)).toMatchObject([
+      { state: "skipped", reason: "day ended" },
+    ]);
+    // And the new day is the one being planned now.
+    expect((await stores.days.get(USER, TOMORROW))?.plannedAt).toBe(local("01:40", TOMORROW));
+  });
+
+  test("the morning message is not sent again in the small hours", async () => {
+    const { stores, deps, telegram } = await lateHarness();
+    const mornings = () => sentTexts(telegram).filter((text) => text.startsWith("Morning."));
+
+    await runTick(deps, USER, local("09:00"));
+    expect(mornings()).toHaveLength(1);
+
+    await runTick(deps, USER, local("00:30", TOMORROW));
+    expect(mornings()).toHaveLength(1);
+    // The 00:30 tick touched the day that is running; tomorrow has no record
+    // of a morning at all, so the one at its wake target is still to come.
+    expect(await stores.days.get(USER, TOMORROW)).toBeNull();
+    expect((await stores.days.get(USER, DATE))?.morningSentAt).toBe(local("09:00"));
+  });
+
+  test("an answer after midnight moves the block later in the same day", async () => {
+    const { stores, deps } = await lateHarness();
+    await runTick(deps, USER, local("23:20"));
+    const block = (await stores.blocks.listForDate(USER, DATE))[0];
+    // It is running at 00:30, so the tick asks; "later today" has to mean
+    // later in THIS day, which still has an hour of window left.
+    await runTick(deps, USER, local("00:30", TOMORROW));
+    const ask = (await stores.asks.listOpen(USER)).find((a) => a.kind === "slip");
+    expect(ask?.dedupeKey).toBe(`slip:${block.id}`);
+  });
+});
+
+// ------------------------------------------------- an instant with milliseconds
+
+// F2. Both routes build `now` with `new Date().toISOString()`, which carries
+// milliseconds, and every v2 test built it on a whole minute, which is why none
+// of this showed. `zonedIso` of a `.123` instant at a POSITIVE offset emitted
+// "+08:60": Postgres refuses it (22009), `Date.parse` reads NaN, and the memory
+// store read NaN as "no runs" rather than refusing it, so the two stores
+// disagreed as well. Slips, watchdog, morning and prune all go through it.
+describe("an instant that carries milliseconds", () => {
+  const TOKYO = "Asia/Tokyo";
+  const TOKYO_RULES: RulesDocument = {
+    ...RULES,
+    planner: { ...RULES.planner, timeZone: TOKYO },
+  };
+
+  function tokyo(wall: string, date = DATE): string {
+    const [hour, minute] = wall.split(":").map(Number);
+    return new Date(zonedWallTimeToUtcMs(date, hour, minute, TOKYO)).toISOString();
+  }
+  const withMillis = (instant: string) => instant.replace(".000Z", ".123Z");
+
+  test("createEngineContext floors it, so nothing downstream sees a fraction", async () => {
+    const { deps } = await harness({ rules: TOKYO_RULES });
+    const ctx = await createEngineContext(deps, USER, withMillis(tokyo("09:40")));
+    expect(ctx.now).toBe(tokyo("09:40"));
+    expect(ctx.nowMs % 1000).toBe(0);
+  });
+
+  test("a tick east of UTC runs every step and writes readable instants", async () => {
+    const { stores, deps } = await harness({ rules: TOKYO_RULES });
+    await stores.blocks.replacePlanned(USER, DATE, [
+      aBlock({ start: tokyo("09:00"), end: tokyo("09:50") }),
+    ]);
+    await stores.feeds.saveExpectation(USER, {
+      feed: "calendar",
+      label: "the calendar",
+      everyMinutes: 60,
+      graceMinutes: 10,
+      minCount: 0,
+      activeHours: null,
+      enabledAt: tokyo("00:00", "2026-11-01"),
+    });
+    // Old enough that the prune step has something to delete.
+    await stores.feeds.addRun(USER, okRun(tokyo("00:00", "2026-10-01")));
+
+    const now = withMillis(tokyo("09:40"));
+    expect(now).toContain(".123Z");
+
+    const result = await runTick(deps, USER, now);
+
+    expect(Object.entries(result.steps).filter(([, state]) => state !== "ok")).toEqual([]);
+    expect(result.ok).toBe(true);
+
+    // The slip ask's expiry is the instant zonedIso used to mangle.
+    const slip = (await stores.asks.listOpen(USER)).find((ask) => ask.kind === "slip");
+    expect(slip?.expiresAt).toBe(tokyo("10:10"));
+    // And the prune cutoff was an instant Postgres would have taken.
+    expect((await runsOf(stores, USER, "calendar")).map((run) => run.startedAt)).not.toContain(
+      tokyo("00:00", "2026-10-01"),
+    );
+  });
+
+  test("the memory store refuses an unreadable instant rather than finding nothing", async () => {
+    const { stores } = await harness();
+    // What zonedIso used to hand it. Postgres answers 22009; reading it as
+    // "no runs" is how the two stores came to disagree.
+    const mangled = "2026-11-09T09:40:00+08:60";
+    await expect(stores.feeds.listRuns(USER, mangled)).rejects.toThrow(/not an instant/);
+    await expect(stores.feeds.prune(USER, mangled)).rejects.toThrow(/not an instant/);
+    await expect(stores.asks.countUnanswered(USER, "energy", mangled)).rejects.toThrow(
+      /not an instant/,
+    );
+    await expect(stores.outbox.countInterruptsSince(USER, mangled)).rejects.toThrow(
+      /not an instant/,
+    );
   });
 });
 
@@ -720,8 +922,11 @@ describe("runTick, the morning message", () => {
 
     const open = await stores.asks.listOpen(USER);
     expect(open.map((ask) => ask.kind)).toEqual(["energy"]);
+    // F5. This account has no feed expectations, so there is nothing to call
+    // alive. It used to say "All feeds alive.", which is the one thing a
+    // watchdog must never say about nothing.
     expect(sentTexts(telegram)).toEqual([
-      "Morning. Nothing fixed today.\nThen: Write the brief at 09:00.\nAll feeds alive. Energy today?",
+      "Morning. Nothing fixed today.\nThen: Write the brief at 09:00.\nNothing is being watched yet. Energy today?",
     ]);
     expect(sentMessages(telegram)[0].msg.buttons.map((button) => button.optionId)).toEqual([
       "low",

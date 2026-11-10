@@ -19,10 +19,18 @@ import { zonedDateKey, zonedIso, zonedWallTimeToUtcMs } from "@/app/lib/snapshot
 import { createTelegramClient } from "@/app/lib/v2/channel/telegram";
 import { CALENDAR_FEED, TASK_FIXED_PREFIX, type TickDeps } from "@/app/lib/v2/engine/tick";
 import { createProbes } from "@/app/lib/v2/engine/probes";
-import { shiftDateKey } from "@/app/lib/v2/plan/day";
+import { dayBounds, shiftDateKey } from "@/app/lib/v2/plan/day";
+import { parseRules } from "@/app/lib/v2/rules";
 import { createSupabaseStores } from "@/app/lib/v2/store/supabase";
 import type { EngineUser, Stores } from "@/app/lib/v2/store/types";
-import type { Candidate, DateKey, FeedRun, FixedEvent, Instant } from "@/app/lib/v2/types";
+import type {
+  Candidate,
+  DateKey,
+  FeedRun,
+  FixedEvent,
+  Instant,
+  PlannerRules,
+} from "@/app/lib/v2/types";
 import { GoogleCalendarConnectionError, listEvents } from "@/utils/google/calendar";
 import { createServiceClient } from "@/utils/supabase/service";
 
@@ -61,6 +69,56 @@ export interface EngineCalendarEvent {
 const TASK_COLUMNS =
   "id, title, group_id, due_date, due_time, status, estimated_minutes, duration_min, gcal_event_id, gcal_calendar_id";
 
+// NOT `google_calendar_id`, which is what `groups` calls its link (0003) and
+// what this file asked for until the schema contract test was written. On
+// `income_sources` the column is `calendar_id` (0007_finance_recurring.sql).
+/** The calendars an income source is linked to (0007_finance_recurring.sql). */
+const INCOME_SOURCE_COLUMNS = "calendar_id";
+/** The engine's own touch blocks: which tasks have already been opened once. */
+const TOUCH_BLOCK_COLUMNS = "task_id";
+/** The engine's own income blocks, for the week's capped hours. */
+const INCOME_BLOCK_COLUMNS = "starts_at, ends_at";
+
+/** One query's table and the columns it names, as the query itself passes them. */
+export interface QueryShape {
+  readonly table: string;
+  /** The select list, exactly as the query passes it. */
+  readonly select: string;
+  /** Columns used as a filter or an order that the select list does not name. */
+  readonly where: readonly string[];
+}
+
+/**
+ * Every table and column this file sends to Postgres, in one place.
+ *
+ * `__tests__/v2-schema-contract.test.ts` applies every migration to an
+ * in-memory Postgres, drives these adapters with a recording client, and
+ * asserts that what they actually send exists on the table AND is exactly what
+ * is declared here. Nothing else could have caught the first spelling of the
+ * income calendars column, because no test ran these queries against a schema.
+ *
+ * The table name and the `user_id` filter stay string literals in the query:
+ * `__tests__/tenant-scope-invariant.test.ts` reads this source for
+ * `.from("<table>")` and the `.eq("user_id", ...)` that scopes it, and a chain
+ * written behind a constant would be invisible to it.
+ */
+export const SOURCE_QUERIES = [
+  { table: "income_sources", select: INCOME_SOURCE_COLUMNS, where: ["user_id"] },
+  // `tasks` is read twice, for the day's time-blocked tasks and for the
+  // candidates, with the same columns both times.
+  { table: "tasks", select: TASK_COLUMNS, where: ["user_id", "status"] },
+  {
+    table: "v2_blocks",
+    select: TOUCH_BLOCK_COLUMNS,
+    where: ["user_id", "kind", "state", "date"],
+  },
+  {
+    table: "v2_blocks",
+    select: INCOME_BLOCK_COLUMNS,
+    where: ["user_id", "kind", "state", "date"],
+  },
+] as const satisfies readonly QueryShape[];
+
 /** A title is the user's own text; this is only for a row that has none. */
 const UNTITLED = "untitled";
 /** A task with no due time closes at the end of its local day. */
@@ -92,6 +150,46 @@ function dateKeyOf(value: string, timeZone: string): DateKey | null {
 function localIso(date: DateKey, hour: number, minute: number, timeZone: string): Instant {
   const ms = zonedWallTimeToUtcMs(date, hour, minute, timeZone);
   return zonedIso(ms, timeZone);
+}
+
+/**
+ * This account's planner rules, in the one spelling where the store's zone and
+ * the planner's cannot disagree (store/types.ts). The reads here need the whole
+ * rules row rather than just the zone, because a planning day runs to lights
+ * out and that is where lights out lives.
+ *
+ * It cannot throw in production: `createEngineContext` parses the same input
+ * before anything that calls these adapters exists.
+ */
+function rulesOf(user: EngineUser): PlannerRules {
+  return parseRules({ ...user.rules.planner, timeZone: user.timeZone });
+}
+
+/** An error's class, never its message: a PostgREST message can carry a row value. */
+function nameOf(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+/**
+ * Does this task's own slot fall on the planning day?
+ *
+ * Its start instant when it has a time, so a task timed for 00:30 belongs to the
+ * day whose lights out is 01:30 and not to the one that starts the next
+ * morning; `due_date === date` would put it on neither, because the plan that
+ * could place something over it runs on the earlier day. A task with no time
+ * has only its date to go on, and cannot become a fixed event anyway.
+ */
+function taskOnDay(
+  task: EngineTaskRow,
+  date: DateKey,
+  bounds: { startMs: number; endMs: number },
+  timeZone: string,
+): boolean {
+  if (task.due_date === null) return false;
+  const time = wallParts(task.due_time);
+  if (time === null) return task.due_date === date;
+  const startMs = zonedWallTimeToUtcMs(task.due_date, time.hour, time.minute, timeZone);
+  return startMs >= bounds.startMs && startMs < bounds.endMs;
 }
 
 /**
@@ -162,12 +260,16 @@ export function toFixedEvents(
     if (task.gcal_event_id == null || task.gcal_calendar_id == null) continue;
     taskByEvent.set(`${task.gcal_calendar_id}:${task.gcal_event_id}`, task);
   }
+  // The tasks whose Google copy actually made it onto the day. Marked AFTER the
+  // push, never before: an event with an unreadable start or end is dropped, and
+  // marking the task first meant it was skipped by the loop below as well, so a
+  // task that had been pushed to Google lost its block entirely because Google
+  // answered with a date nobody could read.
   const merged = new Set<string>();
 
   for (const event of events) {
     const countsTowardCap = capCalendarIds.has(event.calendarId);
     const task = taskByEvent.get(event.id);
-    if (task !== undefined) merged.add(task.id);
     const id = task === undefined ? event.id : `${TASK_FIXED_PREFIX}${task.id}`;
     if (event.allDay) {
       const from = dateKeyOf(event.start, timeZone);
@@ -184,6 +286,7 @@ export function toFixedEvents(
         countsTowardCap,
         source: "google",
       });
+      if (task !== undefined) merged.add(task.id);
       continue;
     }
     // A timed event already carries its own offset, so it is kept as Google
@@ -202,6 +305,7 @@ export function toFixedEvents(
       countsTowardCap,
       source: "google",
     });
+    if (task !== undefined) merged.add(task.id);
   }
 
   // The timed tasks whose Google copy was NOT among the events: either they
@@ -270,17 +374,22 @@ function calendarErrorClass(error: unknown): string {
  * The calendars an income source is linked to: the events that count toward the
  * weekly cap. The error is NOT swallowed. A silent empty set would make today's
  * shifts uncapped, which is the quiet failure the cap exists to prevent.
+ *
+ * `createLoadFixed` catches it rather than letting it through (the day still
+ * has to be planned) and says so with `capUnknown`, which reaches the planner as
+ * a full week. `createLoadWeekCapHours` catches it as `ok: false`, which is the
+ * same answer. Neither ever reports an empty set as a known one.
  */
 async function capCalendarIdsFor(client: SupabaseClient, userId: string): Promise<Set<string>> {
   const { data, error } = await client
     .from("income_sources")
-    .select("google_calendar_id")
+    .select(INCOME_SOURCE_COLUMNS)
     .eq("user_id", userId);
   if (error) throw new Error("the income calendars could not be read");
-  const rows = (data ?? []) as Array<{ google_calendar_id: string | null }>;
+  const rows = (data ?? []) as Array<{ calendar_id: string | null }>;
   return new Set(
     rows
-      .map((row) => row.google_calendar_id)
+      .map((row) => row.calendar_id)
       .filter((id): id is string => typeof id === "string" && id.length > 0),
   );
 }
@@ -300,18 +409,28 @@ async function openTaskRows(client: SupabaseClient, userId: string): Promise<Eng
  * The day's fixed events, and the calendar's own feed run. A calendar failure is
  * reported, never thrown: the plan is better off running without the calendar
  * than not running at all (behaviour 4).
+ *
+ * The cap calendars are a SEPARATE read with its own failure handling, for the
+ * same reason. It used to sit outside the try, so one unreadable
+ * `income_sources` row took the whole plan step down with it; now it reports
+ * `capUnknown` and the planner treats the week as full (the cap fails closed).
  */
 export function createLoadFixed(client: SupabaseClient): TickDeps["loadFixed"] {
   return async (userId, date, user) => {
     const startedAt = new Date().toISOString();
     const zone = user.timeZone;
-    const timeMin = new Date(zonedWallTimeToUtcMs(date, 0, 0, zone)).toISOString();
-    const timeMax = new Date(
-      zonedWallTimeToUtcMs(shiftDateKey(date, 1), 0, 0, zone),
-    ).toISOString();
+    const bounds = dayBounds(date, rulesOf(user));
+    const timeMin = new Date(bounds.startMs).toISOString();
+    const timeMax = new Date(bounds.endMs).toISOString();
 
-    const [capCalendarIds, tasks] = await Promise.all([
-      capCalendarIdsFor(client, userId),
+    const [caps, tasks] = await Promise.all([
+      capCalendarIdsFor(client, userId).then(
+        (ids) => ({ ids, unknown: false }),
+        (error: unknown) => {
+          console.warn(`v2 income calendars could not be read for ${userId} (${nameOf(error)})`);
+          return { ids: new Set<string>(), unknown: true };
+        },
+      ),
       openTaskRows(client, userId),
     ]);
 
@@ -335,11 +454,12 @@ export function createLoadFixed(client: SupabaseClient): TickDeps["loadFixed"] {
     return {
       fixed: toFixedEvents(
         events,
-        tasks.filter((task) => task.due_date === date),
-        capCalendarIds,
+        tasks.filter((task) => taskOnDay(task, date, bounds, zone)),
+        caps.ids,
         zone,
       ),
       calendar,
+      capUnknown: caps.unknown,
     };
   };
 }
@@ -357,6 +477,10 @@ const TOUCH_LOOKBACK_DAYS = 120;
  */
 export function createLoadCandidates(client: SupabaseClient): TickDeps["loadCandidates"] {
   return async (userId, user, now) => {
+    // The CALENDAR date, deliberately: this is a 120 day lower bound on a
+    // `date` column, so whether `now` falls on the planning day or on the one
+    // after it cannot change which touch blocks come back. Everything that
+    // decides what happens to a day uses the planning date (see `planningDate`).
     const since = shiftDateKey(
       zonedDateKey(Date.parse(now), user.timeZone),
       -TOUCH_LOOKBACK_DAYS,
@@ -365,7 +489,7 @@ export function createLoadCandidates(client: SupabaseClient): TickDeps["loadCand
       openTaskRows(client, userId),
       client
         .from("v2_blocks")
-        .select("task_id")
+        .select(TOUCH_BLOCK_COLUMNS)
         .eq("user_id", userId)
         .eq("kind", "touch")
         .in("state", ["started", "done"])
@@ -389,7 +513,7 @@ export function createLoadCandidates(client: SupabaseClient): TickDeps["loadCand
  * records of the same shift count once.
  *
  * `ok: false` says the figure is not known, and the tick then plans as if the
- * week were full. That is the point: a weekly cap models a legal limit, so the
+ * week were full. That is the point: a weekly cap models a hard limit, so the
  * one answer it must never give is a confident low number.
  */
 export function createLoadWeekCapHours(
@@ -425,10 +549,11 @@ export function createLoadWeekCapHours(
       }
 
       // The other six days only: today's own hours are the planner's to count
-      // from the fixed events it was given.
-      const dayStartMs = zonedWallTimeToUtcMs(date, 0, 0, zone);
-      const dayEndMs = zonedWallTimeToUtcMs(shiftDateKey(date, 1), 0, 0, zone);
-      const elsewhere = spans.flatMap((span) => outside(span, dayStartMs, dayEndMs));
+      // from the fixed events it was given. "Today" has to be the same interval
+      // `loadFixed` read, or a shift lands in neither: before wake, or after
+      // midnight on a day whose lights out is 01:30.
+      const day = dayBounds(date, rulesOf(user));
+      const elsewhere = spans.flatMap((span) => outside(span, day.startMs, day.endMs));
       return { hours: unionHours(elsewhere), ok: true };
     } catch (error) {
       const errorClass = calendarErrorClass(error);
@@ -480,7 +605,7 @@ async function incomeBlockSpans(
 ): Promise<Span[]> {
   const { data, error } = await client
     .from("v2_blocks")
-    .select("starts_at, ends_at")
+    .select(INCOME_BLOCK_COLUMNS)
     .eq("user_id", userId)
     .eq("kind", "income")
     .neq("state", "skipped")

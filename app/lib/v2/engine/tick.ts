@@ -34,10 +34,12 @@ import {
   MINUTE_MS,
   carveIntervals,
   compareText,
+  dayWindow,
   freeIntervals,
   leaveByFor,
   maybeInstantMs,
   minutesToMs,
+  planningDate,
   shiftDateKey,
   wallMinutes,
   weekdayOf,
@@ -100,6 +102,7 @@ const STALE_SEND_HOURS = 12;
  */
 export const TICK_DEADLINE_MS = 20_000;
 
+const SECOND_MS = 1_000;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 const NOON_MINUTES = 12 * 60;
@@ -124,7 +127,14 @@ export function fixedTaskId(event: FixedEvent): string | null {
   return id.length > 0 ? id : null;
 }
 
-const REASON = {
+/**
+ * Why the tick closed a stop off. USER-FACING: unlike the planner's own tokens
+ * these are words, because they are the only explanation a skipped stop has and
+ * the Today screen shows them (SKIPPED_REASON in app/lib/v2/view/today.ts, which
+ * `__tests__/v2-view-today.test.ts` pins against this list). So the copy rules
+ * apply: plain, direct, and no em or en dash.
+ */
+export const REASON = {
   dayEnded: "day ended",
   slippedTwice: "slipped twice",
   noRoomLater: "no room later today",
@@ -146,7 +156,18 @@ export interface TickDeps {
     userId: string,
     date: DateKey,
     user: EngineUser,
-  ): Promise<{ fixed: FixedEvent[]; calendar: FeedRun }>;
+  ): Promise<{
+    fixed: FixedEvent[];
+    calendar: FeedRun;
+    /**
+     * True when the calendars that count toward the weekly cap could not be
+     * read, so no event on the day is KNOWN to count. Absent means they were
+     * read. The planner then treats the week as full, exactly as an unreadable
+     * week does (behaviour 16): the one answer a cap must never give is a
+     * confident low number, and an empty cap set is one.
+     */
+    capUnknown?: boolean;
+  }>;
   loadCandidates(userId: string, user: EngineUser, now: Instant): Promise<Candidate[]>;
   /**
    * The capped hours already on the OTHER six days of that week: the shifts on
@@ -154,7 +175,7 @@ export interface TickDeps {
    * Sunday, merged with the engine's own income blocks so overlapping records
    * of the same work count once.
    *
-   * `ok: false` means the figure is not known. The weekly cap models a legal
+   * `ok: false` means the figure is not known. The weekly cap models a hard
    * limit, so the tick then plans as if the week were full rather than guessing
    * low: an unknown cap places no capped work (behaviour: fail closed).
    */
@@ -187,6 +208,13 @@ export interface TickResult {
  */
 type StepOutcome = string | null;
 
+/** What the day's one calendar read produced, as the steps get it. */
+export interface DayFixed {
+  fixed: FixedEvent[];
+  /** The cap calendars could not be read, so the week counts as full. */
+  capUnknown: boolean;
+}
+
 /**
  * Everything one account's tick resolved before it did anything, plus the day's
  * fixed events behind a one-shot memo: two steps need them and the calendar is
@@ -199,10 +227,24 @@ export interface EngineContext {
   userId: string;
   user: EngineUser;
   rules: PlannerRules;
+  /** Floored to the whole second. See `wholeSecond`. */
   now: Instant;
   nowMs: number;
+  /**
+   * The PLANNING day, and what every step that says "today" means: the day's
+   * blocks, its plan, its close-out, its slips, its day record, its interrupt
+   * budget. With a lights out after midnight it is still yesterday's date at
+   * 00:30, which is the whole point (see `planningDate` in plan/day.ts).
+   */
   today: DateKey;
-  fixedToday(): Promise<FixedEvent[]>;
+  /**
+   * The calendar date in the user's zone. ONLY the morning message uses it: it
+   * belongs to the wake target, and by the wake target the two dates are the
+   * same anyway, so the morning that was skipped at 00:30 is not re-sent for a
+   * day that has already had one.
+   */
+  calendarDate: DateKey;
+  fixedToday(): Promise<DayFixed>;
 }
 
 interface TickState {
@@ -220,22 +262,46 @@ function logFailure(userId: string, step: string, error: unknown): void {
   console.warn(`v2 tick: ${step} failed for ${userId} (${kind})`);
 }
 
+/**
+ * `at`, floored to the whole second.
+ *
+ * Both routes build `now` with `new Date().toISOString()`, which carries
+ * milliseconds, and sub-second precision is poison downstream: `zonedIso` of a
+ * `.123` instant at a positive offset used to emit `+08:60`, which Postgres
+ * refuses (22009) and `Date.parse` reads as NaN, so the slips step, the
+ * watchdog window and the prune cutoff all failed - east of UTC only, and
+ * never in a test, because every test builds `now` on a whole minute.
+ *
+ * `zonedIso` is fixed too (it rounds the offset now), and this is the other
+ * half: nothing below this line ever sees a fraction of a second, so an instant
+ * can round-trip through an ISO string without moving.
+ *
+ * It floors rather than rounds, so `now` never steps forward over the start of
+ * a block that has not begun yet.
+ */
+export function wholeSecond(at: Instant): Instant {
+  const ms = Date.parse(at);
+  if (!Number.isFinite(ms)) throw new Error(`not an instant: ${at}`);
+  return new Date(Math.floor(ms / SECOND_MS) * SECOND_MS).toISOString();
+}
+
 export async function createEngineContext(
   deps: TickDeps,
   userId: string,
-  now: Instant,
+  at: Instant,
 ): Promise<EngineContext> {
+  const now = wholeSecond(at);
   const nowMs = Date.parse(now);
-  if (!Number.isFinite(nowMs)) throw new Error(`not an instant: ${now}`);
   const user = await deps.stores.users.get(userId);
   if (user === null) throw new Error("this account has no rules row");
   // The one spelling in which the store's zone and the planner's cannot
   // disagree (store/types.ts). It throws on a zone or a wall time this runtime
   // will not take, which fails THIS account's tick and no other.
   const rules = parseRules({ ...user.rules.planner, timeZone: user.timeZone });
-  const today = zonedDateKey(nowMs, rules.timeZone);
+  const today = planningDate(now, rules);
+  const calendarDate = zonedDateKey(nowMs, rules.timeZone);
 
-  let pending: Promise<FixedEvent[]> | null = null;
+  let pending: Promise<DayFixed> | null = null;
   return {
     deps,
     stores: deps.stores,
@@ -245,16 +311,19 @@ export async function createEngineContext(
     now,
     nowMs,
     today,
+    calendarDate,
     fixedToday() {
-      pending ??= deps.loadFixed(userId, today, user).then(async ({ fixed, calendar }) => {
-        try {
-          await deps.stores.feeds.addRun(userId, calendar);
-        } catch (error) {
-          // Recording the calendar's health must not cost the plan.
-          logFailure(userId, "calendar-run", error);
-        }
-        return fixed;
-      });
+      pending ??= deps
+        .loadFixed(userId, today, user)
+        .then(async ({ fixed, calendar, capUnknown }) => {
+          try {
+            await deps.stores.feeds.addRun(userId, calendar);
+          } catch (error) {
+            // Recording the calendar's health must not cost the plan.
+            logFailure(userId, "calendar-run", error);
+          }
+          return { fixed, capUnknown: capUnknown === true };
+        });
       return pending;
     },
   };
@@ -291,7 +360,7 @@ function lengthHours(block: Block): number {
  * `capHoursElsewhere` is NOT computed here. It is the week's capped hours from
  * `loadWeekCapHours`, which reads the calendars an income source is linked to
  * and merges the engine's own income blocks into them; a figure taken from the
- * blocks alone would miss a whole shift pattern and leave a legal cap thinking
+ * blocks alone would miss a whole shift pattern and leave a hard cap thinking
  * the week was empty. The caller fills it in.
  */
 export function weekStatsFromBlocks(
@@ -398,7 +467,7 @@ async function moveLaterToday(ctx: EngineContext, blockId: string): Promise<void
       endMs: (maybeInstantMs(other.end) ?? 0) + buffer,
     }));
   const free = carveIntervals(
-    freeIntervals(ctx.today, await ctx.fixedToday(), ctx.rules, {
+    freeIntervals(ctx.today, (await ctx.fixedToday()).fixed, ctx.rules, {
       // Never closer than the slip grace: a block that starts the moment the
       // answer lands has already slipped by the time the next tick looks.
       fromMs: Math.max(ctx.nowMs + SLIP_GRACE_MINUTES * MINUTE_MS, endMs + buffer),
@@ -435,7 +504,7 @@ export async function planToday(
   ctx: EngineContext,
 ): Promise<{ plan: PlanOutput; degraded: StepOutcome }> {
   const monday = weekStartKey(ctx.today);
-  const [day, existing, fixed, offered, week, weekCap] = await Promise.all([
+  const [day, existing, today, offered, week, weekCap] = await Promise.all([
     ctx.stores.days.get(ctx.userId, ctx.today),
     ctx.stores.blocks.listForDate(ctx.userId, ctx.today),
     ctx.fixedToday(),
@@ -443,6 +512,7 @@ export async function planToday(
     weekBlocks(ctx).then((blocks) => weekStatsFromBlocks(ctx.today, blocks, ctx.rules)),
     ctx.deps.loadWeekCapHours(ctx.userId, monday, ctx.today, ctx.user),
   ]);
+  const fixed = today.fixed;
 
   // A task that already has a time today is on the day once, as a fixed event.
   // Leaving it in the candidate list would have the planner book a second block
@@ -452,10 +522,13 @@ export async function planToday(
   );
   const candidates = offered.filter((candidate) => !scheduled.has(candidate.id));
 
-  // The weekly cap models a legal limit, so an unknown week is a full week: the
+  // The weekly cap models a hard limit, so an unknown week is a full week: the
   // planner then has no room for capped work and places none. Guessing low here
-  // is the one failure mode that cannot be allowed to be quiet.
-  const capUnknown = !weekCap.ok && ctx.rules.weeklyHourCap !== null;
+  // is the one failure mode that cannot be allowed to be quiet. Not knowing
+  // WHICH calendars count is the same kind of ignorance as not knowing the
+  // week's hours, so it fails closed the same way.
+  const capUnknown =
+    (!weekCap.ok || today.capUnknown) && ctx.rules.weeklyHourCap !== null;
   week.capHoursElsewhere = capUnknown ? ctx.rules.weeklyHourCap ?? 0 : weekCap.hours;
 
   const out = planDay({
@@ -628,9 +701,15 @@ async function closeOut(ctx: EngineContext): Promise<void> {
     if (endMs === null || endMs > ctx.nowMs) continue;
     await ctx.stores.blocks.setState(ctx.userId, block.id, "done", { from: "started" });
   }
-  // What an earlier day left open. Its plan is over either way.
+  // What an earlier day left open. `ctx.today` is the PLANNING day, so a block
+  // dated yesterday is not in this list at 00:30 on a day whose lights out is
+  // 01:30: the day it belongs to is still running and the block it planned for
+  // 00:10 has not even started. The window check is the same rule said twice,
+  // and it is the one that holds if any other date ever reaches here: a planned
+  // block is only ever closed off once its own day's window has ended.
   for (const block of await ctx.stores.blocks.listOpenBefore(ctx.userId, ctx.today)) {
     if (block.state === "planned") {
+      if (dayWindow(block.date, ctx.rules).endMs > ctx.nowMs) continue;
       await ctx.stores.blocks.setState(ctx.userId, block.id, "skipped", {
         reason: REASON.dayEnded,
         from: "planned",
@@ -735,7 +814,7 @@ function byStart(a: { start: Instant; id: string }, b: { start: Instant; id: str
 async function firstFixedLine(
   ctx: EngineContext,
 ): Promise<{ title: string; time: string; leaveBy: string | null } | null> {
-  const fixed = (await ctx.fixedToday()).filter(
+  const fixed = (await ctx.fixedToday()).fixed.filter(
     (event) => !event.allDay && maybeInstantMs(event.start) !== null,
   );
   const first = [...fixed].sort(byStart)[0];
@@ -761,30 +840,39 @@ async function topBlockLine(
 }
 
 /**
- * Once a day, between that weekday's wake target and noon. The energy ask rides
- * on this message rather than going out as an ask of its own, which is why it
- * does not go through `deliverAsk` and does not spend the interrupt budget.
+ * Once a day, between that weekday's wake target and noon.
+ *
+ * The one step on the CALENDAR date rather than the planning day. It belongs to
+ * the wake target, and by the wake target the two are the same date, so the
+ * window check reads the same either way; using the calendar date is what stops
+ * a 00:30 tick on a day whose lights out is 01:30 (planning day: yesterday)
+ * from looking at yesterday's morning record at all.
+ *
+ * The energy ask rides on this message rather than going out as an ask of its
+ * own, which is why it does not go through `deliverAsk` and does not spend the
+ * interrupt budget.
  */
 async function sendMorning(ctx: EngineContext, state: TickState): Promise<void> {
+  const date = ctx.calendarDate;
   const wake = wallMinutes(
-    ctx.rules.wakeByWeekday[weekdayOf(ctx.today)] ?? ctx.rules.wakeByWeekday[0],
+    ctx.rules.wakeByWeekday[weekdayOf(date)] ?? ctx.rules.wakeByWeekday[0],
   );
   const zone = ctx.rules.timeZone;
   if (
-    ctx.nowMs < minutesToMs(ctx.today, wake, zone) ||
-    ctx.nowMs >= minutesToMs(ctx.today, NOON_MINUTES, zone)
+    ctx.nowMs < minutesToMs(date, wake, zone) ||
+    ctx.nowMs >= minutesToMs(date, NOON_MINUTES, zone)
   ) {
     return;
   }
 
-  const day = await ctx.stores.days.get(ctx.userId, ctx.today);
+  const day = await ctx.stores.days.get(ctx.userId, date);
   if (day?.morningSentAt) return;
 
   let ask: Ask | null = null;
   if (!day?.energy) {
     const open = await ctx.stores.asks.listOpen(ctx.userId);
     const { ask: candidate } = openAsk(
-      energyAsk(ctx.today, ctx.userId, ctx.rules, ctx.now),
+      energyAsk(date, ctx.userId, ctx.rules, ctx.now),
       open,
       ctx.deps.newId,
     );
@@ -805,7 +893,7 @@ async function sendMorning(ctx: EngineContext, state: TickState): Promise<void> 
     id: ctx.deps.newId(),
     userId: ctx.userId,
     kind: "morning",
-    dedupeKey: `morning:${ctx.today}`,
+    dedupeKey: `morning:${date}`,
     delivery: "interrupt",
     message,
     askId: ask?.id ?? null,
@@ -815,7 +903,7 @@ async function sendMorning(ctx: EngineContext, state: TickState): Promise<void> 
     chatMessageId: null,
     error: null,
   });
-  await ctx.stores.days.patch(ctx.userId, ctx.today, { morningSentAt: ctx.now });
+  await ctx.stores.days.patch(ctx.userId, date, { morningSentAt: ctx.now });
 }
 
 /**
@@ -876,9 +964,11 @@ function causeLabel(ctx: EngineContext, alert: Alert): string {
  * The copy for an alert that cleared. messages.ts has no template for it, so it
  * is written here in the same voice as `feedLine`, which is the one place the
  * channel talks about feeds.
+ *
+ * It takes the feeds' labels rather than the context so that it is a pure
+ * function of its copy, which is what lets the no-dash test walk it.
  */
-function clearedMessage(ctx: EngineContext, alert: Alert): OutgoingMessage {
-  const named = alert.feeds.map((feed) => labelFor(ctx, feed));
+export function clearedMessage(named: string[]): OutgoingMessage {
   return {
     text: named.length === 1 ? `I can see ${named[0]} again.` : `${named.length} feeds are back.`,
     buttons: [],
@@ -925,7 +1015,7 @@ async function applyAlertAction(
     delivery: "interrupt",
     message:
       action.type === "close"
-        ? clearedMessage(ctx, alert)
+        ? clearedMessage(alert.feeds.map((feed) => labelFor(ctx, feed)))
         : alertMessage({
             causeLabel: causeLabel(ctx, alert),
             affected: alert.feeds.length,
@@ -1016,9 +1106,10 @@ async function worthSending(ctx: EngineContext, item: OutboxItem): Promise<boole
   }
 
   if (item.kind === "morning") {
+    // The calendar date, because that is the key sendMorning wrote.
     return (
-      item.dedupeKey === `morning:${ctx.today}` &&
-      ctx.nowMs < minutesToMs(ctx.today, NOON_MINUTES, ctx.rules.timeZone)
+      item.dedupeKey === `morning:${ctx.calendarDate}` &&
+      ctx.nowMs < minutesToMs(ctx.calendarDate, NOON_MINUTES, ctx.rules.timeZone)
     );
   }
 
@@ -1134,8 +1225,11 @@ function tickSteps(
 export async function runTick(
   deps: TickDeps,
   userId: string,
-  now: Instant,
+  at: Instant,
 ): Promise<TickResult> {
+  // Floored here as well as in createEngineContext, because the tick's own feed
+  // run is written even when the context could not be built.
+  const now = Number.isFinite(Date.parse(at)) ? wholeSecond(at) : at;
   const steps: Record<string, StepState> = {};
   let firstErrorClass: string | null = null;
 

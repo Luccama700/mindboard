@@ -19,7 +19,7 @@
 
 import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import { compareText, instantMs, maybeInstantMs } from "@/app/lib/v2/plan/day";
-import type { Candidate, Instant, PlannerRules } from "@/app/lib/v2/types";
+import type { Candidate, DateKey, Instant, PlannerRules } from "@/app/lib/v2/types";
 
 export type CandidateTier = "due-today" | "hard-window" | "lane-step" | "side";
 
@@ -44,10 +44,17 @@ export function tierOf(
   rules: PlannerRules,
 ): CandidateTier {
   const dueMs = maybeInstantMs(candidate.due);
-  if (candidate.hard && dueMs !== null) {
+  // An item whose closing instant is BEHIND the reference instant is neither in
+  // the hard window nor due today. It reads as though it were both, which is
+  // what made six overdue items on a low day produce six mandatory hard-window
+  // blocks, every day, with nothing dropped: the deadline tiers are exempt from
+  // capacity and from the per-lane limit, so nothing bounded them. Nor is it a
+  // deadline the day can still serve: the day it closed on has gone. It ranks
+  // as an ordinary step or side quest, by its date, earliest first (which puts
+  // the oldest overdue one first), and from there capacity and the lane limit
+  // decide how much of the backlog the day takes on.
+  if (candidate.hard && dueMs !== null && dueMs >= nowMs) {
     if (zonedDateKey(dueMs, rules.timeZone) === todayKey) return "due-today";
-    // An overdue hard item is inside the window too: it is past the point the
-    // window was warning about, not outside it.
     if (dueMs - nowMs <= rules.hardWindowHours * HOUR_MS) return "hard-window";
   }
   return candidate.kind === "side" ? "side" : "lane-step";
@@ -73,14 +80,23 @@ function compare(a: number, b: number): number {
  * reference instant the buckets are read against (see the note above). The
  * final tie-break is the id rather than the input position, so re-ordered rows
  * out of the database cannot change the plan.
+ *
+ * `today` is the day being planned, and it is REQUIRED rather than derived from
+ * the reference instant, because the two are not the same day once lights out
+ * is after midnight. At 00:05 on a day whose lights out is 01:30 the reference
+ * instant falls on the next calendar date, so "closes today" read as tomorrow's
+ * deadline and the planner crammed its three-hour session into the ninety
+ * minutes left before lights out. Deriving it was the defect; a required
+ * argument is how the compiler names every caller that has to choose.
  */
 export function rankCandidates(
   candidates: Candidate[],
   now: Instant,
   rules: PlannerRules,
+  today: DateKey,
 ): RankedCandidate[] {
   const nowMs = instantMs(now);
-  const todayKey = zonedDateKey(nowMs, rules.timeZone);
+  const todayKey = today;
 
   return candidates
     .map((candidate) => ({

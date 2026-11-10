@@ -246,9 +246,12 @@ export function planDay(input: PlanInput): PlanOutput {
   // is EARLIER than the window start the night-before draft used, so the hard
   // window shrank at midnight and grew again at wake, and a lane's second item
   // lost and regained its block.
+  // `date` and not the reference instant's own day: once lights out is after
+  // midnight the two differ, and "closes today" has to mean the day being
+  // planned (plan/rank.ts says why).
   const window = dayWindow(date, rules);
   const reference = isoOf(Math.max(nowMs, window.startMs), rules);
-  const ranked = rankCandidates(eligible, reference, rules);
+  const ranked = rankCandidates(eligible, reference, rules, date);
 
   let blocksLeft = capacity.blocks;
   let smallLeft = capacity.small;

@@ -16,11 +16,18 @@ function silentSince(status: FeedStatus): number {
   return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
 }
 
+/** No expectation has been set, so there is nothing to call alive or down. */
+export const NOTHING_WATCHED = "Nothing is being watched yet.";
+
 export function feedLine(
   statuses: FeedStatus[],
   labels: Record<string, string>,
   sinceLabel: (at: Instant | null) => string,
 ): string {
+  // An empty list is not a healthy one. Every account starts with no feed
+  // expectations at all, and "All feeds alive." on that account is a report of
+  // health about nothing, which is the one thing a watchdog must never say.
+  if (statuses.length === 0) return NOTHING_WATCHED;
   const down = statuses.filter((s) => s.state !== "alive");
   if (down.length === 0) return "All feeds alive.";
   const worst = down.reduce((a, b) => (silentSince(b) < silentSince(a) ? b : a));

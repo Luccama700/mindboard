@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 const stubs = vi.hoisted(() => ({
   tokenRow: null as Record<string, unknown> | null,
   rows: {} as Record<string, unknown[]>,
+  /** A PostgREST error for one table, the way an unreadable row arrives. */
+  errors: {} as Record<string, { message: string; code?: string } | undefined>,
 }));
 
 vi.mock("@/utils/supabase/server", () => ({
@@ -40,7 +42,11 @@ vi.mock("@/utils/supabase/service", () => {
           error: null,
         }),
         then: (resolve: (answer: { data: unknown; error: unknown }) => unknown) =>
-          resolve({ data: stubs.rows[table] ?? [], error: null }),
+          resolve(
+            stubs.errors[table] !== undefined
+              ? { data: null, error: stubs.errors[table] }
+              : { data: stubs.rows[table] ?? [], error: null },
+          ),
       };
       return chain;
     },
@@ -84,6 +90,12 @@ const user: EngineUser = {
     ],
     feedLabels: {},
   },
+};
+
+/** The same account with a lights out after midnight, so its day runs to 01:30. */
+const lateUser: EngineUser = {
+  ...user,
+  rules: { ...user.rules, planner: { timeZone: ZONE, lightsOut: "01:30" } },
 };
 
 function row(over: Partial<EngineTaskRow> = {}): EngineTaskRow {
@@ -317,6 +329,52 @@ describe("toFixedEvents", () => {
     expect(toFixedEvents([], [timed], new Set(), ZONE).map((e) => e.source)).toEqual(["task"]);
   });
 
+  // F7. The merge marker was set before the event's dates were checked, so an
+  // event Google answered with an unreadable start was dropped AND its task's
+  // own block was skipped: the work vanished from the day altogether.
+  test("an event with an unreadable time leaves the task its own block", () => {
+    const timed = row({
+      due_date: "2026-11-09",
+      due_time: "13:00",
+      duration_min: 90,
+      gcal_event_id: "event-1",
+      gcal_calendar_id: "cal-1",
+    });
+    const fixed = toFixedEvents([event({ start: "whenever" })], [timed], new Set(), ZONE);
+    expect(fixed).toMatchObject([
+      { id: `task:${TASK_A}`, source: "task", start: "2026-11-09T13:00:00-07:00" },
+    ]);
+  });
+
+  test("an unreadable end does the same", () => {
+    const timed = row({
+      due_date: "2026-11-09",
+      due_time: "13:00",
+      duration_min: 90,
+      gcal_event_id: "event-1",
+      gcal_calendar_id: "cal-1",
+    });
+    const fixed = toFixedEvents([event({ end: "" })], [timed], new Set(), ZONE);
+    expect(fixed.map((e) => e.source)).toEqual(["task"]);
+  });
+
+  test("an all day event with an unreadable date does the same", () => {
+    const timed = row({
+      due_date: "2026-11-09",
+      due_time: "13:00",
+      duration_min: 90,
+      gcal_event_id: "event-1",
+      gcal_calendar_id: "cal-1",
+    });
+    const fixed = toFixedEvents(
+      [event({ allDay: true, start: "not a date", end: "not a date" })],
+      [timed],
+      new Set(),
+      ZONE,
+    );
+    expect(fixed.map((e) => e.source)).toEqual(["task"]);
+  });
+
   test("a closed task never becomes a fixed event", () => {
     expect(
       toFixedEvents(
@@ -416,6 +474,7 @@ describe("GoogleCalendarConnectionError", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    stubs.errors = {};
   });
 
   function refuseRefresh(body: unknown, status = 400) {
@@ -479,7 +538,7 @@ describe("GoogleCalendarConnectionError", () => {
     // connection: the one failure the tick must survive (behaviour 4).
     stubs.tokenRow = null;
     stubs.rows.tasks = [row({ due_date: "2026-11-09", due_time: "13:00", duration_min: 90 })];
-    stubs.rows.income_sources = [{ google_calendar_id: "cal-1" }];
+    stubs.rows.income_sources = [{ calendar_id: "cal-1" }];
 
     const loadFixed = createLoadFixed(createServiceClient() as unknown as SupabaseClient);
     const { fixed, calendar } = await loadFixed(USER, "2026-11-09", user);
@@ -494,6 +553,34 @@ describe("GoogleCalendarConnectionError", () => {
     expect(fixed[0].start).toBe("2026-11-09T13:00:00-07:00");
   });
 
+  // F1. capCalendarIdsFor sat outside the try, so an unreadable income_sources
+  // row threw out of loadFixed. fixedToday has no catch, so plan, morning and
+  // "later today" all failed, on every tick, for every account.
+  test("an unreadable income_sources row does not take the day's events with it", async () => {
+    stubs.tokenRow = null;
+    stubs.rows.tasks = [row({ due_date: "2026-11-09", due_time: "13:00", duration_min: 90 })];
+    stubs.errors.income_sources = { message: "permission denied for table income_sources" };
+
+    const loadFixed = createLoadFixed(createServiceClient() as unknown as SupabaseClient);
+    const { fixed, capUnknown } = await loadFixed(USER, "2026-11-09", user);
+
+    // The day still has what it has, and the cap knows it does not know.
+    expect(fixed.map((event) => event.source)).toEqual(["task"]);
+    expect(capUnknown).toBe(true);
+    // Nothing is reported as counting toward the cap on a guess.
+    expect(fixed.every((event) => !event.countsTowardCap)).toBe(true);
+    expect(warned.join("\n")).not.toContain("permission denied");
+  });
+
+  test("a readable income_sources row says the cap set is known", async () => {
+    stubs.tokenRow = null;
+    stubs.rows.tasks = [];
+    stubs.rows.income_sources = [{ calendar_id: "cal-1" }];
+
+    const loadFixed = createLoadFixed(createServiceClient() as unknown as SupabaseClient);
+    expect((await loadFixed(USER, "2026-11-09", user)).capUnknown).toBe(false);
+  });
+
   test("the production loadFixed asks Google for the user's own local day", async () => {
     stubs.tokenRow = {
       access_token: "ACCESS-TOKEN-VALUE",
@@ -502,7 +589,7 @@ describe("GoogleCalendarConnectionError", () => {
       scopes: "https://www.googleapis.com/auth/calendar.readonly",
     };
     stubs.rows.tasks = [];
-    stubs.rows.income_sources = [{ google_calendar_id: "cal-1" }];
+    stubs.rows.income_sources = [{ calendar_id: "cal-1" }];
 
     const urls: string[] = [];
     vi.stubGlobal(
@@ -543,6 +630,72 @@ describe("GoogleCalendarConnectionError", () => {
     // cal-1 belongs to an income source, so its hours count toward the cap.
     expect(fixed).toHaveLength(1);
     expect(fixed[0]).toMatchObject({ source: "google", countsTowardCap: true, title: "Shift" });
+  });
+
+  // F3. The read used to stop at local midnight while the planning day ran to
+  // lights out, so a real event after midnight was invisible and could be
+  // planned over. It covers the whole of the planning day now: local midnight
+  // (not the wake target, or the first fixed thing of the morning would be
+  // missed) to the later of the next midnight and lights out.
+  test("the production loadFixed covers the whole planning day, past midnight", async () => {
+    stubs.tokenRow = {
+      access_token: "ACCESS-TOKEN-VALUE",
+      refresh_token: "REFRESH-TOKEN-VALUE",
+      expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+      scopes: "https://www.googleapis.com/auth/calendar.readonly",
+    };
+    stubs.rows.tasks = [];
+    stubs.rows.income_sources = [];
+
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        urls.push(url);
+        const body = url.includes("calendarList")
+          ? { items: [{ id: "cal-1", summary: "Work", accessRole: "owner", backgroundColor: "#fff" }] }
+          : {
+              items: [
+                {
+                  id: "event-late",
+                  summary: "Night shift",
+                  start: { dateTime: "2026-11-10T00:30:00-07:00" },
+                  end: { dateTime: "2026-11-10T01:00:00-07:00" },
+                },
+              ],
+            };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+
+    const loadFixed = createLoadFixed(createServiceClient() as unknown as SupabaseClient);
+    const { fixed } = await loadFixed(USER, "2026-11-09", lateUser);
+
+    const events = urls.find((url) => url.includes("/events"));
+    expect(events).toContain(`timeMin=${encodeURIComponent("2026-11-09T07:00:00.000Z")}`);
+    // 01:30 Phoenix on the 10th, which is past the next local midnight.
+    expect(events).toContain(`timeMax=${encodeURIComponent("2026-11-10T08:30:00.000Z")}`);
+    expect(fixed.map((event) => event.title)).toEqual(["Night shift"]);
+  });
+
+  test("a task timed after midnight belongs to the planning day, not the next one", async () => {
+    stubs.tokenRow = null;
+    stubs.rows.income_sources = [];
+    // 00:30 on the 10th: inside the day that began on the 9th and ends at 01:30.
+    stubs.rows.tasks = [
+      row({ due_date: "2026-11-10", due_time: "00:30", duration_min: 30 }),
+    ];
+
+    const loadFixed = createLoadFixed(createServiceClient() as unknown as SupabaseClient);
+    expect((await loadFixed(USER, "2026-11-09", lateUser)).fixed).toMatchObject([
+      { source: "task", start: "2026-11-10T00:30:00-07:00" },
+    ]);
+    // And with an ordinary lights out it belongs to the 10th, as it always did.
+    expect((await loadFixed(USER, "2026-11-09", user)).fixed).toEqual([]);
   });
 
   test("a calendar that never answers is given up on, not waited for", async () => {
@@ -648,7 +801,7 @@ describe("createLoadWeekCapHours", () => {
       expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
       scopes: "https://www.googleapis.com/auth/calendar.readonly",
     };
-    stubs.rows.income_sources = [{ google_calendar_id: "cal-1" }];
+    stubs.rows.income_sources = [{ calendar_id: "cal-1" }];
     stubs.rows.v2_blocks = [];
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
@@ -670,8 +823,26 @@ describe("createLoadWeekCapHours", () => {
     expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 0, ok: true });
   });
 
+  // F3. "Today" here has to be the same interval loadFixed read, or a shift
+  // lands in neither: counted as the week's elsewhere AND missing from the
+  // day's own fixed events. A shift before the wake target and one after
+  // midnight on a day whose lights out is 01:30 are both that shape.
+  test("an early shift on the planning day is left to the planner, not counted elsewhere", async () => {
+    serveWeek([shift(MONDAY, "05:00", "08:00")]);
+    const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
+    expect(await load(USER, MONDAY, MONDAY, lateUser)).toEqual({ hours: 0, ok: true });
+  });
+
+  test("a shift after midnight on the planning day is left to the planner too", async () => {
+    serveWeek([shift("2026-11-10", "00:30", "01:00")]);
+    const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
+    expect(await load(USER, MONDAY, MONDAY, lateUser)).toEqual({ hours: 0, ok: true });
+    // With an ordinary lights out the same shift is simply another day's.
+    expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 0.5, ok: true });
+  });
+
   test("ignores a calendar no income source is linked to", async () => {
-    stubs.rows.income_sources = [{ google_calendar_id: "cal-other" }];
+    stubs.rows.income_sources = [{ calendar_id: "cal-other" }];
     serveWeek([shift("2026-11-10", "13:00", "17:00")]);
     const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
     expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 0, ok: true });

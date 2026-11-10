@@ -481,23 +481,23 @@ describe("behaviour 4: demand, in order", () => {
 
   test("behaviour 4.4: income is skipped when the cap has less room than the block", () => {
     const rules = parseRules({
-      weeklyHourCap: 24,
+      weeklyHourCap: 30,
       incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
     });
-    const tight = planDay(input({ rules, week: week({ capHoursElsewhere: 23 }) }));
+    const tight = planDay(input({ rules, week: week({ capHoursElsewhere: 29 }) }));
     expect(tight.blocks).toEqual([]);
     expect(tight.dropped).toEqual([{ candidateId: "income", reason: "cap" }]);
 
-    const roomy = planDay(input({ rules, week: week({ capHoursElsewhere: 20 }) }));
+    const roomy = planDay(input({ rules, week: week({ capHoursElsewhere: 26 }) }));
     expect(shapes(roomy)).toEqual(["income 09:00-11:00"]);
 
     const exempt = parseRules({
-      weeklyHourCap: 24,
+      weeklyHourCap: 30,
       capExemptRanges: [{ from: "2026-03-09", to: "2026-03-15" }],
       incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
     });
     expect(
-      shapes(planDay(input({ rules: exempt, week: week({ capHoursElsewhere: 23 }) }))),
+      shapes(planDay(input({ rules: exempt, week: week({ capHoursElsewhere: 29 }) }))),
     ).toEqual(["income 09:00-11:00"]);
   });
 
@@ -910,7 +910,7 @@ describe("behaviour 7: modes", () => {
 
   test("behaviour 7: travel skips the cap and the gym", () => {
     const rules = parseRules({
-      weeklyHourCap: 24,
+      weeklyHourCap: 30,
       incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
       gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
     });
@@ -919,14 +919,14 @@ describe("behaviour 7: modes", () => {
         rules,
         mode: "travel",
         energy: "good",
-        week: week({ capHoursElsewhere: 23 }),
+        week: week({ capHoursElsewhere: 29 }),
       }),
     );
     expect(shapes(travel)).toEqual(["income 09:00-11:00"]);
     expect(travel.dropped).toEqual([]);
 
     const normal = planDay(
-      input({ rules, energy: "good", week: week({ capHoursElsewhere: 23 }) }),
+      input({ rules, energy: "good", week: week({ capHoursElsewhere: 29 }) }),
     );
     expect(shapes(normal)).toEqual(["gym 16:00-17:00"]);
     expect(normal.dropped).toEqual([{ candidateId: "income", reason: "cap" }]);
@@ -1266,6 +1266,91 @@ describe("behaviour 11: the day being planned, not the clock", () => {
   });
 });
 
+// F4. An overdue hard item used to rank as hard-window, and step 2 is mandatory
+// and exempt from the per-lane limit, so a backlog of them produced one block
+// each on every day, whatever the energy said, with nothing dropped. They are
+// ordinary steps now, so capacity and the lane limit decide how much of the
+// backlog the day takes on.
+describe("an overdue hard item does not flood the day", () => {
+  const overdue = (n: number, lane: string) =>
+    candidate({
+      id: `late-${n}`,
+      lane,
+      hard: true,
+      // Already read once, so step 3 would ask for a working block rather than
+      // a touch if it asked at all.
+      earlyTouchDone: true,
+      due: utc("12:00", `2026-03-0${n}`),
+    });
+
+  test("six overdue items in six lanes do not each get a mandatory block", () => {
+    const candidates = [1, 2, 3, 4, 5, 6].map((n) => overdue(n, `lane-${n}`));
+    const out = planDay(input({ energy: "low", candidates }));
+
+    expect(out.blocks.map((b) => [b.kind, b.reason])).toEqual([["floor", "floor"]]);
+    // The oldest one is the top-ranked, so it is the one the floor serves.
+    expect(out.blocks[0].taskId).toBe("late-1");
+    expect(out.dropped.map((d) => d.reason)).toEqual([
+      "capacity",
+      "capacity",
+      "capacity",
+      "capacity",
+      "capacity",
+    ]);
+    expect(out.dropped.map((d) => d.candidateId)).not.toContain("late-1");
+  });
+
+  test("six overdue items in one lane are bounded by the lane limit", () => {
+    const candidates = [1, 2, 3, 4, 5, 6].map((n) => overdue(n, "lane-a"));
+    const out = planDay(input({ energy: "ok", candidates }));
+
+    expect(out.blocks).toHaveLength(1);
+    expect(out.blocks[0].taskId).toBe("late-1");
+    expect(out.dropped.map((d) => [d.candidateId, d.reason])).toEqual([
+      ["late-2", "lane-limit"],
+      ["late-3", "lane-limit"],
+      ["late-4", "lane-limit"],
+      ["late-5", "lane-limit"],
+      ["late-6", "lane-limit"],
+    ]);
+  });
+
+  test("an overdue item ranks by its date, so the oldest is served first", () => {
+    const out = planDay(
+      input({
+        energy: "ok",
+        candidates: [
+          overdue(6, "lane-a"),
+          overdue(2, "lane-b"),
+          overdue(4, "lane-c"),
+        ],
+      }),
+    );
+    expect(out.blocks.map((b) => b.taskId)).toEqual(["late-2", "late-4"]);
+    expect(out.dropped.map((d) => [d.candidateId, d.reason])).toEqual([
+      ["late-6", "capacity"],
+    ]);
+  });
+
+  // Not changed by F4, and pinned so it is a decision rather than an accident:
+  // an item that closed EARLIER TODAY is a day's-worth overdue, not a deadline
+  // the day can still meet, and step 3 still offers it one short block. Step 3
+  // is optional and respects the lane limit, so it cannot flood anything.
+  test("an item that closed earlier today still gets one touch block", () => {
+    const out = planDay(
+      input({
+        now: utc("14:00"),
+        candidates: [
+          candidate({ id: "missed", lane: "lane-a", hard: true, due: utc("08:00") }),
+        ],
+      }),
+    );
+    expect(out.blocks.map((b) => [b.kind, b.reason])).toEqual([
+      ["touch", "early-touch"],
+    ]);
+  });
+});
+
 describe("whole-day invariants", () => {
   test("a day filled with fixed events has no overlap and explains every drop", () => {
     const fixed = [
@@ -1334,7 +1419,7 @@ describe("whole-day invariants", () => {
     // 72 hour window hides) and days with no room at all.
     const ruleSets = [
       parseRules({
-        weeklyHourCap: 24,
+        weeklyHourCap: 30,
         incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
         gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
         protectedWindows: [
@@ -1351,7 +1436,7 @@ describe("whole-day invariants", () => {
       }),
       parseRules({
         hardWindowHours: 24,
-        weeklyHourCap: 24,
+        weeklyHourCap: 30,
         capacity: { ok: { small: 2 }, good: { small: 2 } },
         incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
       }),

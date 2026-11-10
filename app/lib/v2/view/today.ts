@@ -116,6 +116,29 @@ const BLOCK_REASON: Record<string, string> = {
   floor: "The one block you keep",
 };
 
+/**
+ * Why a stop the TICK closed off looks like that. Keys are the tick's own
+ * reasons (REASON in app/lib/v2/engine/tick.ts), which is the only explanation
+ * a skipped stop has: the planner never writes one, so without these a stop
+ * that was struck through said nothing but "Not today" and the user could not
+ * tell a day that ended from a question they ignored twice.
+ *
+ * Written out here rather than imported, so the screen does not pull the engine
+ * into its bundle; `__tests__/v2-view-today.test.ts` pins the two lists against
+ * each other, so a new tick reason cannot land without copy.
+ *
+ * Rule 1 at the top of this file still holds for everything else: a reason this
+ * map does not name, and that BLOCK_REASON does not name either, goes quiet
+ * rather than printing a machine token.
+ */
+export const SKIPPED_REASON: Record<string, string> = {
+  "day ended": "The day ended",
+  "slipped twice": "Slipped twice",
+  "moved to tomorrow": "Moved to tomorrow",
+  dropped: "Dropped",
+  "no room later today": "No room later today",
+};
+
 /** Why something is not on the day. Keys are planner reasons (DROPPED). */
 const DROP_REASON: Record<string, string> = {
   "no-room": "No room today",
@@ -304,7 +327,12 @@ export function buildTodayView(input: TodayInput): TodayView {
         leaveBy: null,
         reason: sentence([
           minutesLabel((endMs - startMs) / 60_000),
-          KIND_REASON[block.kind] ?? BLOCK_REASON[block.reason],
+          // A skipped stop's reason comes from the tick, not the planner, so it
+          // is looked up in its own map first; the planner's reason on the row
+          // describes why it was PLANNED, which is no longer the news.
+          (block.state === "skipped" ? SKIPPED_REASON[block.reason] : undefined) ??
+            KIND_REASON[block.kind] ??
+            BLOCK_REASON[block.reason],
         ]),
       },
     });

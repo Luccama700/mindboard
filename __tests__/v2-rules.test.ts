@@ -138,8 +138,8 @@ describe("parseRules", () => {
   });
 
   test("an explicit null clears a nullable field", () => {
-    const rules = parseRules({ weeklyHourCap: 24, gym: null });
-    expect(rules.weeklyHourCap).toBe(24);
+    const rules = parseRules({ weeklyHourCap: 30, gym: null });
+    expect(rules.weeklyHourCap).toBe(30);
     expect(rules.gym).toBeNull();
   });
 

@@ -9,6 +9,8 @@ import { rankCandidates } from "@/app/lib/v2/plan/rank";
 import type { Candidate } from "@/app/lib/v2/types";
 
 const NOW = "2026-03-10T09:00:00+00:00";
+/** The day being planned. Usually the day NOW falls on; not always (see below). */
+const TODAY = "2026-03-10";
 const rules = parseRules({});
 
 function candidate(over: Partial<Candidate> & { id: string }): Candidate {
@@ -27,8 +29,8 @@ function candidate(over: Partial<Candidate> & { id: string }): Candidate {
   };
 }
 
-const tiers = (list: Candidate[]) =>
-  rankCandidates(list, NOW, rules).map((r) => [r.candidate.id, r.tier]);
+const tiers = (list: Candidate[], today = TODAY) =>
+  rankCandidates(list, NOW, rules, today).map((r) => [r.candidate.id, r.tier]);
 
 describe("rankCandidates", () => {
   test("a hard item closing today is due-today", () => {
@@ -43,16 +45,49 @@ describe("rankCandidates", () => {
     ).toEqual([["a", "due-today"]]);
   });
 
-  test("a hard item inside the hard window, including an overdue one, is hard-window", () => {
+  test("a hard item inside the hard window is hard-window", () => {
     expect(
       tiers([
-        candidate({ id: "soon", hard: true, due: "2026-03-12T10:00:00+00:00" }),
-        candidate({ id: "late", hard: true, due: "2026-03-09T10:00:00+00:00" }),
+        candidate({ id: "later", hard: true, due: "2026-03-12T10:00:00+00:00" }),
+        candidate({ id: "sooner", hard: true, due: "2026-03-11T10:00:00+00:00" }),
       ]),
     ).toEqual([
-      ["late", "hard-window"],
-      ["soon", "hard-window"],
+      ["sooner", "hard-window"],
+      ["later", "hard-window"],
     ]);
+  });
+
+  // F4. An overdue hard item used to be hard-window, and the hard window is
+  // exempt from both capacity and the per-lane limit, so a backlog of them
+  // produced one mandatory block each, on every day, with nothing dropped.
+  test("a hard item that has already closed is not in the hard window", () => {
+    expect(
+      tiers([candidate({ id: "late", hard: true, due: "2026-03-09T10:00:00+00:00" })]),
+    ).toEqual([["late", "lane-step"]]);
+  });
+
+  test("a hard item that closed earlier today is not due today either", () => {
+    expect(
+      tiers([candidate({ id: "missed", hard: true, due: "2026-03-10T08:00:00+00:00" })]),
+    ).toEqual([["missed", "lane-step"]]);
+  });
+
+  test("overdue hard items rank by their date, earliest first", () => {
+    expect(
+      tiers([
+        candidate({ id: "b", hard: true, lane: "lane-a", due: "2026-03-08T10:00:00+00:00" }),
+        candidate({ id: "c", hard: true, lane: "lane-a", due: "2026-03-01T10:00:00+00:00" }),
+        candidate({ id: "a", hard: true, lane: "lane-a", due: "2026-03-09T10:00:00+00:00" }),
+      ]).map(([id]) => id),
+    ).toEqual(["c", "b", "a"]);
+  });
+
+  test("an overdue hard side quest is a side quest, not a deadline", () => {
+    expect(
+      tiers([
+        candidate({ id: "errand", kind: "side", hard: true, due: "2026-03-09T10:00:00+00:00" }),
+      ]),
+    ).toEqual([["errand", "side"]]);
   });
 
   test("a hard item outside the hard window falls back to its kind", () => {
@@ -146,8 +181,8 @@ describe("rankCandidates", () => {
       candidate({ id: "b" }),
       candidate({ id: "c", kind: "side" }),
     ];
-    const forward = rankCandidates(list, NOW, rules).map((r) => r.candidate.id);
-    const backward = rankCandidates([...list].reverse(), NOW, rules).map(
+    const forward = rankCandidates(list, NOW, rules, TODAY).map((r) => r.candidate.id);
+    const backward = rankCandidates([...list].reverse(), NOW, rules, TODAY).map(
       (r) => r.candidate.id,
     );
     expect(backward).toEqual(forward);
@@ -162,6 +197,7 @@ describe("rankCandidates", () => {
         [candidate({ id: "x", hard: true, due: "2026-03-11T18:00:00+00:00" })],
         evening,
         tight,
+        TODAY,
       )[0].tier,
     ).toBe("lane-step");
     // 10 hours out, and tomorrow rather than today.
@@ -170,6 +206,7 @@ describe("rankCandidates", () => {
         [candidate({ id: "x", hard: true, due: "2026-03-11T06:00:00+00:00" })],
         evening,
         tight,
+        TODAY,
       )[0].tier,
     ).toBe("hard-window");
   });
@@ -181,7 +218,7 @@ describe("rankCandidates", () => {
     const now = "2026-03-10T09:00:00+09:00";
     const due = "2026-03-10T23:00:00+00:00";
     expect(
-      rankCandidates([candidate({ id: "x", hard: true, due })], now, tokyo)[0]
+      rankCandidates([candidate({ id: "x", hard: true, due })], now, tokyo, TODAY)[0]
         .tier,
     ).toBe("hard-window");
     expect(
@@ -189,7 +226,27 @@ describe("rankCandidates", () => {
         [candidate({ id: "x", hard: true, due: "2026-03-10T20:00:00+09:00" })],
         now,
         tokyo,
+        TODAY,
       )[0].tier,
+    ).toBe("due-today");
+  });
+
+  // F3. The reference instant and the day being planned are the same day on an
+  // ordinary day, and are NOT once lights out is after midnight: at 00:05 the
+  // planning day is still yesterday. "Closes today" has to follow the planning
+  // day, or tomorrow's deadline gets its three-hour session tonight.
+  test("today is the day being planned, not the day the reference instant falls on", () => {
+    const afterMidnight = "2026-03-11T00:05:00+00:00";
+    const closesOnThe11th = candidate({
+      id: "x",
+      hard: true,
+      due: "2026-03-11T23:59:00+00:00",
+    });
+    expect(
+      rankCandidates([closesOnThe11th], afterMidnight, rules, "2026-03-10")[0].tier,
+    ).toBe("hard-window");
+    expect(
+      rankCandidates([closesOnThe11th], afterMidnight, rules, "2026-03-11")[0].tier,
     ).toBe("due-today");
   });
 });

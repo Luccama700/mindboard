@@ -19,6 +19,7 @@ import {
   applyEffect,
   createEngineContext,
   planToday,
+  wholeSecond,
   type TickDeps,
 } from "@/app/lib/v2/engine/tick";
 import { redeemPairingCode } from "@/app/lib/v2/engine/pairing";
@@ -143,9 +144,15 @@ async function handleStart(
 export async function handleIncoming(
   deps: TickDeps,
   incoming: Incoming,
-  now: Instant,
+  at: Instant,
   context: IncomingContext = {},
 ): Promise<void> {
+  // The webhook builds `at` with `new Date().toISOString()`, so it carries
+  // milliseconds. Floored here rather than only in `createEngineContext`,
+  // because `asks.answer` and `redeemPairingCode` are handed it before any
+  // context exists, and nothing below this line should see a fraction of a
+  // second (see `wholeSecond`).
+  const now = wholeSecond(at);
   switch (incoming.type) {
     case "answer":
       await handleAnswer(deps, incoming, now, context);

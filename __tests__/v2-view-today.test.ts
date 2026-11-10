@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest";
 
 import { parseRules } from "@/app/lib/v2/rules";
 import {
+  SKIPPED_REASON,
   STOP_STATUS_COPY,
   TODAY_COPY,
   actionLine,
@@ -15,6 +16,8 @@ import {
   droppedTitles,
   type TodayInput,
 } from "@/app/lib/v2/view/today";
+// The tick's own reasons, imported so the view's copy for them cannot drift.
+import { REASON as TICK_REASON } from "@/app/lib/v2/engine/tick";
 import type {
   Ask,
   Block,
@@ -502,6 +505,74 @@ describe("the reason line", () => {
       }),
     );
     expect(view.stops[0].reason).toBe("25 minutes");
+  });
+
+  // F9. The tick stores its own reason on a stop it closed off, and the view
+  // looked reasons up by planner token only, so a skipped stop said nothing but
+  // "Not today" and the user could not tell a day that ended from a question
+  // they ignored twice.
+  describe("a stop the tick closed off", () => {
+    const skipped = (reason: string) =>
+      buildTodayView(
+        input({
+          plan: plan({
+            blocks: [
+              block({
+                id: "b",
+                state: "skipped",
+                reason,
+                start: at("10:35"),
+                end: at("11:00"),
+              }),
+            ],
+          }),
+        }),
+      ).stops[0];
+
+    test.each(Object.values(TICK_REASON))("shows its own reason: %s", (reason) => {
+      const stop = skipped(reason);
+      expect(stop.state).toBe("skipped");
+      expect(stop.reason.startsWith("25 minutes. ")).toBe(true);
+      expect(stop.reason.length).toBeGreaterThan("25 minutes. ".length);
+    });
+
+    test("names every reason the tick can write", () => {
+      // The view keeps its own copy of these strings so the screen does not
+      // import the engine. This is what stops the two lists drifting.
+      expect(Object.values(TICK_REASON).filter((reason) => !(reason in SKIPPED_REASON)))
+        .toEqual([]);
+      expect(
+        Object.keys(SKIPPED_REASON).filter(
+          (key) => !(Object.values(TICK_REASON) as string[]).includes(key),
+        ),
+      ).toEqual([]);
+    });
+
+    test("reads as words, with no machine token and no dash", () => {
+      for (const reason of Object.values(SKIPPED_REASON)) {
+        expect(reason).not.toMatch(/[a-z]-[a-z]/);
+        expect(reason).not.toMatch(/[—–]/);
+        // Sentence case: it is joined after "25 minutes. ".
+        expect(reason[0]).toBe(reason[0].toUpperCase());
+      }
+    });
+
+    test("an unknown reason on a skipped stop still stays silent", () => {
+      expect(skipped("some-new-reason").reason).toBe("25 minutes");
+    });
+
+    test("a block that is still planned keeps the planner's own reason", () => {
+      const view = buildTodayView(
+        input({
+          plan: plan({
+            blocks: [
+              block({ id: "b", reason: "lane-next", start: at("10:35"), end: at("11:00") }),
+            ],
+          }),
+        }),
+      );
+      expect(view.stops[0].reason).toBe("25 minutes. Next step in this lane");
+    });
   });
 
   test("tells a fixed event by where it is, and says when it is paid work", () => {

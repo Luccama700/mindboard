@@ -74,7 +74,7 @@ function rules(): PlannerRules {
       good: { blocks: 4, small: 2, gym: true, social: true },
     },
     maxBlocksPerLanePerDay: 1,
-    weeklyHourCap: 24,
+    weeklyHourCap: 30,
     incomeTarget: { lane: "work", weeklyHours: 10, blockMinutes: 120 },
     travel: [
       {
