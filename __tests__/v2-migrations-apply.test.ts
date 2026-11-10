@@ -1206,8 +1206,7 @@ describe("0066 and 0067, the v2 engine", () => {
     const snapshot = () =>
       rows(fn, "select user_id, id, date::text as date, state, title from public.v2_blocks order by user_id, id");
 
-    beforeAll(async () => {
-      fn = await clone(with66);
+    const seedBlocks = async (db: Db) => {
       const block = (u: string, id: string, date: string, state: string) =>
         `insert into public.v2_blocks (user_id, id, date, starts_at, ends_at, kind, title, state) values ('${u}', '${id}', '${date}', '${date}T09:00:00Z', '${date}T10:00:00Z', 'focus', 'old ${id}', '${state}')`;
       for (const sql of [
@@ -1216,11 +1215,17 @@ describe("0066 and 0067, the v2 engine", () => {
         block(A, "s1", D1, "started"),
         block(A, "d1", D1, "done"),
         block(A, "k1", D1, "skipped"),
-        block(A, "p3", D2, "planned"),
+        block(A, "p3", D2, "planned"), // another day, and named by the plan
+        block(A, "p4", D2, "planned"), // another day, and NOT named by the plan: the delete step must spare it by date
         block(B, "bp1", D1, "planned"),
       ]) {
-        await fn.exec(sql);
+        await db.exec(sql);
       }
+    };
+
+    beforeAll(async () => {
+      fn = await clone(with66);
+      await seedBlocks(fn);
     });
 
     it("cannot be executed by anon or authenticated, and can by service_role", async () => {
@@ -1236,7 +1241,7 @@ describe("0066 and 0067, the v2 engine", () => {
       await asRole(fn, "authenticated", A, async () => {
         await expect(call(fn, A, D1, [])).rejects.toThrow(/permission denied/);
       });
-      expect(await snapshot()).toHaveLength(7); // the refused calls changed nothing
+      expect(await snapshot()).toHaveLength(8); // the refused calls changed nothing
     });
 
     it("replaces only the planned rows of that user and date", async () => {
@@ -1257,9 +1262,33 @@ describe("0066 and 0067, the v2 engine", () => {
         { user_id: A, id: "n1", date: D1, state: "planned", title: "new n1" },
         { user_id: A, id: "p1", date: D1, state: "planned", title: "new p1" },
         { user_id: A, id: "p3", date: D2, state: "planned", title: "old p3" },
+        { user_id: A, id: "p4", date: D2, state: "planned", title: "old p4" },
         { user_id: A, id: "s1", date: D1, state: "started", title: "old s1" },
         { user_id: B, id: "bp1", date: D1, state: "planned", title: "old bp1" },
-      ]); // p2 was planned, on D1, and absent from the plan: deleted
+      ]); // p2 was planned, on D1, and absent from the plan: deleted. p4 is planned and absent too, but on D2: kept.
+    });
+
+    it("would notice if the delete step stopped checking the date: a copy of the function without that condition deletes p4", async () => {
+      const mutant = await clone(with66);
+      await seedBlocks(mutant);
+      const [{ def }] = await rows<{ def: string }>(mutant, `select pg_get_functiondef('${V2_FN}'::regprocedure) as def`);
+      const without = def
+        .replace("v2_replace_planned_blocks(", "v2_replace_planned_blocks_mutant(")
+        .replace("and b.date = p_date", "and true");
+      expect(without).not.toBe(def);
+      expect(without).toContain("v2_replace_planned_blocks_mutant(");
+      expect(without).toContain("and true");
+      await mutant.exec(without);
+      const blocks = [plan("p1", "new p1"), plan("n1", "new n1")]; // p3 and p4 are not named here
+      await mutant.query("select public.v2_replace_planned_blocks_mutant($1::uuid, $2::date, $3::jsonb)", [A, D1, JSON.stringify(blocks)]);
+      const survivors = await rows<{ id: string }>(mutant, `select id from public.v2_blocks where user_id = '${A}' and date = '${D2}' order by id`);
+      expect(survivors).toEqual([]); // the mutant deletes another day's planned rows ...
+
+      const real = await clone(with66);
+      await seedBlocks(real);
+      await real.query("select public.v2_replace_planned_blocks($1::uuid, $2::date, $3::jsonb)", [A, D1, JSON.stringify(blocks)]);
+      const kept = await rows<{ id: string }>(real, `select id from public.v2_blocks where user_id = '${A}' and date = '${D2}' order by id`);
+      expect(kept).toEqual([{ id: "p3" }, { id: "p4" }]); // ... and the real one does not
     });
 
     it("is all or nothing when one element is malformed", async () => {
@@ -1267,7 +1296,7 @@ describe("0066 and 0067, the v2 engine", () => {
       const malformed: [string, Record<string, unknown>, RegExp][] = [
         ["unknown kind", { kind: "bogus" }, /check constraint|v2_blocks_kind_check/i],
         ["ends before it starts", { ends_at: `${D1}T08:00:00Z` }, /check constraint|v2_blocks_window/i],
-        ["not a time", { starts_at: "not-a-time" }, /./],
+        ["not a time", { starts_at: "not-a-time" }, /invalid input syntax|date\/time|datetime|timestamp/i],
         ["no title", { title: null }, /not-null|null value/i],
       ];
       for (const [label, bad, expected] of malformed) {
@@ -1281,8 +1310,9 @@ describe("0066 and 0067, the v2 engine", () => {
     it("refuses the same id twice, and changes nothing", async () => {
       const before = await snapshot();
       await asService(async () => {
-        await expect(call(fn, A, D1, [plan("dup", "one"), plan("dup", "two")])).rejects.toThrow();
-        await expect(call(fn, A, D1, [plan("p1", "one"), plan("p1", "two")])).rejects.toThrow();
+        const twice = /second time|cardinality/i; // Postgres refusing one row affected twice
+        await expect(call(fn, A, D1, [plan("dup", "one"), plan("dup", "two")])).rejects.toThrow(twice);
+        await expect(call(fn, A, D1, [plan("p1", "one"), plan("p1", "two")])).rejects.toThrow(twice);
       });
       expect(await snapshot()).toEqual(before);
     });
