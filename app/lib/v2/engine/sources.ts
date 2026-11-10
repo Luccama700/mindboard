@@ -151,14 +151,30 @@ export function toFixedEvents(
 ): FixedEvent[] {
   const out: FixedEvent[] = [];
 
+  // A task that was pushed to Google is the SAME thing as the event it created.
+  // It goes on the day once, with the event's time (Google is where it was last
+  // moved) and the TASK's id, so whatever reads these knows which task it is and
+  // does not plan a second block for work that already has a slot. Keyed the way
+  // the task row points at it.
+  const taskByEvent = new Map<string, EngineTaskRow>();
+  for (const task of timedTasks) {
+    if (!isOpen(task.status)) continue;
+    if (task.gcal_event_id == null || task.gcal_calendar_id == null) continue;
+    taskByEvent.set(`${task.gcal_calendar_id}:${task.gcal_event_id}`, task);
+  }
+  const merged = new Set<string>();
+
   for (const event of events) {
     const countsTowardCap = capCalendarIds.has(event.calendarId);
+    const task = taskByEvent.get(event.id);
+    if (task !== undefined) merged.add(task.id);
+    const id = task === undefined ? event.id : `${TASK_FIXED_PREFIX}${task.id}`;
     if (event.allDay) {
       const from = dateKeyOf(event.start, timeZone);
       if (from === null) continue;
       const to = dateKeyOf(event.end, timeZone) ?? shiftDateKey(from, 1);
       out.push({
-        id: event.id,
+        id,
         title: event.summary,
         start: localIso(from, 0, 0, timeZone),
         end: localIso(to, 0, 0, timeZone),
@@ -176,7 +192,7 @@ export function toFixedEvents(
       continue;
     }
     out.push({
-      id: event.id,
+      id,
       title: event.summary,
       start: event.start,
       end: event.end,
@@ -188,25 +204,15 @@ export function toFixedEvents(
     });
   }
 
-  // A task that was pushed to Google is the same block as the event it created,
-  // so the event is the copy that counts. planning.ts does this for a promoted
-  // recurring slot ("the real event replaces the routine"); without it a
-  // time-blocked task is busy twice and Today names it twice. When the calendar
-  // read failed there are no events to match, so the local copy is kept.
-  const fetched = new Set(out.map((event) => event.id));
-
+  // The timed tasks whose Google copy was NOT among the events: either they
+  // were never pushed, or the event is gone, or the calendar read failed. Their
+  // own time is then all there is, so they go on the day themselves.
   for (const task of timedTasks) {
     if (!isOpen(task.status)) continue;
+    if (merged.has(task.id)) continue;
     const time = wallParts(task.due_time);
     const minutes = task.duration_min;
     if (task.due_date === null || time === null || minutes === null || minutes <= 0) continue;
-    if (
-      task.gcal_event_id != null &&
-      task.gcal_calendar_id != null &&
-      fetched.has(`${task.gcal_calendar_id}:${task.gcal_event_id}`)
-    ) {
-      continue;
-    }
     const startMs = zonedWallTimeToUtcMs(task.due_date, time.hour, time.minute, timeZone);
     out.push({
       id: `${TASK_FIXED_PREFIX}${task.id}`,
@@ -396,9 +402,16 @@ export function createLoadWeekCapHours(
     const timeMax = new Date(zonedWallTimeToUtcMs(weekEnd, 0, 0, zone)).toISOString();
 
     try {
-      const [capCalendarIds, events, blocks] = await Promise.all([
-        capCalendarIdsFor(client, userId),
-        withTimeout(listEvents(userId, { timeMin, timeMax }), CALENDAR_TIMEOUT_MS),
+      const capCalendarIds = await capCalendarIdsFor(client, userId);
+      // No calendar counts toward the cap, so there is nothing to read and
+      // nothing that could fail: the engine's own income blocks ARE the answer.
+      // Without this an account with a cap and no linked income calendar would
+      // report `cap-unknown` on every tick for as long as Google was unreachable,
+      // and never plan any income work again.
+      const [events, blocks] = await Promise.all([
+        capCalendarIds.size === 0
+          ? Promise.resolve([] as EngineCalendarEvent[])
+          : withTimeout(listEvents(userId, { timeMin, timeMax }), CALENDAR_TIMEOUT_MS),
         incomeBlockSpans(client, userId, weekStart, weekEnd),
       ]);
 

@@ -149,6 +149,10 @@ export function createTelegramClient(token: string, fetchImpl: typeof fetch = fe
       try {
         parsed = await response.json();
       } catch {
+        // A body that stalled until the timeout aborted it is a request that
+        // never answered, not an HTTP status: without this it would be reported
+        // as the status of the headers that did arrive.
+        if (controller.signal.aborted) throw new TelegramError(method, null);
         parsed = null;
       }
       const ok =

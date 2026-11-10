@@ -260,7 +260,7 @@ describe("toFixedEvents", () => {
     ).toEqual([]);
   });
 
-  test("a task that is already on the calendar is not a second fixed event", () => {
+  test("a task that is already on the calendar is one fixed event, carrying the task's id", () => {
     const timed = row({
       due_date: "2026-11-09",
       due_time: "13:00",
@@ -268,17 +268,49 @@ describe("toFixedEvents", () => {
       gcal_event_id: "event-1",
       gcal_calendar_id: "cal-1",
     });
-    expect(toFixedEvents([event()], [timed], new Set(), ZONE).map((e) => e.source)).toEqual([
-      "google",
-    ]);
+    const fixed = toFixedEvents([event()], [timed], new Set(["cal-1"]), ZONE);
+    expect(fixed).toHaveLength(1);
+    expect(fixed[0]).toMatchObject({
+      // The task's id, so the planner knows not to book the work twice...
+      id: `task:${TASK_A}`,
+      // ...and Google's own time, which is where it was last moved.
+      start: "2026-11-09T16:00:00.000Z",
+      end: "2026-11-09T20:00:00.000Z",
+      source: "google",
+      calendarId: "cal-1",
+      countsTowardCap: true,
+    });
   });
 
-  test("a task whose calendar copy was not fetched keeps its own block", () => {
+  test("a task pushed to a calendar that was not fetched keeps its own block", () => {
     const timed = row({
       due_date: "2026-11-09",
       due_time: "13:00",
       duration_min: 90,
       gcal_event_id: "event-9",
+      gcal_calendar_id: "cal-1",
+    });
+    const fixed = toFixedEvents([event()], [timed], new Set(), ZONE);
+    expect(fixed.map((e) => e.id)).toEqual(["cal-1:event-1", `task:${TASK_A}`]);
+  });
+
+  test("a closed task's calendar event stays a plain calendar event", () => {
+    const closed = row({
+      status: "done",
+      gcal_event_id: "event-1",
+      gcal_calendar_id: "cal-1",
+    });
+    expect(toFixedEvents([event()], [closed], new Set(), ZONE).map((e) => e.id)).toEqual([
+      "cal-1:event-1",
+    ]);
+  });
+
+  test("a task whose calendar read failed altogether keeps its own block", () => {
+    const timed = row({
+      due_date: "2026-11-09",
+      due_time: "13:00",
+      duration_min: 90,
+      gcal_event_id: "event-1",
       gcal_calendar_id: "cal-1",
     });
     // Nothing came back from Google, so the task's own time is all there is.
@@ -659,6 +691,23 @@ describe("createLoadWeekCapHours", () => {
     stubs.tokenRow = null;
     const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
     expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 0, ok: false });
+  });
+
+  test("with no income calendar at all it does not ask Google, so it always knows", async () => {
+    // An account with a cap and no linked calendar, with Google unreachable:
+    // without the shortcut this would answer `cap-unknown` on every tick for
+    // ever, and never plan income work again.
+    stubs.rows.income_sources = [];
+    stubs.tokenRow = null;
+    stubs.rows.v2_blocks = [
+      { starts_at: "2026-11-10T09:00:00-07:00", ends_at: "2026-11-10T12:00:00-07:00" },
+    ];
+    const calls = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", calls);
+
+    const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
+    expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 3, ok: true });
+    expect(calls).not.toHaveBeenCalled();
   });
 });
 

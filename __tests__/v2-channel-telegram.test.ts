@@ -304,6 +304,33 @@ describe("createTelegramClient", () => {
     }
   });
 
+  it("reports a body that stalls past the timeout as no response, not as its status", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = ((_url: unknown, init?: RequestInit) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            new Promise((_resolve, reject) => {
+              signal?.addEventListener("abort", () => reject(new Error("aborted")));
+            }),
+        } as unknown as Response);
+      }) as unknown as typeof fetch;
+      const client = createTelegramClient(TOKEN, fetchImpl);
+      const pending = client.sendMessage("42", { text: "x", buttons: [] });
+      const assertion = expect(pending).rejects.toMatchObject({
+        method: "sendMessage",
+        status: null,
+      });
+      await vi.advanceTimersByTimeAsync(TELEGRAM_TIMEOUT_MS);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves no timer behind once a request has answered", async () => {
     vi.useFakeTimers();
     try {

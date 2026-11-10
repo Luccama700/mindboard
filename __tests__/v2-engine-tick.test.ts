@@ -356,6 +356,31 @@ describe("runTick, planning", () => {
     ).toEqual([]);
   });
 
+  test("a task whose time lives on Google is not planned a second time either", async () => {
+    // The common path for a time-blocked task: `tasks.gcal_event_id` is set, so
+    // the only fixed event is the calendar's, carrying the task's id.
+    const pushed: FixedEvent = {
+      id: `task:${TASK_A}`,
+      title: "Write the brief",
+      start: local("13:00"),
+      end: local("14:30"),
+      allDay: false,
+      calendarId: "cal-1",
+      location: null,
+      countsTowardCap: false,
+      source: "google",
+    };
+    const { stores, deps } = await harness({
+      deps: { loadFixed: async () => ({ fixed: [pushed], calendar: okRun(local("09:00")) }) },
+    });
+
+    await runTick(deps, USER, local("09:30"));
+
+    expect(
+      (await stores.blocks.listForDate(USER, DATE)).filter((block) => block.taskId === TASK_A),
+    ).toEqual([]);
+  });
+
   test("capped hours on the week's other days leave no room for income work", async () => {
     const roomy = await harness({ rules: CAPPED_RULES });
     await runTick(roomy.deps, USER, local("09:30"));
@@ -590,6 +615,54 @@ describe("runTick, slips", () => {
     expect(
       (await stores.blocks.listForDate(USER, DATE)).find((block) => block.id === aBlock().id),
     ).toMatchObject({ state: "planned", start: local("14:00") });
+  });
+
+  test("one block whose effect throws does not leave the rest of the day unasked", async () => {
+    const { stores, deps } = await harness({
+      deps: {
+        loadFixed: async () => {
+          throw new Error("the task list is unreadable");
+        },
+      },
+    });
+    await stores.blocks.replacePlanned(USER, DATE, [
+      aBlock(),
+      aBlock({ id: `${DATE}:focus:${TASK_B}`, taskId: TASK_B, title: "Read the paper" }),
+    ]);
+    // The first block's question is already resolved, and re-applying its
+    // effect needs the calendar, which throws.
+    await stores.asks.insert(USER, {
+      id: "cccccccc-cccc-4ccc-8ccc-000000000012",
+      userId: USER,
+      kind: "slip",
+      topic: `task:${TASK_A}`,
+      text: "Still doing Write the brief?",
+      options: [
+        {
+          id: "later",
+          label: "Later today",
+          effect: { type: "block.reschedule", blockId: aBlock().id, to: "later-today" },
+        },
+      ],
+      defaultOptionId: "later",
+      timeCritical: true,
+      openedAt: local("14:05"),
+      remindAt: null,
+      remindedAt: null,
+      expiresAt: local("14:10"),
+      status: "expired",
+      answeredOptionId: null,
+      answeredAt: null,
+      assumed: true,
+      dedupeKey: `slip:${aBlock().id}`,
+    });
+
+    const result = await runTick(deps, USER, local("14:15"));
+
+    expect(result.steps.slips).toBe("error");
+    // The second block was still looked at, and asked about.
+    const open = await stores.asks.listOpen(USER);
+    expect(open.map((ask) => ask.dedupeKey)).toEqual([`slip:${DATE}:focus:${TASK_B}`]);
   });
 
   test("a tap that lands while a tick is running is not punished as a second slip", async () => {

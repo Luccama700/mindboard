@@ -108,9 +108,18 @@ export const OPTION_ID_MAX = 12;
 /** A fixed event that stands for a task carries its id behind this prefix. */
 export const TASK_FIXED_PREFIX = "task:";
 
-/** The task a `task`-sourced fixed event stands for, or null. */
+/**
+ * The task a fixed event stands for, or null.
+ *
+ * The id is the whole test, deliberately NOT the source: a task that was pushed
+ * to Google comes back as a calendar event (`source: "google"`, its own calendar
+ * and time), and `toFixedEvents` gives that merged record the task's id, so the
+ * one thing on the day is one fixed event and the task behind it is still
+ * known. Keying on the source would miss exactly that case, which is the common
+ * one for a time-blocked task.
+ */
 export function fixedTaskId(event: FixedEvent): string | null {
-  if (event.source !== "task" || !event.id.startsWith(TASK_FIXED_PREFIX)) return null;
+  if (!event.id.startsWith(TASK_FIXED_PREFIX)) return null;
   const id = event.id.slice(TASK_FIXED_PREFIX.length);
   return id.length > 0 ? id : null;
 }
@@ -468,15 +477,14 @@ export async function planToday(
     ctx.today,
     out.blocks.filter((block) => block.state === "planned"),
   );
-  // `energyAssumed` is written here only while the day has no energy at all,
-  // which is the one case where the plan assumed one. It is never written back
-  // to false: that would erase what `energy.set` recorded, which is whether
-  // the energy on the row was answered or defaulted.
+  // A plan writes neither `energy` nor `energyAssumed`. Those two belong to the
+  // answer (given) or to the energy ask's expiry (assumed), and a plan that
+  // wrote them would race an answer it had just read as absent. For a day with
+  // no answer yet, what Today reports is the plan's own `energyAssumed`.
   await ctx.stores.days.patch(ctx.userId, ctx.today, {
     plannedAt: ctx.now,
     dropped: out.dropped,
     leaveBy: out.leaveBy,
-    ...(day?.energy == null ? { energyAssumed: true } : {}),
   });
 
   if (capUnknown) {
@@ -593,16 +601,24 @@ function mayInterrupt(ctx: EngineContext, askKind: string | null): boolean {
 
 async function expireAsks(ctx: EngineContext): Promise<void> {
   const open = await ctx.stores.asks.listOpen(ctx.userId);
+  // One ask at a time, independently: an effect that throws must not stop the
+  // asks behind it from expiring. The step still reports the failure.
+  let failure: unknown = null;
   for (const due of expireDue(open, ctx.now)) {
-    const expired = await ctx.stores.asks.expire(ctx.userId, due.ask.id, ctx.now);
-    if (expired === null) continue; // another tick, or an answer, got there first
-    if (!due.ask.options.some((option) => option.id === due.ask.defaultOptionId)) {
-      // expireDue never throws for this, so it would otherwise be silent.
-      console.warn(`v2 ask ${due.ask.id} (${due.ask.kind}) has no default option`);
+    try {
+      const expired = await ctx.stores.asks.expire(ctx.userId, due.ask.id, ctx.now);
+      if (expired === null) continue; // another tick, or an answer, got there first
+      if (!due.ask.options.some((option) => option.id === due.ask.defaultOptionId)) {
+        // expireDue never throws for this, so it would otherwise be silent.
+        console.warn(`v2 ask ${due.ask.id} (${due.ask.kind}) has no default option`);
+      }
+      // Nobody answered, so whatever the default decided was assumed.
+      await applyEffect(ctx, due.effect, true);
+    } catch (error) {
+      failure ??= error;
     }
-    // Nobody answered, so whatever the default decided was assumed.
-    await applyEffect(ctx, due.effect, true);
   }
+  if (failure !== null) throw failure;
 }
 
 async function closeOut(ctx: EngineContext): Promise<void> {
@@ -671,32 +687,42 @@ async function resolveSlips(ctx: EngineContext): Promise<void> {
   const blocks = await ctx.stores.blocks.listForDate(ctx.userId, ctx.today);
   const open = await ctx.stores.asks.listOpen(ctx.userId);
 
+  // Every block is handled independently: one block whose effect throws must
+  // not leave the rest of the day unasked. The step still reports the failure.
+  let failure: unknown = null;
+
   for (const block of blocks) {
     if (block.state !== "planned") continue;
     const startMs = maybeInstantMs(block.start);
     if (startMs === null || startMs > cutoff) continue;
 
-    const draft = slipAsk(block, ctx.userId, ctx.rules, ctx.now);
-    const { ask: candidate } = openAsk(draft, open, ctx.deps.newId);
-    // Build the message from the ask the STORE returned: it can be one that
-    // already existed, with a different id than the one just made.
-    const { ask, created } = await ctx.stores.asks.insert(ctx.userId, candidate);
-    if (created) {
-      await deliverAsk(ctx, ask);
-      continue;
-    }
-    if (ask.status === "open") continue;
+    try {
+      const draft = slipAsk(block, ctx.userId, ctx.rules, ctx.now);
+      const { ask: candidate } = openAsk(draft, open, ctx.deps.newId);
+      // Build the message from the ask the STORE returned: it can be one that
+      // already existed, with a different id than the one just made.
+      const { ask, created } = await ctx.stores.asks.insert(ctx.userId, candidate);
+      if (created) {
+        await deliverAsk(ctx, ask);
+        continue;
+      }
+      if (ask.status === "open") continue;
 
-    const resolvedMs = resolvedAtMs(ask);
-    if (resolvedMs === null || startMs <= resolvedMs) {
-      await applyEffect(ctx, resolvedEffect(ask), ask.assumed);
-      continue;
+      const resolvedMs = resolvedAtMs(ask);
+      if (resolvedMs === null || startMs <= resolvedMs) {
+        await applyEffect(ctx, resolvedEffect(ask), ask.assumed);
+        continue;
+      }
+      await ctx.stores.blocks.setState(ctx.userId, block.id, "skipped", {
+        reason: REASON.slippedTwice,
+        from: "planned",
+      });
+    } catch (error) {
+      failure ??= error;
     }
-    await ctx.stores.blocks.setState(ctx.userId, block.id, "skipped", {
-      reason: REASON.slippedTwice,
-      from: "planned",
-    });
   }
+
+  if (failure !== null) throw failure;
 }
 
 function byStart(a: { start: Instant; id: string }, b: { start: Instant; id: string }): number {
