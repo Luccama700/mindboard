@@ -21,11 +21,11 @@ Read this first when resuming. Newest entry on top. `PLAN.md` is the current pla
 - Tasks 3 (asks), 4 (watchdog) and 5 (messages, Telegram adapter) built by implementer agents, each reviewed by a separate reviewer agent, all approved with no blocking finding. Commits `f45a585`, `187e1c0`, `714afd7`. Their small deferred findings are listed in the ledger and folded into Task 6 and Task 7 where they belong.
 - Plan corrected where the build showed it was wrong (`f313ab6`): the morning message is three lines, the watchdog has a silent `update` action, expiring asks never throws.
 - Wave 2 detailed in `PLAN.md` (`306865c`): Task 6 tables and stores, Task 7 tick and routes, Task 8 Today on sample data, Task 9 migration rehearsal. `motion` and `@electric-sql/pglite` (dev only) installed.
-- A read-only JSON export of the database ran and matched an independent row count on all 44 tables. Tool and output are outside git (`docs/rebuild/tools/export-json.mjs`, `Documents\mindboard\backups\`). It is a copy of the data, not a restorable dump.
+- A read-only export tool was written and rehearsed. It is kept outside git, with its notes.
 - `docs/rebuild/05-cutover-runbook.md` written (outside git): the order for the sitting that makes the security release live.
 - Task 2 (planner) built and reviewed by a stronger reviewer. Four fix rounds, each on a case the reviewer reproduced: the guaranteed floor block losing its slot, a block leaving the plan at midnight, a floor fix that moved blocks it should have left alone, and a newly demanded block taking the top task's reserved slot. Clean at `a3e98d4`. 96 tests, including a two-day sweep that replans every ten minutes.
 - Task 6 (tables and stores) built and reviewed. `0066` creates nine tables and one server-only function and touches nothing that exists. `0067` schedules the tick through Vault. Two fix rounds (replacing a day's plan is now one locked statement; the in-memory store mirrors the database's rules). Clean at `69f7fe4`. Neither migration has been applied anywhere real.
-- Task 9 (migration rehearsal) built and reviewed. Every migration runs in an in-memory Postgres as part of `npm run test`. It found no fault in `0056` to `0067`. Run on the real export, the nine security migrations applied cleanly, and production's constraint and policy names match the files exactly.
+- Task 9 (migration rehearsal) built and reviewed. Every migration runs in an in-memory Postgres as part of `npm run test`. It found no fault in `0056` to `0067`. The rehearsal on a local copy of real data and the comparison of constraint and policy names with the live database are written up outside git.
 - Task 8 (Today on sample data) built, rendered at phone width and reviewed. Fixture mode only (`V2_FIXTURES=1`, never in production). The first render caught a stylesheet that did not parse, which no test could see.
 - Task 7 (the tick, incoming answers, routes) in progress at the time of this entry. If its commit is missing from `git log`, it starts again from its brief plus `.superpowers/sdd/PLAN/task-7-context.md` (if that file is gone, the same facts are in the Task 2, 3, 4, 5 and 6 sections of `PLAN.md`).
 
@@ -43,9 +43,9 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 
 ### Known traps
 
-- This PC's Node (tzdata 2025c) and the database both compute `America/Vancouver` as UTC-8 in winter. Windows and the hosting runtime use UTC-7 all year, which is correct since British Columbia stopped changing clocks. Never assert that offset in a test, never compute local time in SQL.
+- Runtimes carry different versions of the time-zone database and can disagree about a zone whose rules changed recently. Never assert a particular zone's offset for a recent date in a test, and never compute local time in SQL. Tests use `UTC`, `America/Phoenix`, `Asia/Tokyo` and `America/New_York`.
 - `utils/google/calendar.ts` throws a generic error when a token refresh fails and discards Google's error code. Task 6 fixes that.
 - `next build` needs placeholder env values (see `PLAN.md`). It does not need real ones.
-- The code reads `GOOGLE_CLIENT_SECRET`. The local env file on the PC names that value differently, so a local run could never refresh a Google token. Whether the host has the right name is a check in the cutover runbook.
-- No Docker, no Supabase CLI and no `pg_dump` on this PC. Migrations are rehearsed in an in-memory Postgres (Task 9). A real dump needs the PostgreSQL command-line tools installed first.
+- The code reads `GOOGLE_CLIENT_SECRET`. A local env file that names that value differently can never refresh a Google token.
+- Do not assume Docker, the Supabase CLI or `pg_dump` exist where this runs. Migrations are rehearsed in an in-memory Postgres (Task 9).
 - Several agents share this folder during a wave. They do not commit and they run only their own tests. Commit by explicit path, never `git add -A`.
