@@ -50,9 +50,10 @@ export function tierOf(
   // blocks, every day, with nothing dropped: the deadline tiers are exempt from
   // capacity and from the per-lane limit, so nothing bounded them. Nor is it a
   // deadline the day can still serve: the day it closed on has gone. It ranks
-  // as an ordinary step or side quest, by its date, earliest first (which puts
-  // the oldest overdue one first), and from there capacity and the lane limit
-  // decide how much of the backlog the day takes on.
+  // as an ordinary step or side quest, and inside that tier it sorts after
+  // every item that is not overdue, most recently overdue first
+  // (`ordinaryOrder`); capacity and the lane limit then decide how much of the
+  // backlog the day takes on.
   if (candidate.hard && dueMs !== null && dueMs >= nowMs) {
     if (zonedDateKey(dueMs, rules.timeZone) === todayKey) return "due-today";
     if (dueMs - nowMs <= rules.hardWindowHours * HOUR_MS) return "hard-window";
@@ -60,8 +61,47 @@ export function tierOf(
   return candidate.kind === "side" ? "side" : "lane-step";
 }
 
-/** The sort key a bucket orders by: deadline, or expiry for side quests. */
-function clockKey(ranked: RankedCandidate): number {
+/**
+ * The ordinary tiers, which are the only ones the overdue rule applies in. The
+ * deadline tiers cannot hold an overdue item at all: `tierOf` refuses one.
+ */
+function isOrdinary(tier: CandidateTier): boolean {
+  return tier === "lane-step" || tier === "side";
+}
+
+/**
+ * How an item sorts inside the ordinary tiers: `overdue` 1 sorts AFTER every
+ * item whose own date is still ahead or absent, and `at` is the instant it
+ * sorts on inside its own group, ascending.
+ *
+ * An overdue item's `at` is the NEGATED instant, so the most recently overdue
+ * comes first. A pile of lapsed items holds some that are dead and some that
+ * are still alive and the planner cannot tell which, so the oldest is the worst
+ * possible guess: ordering by it put the day's guaranteed floor block on a
+ * homework three weeks past its date, ahead of a paper due in three days, every
+ * day. Last, and freshest first, is the honest default.
+ *
+ * Exported because planner.ts re-sorts the lane-step tier to add its low-energy
+ * tie-break, and a second spelling of this rule there is how the two come apart.
+ */
+export function ordinaryOrder(
+  candidate: Candidate,
+  nowMs: number,
+): { overdue: number; at: number } {
+  const dueMs = maybeInstantMs(candidate.due);
+  if (dueMs !== null && dueMs < nowMs) return { overdue: 1, at: -dueMs };
+  return { overdue: 0, at: dueMs ?? Number.POSITIVE_INFINITY };
+}
+
+/**
+ * The sort key a bucket orders by: the deadline, the expiry for a side quest,
+ * or the negated deadline for an overdue item. An overdue side quest is ordered
+ * by its own lapsed date rather than by its expiry, because an expiry says
+ * nothing about how long ago the date went.
+ */
+function clockKey(ranked: RankedCandidate, nowMs: number): number {
+  const order = ordinaryOrder(ranked.candidate, nowMs);
+  if (isOrdinary(ranked.tier) && order.overdue === 1) return order.at;
   const value =
     ranked.tier === "side" ? ranked.candidate.expiresAt : ranked.candidate.due;
   return maybeInstantMs(value) ?? Number.POSITIVE_INFINITY;
@@ -106,11 +146,17 @@ export function rankCandidates(
     .sort((a, b) => {
       const byTier = TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
       if (byTier !== 0) return byTier;
+      // Overdue after everything that is not, dated or undated, and decided
+      // BEFORE the pinned rule: a pinned side quest whose date is still ahead
+      // is live work and an overdue one is not.
+      const overdueA = isOrdinary(a.tier) ? ordinaryOrder(a.candidate, nowMs).overdue : 0;
+      const overdueB = isOrdinary(b.tier) ? ordinaryOrder(b.candidate, nowMs).overdue : 0;
+      if (overdueA !== overdueB) return overdueA - overdueB;
       // A pinned side quest never expires, so it waits for the ones that do.
       if (a.tier === "side" && a.candidate.pinned !== b.candidate.pinned) {
         return a.candidate.pinned ? 1 : -1;
       }
-      const byClock = compare(clockKey(a), clockKey(b));
+      const byClock = compare(clockKey(a, nowMs), clockKey(b, nowMs));
       if (byClock !== 0) return byClock;
       return compareText(a.candidate.id, b.candidate.id);
     });

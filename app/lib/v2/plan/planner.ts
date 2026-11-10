@@ -37,7 +37,11 @@ import {
   wallTimeToMs,
   type MsInterval,
 } from "@/app/lib/v2/plan/day";
-import { rankCandidates, type RankedCandidate } from "@/app/lib/v2/plan/rank";
+import {
+  ordinaryOrder,
+  rankCandidates,
+  type RankedCandidate,
+} from "@/app/lib/v2/plan/rank";
 import type {
   Block,
   BlockKind,
@@ -250,7 +254,8 @@ export function planDay(input: PlanInput): PlanOutput {
   // midnight the two differ, and "closes today" has to mean the day being
   // planned (plan/rank.ts says why).
   const window = dayWindow(date, rules);
-  const reference = isoOf(Math.max(nowMs, window.startMs), rules);
+  const referenceMs = Math.max(nowMs, window.startMs);
+  const reference = isoOf(referenceMs, rules);
   const ranked = rankCandidates(eligible, reference, rules, date);
 
   let blocksLeft = capacity.blocks;
@@ -437,10 +442,17 @@ export function planDay(input: PlanInput): PlanOutput {
 
     // 5. One focus block per lane for the remaining steps. A candidate with no
     //    lane has no lane to limit, so capacity is the only thing bounding it.
+    // Re-sorted only to add the low-energy tie-break below, so the two ordering
+    // keys come from rank.ts rather than being spelled a second time here: an
+    // overdue item sorts after everything that is not, most recently overdue
+    // first. Keying on the due instant alone put the oldest lapsed item at the
+    // head of the demand list, which is where it decided the day's one block
+    // per lane.
     const steps = inTier("lane-step").sort((a, b) => {
-      const dueA = maybeInstantMs(a.candidate.due) ?? Number.POSITIVE_INFINITY;
-      const dueB = maybeInstantMs(b.candidate.due) ?? Number.POSITIVE_INFINITY;
-      if (dueA !== dueB) return dueA < dueB ? -1 : 1;
+      const orderA = ordinaryOrder(a.candidate, referenceMs);
+      const orderB = ordinaryOrder(b.candidate, referenceMs);
+      if (orderA.overdue !== orderB.overdue) return orderA.overdue - orderB.overdue;
+      if (orderA.at !== orderB.at) return orderA.at < orderB.at ? -1 : 1;
       // Behaviour 4.5: a low day prefers the cheapest work. An unknown cost is
       // not evidence of a cheap task, so it sorts last.
       if (energyUsed === "low") {

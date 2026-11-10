@@ -72,14 +72,53 @@ describe("rankCandidates", () => {
     ).toEqual([["missed", "lane-step"]]);
   });
 
-  test("overdue hard items rank by their date, earliest first", () => {
+  // The second half of the overdue rule, from running the engine on real data:
+  // some of a pile of lapsed items are dead and some are still alive, the
+  // planner cannot tell which, and the oldest is the worst guess. So an overdue
+  // item goes last inside its tier, and freshest first among its own kind.
+  test("among overdue items the most recently overdue comes first", () => {
     expect(
       tiers([
         candidate({ id: "b", hard: true, lane: "lane-a", due: "2026-03-08T10:00:00+00:00" }),
         candidate({ id: "c", hard: true, lane: "lane-a", due: "2026-03-01T10:00:00+00:00" }),
         candidate({ id: "a", hard: true, lane: "lane-a", due: "2026-03-09T10:00:00+00:00" }),
       ]).map(([id]) => id),
-    ).toEqual(["c", "b", "a"]);
+    ).toEqual(["a", "b", "c"]);
+  });
+
+  test("an overdue item ranks after items that still have their date ahead, and after undated ones", () => {
+    expect(
+      tiers([
+        candidate({ id: "lapsed", hard: true, due: "2026-03-01T10:00:00+00:00" }),
+        candidate({ id: "undated" }),
+        candidate({ id: "ahead", due: "2026-04-01T10:00:00+00:00" }),
+        candidate({ id: "lapsed-soft", due: "2026-03-09T10:00:00+00:00" }),
+      ]).map(([id]) => id),
+    ).toEqual(["ahead", "undated", "lapsed-soft", "lapsed"]);
+  });
+
+  test("an overdue side quest goes after the live ones, pinned or not", () => {
+    // The overdue test is decided before the pinned rule: a pinned side quest
+    // whose date is still ahead is live work, an overdue one is not. An overdue
+    // side quest also orders by its own lapsed date rather than by its expiry.
+    expect(
+      tiers([
+        candidate({
+          id: "lapsed-old",
+          kind: "side",
+          due: "2026-03-01T10:00:00+00:00",
+          expiresAt: "2026-03-11T00:00:00+00:00",
+        }),
+        candidate({
+          id: "lapsed-new",
+          kind: "side",
+          due: "2026-03-09T10:00:00+00:00",
+          expiresAt: "2026-03-30T00:00:00+00:00",
+        }),
+        candidate({ id: "pinned", kind: "side", pinned: true }),
+        candidate({ id: "live", kind: "side", expiresAt: "2026-03-20T00:00:00+00:00" }),
+      ]).map(([id]) => id),
+    ).toEqual(["live", "pinned", "lapsed-new", "lapsed-old"]);
   });
 
   test("an overdue hard side quest is a side quest, not a deadline", () => {

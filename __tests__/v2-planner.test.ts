@@ -1306,7 +1306,8 @@ describe("behaviour 11: the day being planned, not the clock", () => {
 // and exempt from the per-lane limit, so a backlog of them produced one block
 // each on every day, whatever the energy said, with nothing dropped. They are
 // ordinary steps now, so capacity and the lane limit decide how much of the
-// backlog the day takes on.
+// backlog the day takes on, and inside the ordinary tiers an overdue item sorts
+// after every item that is not overdue, most recently overdue first.
 describe("an overdue hard item does not flood the day", () => {
   const overdue = (n: number, lane: string) =>
     candidate({
@@ -1324,8 +1325,9 @@ describe("an overdue hard item does not flood the day", () => {
     const out = planDay(input({ energy: "low", candidates }));
 
     expect(out.blocks.map((b) => [b.kind, b.reason])).toEqual([["floor", "floor"]]);
-    // The oldest one is the top-ranked, so it is the one the floor serves.
-    expect(out.blocks[0].taskId).toBe("late-1");
+    // The most recently overdue is the top-ranked, so it is the one the floor
+    // serves. The oldest is the worst guess at what is still alive.
+    expect(out.blocks[0].taskId).toBe("late-6");
     expect(out.dropped.map((d) => d.reason)).toEqual([
       "capacity",
       "capacity",
@@ -1333,7 +1335,7 @@ describe("an overdue hard item does not flood the day", () => {
       "capacity",
       "capacity",
     ]);
-    expect(out.dropped.map((d) => d.candidateId)).not.toContain("late-1");
+    expect(out.dropped.map((d) => d.candidateId)).not.toContain("late-6");
   });
 
   test("six overdue items in one lane are bounded by the lane limit", () => {
@@ -1341,17 +1343,17 @@ describe("an overdue hard item does not flood the day", () => {
     const out = planDay(input({ energy: "ok", candidates }));
 
     expect(out.blocks).toHaveLength(1);
-    expect(out.blocks[0].taskId).toBe("late-1");
+    expect(out.blocks[0].taskId).toBe("late-6");
     expect(out.dropped.map((d) => [d.candidateId, d.reason])).toEqual([
-      ["late-2", "lane-limit"],
-      ["late-3", "lane-limit"],
-      ["late-4", "lane-limit"],
       ["late-5", "lane-limit"],
-      ["late-6", "lane-limit"],
+      ["late-4", "lane-limit"],
+      ["late-3", "lane-limit"],
+      ["late-2", "lane-limit"],
+      ["late-1", "lane-limit"],
     ]);
   });
 
-  test("an overdue item ranks by its date, so the oldest is served first", () => {
+  test("an overdue item ranks by its date, so the freshest is served first", () => {
     const out = planDay(
       input({
         energy: "ok",
@@ -1362,10 +1364,43 @@ describe("an overdue hard item does not flood the day", () => {
         ],
       }),
     );
-    expect(out.blocks.map((b) => b.taskId)).toEqual(["late-2", "late-4"]);
+    expect(out.blocks.map((b) => b.taskId)).toEqual(["late-6", "late-4"]);
     expect(out.dropped.map((d) => [d.candidateId, d.reason])).toEqual([
-      ["late-6", "capacity"],
+      ["late-2", "capacity"],
     ]);
+  });
+
+  // The consequence that matters: the day's guaranteed 25 minutes go to live
+  // work. On real data the engine put them on a homework three weeks past its
+  // date, ahead of a paper due in three days.
+  test("the floor block does not go to an overdue item while live work exists", () => {
+    // A 12 hour hard window, so both items are ordinary steps and the floor
+    // block is decided by the ranking alone rather than by a mandatory tier.
+    const rules = parseRules({ hardWindowHours: 12 });
+    const out = planDay(
+      input({
+        rules,
+        energy: "low",
+        candidates: [
+          candidate({
+            id: "homework",
+            lane: "lane-a",
+            hard: true,
+            due: utc("23:59", "2026-03-03"),
+          }),
+          candidate({
+            id: "paper",
+            lane: "lane-b",
+            hard: true,
+            due: utc("23:59", "2026-03-13"),
+          }),
+        ],
+      }),
+    );
+
+    expect(out.blocks.map((b) => [b.kind, b.taskId])).toEqual([["floor", "paper"]]);
+    expect(out.dropped.map((d) => d.candidateId)).toContain("homework");
+    expect(out.dropped.map((d) => d.candidateId)).not.toContain("paper");
   });
 
   // Not changed by F4, and pinned so it is a decision rather than an accident:
