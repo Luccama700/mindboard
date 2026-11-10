@@ -31,7 +31,10 @@ vi.mock("@/utils/supabase/service", () => {
         select: () => chain,
         update: () => chain,
         eq: () => chain,
+        neq: () => chain,
         in: () => chain,
+        gte: () => chain,
+        lt: () => chain,
         maybeSingle: async () => ({
           data: table === "google_tokens" ? stubs.tokenRow : null,
           error: null,
@@ -50,7 +53,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { GoogleCalendarConnectionError, listEvents } from "@/utils/google/calendar";
 import { createServiceClient } from "@/utils/supabase/service";
 import {
+  CALENDAR_TIMEOUT_MS,
   createLoadFixed,
+  createLoadWeekCapHours,
+  unionHours,
   tasksToCandidates,
   toFixedEvents,
   type EngineCalendarEvent,
@@ -254,6 +260,31 @@ describe("toFixedEvents", () => {
     ).toEqual([]);
   });
 
+  test("a task that is already on the calendar is not a second fixed event", () => {
+    const timed = row({
+      due_date: "2026-11-09",
+      due_time: "13:00",
+      duration_min: 90,
+      gcal_event_id: "event-1",
+      gcal_calendar_id: "cal-1",
+    });
+    expect(toFixedEvents([event()], [timed], new Set(), ZONE).map((e) => e.source)).toEqual([
+      "google",
+    ]);
+  });
+
+  test("a task whose calendar copy was not fetched keeps its own block", () => {
+    const timed = row({
+      due_date: "2026-11-09",
+      due_time: "13:00",
+      duration_min: 90,
+      gcal_event_id: "event-9",
+      gcal_calendar_id: "cal-1",
+    });
+    // Nothing came back from Google, so the task's own time is all there is.
+    expect(toFixedEvents([], [timed], new Set(), ZONE).map((e) => e.source)).toEqual(["task"]);
+  });
+
   test("a closed task never becomes a fixed event", () => {
     expect(
       toFixedEvents(
@@ -289,17 +320,21 @@ describe("weekStatsFromBlocks", () => {
     };
   }
 
-  test("counts income hours and capped hours from the week's other income blocks", () => {
+  test("counts the income hours on the week's other days", () => {
     const stats = weekStatsFromBlocks("2026-11-09", [block()], rules);
     expect(stats.incomeHoursElsewhere).toBe(2);
-    expect(stats.capHoursElsewhere).toBe(2);
     expect(stats.gymSessionsDone).toBe(0);
+  });
+
+  test("leaves the capped hours to the caller, which reads the week's calendar", () => {
+    // Blocks alone would miss a whole shift pattern, and a weekly cap that
+    // guesses low is the one answer it must never give.
+    expect(weekStatsFromBlocks("2026-11-09", [block()], rules).capHoursElsewhere).toBe(0);
   });
 
   test("a skipped block counts for nothing", () => {
     const stats = weekStatsFromBlocks("2026-11-09", [block({ state: "skipped" })], rules);
     expect(stats.incomeHoursElsewhere).toBe(0);
-    expect(stats.capHoursElsewhere).toBe(0);
   });
 
   test("counts gym sessions that are still planned, so the week keeps its limit", () => {
@@ -476,6 +511,154 @@ describe("GoogleCalendarConnectionError", () => {
     // cal-1 belongs to an income source, so its hours count toward the cap.
     expect(fixed).toHaveLength(1);
     expect(fixed[0]).toMatchObject({ source: "google", countsTowardCap: true, title: "Shift" });
+  });
+
+  test("a calendar that never answers is given up on, not waited for", async () => {
+    vi.useFakeTimers();
+    try {
+      stubs.tokenRow = {
+        access_token: "ACCESS-TOKEN-VALUE",
+        refresh_token: "REFRESH-TOKEN-VALUE",
+        expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+        scopes: "https://www.googleapis.com/auth/calendar.readonly",
+      };
+      stubs.rows.tasks = [];
+      stubs.rows.income_sources = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => new Promise<Response>(() => {})),
+      );
+
+      const loadFixed = createLoadFixed(createServiceClient() as unknown as SupabaseClient);
+      const pending = loadFixed(USER, "2026-11-09", user);
+      await vi.advanceTimersByTimeAsync(CALENDAR_TIMEOUT_MS);
+      const { fixed, calendar } = await pending;
+
+      expect(calendar).toMatchObject({ status: "error", errorClass: "calendar-timeout", count: 0 });
+      expect(fixed).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("unionHours", () => {
+  const hour = 3_600_000;
+  const at = (h: number) => Date.parse("2026-11-10T00:00:00.000Z") + h * hour;
+
+  test("adds disjoint spans and counts overlapping ones once", () => {
+    expect(unionHours([{ startMs: at(9), endMs: at(12) }])).toBe(3);
+    expect(
+      unionHours([
+        { startMs: at(9), endMs: at(12) },
+        { startMs: at(13), endMs: at(14) },
+      ]),
+    ).toBe(4);
+    // The same shift recorded twice, as an event and as a block.
+    expect(
+      unionHours([
+        { startMs: at(9), endMs: at(12) },
+        { startMs: at(10), endMs: at(11) },
+      ]),
+    ).toBe(3);
+    expect(
+      unionHours([
+        { startMs: at(9), endMs: at(12) },
+        { startMs: at(11), endMs: at(14) },
+      ]),
+    ).toBe(5);
+  });
+
+  test("ignores an empty or inverted span", () => {
+    expect(unionHours([])).toBe(0);
+    expect(unionHours([{ startMs: at(9), endMs: at(9) }])).toBe(0);
+    expect(unionHours([{ startMs: at(12), endMs: at(9) }])).toBe(0);
+  });
+});
+
+describe("createLoadWeekCapHours", () => {
+  const MONDAY = "2026-11-09";
+
+  function serveWeek(events: Array<Record<string, unknown>>, calendarId = "cal-1") {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        const url = String(input);
+        const body = url.includes("calendarList")
+          ? {
+              items: [
+                { id: calendarId, summary: "Work", accessRole: "owner", backgroundColor: "#fff" },
+              ],
+            }
+          : { items: events };
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+  }
+
+  function shift(date: string, from: string, to: string) {
+    return {
+      id: `event-${date}-${from}`,
+      summary: "Shift",
+      start: { dateTime: `${date}T${from}:00-07:00` },
+      end: { dateTime: `${date}T${to}:00-07:00` },
+    };
+  }
+
+  beforeEach(() => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key-for-tests";
+    stubs.tokenRow = {
+      access_token: "ACCESS-TOKEN-VALUE",
+      refresh_token: "REFRESH-TOKEN-VALUE",
+      expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+      scopes: "https://www.googleapis.com/auth/calendar.readonly",
+    };
+    stubs.rows.income_sources = [{ google_calendar_id: "cal-1" }];
+    stubs.rows.v2_blocks = [];
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  test("counts the shifts on the week's other days", async () => {
+    serveWeek([shift("2026-11-10", "13:00", "17:00")]);
+    const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
+    expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 4, ok: true });
+  });
+
+  test("leaves today's own shift to the planner", async () => {
+    serveWeek([shift(MONDAY, "13:00", "17:00")]);
+    const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
+    expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 0, ok: true });
+  });
+
+  test("ignores a calendar no income source is linked to", async () => {
+    stubs.rows.income_sources = [{ google_calendar_id: "cal-other" }];
+    serveWeek([shift("2026-11-10", "13:00", "17:00")]);
+    const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
+    expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 0, ok: true });
+  });
+
+  test("counts a shift and an income block over the same hours once", async () => {
+    serveWeek([shift("2026-11-10", "13:00", "17:00")]);
+    stubs.rows.v2_blocks = [
+      { starts_at: "2026-11-10T14:00:00-07:00", ends_at: "2026-11-10T16:00:00-07:00" },
+      { starts_at: "2026-11-11T09:00:00-07:00", ends_at: "2026-11-11T10:00:00-07:00" },
+    ];
+    const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
+    expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 5, ok: true });
+  });
+
+  test("says it does not know when the calendar refuses", async () => {
+    stubs.tokenRow = null;
+    const load = createLoadWeekCapHours(createServiceClient() as unknown as SupabaseClient);
+    expect(await load(USER, MONDAY, MONDAY, user)).toEqual({ hours: 0, ok: false });
   });
 });
 

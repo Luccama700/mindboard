@@ -16,6 +16,7 @@ import type { Ask, Block, Candidate, FeedRun, FixedEvent } from "@/app/lib/v2/ty
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const TASK_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+const OTHER = "22222222-2222-4222-8222-222222222222";
 const CHAT = "4242";
 const HASH = "a".repeat(64);
 const ZONE = "America/Phoenix";
@@ -107,6 +108,7 @@ async function harness(
     telegram,
     loadFixed: async () => ({ fixed: over.fixed ?? [], calendar: CALENDAR_OK }),
     loadCandidates: async () => over.candidates ?? [candidate()],
+    loadWeekCapHours: async () => ({ hours: 0, ok: true }),
     newId: () => `bbbbbbbb-bbbb-4bbb-8bbb-${String(++n).padStart(12, "0")}`,
     probes: [],
   };
@@ -277,6 +279,61 @@ describe("handleIncoming, an answer", () => {
     ]);
   });
 
+  test("a chat linked to one account cannot answer another account's ask", async () => {
+    const { stores, deps, telegram } = await harness();
+    const ask = await slipAskFor(stores, deps);
+
+    // A second account, linked to its own chat, taps the first account's ask id.
+    await stores.users.save(OTHER, { rules: RULES, enabled: true });
+    await stores.channels.setPairing(
+      OTHER,
+      "b".repeat(64),
+      new Date(Date.parse(local("10:00")) + DAY).toISOString(),
+    );
+    await stores.channels.redeemPairing("b".repeat(64), "9999", local("10:00"));
+    telegram.sent.length = 0;
+
+    await handleIncoming(
+      deps,
+      { type: "answer", chatId: "9999", askId: ask.id, optionId: "did", callbackId: "cb-x" },
+      local("10:20"),
+      { chatMessageId: "77" },
+    );
+
+    expect((await stores.asks.get(USER, ask.id))?.status).toBe("open");
+    expect(blockOf(await stores.blocks.listForDate(USER, DATE))?.state).toBe("planned");
+    expect(await stores.blocks.listForDate(OTHER, DATE)).toEqual([]);
+    expect(telegram.sent).toEqual([]);
+  });
+
+  test("a tap that arrives after the block was started does not overwrite it", async () => {
+    const { stores, deps } = await harness();
+    const ask = await slipAskFor(stores, deps);
+    await stores.blocks.setState(USER, aBlock().id, "started");
+
+    await handleIncoming(
+      deps,
+      { type: "answer", chatId: CHAT, askId: ask.id, optionId: "drop", callbackId: "cb-1" },
+      local("10:20"),
+    );
+
+    expect(blockOf(await stores.blocks.listForDate(USER, DATE))?.state).toBe("started");
+  });
+
+  test("tomorrow does not overwrite a block that was already finished", async () => {
+    const { stores, deps } = await harness();
+    const ask = await slipAskFor(stores, deps);
+    await stores.blocks.setState(USER, aBlock().id, "done");
+
+    await handleIncoming(
+      deps,
+      { type: "answer", chatId: CHAT, askId: ask.id, optionId: "tomorrow", callbackId: "cb-1" },
+      local("10:20"),
+    );
+
+    expect(blockOf(await stores.blocks.listForDate(USER, DATE))?.state).toBe("done");
+  });
+
   test("an ask id that belongs to nobody is ignored", async () => {
     const { deps, telegram } = await harness();
     await handleIncoming(
@@ -295,7 +352,7 @@ describe("handleIncoming, an answer", () => {
 });
 
 describe("handleIncoming, the effects", () => {
-  test("later today moves the block to a later free slot and the next tick keeps it there", async () => {
+  test("tapping later today moves the block to a later free slot and the next tick keeps it there", async () => {
     const { stores, deps } = await harness();
     const ask = await slipAskFor(stores, deps);
 
@@ -316,7 +373,7 @@ describe("handleIncoming, the effects", () => {
     });
   });
 
-  test("later today starts after now when now is past the block's own end", async () => {
+  test("later today never lands closer than the slip grace, or it slips at once", async () => {
     const { stores, deps } = await harness();
     const ask = await slipAskFor(stores, deps);
 
@@ -326,9 +383,11 @@ describe("handleIncoming, the effects", () => {
       local("14:00"),
     );
 
+    // Now is past the block's own end, so the buffer does not decide this: the
+    // grace does, and a block placed at 14:00 would have slipped by 14:10.
     expect(blockOf(await stores.blocks.listForDate(USER, DATE))).toMatchObject({
-      start: local("14:00"),
-      end: local("14:50"),
+      start: local("14:10"),
+      end: local("15:00"),
     });
   });
 
@@ -414,6 +473,7 @@ describe("handleIncoming, start and text", () => {
       telegram,
       loadFixed: async () => ({ fixed: [], calendar: CALENDAR_OK }),
       loadCandidates: async () => [],
+      loadWeekCapHours: async () => ({ hours: 0, ok: true }),
       newId: () => "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
     };
     const code = await createPairingCode(stores, USER, local("09:00"), () => "MNPQRSTVWXYZ0123456789ABCD");

@@ -20,10 +20,11 @@ import {
   tickStatus,
   type TickDeps,
 } from "@/app/lib/v2/engine/tick";
+import { handleIncoming } from "@/app/lib/v2/engine/incoming";
 import { createMemoryStores } from "@/app/lib/v2/store/memory";
 import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import type { RulesDocument, StoredExpectation, Stores } from "@/app/lib/v2/store/types";
-import type { Alert, Block, Candidate, FeedRun } from "@/app/lib/v2/types";
+import type { Alert, Block, Candidate, FeedRun, FixedEvent } from "@/app/lib/v2/types";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
@@ -69,6 +70,16 @@ const RULES: RulesDocument = {
     { key: "lane-a", label: "Lane A", color: "#b5ff3c", groupIds: ["g1"], hardDates: false },
   ],
   feedLabels: { "home-worker": "the home pc" },
+};
+
+/** An account with a legal weekly cap and an income lane to spend it on. */
+const CAPPED_RULES: RulesDocument = {
+  ...RULES,
+  planner: {
+    ...RULES.planner,
+    weeklyHourCap: 20,
+    incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
+  },
 };
 
 function candidate(over: Partial<Candidate> = {}): Candidate {
@@ -147,6 +158,7 @@ async function harness(
     telegram: over.telegram === undefined ? telegram : over.telegram,
     loadFixed: async () => ({ fixed: [], calendar: okRun(local("09:00")) }),
     loadCandidates: async () => over.candidates ?? [candidate()],
+    loadWeekCapHours: async () => ({ hours: 0, ok: true }),
     newId: () => `bbbbbbbb-bbbb-4bbb-8bbb-${String(++n).padStart(12, "0")}`,
     probes: [],
     ...over.deps,
@@ -231,6 +243,7 @@ describe("runTick, the step list", () => {
       telegram: null,
       loadFixed: async () => ({ fixed: [], calendar: okRun(local("09:00")) }),
       loadCandidates: async () => [],
+      loadWeekCapHours: async () => ({ hours: 0, ok: true }),
       newId: () => "bbbbbbbb-bbbb-4bbb-8bbb-000000000001",
     };
     const result = await runTick(deps, USER, local("09:30"));
@@ -299,7 +312,7 @@ describe("runTick, planning", () => {
     expect(blocks.filter((block) => block.taskId === TASK_A)).toHaveLength(1);
   });
 
-  test("a failing calendar does not stop the plan", async () => {
+  test("a tick with a failing calendar still plans", async () => {
     const failed: FeedRun = {
       feed: "calendar",
       startedAt: local("09:30"),
@@ -318,6 +331,79 @@ describe("runTick, planning", () => {
       status: "error",
       errorClass: "invalid_grant",
     });
+  });
+
+  test("a task that already has a time today is not planned a second time", async () => {
+    const timed: FixedEvent = {
+      id: `task:${TASK_A}`,
+      title: "Write the brief",
+      start: local("13:00"),
+      end: local("14:30"),
+      allDay: false,
+      calendarId: null,
+      location: null,
+      countsTowardCap: false,
+      source: "task",
+    };
+    const { stores, deps } = await harness({
+      deps: { loadFixed: async () => ({ fixed: [timed], calendar: okRun(local("09:00")) }) },
+    });
+
+    await runTick(deps, USER, local("09:30"));
+
+    expect(
+      (await stores.blocks.listForDate(USER, DATE)).filter((block) => block.taskId === TASK_A),
+    ).toEqual([]);
+  });
+
+  test("capped hours on the week's other days leave no room for income work", async () => {
+    const roomy = await harness({ rules: CAPPED_RULES });
+    await runTick(roomy.deps, USER, local("09:30"));
+    expect(
+      (await roomy.stores.blocks.listForDate(USER, DATE)).some((block) => block.kind === "income"),
+    ).toBe(true);
+
+    const full = await harness({
+      rules: CAPPED_RULES,
+      deps: { loadWeekCapHours: async () => ({ hours: 20, ok: true }) },
+    });
+    await runTick(full.deps, USER, local("09:30"));
+    expect(
+      (await full.stores.blocks.listForDate(USER, DATE)).some((block) => block.kind === "income"),
+    ).toBe(false);
+    expect((await full.stores.days.get(USER, DATE))?.dropped).toEqual([
+      { candidateId: "income", reason: "cap" },
+    ]);
+  });
+
+  test("a week whose capped hours cannot be read plans as if the week were full, visibly", async () => {
+    const { stores, deps } = await harness({
+      rules: CAPPED_RULES,
+      deps: { loadWeekCapHours: async () => ({ hours: 0, ok: false }) },
+    });
+
+    const result = await runTick(deps, USER, local("09:30"));
+
+    expect(
+      (await stores.blocks.listForDate(USER, DATE)).some((block) => block.kind === "income"),
+    ).toBe(false);
+    // Visible three ways: the step, the tick's own run, and the calendar feed.
+    expect(result.steps.plan).toBe("error");
+    expect((await runsOf(stores, USER, ENGINE_TICK_FEED))[0].errorClass).toBe("cap-unknown");
+    expect(
+      (await runsOf(stores, USER, "calendar")).some((run) => run.errorClass === "cap-unknown"),
+    ).toBe(true);
+    // The rest of the day was still planned.
+    expect((await stores.blocks.listForDate(USER, DATE)).length).toBeGreaterThan(0);
+  });
+
+  test("an unknown week is not a problem for an account with no cap at all", async () => {
+    const { stores, deps } = await harness({
+      deps: { loadWeekCapHours: async () => ({ hours: 0, ok: false }) },
+    });
+    const result = await runTick(deps, USER, local("09:30"));
+    expect(result.steps.plan).toBe("ok");
+    expect((await stores.blocks.listForDate(USER, DATE)).length).toBe(1);
   });
 
   test("loads the calendar once per tick, however many steps need it", async () => {
@@ -437,6 +523,118 @@ describe("runTick, slips", () => {
       (block) => block.id === aBlock().id,
     );
     expect(skipped).toMatchObject({ state: "skipped", reason: "slipped twice" });
+  });
+
+  test("two ticks at the expiry instant move the block once instead of skipping it", async () => {
+    // The window this closes: tick A has expired the ask and is inside the
+    // move, awaiting the calendar, while tick B reaches its slips step and
+    // finds a resolved question on a block that has not moved yet.
+    const { stores, deps } = await harness({
+      deps: {
+        loadFixed: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return { fixed: [], calendar: okRun(local("14:00")) };
+        },
+      },
+    });
+    await stores.blocks.replacePlanned(USER, DATE, [aBlock()]);
+    await runTick(deps, USER, local("14:15"));
+
+    await Promise.all([runTick(deps, USER, local("14:50")), runTick(deps, USER, local("14:50"))]);
+
+    expect(
+      (await stores.blocks.listForDate(USER, DATE)).find((block) => block.id === aBlock().id),
+    ).toMatchObject({ state: "planned", start: local("15:00"), end: local("15:50") });
+  });
+
+  test("an effect that threw in the expire step does not become a skip in the slips step", async () => {
+    // Path (a): asks.expire commits, then moveLaterToday throws inside the same
+    // tick. The block has not moved, so it must not be read as a second slip.
+    const { stores, deps } = await harness({
+      deps: {
+        loadFixed: async () => {
+          throw new Error("the task list is unreadable");
+        },
+      },
+    });
+    await stores.blocks.replacePlanned(USER, DATE, [aBlock()]);
+    await stores.asks.insert(USER, {
+      id: "cccccccc-cccc-4ccc-8ccc-000000000011",
+      userId: USER,
+      kind: "slip",
+      topic: `task:${TASK_A}`,
+      text: "Still doing Write the brief?",
+      options: [
+        {
+          id: "later",
+          label: "Later today",
+          effect: { type: "block.reschedule", blockId: aBlock().id, to: "later-today" },
+        },
+      ],
+      defaultOptionId: "later",
+      timeCritical: true,
+      openedAt: local("14:15"),
+      remindAt: null,
+      remindedAt: null,
+      expiresAt: local("14:45"),
+      status: "open",
+      answeredOptionId: null,
+      answeredAt: null,
+      assumed: false,
+      dedupeKey: `slip:${aBlock().id}`,
+    });
+
+    const result = await runTick(deps, USER, local("14:50"));
+
+    expect(result.steps.expire).toBe("error");
+    expect(
+      (await stores.blocks.listForDate(USER, DATE)).find((block) => block.id === aBlock().id),
+    ).toMatchObject({ state: "planned", start: local("14:00") });
+  });
+
+  test("a tap that lands while a tick is running is not punished as a second slip", async () => {
+    // Path (c): the tap records the answer and is inside moveLaterToday, waiting
+    // on the calendar, while the tick reaches its slips step.
+    const { stores, deps } = await harness({
+      deps: {
+        loadFixed: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return { fixed: [], calendar: okRun(local("14:00")) };
+        },
+      },
+    });
+    await stores.blocks.replacePlanned(USER, DATE, [aBlock()]);
+    await runTick(deps, USER, local("14:15"));
+    const [ask] = await stores.asks.listOpen(USER);
+
+    const tap = handleIncoming(
+      deps,
+      { type: "answer", chatId: CHAT, askId: ask.id, optionId: "later", callbackId: "cb-1" },
+      local("14:30"),
+    );
+    const tick = runTick(deps, USER, local("14:30"));
+    await Promise.all([tap, tick]);
+
+    expect(
+      (await stores.blocks.listForDate(USER, DATE)).find((block) => block.id === aBlock().id),
+    ).toMatchObject({ state: "planned", start: local("15:00") });
+  });
+
+  test("a resolved question whose effect never landed is applied, not punished", async () => {
+    const { stores, deps } = await harness();
+    await stores.blocks.replacePlanned(USER, DATE, [aBlock()]);
+    await runTick(deps, USER, local("14:15"));
+    const [ask] = await stores.asks.listOpen(USER);
+
+    // The answer is recorded but its effect does not run: the shape a failed
+    // step, or a crash between the two writes, leaves behind.
+    await stores.asks.answer(USER, ask.id, "later", local("14:20"));
+
+    await runTick(deps, USER, local("14:30"));
+
+    expect(
+      (await stores.blocks.listForDate(USER, DATE)).find((block) => block.id === aBlock().id),
+    ).toMatchObject({ state: "planned", start: local("15:00") });
   });
 });
 
@@ -889,6 +1087,148 @@ describe("runTick, sending", () => {
 
     await runTick(deps, USER, local("02:05"));
     expect(sentTexts(telegram)).toEqual(["Still up?"]);
+  });
+
+  test("the backlog from before the chat was linked is retired, not flushed", async () => {
+    const { stores, deps, telegram } = await harness({ linked: false });
+    // Three mornings nobody could be told about.
+    await runTick(deps, USER, local("08:10", "2026-11-07"));
+    await runTick(deps, USER, local("08:10", "2026-11-08"));
+    await runTick(deps, USER, local("08:10", DATE));
+    expect(telegram.sent).toEqual([]);
+    expect(await stores.outbox.listUnsent(USER)).toHaveLength(3);
+
+    await stores.channels.setPairing(USER, HASH, plus(local("08:30"), DAY));
+    await stores.channels.redeemPairing(HASH, CHAT, local("08:30"));
+
+    await runTick(deps, USER, local("09:00"));
+
+    // Today's, and only today's.
+    expect(sentTexts(telegram)).toHaveLength(1);
+    expect(sentTexts(telegram)[0]).toContain("Morning.");
+    const left = await stores.outbox.listUnsent(USER);
+    expect(left).toHaveLength(2);
+    expect(left.every((item) => item.error === "stale" && item.claimedAt !== null)).toBe(true);
+    // Retiring a message is not a channel failure.
+    expect((await runsOf(stores, USER, TELEGRAM_FEED))[0]).toMatchObject({
+      status: "ok",
+      count: 1,
+    });
+  });
+
+  test("an alert message whose alert has closed is retired, not sent", async () => {
+    const { stores, deps, telegram } = await harness();
+    const alertId = "dddddddd-dddd-4ddd-8ddd-000000000021";
+    await stores.alerts.save(USER, {
+      id: alertId,
+      cause: "no-run",
+      feeds: ["home-worker"],
+      since: local("13:00"),
+      step: 0,
+      lastSentAt: null,
+      status: "closed",
+    });
+    await stores.outbox.enqueue(USER, {
+      id: "ffffffff-ffff-4fff-8fff-000000000021",
+      userId: USER,
+      kind: "alert",
+      dedupeKey: `alert:${alertId}:open:0`,
+      delivery: "interrupt",
+      message: { text: "the home pc. 1 thing affected, day 1.", buttons: [] },
+      askId: null,
+      createdAt: local("13:20"),
+      claimedAt: null,
+      sentAt: null,
+      chatMessageId: null,
+      error: null,
+    });
+
+    await runTick(deps, USER, local("13:30"));
+
+    expect(sentTexts(telegram)).toEqual([]);
+    expect((await stores.outbox.listUnsent(USER))[0].error).toBe("stale");
+  });
+
+  test("an alert counts as announced when its message is sent, not when it is queued", async () => {
+    const { stores, deps } = await harness();
+    await stores.feeds.saveExpectation(USER, {
+      feed: "home-worker",
+      label: "the home pc",
+      everyMinutes: 15,
+      graceMinutes: 5,
+      minCount: 1,
+      activeHours: null,
+      enabledAt: plus(local("09:00"), -3 * DAY),
+    });
+
+    // Queued in the quiet hours, so nothing went out.
+    await runTick(deps, USER, local("02:00"));
+    expect((await stores.alerts.listOpen(USER))[0].lastSentAt).toBeNull();
+
+    await runTick(deps, USER, local("08:05"));
+    expect((await stores.alerts.listOpen(USER))[0].lastSentAt).toBe(local("08:05"));
+  });
+
+  test("an ask that could not be delivered gives its budget unit back", async () => {
+    const blocked: TelegramClient = {
+      sendMessage: async () => {
+        throw new TelegramError("sendMessage", 403);
+      },
+      answerCallback: async () => {},
+      replaceButtons: async () => {},
+    };
+    const { stores, deps } = await harness({
+      rules: { ...RULES, planner: { ...RULES.planner, interruptsPerDay: 1 } },
+      telegram: blocked,
+    });
+    await stores.blocks.replacePlanned(USER, DATE, [aBlock()]);
+    await runTick(deps, USER, local("14:15"));
+    expect((await stores.outbox.listUnsent(USER))[0].error).toBe("bot-blocked");
+
+    await stores.blocks.replacePlanned(USER, DATE, [
+      aBlock(),
+      aBlock({ id: `${DATE}:focus:${TASK_B}`, taskId: TASK_B, title: "Read the paper" }),
+    ]);
+    await runTick(deps, USER, local("14:30"));
+
+    // The day's one interrupt was never delivered, so the second question is
+    // still allowed to interrupt rather than falling to the digest.
+    const queued = await stores.outbox.listUnsent(USER);
+    expect(queued.filter((item) => item.kind === "ask" && item.delivery === "interrupt")).toHaveLength(
+      2,
+    );
+  });
+
+  test("a morning that missed its window is not sent in the afternoon", async () => {
+    const { stores, deps, telegram } = await harness({ linked: false });
+    await runTick(deps, USER, local("11:50"));
+    await stores.channels.setPairing(USER, HASH, plus(local("12:00"), DAY));
+    await stores.channels.redeemPairing(HASH, CHAT, local("12:00"));
+
+    await runTick(deps, USER, local("12:30"));
+
+    // The block the 11:50 plan placed has begun by now, so a slip question is
+    // live and may go out. The morning is what must not.
+    expect(sentTexts(telegram).some((text) => text.startsWith("Morning."))).toBe(false);
+    expect(
+      (await stores.outbox.listUnsent(USER)).find((item) => item.kind === "morning")?.error,
+    ).toBe("stale");
+  });
+
+  test("a question that is no longer open is never pushed", async () => {
+    const { stores, deps, telegram } = await harness({ linked: false });
+    await stores.blocks.replacePlanned(USER, DATE, [aBlock()]);
+    await runTick(deps, USER, local("14:15"));
+    const [ask] = await stores.asks.listOpen(USER);
+    await stores.asks.answer(USER, ask.id, "did", local("14:20"));
+
+    await stores.channels.setPairing(USER, HASH, plus(local("14:30"), DAY));
+    await stores.channels.redeemPairing(HASH, CHAT, local("14:30"));
+    await runTick(deps, USER, local("14:40"));
+
+    expect(sentTexts(telegram)).toEqual([]);
+    const retired = (await stores.outbox.listUnsent(USER)).find((item) => item.kind === "ask");
+    expect(retired?.error).toBe("stale");
   });
 
   test("a digest item is never pushed", async () => {

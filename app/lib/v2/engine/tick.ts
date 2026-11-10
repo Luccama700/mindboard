@@ -85,12 +85,35 @@ export const CALENDAR_FEED = "calendar";
 const WATCHDOG_WINDOW_HOURS = 48;
 /** Past this, the status route says the clock is not running. */
 const TICK_STALE_MINUTES = 30;
+/**
+ * A queued message older than this is retired instead of pushed. Wide enough
+ * that an alert raised in the night still goes out at the wake target, narrow
+ * enough that linking the chat does not flush days of backlog.
+ */
+const STALE_SEND_HOURS = 12;
+/**
+ * How long one account's tick may take. The accounts run one after another
+ * inside a sixty second function, so an account that hangs would starve every
+ * account behind it: after this it is abandoned, counted as failed, and the
+ * next one starts. The route enforces it; the constant lives here because it is
+ * engine policy.
+ */
+export const TICK_DEADLINE_MS = 20_000;
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 const NOON_MINUTES = 12 * 60;
 /** The AskOption contract in types.ts. A longer id is a forged callback. */
 export const OPTION_ID_MAX = 12;
+/** A fixed event that stands for a task carries its id behind this prefix. */
+export const TASK_FIXED_PREFIX = "task:";
+
+/** The task a `task`-sourced fixed event stands for, or null. */
+export function fixedTaskId(event: FixedEvent): string | null {
+  if (event.source !== "task" || !event.id.startsWith(TASK_FIXED_PREFIX)) return null;
+  const id = event.id.slice(TASK_FIXED_PREFIX.length);
+  return id.length > 0 ? id : null;
+}
 
 const REASON = {
   dayEnded: "day ended",
@@ -101,6 +124,10 @@ const REASON = {
 } as const;
 
 const NOT_LINKED = "not-linked";
+/** Stored on a queued message that was retired unsent. Not a channel failure. */
+const STALE = "stale";
+/** The week's capped hours could not be read, so the cap was taken as full. */
+const CAP_UNKNOWN = "cap-unknown";
 
 export interface TickDeps {
   stores: Stores;
@@ -112,6 +139,22 @@ export interface TickDeps {
     user: EngineUser,
   ): Promise<{ fixed: FixedEvent[]; calendar: FeedRun }>;
   loadCandidates(userId: string, user: EngineUser, now: Instant): Promise<Candidate[]>;
+  /**
+   * The capped hours already on the OTHER six days of that week: the shifts on
+   * the calendars an income source is linked to, from one read over Monday to
+   * Sunday, merged with the engine's own income blocks so overlapping records
+   * of the same work count once.
+   *
+   * `ok: false` means the figure is not known. The weekly cap models a legal
+   * limit, so the tick then plans as if the week were full rather than guessing
+   * low: an unknown cap places no capped work (behaviour: fail closed).
+   */
+  loadWeekCapHours(
+    userId: string,
+    weekStart: DateKey,
+    date: DateKey,
+    user: EngineUser,
+  ): Promise<{ hours: number; ok: boolean }>;
   newId(): string;
   /**
    * Feeds that leave no run of their own, so the engine goes and looks (see
@@ -126,6 +169,14 @@ export interface TickResult {
   ok: boolean;
   steps: Record<string, StepState>;
 }
+
+/**
+ * What a step says about itself: null when it did its job, or a short class
+ * when it finished but in a degraded way. A step that throws is reported as
+ * `<step>-failed` instead; this is for the case where the work was done and
+ * something about it still has to be visible (an unknown weekly cap).
+ */
+type StepOutcome = string | null;
 
 /**
  * Everything one account's tick resolved before it did anything, plus the day's
@@ -228,11 +279,11 @@ function lengthHours(block: Block): number {
  * What the week looks like from the blocks the engine owns on its OTHER days.
  * Planned counts the same as done: the point is not to book past a weekly limit.
  *
- * KNOWN LIMIT, deliberately not hidden: `capHoursElsewhere` sees income BLOCKS
- * only. Paid work that exists solely as a shift on a Google calendar of another
- * day is invisible here, because `loadFixed` loads one date and TickDeps has no
- * seam for a week of fixed events. The weekly cap is therefore a floor, not the
- * true figure, until something loads the week's calendar.
+ * `capHoursElsewhere` is NOT computed here. It is the week's capped hours from
+ * `loadWeekCapHours`, which reads the calendars an income source is linked to
+ * and merges the engine's own income blocks into them; a figure taken from the
+ * blocks alone would miss a whole shift pattern and leave a legal cap thinking
+ * the week was empty. The caller fills it in.
  */
 export function weekStatsFromBlocks(
   date: DateKey,
@@ -240,13 +291,12 @@ export function weekStatsFromBlocks(
   rules: PlannerRules,
 ): WeekStats {
   const incomeLane = rules.incomeTarget?.lane ?? null;
-  let capHoursElsewhere = 0;
+  const capHoursElsewhere = 0;
   let incomeHoursElsewhere = 0;
   let gymSessionsDone = 0;
   for (const block of blocks) {
     if (block.date === date || block.state === "skipped") continue;
     const hours = lengthHours(block);
-    if (block.kind === "income") capHoursElsewhere += hours;
     if (incomeLane !== null && block.lane === incomeLane) incomeHoursElsewhere += hours;
     if (block.kind === "gym") gymSessionsDone += 1;
   }
@@ -286,14 +336,18 @@ export async function applyEffect(
       await ctx.stores.blocks.setState(ctx.userId, effect.blockId, "done");
       return;
     case "block.drop":
+      // `from` guards every skip: a tap that arrives after the block was
+      // started or finished must not overwrite what actually happened.
       await ctx.stores.blocks.setState(ctx.userId, effect.blockId, "skipped", {
         reason: REASON.dropped,
+        from: "planned",
       });
       return;
     case "block.reschedule":
       if (effect.to === "tomorrow") {
         await ctx.stores.blocks.setState(ctx.userId, effect.blockId, "skipped", {
           reason: REASON.movedToTomorrow,
+          from: "planned",
         });
         return;
       }
@@ -336,7 +390,9 @@ async function moveLaterToday(ctx: EngineContext, blockId: string): Promise<void
     }));
   const free = carveIntervals(
     freeIntervals(ctx.today, await ctx.fixedToday(), ctx.rules, {
-      fromMs: Math.max(ctx.nowMs, endMs + buffer),
+      // Never closer than the slip grace: a block that starts the moment the
+      // answer lands has already slipped by the time the next tick looks.
+      fromMs: Math.max(ctx.nowMs + SLIP_GRACE_MINUTES * MINUTE_MS, endMs + buffer),
       allowProtected: false,
     }),
     busy,
@@ -359,15 +415,39 @@ async function moveLaterToday(ctx: EngineContext, blockId: string): Promise<void
 
 // ---------------------------------------------------------------------- plan
 
-/** Plans today and stores it. Shared by the tick's plan step and every answer. */
-export async function planToday(ctx: EngineContext): Promise<PlanOutput> {
-  const [day, existing, fixed, candidates, week] = await Promise.all([
+/**
+ * Plans today and stores it. Shared by the tick's plan step and every answer.
+ *
+ * Returns the plan and, when the week's capped hours could not be read, the
+ * class that says the cap was taken as full: the caller decides what to do with
+ * that (the tick records it on the step and on the `calendar` feed).
+ */
+export async function planToday(
+  ctx: EngineContext,
+): Promise<{ plan: PlanOutput; degraded: StepOutcome }> {
+  const monday = weekStartKey(ctx.today);
+  const [day, existing, fixed, offered, week, weekCap] = await Promise.all([
     ctx.stores.days.get(ctx.userId, ctx.today),
     ctx.stores.blocks.listForDate(ctx.userId, ctx.today),
     ctx.fixedToday(),
     ctx.deps.loadCandidates(ctx.userId, ctx.user, ctx.now),
     weekBlocks(ctx).then((blocks) => weekStatsFromBlocks(ctx.today, blocks, ctx.rules)),
+    ctx.deps.loadWeekCapHours(ctx.userId, monday, ctx.today, ctx.user),
   ]);
+
+  // A task that already has a time today is on the day once, as a fixed event.
+  // Leaving it in the candidate list would have the planner book a second block
+  // for the same work somewhere else.
+  const scheduled = new Set(
+    fixed.map(fixedTaskId).filter((id): id is string => id !== null),
+  );
+  const candidates = offered.filter((candidate) => !scheduled.has(candidate.id));
+
+  // The weekly cap models a legal limit, so an unknown week is a full week: the
+  // planner then has no room for capped work and places none. Guessing low here
+  // is the one failure mode that cannot be allowed to be quiet.
+  const capUnknown = !weekCap.ok && ctx.rules.weeklyHourCap !== null;
+  week.capHoursElsewhere = capUnknown ? ctx.rules.weeklyHourCap ?? 0 : weekCap.hours;
 
   const out = planDay({
     date: ctx.today,
@@ -388,16 +468,29 @@ export async function planToday(ctx: EngineContext): Promise<PlanOutput> {
     ctx.today,
     out.blocks.filter((block) => block.state === "planned"),
   );
-  // `energyAssumed` is deliberately NOT written here. The planner derives it
-  // from `energy === null`, which the day row already says; the stored flag
-  // means something narrower - the energy on the row was a default nobody
-  // answered - and only `energy.set` knows that.
+  // `energyAssumed` is written here only while the day has no energy at all,
+  // which is the one case where the plan assumed one. It is never written back
+  // to false: that would erase what `energy.set` recorded, which is whether
+  // the energy on the row was answered or defaulted.
   await ctx.stores.days.patch(ctx.userId, ctx.today, {
     plannedAt: ctx.now,
     dropped: out.dropped,
     leaveBy: out.leaveBy,
+    ...(day?.energy == null ? { energyAssumed: true } : {}),
   });
-  return out;
+
+  if (capUnknown) {
+    // Visible on the feed the figure came from, as well as on the step.
+    await ctx.stores.feeds.addRun(ctx.userId, {
+      feed: CALENDAR_FEED,
+      startedAt: ctx.now,
+      finishedAt: ctx.now,
+      status: "error",
+      count: 0,
+      errorClass: CAP_UNKNOWN,
+    });
+  }
+  return { plan: out, degraded: capUnknown ? CAP_UNKNOWN : null };
 }
 
 // ---------------------------------------------------------------- deliveries
@@ -409,16 +502,31 @@ export async function planToday(ctx: EngineContext): Promise<PlanOutput> {
  * all, so the ask row itself is the record.
  */
 async function deliverAsk(ctx: EngineContext, ask: Ask): Promise<Delivery> {
-  const [day, interruptsSentToday, unansweredOnTopicThisWeek] = await Promise.all([
+  const since = dayStart(ctx);
+  const [day, queued, unsent, unansweredOnTopicThisWeek] = await Promise.all([
     ctx.stores.days.get(ctx.userId, ctx.today),
-    ctx.stores.outbox.countInterruptsSince(ctx.userId, dayStart(ctx)),
+    ctx.stores.outbox.countInterruptsSince(ctx.userId, since),
+    ctx.stores.outbox.listUnsent(ctx.userId),
     ctx.stores.asks.countUnanswered(ctx.userId, ask.topic, weekStart(ctx)),
   ]);
+
+  // The store counts interrupts at enqueue time, which is the right moment for
+  // a budget: two asks opened in one tick both count. But an ask that could not
+  // be delivered was never an interruption, so one that carries an error class
+  // (a refused send, or one retired as stale) gives its unit back.
+  const sinceMs = Date.parse(since);
+  const undelivered = unsent.filter(
+    (item) =>
+      item.kind === "ask" &&
+      item.delivery === "interrupt" &&
+      item.error !== null &&
+      (maybeInstantMs(item.createdAt) ?? 0) >= sinceMs,
+  ).length;
 
   const delivery = decideDelivery(ask, {
     now: ctx.now,
     rules: ctx.rules,
-    interruptsSentToday,
+    interruptsSentToday: Math.max(0, queued - undelivered),
     unansweredOnTopicThisWeek,
     // Nothing stores the week's answer rate yet, and "not known" is the value
     // the policy has for that; it halves no budget on a guess.
@@ -517,14 +625,46 @@ async function closeOut(ctx: EngineContext): Promise<void> {
   }
 }
 
+/** What an answered or expired ask decided, read back off the ask itself. */
+function resolvedEffect(ask: Ask): AskEffect {
+  const optionId = ask.answeredOptionId ?? (ask.assumed ? ask.defaultOptionId : null);
+  if (optionId === null) return { type: "none" };
+  return ask.options.find((option) => option.id === optionId)?.effect ?? { type: "none" };
+}
+
+/**
+ * When an ask stopped being open: the answer's instant, or the expiry it passed.
+ * Not `openedAt`, which is before anything was decided.
+ */
+function resolvedAtMs(ask: Ask): number | null {
+  const at = ask.answeredAt ?? (ask.status === "expired" ? ask.expiresAt : null);
+  return at === null ? null : maybeInstantMs(at);
+}
+
 /**
  * The planner will not move a `planned` block that has already begun, so the
  * tick resolves it: ask once, wait while the question is open, and skip the
- * block when the question has already been answered for it (it was moved later
- * once and slipped again).
+ * block when it was already moved once for this question and has slipped again.
  *
  * `asks.insert` is both halves of "is there already an ask for this block?" and
  * "open one", in one statement, which is what makes a doubled tick harmless.
+ *
+ * THE TEST IS WHETHER THE BLOCK MOVED AFTER THE QUESTION WAS RESOLVED, not
+ * whether the question is resolved. Those two are the same thing only once the
+ * effect has landed, and `asks.expire` and `asks.answer` commit first, so there
+ * is a window where it has not:
+ *
+ *   (a) the effect throws in step 1 (the production loadFixed throws when the
+ *       task read fails), and step 3 of the same tick then sees a resolved ask;
+ *   (b) two ticks at once: the loser of `asks.expire` runs on to step 3 while
+ *       the winner is still inside `moveLaterToday`, waiting on Google;
+ *   (c) a tap racing a tick, or `applyEffect` throwing after `asks.answer`.
+ *
+ * In all three, reading the ask alone would skip a block that was about to be
+ * moved, the winner's `setTime` would then return null, and the user would be
+ * told "Got it: Later today" about a block that had been dropped. So a resolved
+ * question on a block that has not moved since re-applies what it decided;
+ * every store write underneath is conditional, so doing it twice costs nothing.
  */
 async function resolveSlips(ctx: EngineContext): Promise<void> {
   const cutoff = ctx.nowMs - SLIP_GRACE_MINUTES * MINUTE_MS;
@@ -546,6 +686,12 @@ async function resolveSlips(ctx: EngineContext): Promise<void> {
       continue;
     }
     if (ask.status === "open") continue;
+
+    const resolvedMs = resolvedAtMs(ask);
+    if (resolvedMs === null || startMs <= resolvedMs) {
+      await applyEffect(ctx, resolvedEffect(ask), ask.assumed);
+      continue;
+    }
     await ctx.stores.blocks.setState(ctx.userId, block.id, "skipped", {
       reason: REASON.slippedTwice,
       from: "planned",
@@ -724,9 +870,22 @@ async function shouldAnnounce(ctx: EngineContext, action: AlertAction): Promise<
   return ctx.nowMs - Date.parse(lastSentAt) >= ALERT_REOPEN_QUIET_HOURS * HOUR_MS;
 }
 
-async function applyAlertAction(ctx: EngineContext, action: AlertAction): Promise<void> {
+async function applyAlertAction(
+  ctx: EngineContext,
+  action: AlertAction,
+  openBefore: Map<string, Alert>,
+): Promise<void> {
   const announce = await shouldAnnounce(ctx, action);
-  const alert: Alert = announce ? { ...action.alert, lastSentAt: ctx.now } : action.alert;
+  // `lastSentAt` is stamped when the message is SENT, not here: a message that
+  // is enqueued and then held in quiet hours, retired, or refused was never
+  // announced, and an alert that claims it was would suppress a real reopen for
+  // six hours about something the user never heard. planAlerts sets it on an
+  // escalation, so it is put back to whatever the stored row had.
+  const alert: Alert = {
+    ...action.alert,
+    lastSentAt: openBefore.get(action.alert.id)?.lastSentAt ?? action.alert.lastSentAt,
+  };
+  if (action.type === "open") alert.lastSentAt = null;
   // One open alert per cause is a database fact, so a tick that loses that race
   // stores nothing and announces nothing.
   const stored = await ctx.stores.alerts.save(ctx.userId, alert);
@@ -759,8 +918,9 @@ async function applyAlertAction(ctx: EngineContext, action: AlertAction): Promis
 async function runWatchdog(ctx: EngineContext, state: TickState): Promise<void> {
   const statuses = await feedStatuses(ctx, state);
   const open = await ctx.stores.alerts.listOpen(ctx.userId);
+  const openBefore = new Map(open.map((alert) => [alert.id, alert]));
   for (const action of planAlerts(statuses, open, ctx.now, ctx.deps.newId)) {
-    await applyAlertAction(ctx, action);
+    await applyAlertAction(ctx, action, openBefore);
   }
 }
 
@@ -779,6 +939,75 @@ async function isNightGuard(ctx: EngineContext, item: OutboxItem): Promise<boole
   if (item.askId === null) return false;
   const ask = await ctx.stores.asks.get(ctx.userId, item.askId);
   return ask !== null && mayInterrupt(ctx, ask.kind);
+}
+
+/**
+ * The alert an alert message is about. It reads back a key this file wrote
+ * (`applyAlertAction`), which is why parsing it is safe: the outbox has an
+ * `ask_id` column but no `alert_id`, so the key is where the link lives.
+ */
+const ALERT_KEY = /^alert:(.+):(open|escalate|close):([012])$/;
+
+function alertOf(dedupeKey: string): { id: string; type: string } | null {
+  const match = ALERT_KEY.exec(dedupeKey);
+  return match === null ? null : { id: match[1], type: match[2] };
+}
+
+/** Stamps an alert as announced, now that something actually went out. */
+async function markAnnounced(ctx: EngineContext, item: OutboxItem): Promise<void> {
+  if (item.kind !== "alert") return;
+  const parsed = alertOf(item.dedupeKey);
+  if (parsed === null || parsed.type === "close") return;
+  const open = await ctx.stores.alerts.listOpen(ctx.userId);
+  const alert = open.find((candidate) => candidate.id === parsed.id);
+  if (alert === undefined) return;
+  await ctx.stores.alerts.save(ctx.userId, { ...alert, lastSentAt: ctx.now });
+}
+
+/**
+ * Is this still worth pushing?
+ *
+ * It matters most on the day the chat is linked. Everything queued while
+ * `telegram` was null or no chat was paired is still unclaimed, so without this
+ * the first tick after pairing would send the whole backlog at once: three
+ * mornings in a row, questions about blocks that are long gone, alerts about
+ * outages that cleared. That is the nagging the delivery rules exist to
+ * prevent, on exactly the day a first impression is made.
+ *
+ * A question nobody can answer any more is not worth asking (its buttons would
+ * do nothing); a morning is only news this morning; an alert message is only
+ * news while its alert is still open, and a close only if the opening was
+ * actually announced. Anything else is held to an age cap wide enough that an
+ * alert queued at 02:00 still goes out at the wake target.
+ */
+async function worthSending(ctx: EngineContext, item: OutboxItem): Promise<boolean> {
+  const createdMs = maybeInstantMs(item.createdAt);
+  if (createdMs !== null && ctx.nowMs - createdMs >= STALE_SEND_HOURS * HOUR_MS) return false;
+
+  if (item.kind === "ask") {
+    const ask = item.askId === null ? null : await ctx.stores.asks.get(ctx.userId, item.askId);
+    return ask !== null && ask.status === "open";
+  }
+
+  if (item.kind === "morning") {
+    return (
+      item.dedupeKey === `morning:${ctx.today}` &&
+      ctx.nowMs < minutesToMs(ctx.today, NOON_MINUTES, ctx.rules.timeZone)
+    );
+  }
+
+  if (item.kind === "alert") {
+    const alert = alertOf(item.dedupeKey);
+    if (alert === null) return false;
+    // A close could only have been queued for an alert whose opening had been
+    // sent (applyAlertAction checks `lastSentAt`, which is stamped on a real
+    // send and never cleared), so the age cap above is the whole test for it.
+    if (alert.type === "close") return true;
+    const open = await ctx.stores.alerts.listOpen(ctx.userId);
+    return open.some((candidate) => candidate.id === alert.id);
+  }
+
+  return true;
 }
 
 async function sendOutbox(ctx: EngineContext): Promise<void> {
@@ -807,12 +1036,23 @@ async function sendOutbox(ctx: EngineContext): Promise<void> {
 
   for (const item of await ctx.stores.outbox.listSendable(ctx.userId, "interrupt")) {
     if (quiet && !(await isNightGuard(ctx, item))) continue;
+    if (!(await worthSending(ctx, item))) {
+      // Retired, not skipped: claimed so it leaves the sendable list for good,
+      // and `stale` is a state of the item, never a failure of the channel, so
+      // it does not colour the telegram feed run.
+      const retired = await ctx.stores.outbox.claim(ctx.userId, item.id, ctx.now);
+      if (retired !== null) {
+        await ctx.stores.outbox.markFailed(ctx.userId, retired.id, ctx.now, STALE);
+      }
+      continue;
+    }
     // One conditional claim: two overlapping ticks send one message.
     const claimed = await ctx.stores.outbox.claim(ctx.userId, item.id, ctx.now);
     if (claimed === null) continue;
     try {
       const { messageId } = await telegram.sendMessage(chatId, claimed.message);
       await ctx.stores.outbox.markSent(ctx.userId, claimed.id, ctx.now, messageId);
+      await markAnnounced(ctx, claimed);
       sent += 1;
     } catch (error) {
       const failure = telegramErrorClass(error);
@@ -837,21 +1077,31 @@ async function pruneRuns(ctx: EngineContext): Promise<void> {
 function tickSteps(
   ctx: EngineContext,
   state: TickState,
-): Array<[string, () => Promise<void>]> {
+): Array<[string, () => Promise<StepOutcome>]> {
+  /** A step that is either done or thrown, with nothing in between to report. */
+  const plain =
+    (work: () => Promise<void>) =>
+    async (): Promise<StepOutcome> => {
+      await work();
+      return null;
+    };
+
   return [
-    ["expire", () => expireAsks(ctx)],
-    ["close-out", () => closeOut(ctx)],
-    ["slips", () => resolveSlips(ctx)],
+    ["expire", plain(() => expireAsks(ctx))],
+    ["close-out", plain(() => closeOut(ctx))],
+    ["slips", plain(() => resolveSlips(ctx))],
     [
       "plan",
       async () => {
-        state.plan = await planToday(ctx);
+        const { plan, degraded } = await planToday(ctx);
+        state.plan = plan;
+        return degraded;
       },
     ],
-    ["morning", () => sendMorning(ctx, state)],
-    ["watchdog", () => runWatchdog(ctx, state)],
-    ["send", () => sendOutbox(ctx)],
-    ["prune", () => pruneRuns(ctx)],
+    ["morning", plain(() => sendMorning(ctx, state))],
+    ["watchdog", plain(() => runWatchdog(ctx, state))],
+    ["send", plain(() => sendOutbox(ctx))],
+    ["prune", plain(() => pruneRuns(ctx))],
   ];
 }
 
@@ -863,34 +1113,34 @@ export async function runTick(
   const steps: Record<string, StepState> = {};
   let firstErrorClass: string | null = null;
 
-  const record = (step: string, error: unknown): void => {
-    if (error === null) {
-      steps[step] = "ok";
-      return;
-    }
+  const succeeded = (step: string): void => {
+    steps[step] = "ok";
+  };
+  const failed = (step: string, errorClass: string, error?: unknown): void => {
     steps[step] = "error";
-    firstErrorClass ??= `${step}-failed`;
-    logFailure(userId, step, error);
+    firstErrorClass ??= errorClass;
+    if (error !== undefined) logFailure(userId, step, error);
   };
 
   let ctx: EngineContext | null = null;
   try {
     ctx = await createEngineContext(deps, userId, now);
-    record("load", null);
+    succeeded("load");
   } catch (error) {
     // Without rules there is no zone, so there is no step that could run. Every
     // other account's tick is unaffected: the cron route runs each in its own try.
-    record("load", error);
+    failed("load", "load-failed", error);
   }
 
   if (ctx !== null) {
     const state: TickState = { plan: null, statuses: null };
     for (const [name, step] of tickSteps(ctx, state)) {
       try {
-        await step();
-        record(name, null);
+        const degraded = await step();
+        if (degraded === null) succeeded(name);
+        else failed(name, degraded);
       } catch (error) {
-        record(name, error);
+        failed(name, `${name}-failed`, error);
       }
     }
   }

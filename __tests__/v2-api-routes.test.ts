@@ -6,7 +6,12 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { FakeTelegram } from "@/app/lib/v2/channel/fake-telegram";
-import { runTick, type TickDeps } from "@/app/lib/v2/engine/tick";
+import {
+  ENGINE_TICK_FEED,
+  TICK_DEADLINE_MS,
+  runTick,
+  type TickDeps,
+} from "@/app/lib/v2/engine/tick";
 import { createMemoryStores } from "@/app/lib/v2/store/memory";
 import type { RulesDocument, Stores } from "@/app/lib/v2/store/types";
 import type { Candidate, FeedRun } from "@/app/lib/v2/types";
@@ -28,6 +33,7 @@ import * as webhookRoute from "@/app/api/v2/telegram/webhook/route";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const BROKEN = "22222222-2222-4222-8222-222222222222";
+const HUNG = "33333333-3333-4333-8333-333333333333";
 const TASK_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
 const CHAT = "4242";
 const HASH = "a".repeat(64);
@@ -92,6 +98,7 @@ async function setEngine(
     telegram,
     loadFixed: async () => ({ fixed: [], calendar: CALENDAR_OK }),
     loadCandidates: async () => [candidate],
+    loadWeekCapHours: async () => ({ hours: 0, ok: true }),
     newId: () => `bbbbbbbb-bbbb-4bbb-8bbb-${String(++n).padStart(12, "0")}`,
     probes: [],
   };
@@ -177,6 +184,50 @@ describe("POST /api/v2/cron/tick", () => {
     expect(await stores.blocks.listForDate(USER, "2026-11-09")).toHaveLength(1);
   });
 
+  test("an account whose tick hangs is abandoned, and the next one still runs", async () => {
+    // The shared setup fakes only Date; the route's deadline is a real timer.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date(NOW));
+    const stores = createMemoryStores();
+    await stores.users.save(HUNG, { rules: RULES, enabled: true });
+    await stores.users.save(USER, { rules: RULES, enabled: true });
+    let n = 0;
+    const deps: TickDeps = {
+      stores,
+      telegram: new FakeTelegram(),
+      // The account that hangs is the FIRST one, so the assertion below is
+      // about the route's deadline and not about running order.
+      loadFixed: async (userId) =>
+        userId === HUNG
+          ? new Promise(() => {})
+          : { fixed: [], calendar: CALENDAR_OK },
+      loadCandidates: async () => [candidate],
+      loadWeekCapHours: async () => ({ hours: 0, ok: true }),
+      newId: () => `bbbbbbbb-bbbb-4bbb-8bbb-${String(++n).padStart(12, "0")}`,
+      probes: [],
+    };
+    engine.current = { stores, deps };
+    process.env.V2_CRON_SECRET = "right-secret";
+
+    const pending = tickRoute.POST(
+      post("https://example.test/api/v2/cron/tick", {
+        headers: { authorization: "Bearer right-secret" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(TICK_DEADLINE_MS);
+    const response = await pending;
+
+    expect(await response.json()).toEqual({ users: 2, failed: 1 });
+    // The abandoned account says so on its own feed.
+    const runs = await stores.feeds.listRuns(HUNG, "2026-01-01T00:00:00.000Z");
+    expect(runs.find((run) => run.feed === ENGINE_TICK_FEED)).toMatchObject({
+      status: "error",
+      errorClass: "timeout",
+    });
+    // And the account behind it was planned anyway.
+    expect(await stores.blocks.listForDate(USER, "2026-11-09")).toHaveLength(1);
+  });
+
   test("skips an account whose engine is switched off", async () => {
     await setEngine({
       users: [
@@ -240,7 +291,7 @@ describe("POST /api/v2/telegram/webhook", () => {
     expect(response.status).toBe(200);
   });
 
-  test("hands a /start to the engine, which links the chat", async () => {
+  test("hands a /start to the engine, which answers it", async () => {
     const { stores, telegram } = await setEngine();
     process.env.TELEGRAM_WEBHOOK_SECRET = "hook-secret";
     // The chat is linked already, so a bare /start gets the refusal. What is

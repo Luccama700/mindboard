@@ -128,32 +128,38 @@ export function createTelegramClient(token: string, fetchImpl: typeof fetch = fe
     // what spends it, and a plain timer is the one shape a test can advance.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TELEGRAM_TIMEOUT_MS);
-    let response: Response;
+    // The timeout covers the body as well as the response: a connection that
+    // answers a header and then stalls mid-stream would otherwise hang the tick
+    // exactly as a connection that never answered at all.
     try {
-      response = await fetchImpl(`https://api.telegram.org/bot${token}/${method}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-    } catch {
-      // The underlying error can echo the request URL, which contains the token.
-      throw new TelegramError(method, null);
+      let response: Response;
+      try {
+        response = await fetchImpl(`https://api.telegram.org/bot${token}/${method}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch {
+        // The underlying error can echo the request URL, which contains the token.
+        throw new TelegramError(method, null);
+      }
+
+      let parsed: unknown = null;
+      try {
+        parsed = await response.json();
+      } catch {
+        parsed = null;
+      }
+      const ok =
+        typeof parsed === "object" && parsed !== null && (parsed as { ok?: unknown }).ok === true;
+      if (!response.ok || !ok) {
+        throw new TelegramError(method, response.status);
+      }
+      return (parsed as { result?: unknown }).result;
     } finally {
       clearTimeout(timer);
     }
-
-    let parsed: unknown = null;
-    try {
-      parsed = await response.json();
-    } catch {
-      parsed = null;
-    }
-    const ok = typeof parsed === "object" && parsed !== null && (parsed as { ok?: unknown }).ok === true;
-    if (!response.ok || !ok) {
-      throw new TelegramError(method, response.status);
-    }
-    return (parsed as { result?: unknown }).result;
   }
 
   return {

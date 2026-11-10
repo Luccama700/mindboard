@@ -17,7 +17,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { zonedDateKey, zonedIso, zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 import { createTelegramClient } from "@/app/lib/v2/channel/telegram";
-import { CALENDAR_FEED, type TickDeps } from "@/app/lib/v2/engine/tick";
+import { CALENDAR_FEED, TASK_FIXED_PREFIX, type TickDeps } from "@/app/lib/v2/engine/tick";
 import { createProbes } from "@/app/lib/v2/engine/probes";
 import { shiftDateKey } from "@/app/lib/v2/plan/day";
 import { createSupabaseStores } from "@/app/lib/v2/store/supabase";
@@ -40,6 +40,9 @@ export interface EngineTaskRow {
   status: string;
   estimated_minutes: number | null;
   duration_min: number | null;
+  /** Set when this task was pushed to Google, which then holds the same block. */
+  gcal_event_id?: string | null;
+  gcal_calendar_id?: string | null;
 }
 
 /** What a calendar event has to carry. A subset of utils/google/calendar's. */
@@ -53,8 +56,10 @@ export interface EngineCalendarEvent {
   location?: string | null;
 }
 
+// One literal, not a concatenation: the Supabase client parses this string as a
+// type, and a built-up string makes every row `GenericStringError`.
 const TASK_COLUMNS =
-  "id, title, group_id, due_date, due_time, status, estimated_minutes, duration_min";
+  "id, title, group_id, due_date, due_time, status, estimated_minutes, duration_min, gcal_event_id, gcal_calendar_id";
 
 /** A title is the user's own text; this is only for a row that has none. */
 const UNTITLED = "untitled";
@@ -183,14 +188,28 @@ export function toFixedEvents(
     });
   }
 
+  // A task that was pushed to Google is the same block as the event it created,
+  // so the event is the copy that counts. planning.ts does this for a promoted
+  // recurring slot ("the real event replaces the routine"); without it a
+  // time-blocked task is busy twice and Today names it twice. When the calendar
+  // read failed there are no events to match, so the local copy is kept.
+  const fetched = new Set(out.map((event) => event.id));
+
   for (const task of timedTasks) {
     if (!isOpen(task.status)) continue;
     const time = wallParts(task.due_time);
     const minutes = task.duration_min;
     if (task.due_date === null || time === null || minutes === null || minutes <= 0) continue;
+    if (
+      task.gcal_event_id != null &&
+      task.gcal_calendar_id != null &&
+      fetched.has(`${task.gcal_calendar_id}:${task.gcal_event_id}`)
+    ) {
+      continue;
+    }
     const startMs = zonedWallTimeToUtcMs(task.due_date, time.hour, time.minute, timeZone);
     out.push({
-      id: `task:${task.id}`,
+      id: `${TASK_FIXED_PREFIX}${task.id}`,
       title: task.title ?? UNTITLED,
       start: zonedIso(startMs, timeZone),
       end: zonedIso(startMs + minutes * 60_000, timeZone),
@@ -207,19 +226,51 @@ export function toFixedEvents(
 
 // ------------------------------------------------------------ the real reads
 
+/**
+ * How long the calendar gets to answer. The cron route runs the accounts one
+ * after another inside a sixty second function, so one request that never comes
+ * back would spend the whole budget and starve every account behind it.
+ * `listEvents` has no timeout of its own.
+ */
+export const CALENDAR_TIMEOUT_MS = 10_000;
+
+class CalendarTimeoutError extends Error {
+  constructor() {
+    super("the calendar did not answer in time");
+    this.name = "CalendarTimeoutError";
+  }
+}
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new CalendarTimeoutError()), ms);
+  });
+  // Promise.race attaches a handler to `work`, so a request that rejects after
+  // the limit has won is already handled and raises nothing.
+  return Promise.race([work, limit]).finally(() => clearTimeout(timer));
+}
+
 /** A short stable class. Google's own code when there is one, never its prose. */
 function calendarErrorClass(error: unknown): string {
+  if (error instanceof CalendarTimeoutError) return "calendar-timeout";
   if (error instanceof GoogleCalendarConnectionError) {
     return error.code === "unknown" ? "calendar-auth" : error.code;
   }
   return "calendar-failed";
 }
 
+/**
+ * The calendars an income source is linked to: the events that count toward the
+ * weekly cap. The error is NOT swallowed. A silent empty set would make today's
+ * shifts uncapped, which is the quiet failure the cap exists to prevent.
+ */
 async function capCalendarIdsFor(client: SupabaseClient, userId: string): Promise<Set<string>> {
-  const { data } = await client
+  const { data, error } = await client
     .from("income_sources")
     .select("google_calendar_id")
     .eq("user_id", userId);
+  if (error) throw new Error("the income calendars could not be read");
   const rows = (data ?? []) as Array<{ google_calendar_id: string | null }>;
   return new Set(
     rows
@@ -261,7 +312,7 @@ export function createLoadFixed(client: SupabaseClient): TickDeps["loadFixed"] {
     let events: EngineCalendarEvent[] = [];
     let errorClass: string | null = null;
     try {
-      events = await listEvents(userId, { timeMin, timeMax });
+      events = await withTimeout(listEvents(userId, { timeMin, timeMax }), CALENDAR_TIMEOUT_MS);
     } catch (error) {
       errorClass = calendarErrorClass(error);
       console.warn(`v2 calendar read failed for ${userId} (${errorClass})`);
@@ -288,12 +339,22 @@ export function createLoadFixed(client: SupabaseClient): TickDeps["loadFixed"] {
 }
 
 /**
+ * How far back a finished touch block still counts as "this has been read".
+ * The query is bounded so it cannot grow with the account's whole history.
+ */
+const TOUCH_LOOKBACK_DAYS = 120;
+
+/**
  * Every open task as a candidate. `earlyTouchDone` comes from the engine's own
  * blocks: a task whose touch block was started or finished has been read, and
  * the planner then asks for a working block instead of another touch.
  */
 export function createLoadCandidates(client: SupabaseClient): TickDeps["loadCandidates"] {
-  return async (userId, user) => {
+  return async (userId, user, now) => {
+    const since = shiftDateKey(
+      zonedDateKey(Date.parse(now), user.timeZone),
+      -TOUCH_LOOKBACK_DAYS,
+    );
     const [tasks, touched] = await Promise.all([
       openTaskRows(client, userId),
       client
@@ -301,14 +362,122 @@ export function createLoadCandidates(client: SupabaseClient): TickDeps["loadCand
         .select("task_id")
         .eq("user_id", userId)
         .eq("kind", "touch")
-        .in("state", ["started", "done"]),
+        .in("state", ["started", "done"])
+        .gte("date", since),
     ]);
+    // Not ignored: an unreadable list would silently ask for a touch that has
+    // already happened, every day.
+    if (touched.error) throw new Error("the touch blocks could not be read");
     const rows = (touched.data ?? []) as Array<{ task_id: string | null }>;
     const touchedTaskIds = new Set(
       rows.map((row) => row.task_id).filter((id): id is string => id !== null),
     );
     return tasksToCandidates(tasks, user, touchedTaskIds);
   };
+}
+
+/**
+ * The capped hours already on the OTHER six days of the week: one calendar read
+ * over Monday to Sunday, keeping the events whose calendar an income source is
+ * linked to, merged with the engine's own income blocks for those days so two
+ * records of the same shift count once.
+ *
+ * `ok: false` says the figure is not known, and the tick then plans as if the
+ * week were full. That is the point: a weekly cap models a legal limit, so the
+ * one answer it must never give is a confident low number.
+ */
+export function createLoadWeekCapHours(
+  client: SupabaseClient,
+): TickDeps["loadWeekCapHours"] {
+  return async (userId, weekStart, date, user) => {
+    const zone = user.timeZone;
+    const weekEnd = shiftDateKey(weekStart, 7);
+    const timeMin = new Date(zonedWallTimeToUtcMs(weekStart, 0, 0, zone)).toISOString();
+    const timeMax = new Date(zonedWallTimeToUtcMs(weekEnd, 0, 0, zone)).toISOString();
+
+    try {
+      const [capCalendarIds, events, blocks] = await Promise.all([
+        capCalendarIdsFor(client, userId),
+        withTimeout(listEvents(userId, { timeMin, timeMax }), CALENDAR_TIMEOUT_MS),
+        incomeBlockSpans(client, userId, weekStart, weekEnd),
+      ]);
+
+      const spans = [...blocks];
+      for (const event of events) {
+        if (event.allDay || !capCalendarIds.has(event.calendarId)) continue;
+        const startMs = Date.parse(event.start);
+        const endMs = Date.parse(event.end);
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+        spans.push({ startMs, endMs });
+      }
+
+      // The other six days only: today's own hours are the planner's to count
+      // from the fixed events it was given.
+      const dayStartMs = zonedWallTimeToUtcMs(date, 0, 0, zone);
+      const dayEndMs = zonedWallTimeToUtcMs(shiftDateKey(date, 1), 0, 0, zone);
+      const elsewhere = spans.flatMap((span) => outside(span, dayStartMs, dayEndMs));
+      return { hours: unionHours(elsewhere), ok: true };
+    } catch (error) {
+      const errorClass = calendarErrorClass(error);
+      console.warn(`v2 week cap read failed for ${userId} (${errorClass})`);
+      return { hours: 0, ok: false };
+    }
+  };
+}
+
+interface Span {
+  startMs: number;
+  endMs: number;
+}
+
+/** The parts of a span that fall outside one day. */
+function outside(span: Span, dayStartMs: number, dayEndMs: number): Span[] {
+  const parts: Span[] = [];
+  if (span.startMs < dayStartMs) {
+    parts.push({ startMs: span.startMs, endMs: Math.min(span.endMs, dayStartMs) });
+  }
+  if (span.endMs > dayEndMs) {
+    parts.push({ startMs: Math.max(span.startMs, dayEndMs), endMs: span.endMs });
+  }
+  return parts.filter((part) => part.endMs > part.startMs);
+}
+
+/** Hours covered by the union of the spans: overlapping records count once. */
+export function unionHours(spans: Span[]): number {
+  const sorted = [...spans]
+    .filter((span) => span.endMs > span.startMs)
+    .sort((a, b) => a.startMs - b.startMs);
+  let total = 0;
+  let cursor = Number.NEGATIVE_INFINITY;
+  for (const span of sorted) {
+    const from = Math.max(span.startMs, cursor);
+    if (span.endMs > from) {
+      total += span.endMs - from;
+      cursor = span.endMs;
+    }
+  }
+  return total / 3_600_000;
+}
+
+async function incomeBlockSpans(
+  client: SupabaseClient,
+  userId: string,
+  from: DateKey,
+  to: DateKey,
+): Promise<Span[]> {
+  const { data, error } = await client
+    .from("v2_blocks")
+    .select("starts_at, ends_at")
+    .eq("user_id", userId)
+    .eq("kind", "income")
+    .neq("state", "skipped")
+    .gte("date", from)
+    .lt("date", to);
+  if (error) throw new Error("the week's income blocks could not be read");
+  const rows = (data ?? []) as Array<{ starts_at: string; ends_at: string }>;
+  return rows
+    .map((row) => ({ startMs: Date.parse(row.starts_at), endMs: Date.parse(row.ends_at) }))
+    .filter((span) => Number.isFinite(span.startMs) && Number.isFinite(span.endMs));
 }
 
 export interface EngineRuntime {
@@ -334,6 +503,7 @@ export function createEngine(): EngineRuntime {
       telegram: token ? createTelegramClient(token) : null,
       loadFixed: createLoadFixed(client),
       loadCandidates: createLoadCandidates(client),
+      loadWeekCapHours: createLoadWeekCapHours(client),
       newId: () => randomUUID(),
       probes: createProbes(client),
     },
