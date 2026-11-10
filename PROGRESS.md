@@ -43,6 +43,7 @@ Read this first when resuming. Newest entry on top. `PLAN.md` is the current pla
 - **Review of that work, and its fixes** (`79d6daf`). The loader passed. Two faults in the colour work: a custom background in the middle of the range left text under 4.5 to 1, and the appearance panel stopped answering Escape once focus left it. Now the painted page moves away from the ink by the smallest step that can carry text (the stored pick is unchanged, and the panel says so when the move is visible), every token is derived on the scheme's own side of each surface, and the lit card's tint is the largest its inks still read on. A sweep of 96 backgrounds, 5 accents and 6 identity colours pins the ratios; the reviewer's own probe of 143,360 combinations found no failure. The four built-in schemes are byte for byte as before.
 - **The desktop page fills the window** (`434d355`). The owner opened it on a wide monitor and it used the left half: the frame was capped at 1140 px. The cap is gone. The day takes up to 640 px; everything after that goes to the day's context, which becomes more columns as the window allows: one from 1024 px, two from 1360 px (status, the lists), three from 1760 px (status, past their date, did not fit today), and rows two across inside a list once it is wide enough. Phone layout unchanged. Checked by capturing the real page at 1024, 1366, 1920, 2000 and 2560 px wide.
 - **A trap found on the way:** the pane used for rendering is narrower than a desktop window, so a wide layout cannot be judged there. A headless browser on a throwaway profile gives a full-size capture of a local page.
+- **Review of the full-width page, and its fixes** (`b1b8633`). The layout itself was found correct. One real gap: on a wide window a list is a column that scrolls on its own with nothing in it to focus, so a keyboard could not scroll it in a browser that does not make scrollers focusable by itself. Each list takes focus now. Also: the last column keeps off the window's edge, and a long group name gives way before it pushes the date out of a row. Exercised on the production build: a list scrolls while the page and the day stay still, at 2000 and 1366 px wide.
 
 ### How the build runs
 
@@ -60,6 +61,7 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 | Final, one test added after `2159f52` | 0 errors, 2 warnings | 2743 of 2743 (119 files) | not re-run: no code changed since the build above |
 | Real-data mode, desktop layout, colour schemes, `a144aea` | 0 errors, 2 warnings | 2902 of 2902 (121 files) | ok, placeholder env |
 | Colour fixes and the full-width desktop page, `434d355` | 0 errors, 2 warnings | 2935 of 2935 (121 files) | ok, placeholder env |
+| After the review of the full-width page, `b1b8633` | 0 errors, 2 warnings | 2941 of 2941 (121 files) | ok, placeholder env |
 
 ### Known traps
 
