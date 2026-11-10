@@ -59,6 +59,16 @@ export const EXPORT_TABLES: ExportTable[] = [
   { table: "people_groups", order: ["id"] },
   { table: "task_dispatches", order: ["id"] },
   { table: "urc_log", order: ["id"] },
+  // The v2 engine (0066). The seven a session can read; the two it cannot are
+  // excluded below. Keyed by primary key, as above: v2_rules is one row per
+  // user, v2_days one per local day, v2_feed_expectations one per feed.
+  { table: "v2_rules", order: ["user_id"] },
+  { table: "v2_days", order: ["date"] },
+  { table: "v2_blocks", order: ["id"] },
+  { table: "v2_asks", order: ["id"] },
+  { table: "v2_feed_expectations", order: ["feed"] },
+  { table: "v2_feed_runs", order: ["id"] },
+  { table: "v2_alerts", order: ["id"] },
 ];
 
 // Left out on purpose, with the reason the export states out loud.
@@ -70,6 +80,10 @@ export const EXCLUDED_TABLES: Record<string, string> = {
   oauth_grants:
     "connected-app sessions; service-role only, holds refresh-token ids (listed on /settings instead)",
   oauth_used_codes: "spent one-time sign-in codes; service-role only, no user column",
+  v2_outbox:
+    "messages the engine queued and sent; service-role only, and the text of each one is built from the asks and alerts you already have above",
+  v2_channels:
+    "your telegram link; service-role only, holds a chat id and the one-time pairing hash",
 };
 
 // Column-name rules, not a hand-kept column list: a new encrypted column lands
