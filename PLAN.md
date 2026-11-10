@@ -400,6 +400,12 @@ Found by the last review, after the single fix pass, and left open on purpose. N
 - **A "later today" move can be reverted** by a scheduled run that read the day just before the move. The next run applies it again.
 - **A calendar event dragged onto today while its task is dated another day** is planned twice.
 
+Found by the whole-range review on 2026-11-10 and left open by ruling:
+
+- **On the phone layout the document order differs from the visual order.** A screen reader reads the whole day before the energy question and the all day row. It is resolved when the screen is restructured, where each layout gets its own order.
+- **With capacity to spare, an overdue lane step can still take an earlier slot than a live side quest.** Ranking and the guaranteed block are correct; the demand walk still asks for one focus block per lane before it asks for side quests.
+- **`postcss` is imported by two test files but is not a direct dev dependency.** It resolves through hoisting today.
+
 The planner now also exports `planningDate(now, rules)`: the tick's "today" follows lights out, not midnight. `rankCandidates` takes the day being planned as a required fourth argument for the same reason.
 
 ## Next after this plan
