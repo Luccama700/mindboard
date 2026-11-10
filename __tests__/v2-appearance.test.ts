@@ -30,7 +30,11 @@ import {
   inkOn,
   isDarkBackground,
   mixHex,
+  LIT_INK_TOKENS as LIT_INKS,
+  LIT_TINT,
+  VISIBLE_PAGE_MOVE,
   normalizeHex,
+  pageAdjustment,
   parseAppearance,
   readableOn,
   resolveAppearance,
@@ -490,4 +494,293 @@ describe("the panel copy", () => {
   test("says what reset goes back to", () => {
     expect(APPEARANCE_COPY.reset).toBe("Reset to black and purple");
   });
+});
+
+// ===========================================================================
+// Round 2: the guarantee by construction, not by sampling
+//
+// The independent review found that the contrast guarantee held only for the
+// pairs this file happened to try. A custom background in the middle of the
+// range cannot carry readable text at all, so `readableOn` clamped to the
+// extreme and every ink came out under 4.5:1 with nothing saying so. The fix
+// moves the PAINTED page away from the ink until the extreme reaches the bar
+// (ruling R1), and the lit card's tint is now the largest one at which the inks
+// the stylesheet prints on it still clear the bar (R2).
+//
+// So the test is a sweep rather than a handful of pairs. No epsilon: both the
+// implementation and these assertions call the same `contrast` on the same hex
+// strings, so the two sides agree bit for bit.
+// ===========================================================================
+
+/** HSL to hex, so the sweep can walk hues rather than only greys. */
+function hsl(hue: number, saturation: number, lightness: number): string {
+  const s = saturation / 100;
+  const l = lightness / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const h = (((hue % 360) + 360) % 360) / 60;
+  const x = c * (1 - Math.abs((h % 2) - 1));
+  const rgb =
+    h < 1
+      ? [c, x, 0]
+      : h < 2
+        ? [x, c, 0]
+        : h < 3
+          ? [0, c, x]
+          : h < 4
+            ? [0, x, c]
+            : h < 5
+              ? [x, 0, c]
+              : [c, 0, x];
+  const m = l - c / 2;
+  const byte = (value: number) =>
+    Math.round((value + m) * 255)
+      .toString(16)
+      .padStart(2, "0")
+      .toUpperCase();
+  return `#${byte(rgb[0])}${byte(rgb[1])}${byte(rgb[2])}`;
+}
+
+/**
+ * Every background the sweep walks: the whole grey ramp in steps of 5, the four
+ * mid greys the reviewer measured, and saturated colours around the wheel at
+ * three lightnesses.
+ */
+function sweepBackgrounds(): string[] {
+  const out: string[] = [];
+  for (let value = 0; value <= 255; value += 5) {
+    const byte = value.toString(16).padStart(2, "0").toUpperCase();
+    out.push(`#${byte}${byte}${byte}`);
+  }
+  out.push("#FFFFFF", "#777777", "#808080", "#6B6B6B", "#8A8A8A");
+  for (let hue = 0; hue < 360; hue += 30) {
+    for (const lightness of [30, 50, 70]) out.push(hsl(hue, 80, lightness));
+  }
+  return Array.from(new Set(out));
+}
+
+/** The accents: the default, both extremes, a mid grey, and the page itself. */
+const sweepAccents = (background: string) => [
+  "#A78BFA",
+  "#FFFFFF",
+  "#000000",
+  "#808080",
+  background,
+];
+
+/** Identity colours: none, both extremes, a mid grey, a dark navy, a bright yellow. */
+const SWEEP_IDENTITIES: Array<string | null> = [
+  null,
+  "#FFFFFF",
+  "#000000",
+  "#808080",
+  "#1E3A8A",
+  "#FDE047",
+];
+
+/**
+ * The inks the stylesheet prints INSIDE a lit card, and nothing else. Read off
+ * v2.css: --v2-ink by inheritance on the card's h3, --v2-ink-2 on .v2-lit p,
+ * .v2-lit .v2-detail, .v2-stop .v2-leave and the .v2-quiet buttons, and
+ * --v2-signal through the @keyframes v2-moved flash on .v2-lit .v2-when.
+ * --v2-ink-3 is NOT one: .v2-lit p and .v2-lit .v2-detail both override it, and
+ * .v2-tag is not rendered in the lit branch of stop-card.tsx.
+ */
+// Imported from the module, not restated, so the list the tint search holds and
+// the list this sweep measures cannot drift apart.
+const LIT_INK_TOKENS = LIT_INKS;
+
+/** The plain surfaces the stylesheet prints --v2-ident on. See the report. */
+const IDENT_SURFACES = ["--v2-page", "--v2-card"] as const;
+
+describe("the whole range of custom pairs", () => {
+  const backgrounds = sweepBackgrounds();
+
+  test("has something to sweep", () => {
+    expect(backgrounds.length).toBeGreaterThan(80);
+    expect(backgrounds).toContain("#808080");
+    expect(backgrounds).toContain("#000000");
+    expect(backgrounds).toContain("#FFFFFF");
+  });
+
+  test("gives readable text on every background, accent and identity colour", () => {
+    const failures: string[] = [];
+    const fail = (
+      background: string,
+      accent: string,
+      identity: string | null,
+      token: string,
+      surface: string,
+      ratio: number,
+      min: number,
+    ) => {
+      failures.push(
+        `bg ${background} accent ${accent} identity ${identity ?? "none"}: ` +
+          `${token} on ${surface} is ${ratio.toFixed(2)} to 1, wanted ${min} to 1`,
+      );
+    };
+
+    for (const background of backgrounds) {
+      for (const accent of sweepAccents(background)) {
+        const tokens = deriveTokens(background, accent);
+
+        for (const token of TEXT_TOKENS) {
+          for (const surface of SURFACES) {
+            const ratio = contrast(tokens[token], tokens[surface]);
+            if (ratio < 4.5) fail(background, accent, null, token, surface, ratio, 4.5);
+          }
+        }
+        const onAccent = contrast(tokens["--v2-on-accent"], tokens["--v2-accent"]);
+        if (onAccent < 4.5) {
+          fail(background, accent, null, "--v2-on-accent", "--v2-accent", onAccent, 4.5);
+        }
+        const accentMark = contrast(tokens["--v2-accent"], tokens["--v2-page"]);
+        if (accentMark < 3) {
+          fail(background, accent, null, "--v2-accent", "--v2-page", accentMark, 3);
+        }
+
+        for (const identity of SWEEP_IDENTITIES) {
+          const own = identityTokens(identity, tokens);
+
+          for (const token of LIT_INK_TOKENS) {
+            const ratio = contrast(tokens[token], own["--v2-lit"]);
+            if (ratio < 4.5) {
+              fail(background, accent, identity, token, "--v2-lit", ratio, 4.5);
+            }
+          }
+
+          const identOn = contrast(own["--v2-ident"], own["--v2-lit"]);
+          if (identOn < 4.5) {
+            fail(background, accent, identity, "--v2-ident", "--v2-lit", identOn, 4.5);
+          }
+          for (const surface of IDENT_SURFACES) {
+            const ratio = contrast(own["--v2-ident"], tokens[surface]);
+            if (ratio < 4.5) {
+              fail(background, accent, identity, "--v2-ident", surface, ratio, 4.5);
+            }
+          }
+
+          const onIdent = contrast(own["--v2-on-ident"], own["--v2-ident"]);
+          if (onIdent < 4.5) {
+            fail(background, accent, identity, "--v2-on-ident", "--v2-ident", onIdent, 4.5);
+          }
+
+          // The mark is a non-text graphic, printed on the page (the dot on the
+          // line) and on a card (the dot in the lane summary). A stop with no
+          // colour of its own takes the hairline, which is not a mark.
+          if (identity !== null) {
+            for (const surface of IDENT_SURFACES) {
+              const ratio = contrast(own["--v2-lane"], tokens[surface]);
+              if (ratio < 3) {
+                fail(background, accent, identity, "--v2-lane", surface, ratio, 3);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    expect(failures.slice(0, 12)).toEqual([]);
+    expect(failures).toHaveLength(0);
+  });
+});
+
+describe("the built in schemes are untouched by the repair", () => {
+  test("paint the page exactly the colour the scheme names", () => {
+    for (const scheme of SCHEMES) {
+      expect(deriveTokens(scheme.background, scheme.accent)["--v2-page"]).toBe(
+        scheme.background,
+      );
+    }
+  });
+
+  test("still tint the lit card by the full amount, for every sample colour", () => {
+    for (const scheme of SCHEMES) {
+      const tokens = deriveTokens(scheme.background, scheme.accent);
+      for (const colour of IDENTITY_COLOURS) {
+        const own = identityTokens(colour, tokens);
+        expect(own["--v2-lit"]).toBe(
+          mixHex(tokens["--v2-card"], own["--v2-lane"], LIT_TINT),
+        );
+      }
+    }
+  });
+});
+
+describe("pageAdjustment", () => {
+  test("says nothing for the four built in schemes", () => {
+    for (const scheme of SCHEMES) {
+      expect(pageAdjustment(scheme.background, scheme.accent)).toBeNull();
+    }
+  });
+
+  test("says nothing for a clearly dark or clearly light custom pair", () => {
+    expect(pageAdjustment("#120A1F", "#FF8A3D")).toBeNull();
+    expect(pageAdjustment("#FFFDF5", "#0F766E")).toBeNull();
+  });
+
+  // The largest difference on any one channel, which is what the helper counts.
+  const moved = (a: string, b: string) =>
+    Math.max(
+      ...[1, 3, 5].map((at) =>
+        Math.abs(
+          Number.parseInt(a.slice(at, at + 2), 16) -
+            Number.parseInt(b.slice(at, at + 2), 16),
+        ),
+      ),
+    );
+
+  // A mid grey cannot carry readable text at all. #777777 reads as a light
+  // background (black ink contrasts better than white), so the page is pushed
+  // toward white until black ink reaches the bar.
+  test("says what it did for a mid grey, and the page really moved", () => {
+    expect(pageAdjustment("#777777", "#A78BFA")).toBe("lightened");
+    const painted = deriveTokens("#777777", "#A78BFA")["--v2-page"];
+    expect(moved(painted, "#777777")).toBeGreaterThanOrEqual(VISIBLE_PAGE_MOVE);
+  });
+
+  test("says what it did for a grey that reads as dark", () => {
+    expect(pageAdjustment("#6B6B6B", "#A78BFA")).toBe("darkened");
+  });
+
+  // #808080 needs one byte of lightening to hold the guarantee. The page is
+  // moved (the sweep above depends on it) and nothing is said, because nobody
+  // can see one byte and a sentence about it would read as a fault.
+  test("keeps the guarantee silently when the move is too small to see", () => {
+    const painted = deriveTokens("#808080", "#A78BFA")["--v2-page"];
+    expect(painted).not.toBe("#808080");
+    expect(moved(painted, "#808080")).toBeLessThan(VISIBLE_PAGE_MOVE);
+    expect(pageAdjustment("#808080", "#A78BFA")).toBeNull();
+  });
+
+  test("speaks exactly when the painted page is visibly not the picked one", () => {
+    for (const grey of ["#6B6B6B", "#777777", "#808080", "#8A8A8A"]) {
+      const painted = deriveTokens(grey, "#A78BFA")["--v2-page"];
+      const said = pageAdjustment(grey, "#A78BFA");
+      expect(said !== null).toBe(moved(painted, grey) >= VISIBLE_PAGE_MOVE);
+      if (said !== null) expect(["darkened", "lightened"]).toContain(said);
+    }
+  });
+
+  test("falls back rather than throwing on a colour it cannot read", () => {
+    expect(pageAdjustment("not a colour", "#A78BFA")).toBeNull();
+  });
+});
+
+describe("readableOn, pinned at the edges", () => {
+  test.each([
+    ["black on black", "#000000", "#000000"],
+    ["white on paper", "#FFFFFF", "#F6F3EC"],
+    ["an unreadable colour", "zzz", "#000000"],
+    ["an unreadable background", "#A78BFA", "zzz"],
+  ])(
+    "%s comes back readable against the background as read",
+    (_name, colour, background) => {
+      const out = readableOn(colour, background);
+      expect(out).toMatch(/^#[0-9A-F]{6}$/);
+      // Against the background AS THE FUNCTION READS IT: an unparseable value is
+      // black, which is what the rest of the module falls back to as well.
+      const page = normalizeHex(background) ?? "#000000";
+      expect(contrast(out, page)).toBeGreaterThanOrEqual(4.5);
+    },
+  );
 });

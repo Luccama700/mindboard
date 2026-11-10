@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createElement } from "react";
+import { hydrateRoot } from "react-dom/client";
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -29,12 +30,19 @@ import {
   APPEARANCE_COPY,
   APPEARANCE_STORAGE_KEY,
   CUSTOM_SCHEME_ID,
+  DEFAULT_APPEARANCE,
   DEFAULT_SCHEME_ID,
   SCHEMES,
   TOKEN_NAMES,
   deriveTokens,
+  pageAdjustment,
+  tokensFor,
+  type Appearance,
 } from "@/app/lib/v2/view/appearance";
-import { AppearanceRoot } from "@/app/v2/_components/appearance-root";
+import {
+  AppearanceRoot,
+  AppearanceTrigger,
+} from "@/app/v2/_components/appearance-root";
 import { FeedDots } from "@/app/v2/_components/feed-strip";
 import { NotTodayList } from "@/app/v2/_components/not-today-list";
 import type { Block, Energy, PlanInput } from "@/app/lib/v2/types";
@@ -701,5 +709,303 @@ describe("the page is wired to the gate", () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     const page = await import("@/app/v2/today/page");
     expect(page.dynamic).toBe("force-dynamic");
+  });
+});
+
+// ===========================================================================
+// Round 2: the dialog, and the store
+//
+// The review found that Escape and the Tab trap only worked while focus was
+// inside the panel, and focus leaves: the veil catches clicks but is not
+// focusable, so a press on it dropped focus to the body and from there Escape
+// did nothing and Tab walked the page behind a window calling itself modal.
+// Both listen on the document now, and a press on the veil closes.
+//
+// It also found that the only root test ran with nothing stored, so the storage
+// failure paths and the after-hydration apply were never exercised.
+// ===========================================================================
+
+const FOCUSABLE_IN_PANEL = [
+  "button:not([disabled])",
+  "input:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
+describe("the appearance panel is really a dialog", () => {
+  afterEach(() => {
+    cleanup();
+    try {
+      localStorage.clear();
+    } catch {
+      // nothing to clean up
+    }
+  });
+
+  /** The panel, open, with the rail's trigger as the thing that opened it. */
+  const openPanel = async () => {
+    render(
+      createElement(
+        AppearanceRoot,
+        null,
+        createElement(AppearanceTrigger, { variant: "rail" }),
+      ),
+    );
+    const trigger = screen.getByRole("button", { name: APPEARANCE_COPY.open });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    const panel = screen.getByRole("dialog");
+    const veil = panel.parentElement as HTMLElement;
+    return { trigger, panel, veil };
+  };
+
+  const focusablesOf = (panel: HTMLElement) =>
+    Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_IN_PANEL));
+
+  test("closes on a press on the veil, and hands focus back", async () => {
+    const { trigger, veil } = await openPanel();
+    await act(async () => {
+      fireEvent.mouseDown(veil);
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  // A drag that starts on a control and ends on the veil must not close
+  // anything, which is why it is mousedown with target === currentTarget.
+  test("does not close on a press that starts on a control inside it", async () => {
+    const { panel } = await openPanel();
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByRole("button", { name: SCHEMES[0].name }));
+    });
+    expect(screen.getByRole("dialog")).toBe(panel);
+  });
+
+  test("closes on Escape even when focus has left it", async () => {
+    const { trigger, panel } = await openPanel();
+    (panel as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  test("pulls focus back into itself when Tab is pressed from outside", async () => {
+    const { panel } = await openPanel();
+    const inside = focusablesOf(panel);
+    expect(inside.length).toBeGreaterThan(2);
+
+    panel.blur();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Tab" });
+    });
+    expect(document.activeElement).toBe(inside[0]);
+
+    (document.activeElement as HTMLElement).blur();
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Tab", shiftKey: true });
+    });
+    expect(document.activeElement).toBe(inside[inside.length - 1]);
+  });
+
+  test("still wraps at its own edges", async () => {
+    const { panel } = await openPanel();
+    const inside = focusablesOf(panel);
+    const first = inside[0];
+    const last = inside[inside.length - 1];
+
+    last.focus();
+    await act(async () => {
+      fireEvent.keyDown(last, { key: "Tab" });
+    });
+    expect(document.activeElement).toBe(first);
+
+    await act(async () => {
+      fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+    });
+    expect(document.activeElement).toBe(last);
+  });
+
+  // R4. A background in the middle of the range cannot carry readable text, so
+  // the painted page moves; the panel says so rather than letting the page come
+  // out a colour the input does not show.
+  test("says when the page had to move, and says nothing when it did not", async () => {
+    const { panel } = await openPanel();
+    const line = () =>
+      (panel.querySelector('[aria-live="polite"]') as HTMLElement).textContent ?? "";
+
+    for (const scheme of SCHEMES) {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: scheme.name }));
+      });
+      expect(line()).toBe("");
+    }
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(APPEARANCE_COPY.background), {
+        target: { value: "#777777" },
+      });
+    });
+    expect(line()).toBe(APPEARANCE_COPY.lightened);
+    expect(pageAdjustment("#777777", SCHEMES[3].accent)).not.toBeNull();
+
+    // And it goes away again when a scheme that does not need it is picked.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: SCHEMES[0].name }));
+    });
+    expect(line()).toBe("");
+  });
+});
+
+// Each test gets its own module instance, because the store that holds the
+// stored choice is module level: a cache left behind by one test would decide
+// the next one's first render.
+describe("the appearance root and this browser's storage", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    try {
+      localStorage.clear();
+    } catch {
+      // nothing to clean up
+    }
+  });
+
+  // Both components come from the SAME fresh module instance: the context that
+  // carries the handle is module level, so a trigger from the statically
+  // imported copy would read the inert fallback and never open anything.
+  const freshRoot = async () => {
+    vi.resetModules();
+    return import("@/app/v2/_components/appearance-root");
+  };
+
+  const rootEl = () => document.querySelector("[data-v2-root]") as HTMLElement;
+
+  const expectTokens = (element: HTMLElement, appearance: Appearance) => {
+    const want = tokensFor(appearance);
+    for (const name of TOKEN_NAMES) {
+      expect(element.style.getPropertyValue(name)).toBe(want[name]);
+    }
+  };
+
+  test("renders the default scheme when reading storage throws", async () => {
+    const getItem = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new Error("site data blocked");
+      });
+    const fresh = await freshRoot();
+    expect(() =>
+      render(
+        createElement(
+          fresh.AppearanceRoot,
+          null,
+          createElement(fresh.AppearanceTrigger, { variant: "rail" }),
+        ),
+      ),
+    ).not.toThrow();
+    expect(rootEl().getAttribute("data-v2-scheme")).toBe(DEFAULT_SCHEME_ID);
+    expectTokens(rootEl(), DEFAULT_APPEARANCE);
+    expect(getItem).toHaveBeenCalled();
+  });
+
+  test("still applies a choice for this session when writing storage throws", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    const fresh = await freshRoot();
+    render(
+      createElement(
+        fresh.AppearanceRoot,
+        null,
+        createElement(fresh.AppearanceTrigger, { variant: "rail" }),
+      ),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: APPEARANCE_COPY.open }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: SCHEMES[2].name }));
+    });
+    expect(rootEl().getAttribute("data-v2-scheme")).toBe(SCHEMES[2].id);
+    expectTokens(rootEl(), {
+      schemeId: SCHEMES[2].id,
+      background: null,
+      accent: null,
+    });
+  });
+
+  /**
+   * Hydration, for real: the markup comes from `renderToString`, which is what
+   * the server actually sends, and a module instance that ALREADY has the choice
+   * in storage hydrates it. React uses `getServerSnapshot` for the server render
+   * and for the hydrating render, then the browser's own value immediately
+   * after, so a mismatch would surface as a console.error and nothing else.
+   *
+   * It is deliberately one module instance and not two: an earlier version built
+   * the "server" markup from a CLIENT render, and React then reported a style
+   * mismatch whose two sides were identical, because a client render writes
+   * custom properties through setProperty and the hydration diff cannot read
+   * them back the same way. Real server markup does not have that problem (a
+   * probe on a plain div with a custom property was silent both ways), so the
+   * defect was in the harness, not in the page.
+   */
+  const hydrateWith = async (stored: Appearance) => {
+    vi.resetModules();
+    localStorage.clear();
+    localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(stored));
+    const { AppearanceRoot: Root } = await freshRoot();
+    const { renderToString } = await import("react-dom/server");
+
+    const element = createElement(Root, null, "day");
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    host.innerHTML = renderToString(element);
+
+    // The server paints the DEFAULT whatever is stored, which is the other half
+    // of the no flash guarantee: the HTML never carries a browser's own choice.
+    const served = host.querySelector("[data-v2-root]") as HTMLElement;
+    expect(served.getAttribute("data-v2-scheme")).toBe(DEFAULT_SCHEME_ID);
+
+    const seen: string[] = [];
+    const errors = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => {
+        seen.push(String(args[0]));
+      });
+    await act(async () => {
+      hydrateRoot(host, element);
+    });
+    return { host, errors, seen };
+  };
+
+  test("applies a stored built in scheme after hydration, quietly", async () => {
+    const stored: Appearance = {
+      schemeId: "paper-ink",
+      background: null,
+      accent: null,
+    };
+    const { host, errors, seen } = await hydrateWith(stored);
+    const root = host.querySelector("[data-v2-root]") as HTMLElement;
+    expect(root.getAttribute("data-v2-scheme")).toBe("paper-ink");
+    expectTokens(root, stored);
+    expect(seen).toEqual([]);
+    expect(errors).not.toHaveBeenCalled();
+  });
+
+  test("applies a stored custom pair after hydration, quietly", async () => {
+    const stored: Appearance = {
+      schemeId: CUSTOM_SCHEME_ID,
+      background: "#120A1F",
+      accent: "#FF8A3D",
+    };
+    const { host, errors } = await hydrateWith(stored);
+    const root = host.querySelector("[data-v2-root]") as HTMLElement;
+    expect(root.getAttribute("data-v2-scheme")).toBe(CUSTOM_SCHEME_ID);
+    expectTokens(root, stored);
+    expect(errors).not.toHaveBeenCalled();
   });
 });

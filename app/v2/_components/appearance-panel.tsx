@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, type MouseEvent } from "react";
 
 import {
   APPEARANCE_COPY,
@@ -8,6 +8,7 @@ import {
   DEFAULT_APPEARANCE,
   SCHEMES,
   normalizeHex,
+  pageAdjustment,
   resolveAppearance,
   type Appearance,
 } from "@/app/lib/v2/view/appearance";
@@ -43,6 +44,8 @@ export function AppearancePanel({
   const panel = useRef<HTMLDivElement | null>(null);
   const { background, accent } = resolveAppearance(appearance);
   const custom = appearance.schemeId === CUSTOM_SCHEME_ID;
+  /** null for every built-in scheme and every pair that can carry text. */
+  const adjusted = pageAdjustment(background, accent);
 
   // The panel itself takes focus rather than its first control, so the heading
   // is what a screen reader reads out and Tab then lands on the first choice.
@@ -50,25 +53,72 @@ export function AppearancePanel({
     panel.current?.focus();
   }, []);
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      onClose();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const inside = panel.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
-    if (inside === undefined || inside.length === 0) return;
-    const first = inside[0];
-    const last = inside[inside.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey && (active === first || active === panel.current)) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
-      first.focus();
-    }
+  /**
+   * Escape and the Tab trap listen on the DOCUMENT, not on the panel.
+   *
+   * On the panel they only worked while focus was inside it, and focus leaves:
+   * the veil catches clicks but is not focusable, so a press on it dropped focus
+   * to the body and from there Escape did nothing and Tab walked the page behind
+   * a window calling itself modal. Listening on the document means Escape closes
+   * from wherever focus is, and a Tab from outside brings focus back to the first
+   * control (Shift+Tab to the last) instead of leaking.
+   *
+   * Capture phase, and the event is stopped: one Escape, one close.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const node = panel.current;
+      if (node === null) return;
+
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const inside = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (inside.length === 0) return;
+      const first = inside[0];
+      const last = inside[inside.length - 1];
+      const active = document.activeElement;
+      const within = active instanceof Node && node.contains(active);
+
+      // Outside the panel, or on the panel's own container: put focus on an edge
+      // rather than letting the browser walk on from wherever it is.
+      if (!within || active === node) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+        return;
+      }
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [onClose]);
+
+  /**
+   * A press on the veil itself closes the panel, through the same path the Close
+   * button takes, so focus goes back to the control that opened it.
+   *
+   * mouseDOWN rather than click, and only when the press lands on the veil
+   * itself: a drag that starts on a control inside the panel and ends outside it
+   * must not close anything, and a press inside must not bubble into a close.
+   *
+   * KNOWN COST, ACCEPTED: dismissing the browser's own colour popup by pressing
+   * on the page also presses the veil, so the panel closes too. Colours apply as
+   * they are picked, so nothing is lost by that.
+   */
+  const onVeilPress = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    onClose();
   };
 
   /**
@@ -87,7 +137,7 @@ export function AppearancePanel({
   };
 
   return (
-    <div className="v2-sheet" role="presentation">
+    <div className="v2-sheet" role="presentation" onMouseDown={onVeilPress}>
       <div
         className="v2-panel"
         role="dialog"
@@ -95,7 +145,6 @@ export function AppearancePanel({
         aria-labelledby="v2-appearance-title"
         tabIndex={-1}
         ref={panel}
-        onKeyDown={onKeyDown}
       >
         <div className="v2-panel-top">
           <h2 id="v2-appearance-title">{APPEARANCE_COPY.title}</h2>
@@ -162,6 +211,15 @@ export function AppearancePanel({
               />
             </label>
           </div>
+          {/* Said out loud when the painted page is not the one that was picked.
+              A background in the middle of the range cannot carry readable text
+              at all, so the page is moved the smallest amount that lets it; the
+              input above keeps showing exactly the colour he chose, and this
+              line is why the page does not match it. Polite, because it appears
+              while he is still dragging the picker. */}
+          <p className="v2-panel-note" aria-live="polite">
+            {adjusted === null ? "" : APPEARANCE_COPY[adjusted]}
+          </p>
         </div>
 
         <div className="v2-panel-foot">
