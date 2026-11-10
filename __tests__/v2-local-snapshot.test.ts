@@ -355,6 +355,23 @@ const EVENT_ROWS = [
     allDay: false,
     calendarId: "cal-campus",
   },
+  // No name at all, and a name that is only spaces. Both get the words the live
+  // reader uses rather than an empty heading.
+  {
+    id: "cal-campus:ev-nameless",
+    start: at("07:00"),
+    end: at("07:30"),
+    allDay: false,
+    calendarId: "cal-campus",
+  },
+  {
+    id: "cal-campus:ev-blank",
+    summary: "   ",
+    start: at("07:40"),
+    end: at("08:00"),
+    allDay: false,
+    calendarId: "cal-campus",
+  },
   {
     id: "cal-campus:ev-broken",
     summary: "Unreadable",
@@ -547,6 +564,8 @@ describe("what is already on the day", () => {
   test("is this day's events and this day's time blocked tasks, and nothing else", () => {
     expect(ids()).toEqual([
       "cal-campus:ev-allday",
+      "cal-campus:ev-blank",
+      "cal-campus:ev-nameless",
       "cal-campus:ev-seminar",
       "cal-shift:ev-shift",
       "cal-tutoring:ev-tutor-today",
@@ -581,6 +600,12 @@ describe("what is already on the day", () => {
     expect(pushed?.source).toBe("task");
     expect(Date.parse(pushed?.start ?? "")).toBe(Date.parse(at("16:00")));
     expect(data.input.candidates.map((candidate) => candidate.id)).not.toContain("ta-pushed");
+  });
+
+  test("calls an event with no name what the live reader calls it", () => {
+    const named = (id: string) => data.input.fixed.find((event) => event.id === id)?.title;
+    expect(named("cal-campus:ev-nameless")).toBe("untitled event");
+    expect(named("cal-campus:ev-blank")).toBe("untitled event");
   });
 
   test("keeps an all day event as one, with the day's own bounds", () => {
@@ -943,8 +968,10 @@ describe("the copy rules", () => {
 // crashing on it.
 // The loopback check is a speed bump and nothing more (a Host header is the
 // client's own claim), so what is pinned is exactly that: the three spellings a
-// real loopback request carries are served, everything else is a 404, and the
-// value a stranger sent never comes back out anywhere.
+// real loopback request carries are served, everything else is sent to the
+// not-found page with no data, and the value a stranger sent never comes back
+// out anywhere. It guards the snapshot only; the sample is invented and a Vercel
+// preview is where it is meant to be looked at.
 describe("the loopback speed bump", () => {
   test("knows the three spellings, with or without a port", () => {
     for (const host of [
@@ -1019,25 +1046,22 @@ describe("the page is wired to both sources", () => {
   }
 
   /**
-   * The page, rendered one level deep. Both modes return a component of their
-   * own (the mode switch is synchronous, everything after it is not), so the
-   * element it returns is called to get the one the browser would see. The
-   * branch is read off the notice, which each source writes in its own words.
+   * The page, rendered one level deep. Sample mode hands the screen straight
+   * back (nothing in it has to wait); snapshot mode returns a component of its
+   * own, which is called here to get the element the browser would see.
    */
   async function render(search: Record<string, string | string[]> = {}) {
     const { default: TodayPage } = await page();
     const { TodayClient } = await import("@/app/v2/today/today-client");
     const outer = TodayPage({ searchParams: Promise.resolve(search) }) as unknown as Element;
+    if (outer.type === TodayClient) {
+      return { branch: "sample", element: outer, screen: outer.props.data as TodayScreenData };
+    }
     const element = (await (outer.type as (props: unknown) => Promise<unknown>)(
       outer.props,
     )) as Element;
-    if (element.type !== TodayClient) return { branch: "panel", element };
-    const screen = element.props.data as TodayScreenData;
-    return {
-      branch: screen.notice?.startsWith("Your data as of") === true ? "local" : "sample",
-      element,
-      screen,
-    };
+    if (element.type !== TodayClient) return { branch: "panel", element, screen: undefined };
+    return { branch: "local", element, screen: element.props.data as TodayScreenData };
   }
 
   test("asks to be rendered per request, so the gate is never prerendered", async () => {
@@ -1049,6 +1073,21 @@ describe("the page is wired to both sources", () => {
     const { branch, element } = await render();
     expect(branch).toBe("sample");
     expect(element.props.data).toBeTruthy();
+  });
+
+  // The sample is invented, and a Vercel preview is where it is meant to be
+  // looked at, so the loopback check must not reach it.
+  test("shows the sample day to any host, including a preview deployment", async () => {
+    for (const host of [
+      "mindboard-git-rebuild-example.vercel.app",
+      "192.168.1.24:3111",
+      null,
+    ]) {
+      sentHost.value = host;
+      await sample();
+      expect((await render()).branch).toBe("sample");
+      vi.unstubAllEnvs();
+    }
   });
 
   test("falls to the local snapshot when the fixtures flag is off", async () => {
@@ -1093,17 +1132,13 @@ describe("the page is wired to both sources", () => {
     expect(error.digest).toBe(NOT_FOUND_DIGEST);
   });
 
-  test("is not found for a host on the house network, in both modes", async () => {
+  test("sends a host on the house network to the not-found page in snapshot mode", async () => {
     sentHost.value = "192.168.1.24:3111";
     await local();
     expect((await refusal(() => render())).digest).toBe(NOT_FOUND_DIGEST);
-
-    sentHost.value = "192.168.1.24:3111";
-    await sample();
-    expect((await refusal(() => render())).digest).toBe(NOT_FOUND_DIGEST);
   });
 
-  test("is not found when the request sent no host at all", async () => {
+  test("does the same when the request sent no host at all", async () => {
     sentHost.value = null;
     await local();
     expect((await refusal(() => render())).digest).toBe(NOT_FOUND_DIGEST);

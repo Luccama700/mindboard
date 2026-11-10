@@ -26,8 +26,8 @@
 // to be absolute (`localSnapshotDir`). Nothing a visitor sends takes part in
 // any path: the file names inside the folder are literals.
 //
-// WHAT "LOCAL" DOES NOT MEAN. Neither mode asks who is asking, so both show
-// whatever they are built from to ANYONE WHO CAN REACH THIS SERVER. In snapshot
+// WHAT "LOCAL" DOES NOT MEAN. Neither mode asks who is asking, so each shows
+// whatever it is built from to ANYONE WHO CAN REACH THIS SERVER. In snapshot
 // mode that is every open task title, the planner rules and the account's id, in
 // the page payload. `next dev` and `next start` bind to 0.0.0.0 by default,
 // which is every interface on the machine, so the server has to be started on
@@ -35,20 +35,25 @@
 // ENFORCE THAT: by the time a request arrives it has already been accepted, and
 // the address it came from is the proxy's business, not the page's.
 //
-// So there is a speed bump, and it is labelled as one: both modes answer
+// So snapshot mode has a speed bump, and it is labelled as one: it answers
 // `notFound()` unless the request's Host header names the loopback address
 // (`isLoopbackHost`). A Host header is sent by the client and can say anything,
 // so this stops an accident (a phone on the same network opening the dev URL, a
 // scanner walking the subnet) and stops nobody who is trying. Production is
 // refused before this check ever runs.
 //
+// SAMPLE MODE HAS NO SUCH CHECK, deliberately. What is behind it is invented
+// (see the gate above), and a Vercel preview is exactly where it is meant to be
+// looked at, which a loopback check would make impossible. Only real data is
+// worth a speed bump.
+//
 // The three checks are pure functions, so each is testable on its own.
 //
-// WHY THIS PAGE IS NOT ASYNC. Everything the two modes need is asynchronous:
+// WHY THIS PAGE IS NOT ASYNC. Everything snapshot mode needs is asynchronous:
 // `searchParams` and `headers()` are promises in Next 16, and so is reading the
 // folder. But `notFound()` has to throw where the mode is decided rather than
-// inside a promise nobody awaits, so the mode switch stays synchronous and each
-// mode is a component of its own.
+// inside a promise nobody awaits, so the mode switch stays synchronous and the
+// one mode that has to wait is a component of its own.
 //
 // Server and client: the server decides the mode and builds the day (that parses
 // the planner rules and, for a snapshot, reads the folder), then hands plain
@@ -88,7 +93,7 @@ export default function TodayPage(props?: { searchParams?: Promise<Search> }) {
       VERCEL_ENV: process.env.VERCEL_ENV,
     })
   ) {
-    return <SampleToday />;
+    return <TodayClient data={sampleDay()} />;
   }
 
   const dir = localSnapshotDir({
@@ -102,19 +107,20 @@ export default function TodayPage(props?: { searchParams?: Promise<Search> }) {
 
 /**
  * The speed bump described at the top of this file. A request whose Host is not
- * the loopback address gets the same 404 as a route that is switched off: it is
+ * the loopback address is shown the not-found page and no data at all: it is
  * told nothing about what it nearly reached, and the header it sent is not
  * repeated anywhere.
+ *
+ * It may well be shown that page with a 200 rather than a 404. `app/loading.tsx`
+ * wraps this route, and once a loading fallback has rendered the server has
+ * already committed to 200 to start the stream, so a `notFound()` after an
+ * await cannot change the status any more; Next adds a noindex instead (the
+ * streaming guide, "Status codes"). The status is cosmetic here: what matters is
+ * that the owner's day is not in the response, and it is not.
  */
 async function requireLoopback(): Promise<void> {
   const host = (await headers()).get("host");
   if (!isLoopbackHost(host)) notFound();
-}
-
-/** The invented day. Behind the same speed bump, so one rule covers both modes. */
-async function SampleToday() {
-  await requireLoopback();
-  return <TodayClient data={sampleDay()} />;
 }
 
 /**

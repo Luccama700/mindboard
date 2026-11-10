@@ -276,7 +276,11 @@ const taskRowSchema = z.object({
   status: z
     .string()
     .nullish()
-    .transform((value) => value ?? ""),
+    .transform((value) =>
+      value === null || value === undefined || value.trim().length === 0
+        ? UNTITLED_EVENT
+        : value,
+    ),
   estimated_minutes: minutes,
   duration_min: minutes,
   gcal_event_id: text,
@@ -321,19 +325,38 @@ export async function readIncomeCalendarIds(dir: string, userId: string): Promis
 
 // ------------------------------------------------------- calendar-events.json
 
+/**
+ * What an event with no name is called.
+ *
+ * The same words the live reader uses (`utils/google/calendar.ts`, where a
+ * missing `summary` becomes "untitled event"), copied by value rather than
+ * imported: that module is server only and pulls the Google client and the
+ * token store in with it, and this loader reaches neither.
+ */
+const UNTITLED_EVENT = "untitled event";
+
 const eventSchema = z.object({
   id: z.string().min(1),
   summary: z
     .string()
     .nullish()
-    .transform((value) => value ?? ""),
+    // A blank one counts as missing: an empty heading says less than a word.
+    .transform((value) =>
+      value === null || value === undefined || value.trim().length === 0
+        ? UNTITLED_EVENT
+        : value,
+    ),
   start: z.string(),
   end: z.string(),
   allDay: flag,
   calendarId: z
     .string()
     .nullish()
-    .transform((value) => value ?? ""),
+    .transform((value) =>
+      value === null || value === undefined || value.trim().length === 0
+        ? UNTITLED_EVENT
+        : value,
+    ),
   location: text,
 });
 
