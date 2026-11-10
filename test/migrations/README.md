@@ -90,11 +90,17 @@ What it does:
 It exits 0 on success, 1 when a migration or the load fails (the failed file is
 named, the "before" counts are still printed), 2 for a usage error.
 
-**It never prints a row.** It prints file names, table and column names,
-constraint names, counts, and Postgres's one-line message. The `DETAIL` line,
-which quotes the failing row, is never printed, and for data exceptions
-(class `22`, such as a bad uuid) the part of the message after the colon, which
-quotes the value, is cut as well.
+**It never prints a row.** It prints file names, table, column and constraint
+names, counts, and, for errors, an allowlist. A Postgres message can quote a
+value from the data (`invalid input syntax for type uuid: "..."`,
+`value "..." is out of range for type integer`), and `DETAIL` quotes whole rows,
+so `describeError` in `harness.mjs` never prints either. An error is reduced to
+its SQLSTATE, a fixed description of it, and the table, column and constraint
+names the error object carries as separate fields, for example
+`SQLSTATE 23503 foreign key violation (table tasks, constraint tasks_group_id_fkey)`.
+Only for classes whose messages are built from object names and SQL text
+(syntax errors, undefined objects, and the like) is Postgres's own one-line
+message printed.
 
 ### Production runs `0061` differently
 
@@ -124,7 +130,8 @@ silently does nothing and the old object stays.
 
 **One cast.** The constraints query as first written,
 `c.conname || ':' || c.contype`, fails with `operator is not unique: text ||
-"char"` (it is the same in any Postgres: `text || text` through an implicit cast
-competes with `text || anynonarray`). `CATALOG_CONSTRAINTS_SQL` has
-`c.contype::text`. The string being hashed is identical, so the two sides are
-comparable, but run the cast version on production.
+"char"` on this engine (PGlite, Postgres 18): `text || text` through an implicit
+cast competes with `text || anynonarray`. It was not tried elsewhere.
+`CATALOG_CONSTRAINTS_SQL` has `c.contype::text`, which does not depend on how
+that tie is broken. The string being hashed is identical, so the two sides are
+comparable; the cast version is simply the one both sides run.

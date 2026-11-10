@@ -105,19 +105,64 @@ function migrationNumber(spec) {
 
 const padded = (n) => String(n).padStart(4, "0");
 
+// Classes of SQLSTATE whose messages are built from object names, SQL text or
+// fixed wording and never from a row value, so the message is printed as it is.
+// (Class 42 is syntax and undefined objects, 55 is object state, and so on.)
+// Everything else is an allowlist miss and is reduced to codes and names.
+const NAME_ONLY_CLASSES = new Set(["0A", "25", "2B", "3D", "3F", "40", "42", "53", "54", "55", "57", "58"]);
+
+// Fixed texts for the SQLSTATEs that carry a value in their real message.
+const FIXED_TEXT = {
+  "22001": "string data right truncation",
+  "22003": "numeric value out of range",
+  "22007": "invalid datetime format",
+  "22008": "datetime field overflow",
+  "22012": "division by zero",
+  "22P02": "invalid text representation",
+  "22P03": "invalid binary representation",
+  "22P05": "untranslatable character",
+  "22021": "invalid byte sequence for the encoding",
+  "22023": "invalid parameter value",
+  "22025": "invalid escape sequence",
+  "22030": "duplicate JSON object key value",
+  "2200L": "not a well-formed XML document",
+  "23000": "integrity constraint violation",
+  "23001": "restrict violation",
+  "23502": "not-null violation",
+  "23503": "foreign key violation",
+  "23505": "unique violation",
+  "23514": "check violation",
+  "23P01": "exclusion violation",
+};
+const CLASS_TEXT = { "22": "data exception", "23": "integrity constraint violation", P0: "error raised by a function" };
+
 /**
- * What goes in an error message. A Postgres message can quote a value from the
- * data (invalid input syntax for type uuid: "…"); the part after the colon is
- * dropped for data exceptions (class 22) so no value is ever printed. The
- * DETAIL line, which quotes whole rows, is never used.
+ * What may be printed about a Postgres error. A message can quote a value from
+ * the data (invalid input syntax for type uuid: "...", value "..." is out of
+ * range for type integer, a row in a constraint's DETAIL), so this is an
+ * allowlist: the SQLSTATE, a fixed description of it, and the table, column and
+ * constraint names the error object carries as separate fields. The message
+ * itself is used only for the name-only classes above. DETAIL, HINT and WHERE
+ * are never used.
+ *
+ * @param {any} e
+ * @param {{ table?: string }} [context] where the error happened, when the caller knows
  */
-function safeMessage(e) {
-  const message = String(e?.message ?? e).split("\n")[0];
-  if (typeof e?.code === "string" && e.code.startsWith("22")) {
-    const cut = message.indexOf(": ");
-    return cut === -1 ? message : message.slice(0, cut);
-  }
-  return message;
+export function describeError(e, context = {}) {
+  const code = typeof e?.code === "string" ? e.code : undefined;
+  const firstLine = (text) => String(text).split(/\r?\n/)[0];
+  if (!code) return firstLine(e?.message ?? e);
+  if (NAME_ONLY_CLASSES.has(code.slice(0, 2))) return firstLine(e.message ?? "");
+
+  const text = FIXED_TEXT[code] ?? CLASS_TEXT[code.slice(0, 2)] ?? "database error";
+  const where = [
+    ["table", e.table ?? context.table],
+    ["column", e.column],
+    ["constraint", e.constraint],
+  ]
+    .filter(([, name]) => typeof name === "string" && name)
+    .map(([kind, name]) => `${kind} ${name}`);
+  return `SQLSTATE ${code} ${text}${where.length ? ` (${where.join(", ")})` : ""}`;
 }
 
 function applyNeutralising(file, sql, rules) {
@@ -202,7 +247,7 @@ export async function applyMigrations(db, opts = {}) {
       } catch {
         // nothing was open
       }
-      const message = safeMessage(cause);
+      const message = describeError(cause);
       emit({ file, status: "failed", message, neutralised: hits });
       const error = new Error(`${file}: ${message}`, { cause });
       Object.assign(error, { file, code: cause?.code, constraint: cause?.constraint, table: cause?.table });
@@ -355,6 +400,7 @@ const BATCH = 500;
 export async function loadExport(db, exp) {
   /** @type {{ table: string, rows: number, placeholders: string[] }[]} */
   const loaded = [];
+  let current = "auth.users";
   await db.exec("set session_replication_role = replica");
   try {
     for (const u of exp.users) {
@@ -367,6 +413,7 @@ export async function loadExport(db, exp) {
     loaded.push({ table: "auth.users", rows: exp.users.length, placeholders: [] });
 
     for (const t of exp.tables) {
+      current = t.table;
       const { rows: meta } = await db.query(
         `select column_name, data_type, is_nullable, column_default
            from information_schema.columns where table_schema = 'public' and table_name = $1`,
@@ -405,8 +452,7 @@ export async function loadExport(db, exp) {
       loaded.push({ table: `public.${t.table}`, rows: t.data.length, placeholders });
     }
   } catch (e) {
-    const error = new Error(`loading the export: ${safeMessage(e)}`, { cause: e });
-    throw error;
+    throw new Error(`loading the export: ${describeError(e, { table: current })}`, { cause: e });
   } finally {
     await db.exec("set session_replication_role = origin");
   }

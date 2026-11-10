@@ -20,8 +20,11 @@ import {
   CATALOG_POLICIES_SQL,
   catalog,
   createDatabase,
+  describeError,
   listMigrations,
+  loadExport,
   loadSeed,
+  readExport,
   rowCounts,
   runRehearsal,
 } from "../test/migrations/harness.mjs";
@@ -126,8 +129,25 @@ function tmpDir(prefix: string): string {
   tmpDirs.push(dir);
   return dir;
 }
-afterAll(() => {
+// Every database a test opens is closed after the file, whether or not the
+// test closed it itself.
+const opened: Db[] = [];
+async function open(): Promise<Db> {
+  const db = await createDatabase();
+  opened.push(db);
+  return db;
+}
+async function clone(from: Db): Promise<Db> {
+  const db = (await from.clone()) as Db;
+  opened.push(db);
+  return db;
+}
+
+afterAll(async () => {
   for (const dir of tmpDirs) fs.rmSync(dir, { recursive: true, force: true });
+  for (const db of opened) {
+    if (!db.closed) await db.close();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -136,7 +156,7 @@ afterAll(() => {
 describe("platform stubs", () => {
   let db: Db;
   beforeAll(async () => {
-    db = await createDatabase();
+    db = await open();
   });
 
   it("has the three API roles, and only service_role bypasses row level security", async () => {
@@ -221,7 +241,7 @@ describe("listMigrations and applyMigrations options", () => {
     for (const n of [1, 2, 3, 4]) {
       fs.writeFileSync(path.join(dir, `000${n}_t${n}.sql`), `create table public.t${n} (id int);`);
     }
-    const db = await createDatabase();
+    const db = await open();
     const tables = async () =>
       (await rows<{ relname: string }>(db, "select relname from pg_class where relname ~ '^t[0-9]$' and relkind = 'r' order by 1")).map((r) => r.relname);
 
@@ -249,7 +269,7 @@ describe("a failing migration", () => {
     );
     fs.writeFileSync(path.join(dir, "0003_never.sql"), "create table public.never (id int);");
 
-    const db = await createDatabase();
+    const db = await open();
     const failure = await applyMigrations(db, { dir }).then(
       () => null,
       (e: Error) => e,
@@ -272,7 +292,7 @@ describe("a failing migration", () => {
     const dir = tmpDir("selftx");
     fs.writeFileSync(path.join(dir, "0001_tx.sql"), "begin;\ncreate table public.tx_ok (id int);\ncommit;\n");
     fs.writeFileSync(path.join(dir, "0002_tx_bad.sql"), "begin;\ncreate table public.tx_bad (id int);\nselect 1/0;\ncommit;\n");
-    const db = await createDatabase();
+    const db = await open();
     await expect(applyMigrations(db, { dir })).rejects.toThrow(/0002_tx_bad\.sql[\s\S]*division by zero/);
     const n = await rows<{ n: number }>(db, "select count(*)::int as n from pg_class where relname in ('tx_ok','tx_bad')");
     expect(n[0].n).toBe(1);
@@ -287,7 +307,7 @@ describe("every migration on an empty database", () => {
   let db: Db;
   let applied: string[] & { neutralised?: { file: string; statement: string; reason: string }[] };
   beforeAll(async () => {
-    db = await createDatabase();
+    db = await open();
     applied = await applyMigrations(db, { upTo: LAST });
   });
 
@@ -346,7 +366,7 @@ describe("every migration on an empty database", () => {
 
 describe("anon's privileges, before and after 0065", () => {
   it("holds privileges on public tables up to 0064 (the stub is realistic) and none after 0065", async () => {
-    const db = await createDatabase();
+    const db = await open();
     await applyMigrations(db, { upTo: "0064" });
 
     // Supabase's default privileges: tables arwdDxtm, sequences rwU, functions execute, to all three API roles.
@@ -387,10 +407,10 @@ describe("0056 to 0065 over existing data", () => {
   let applied: string[];
 
   beforeAll(async () => {
-    base = await createDatabase();
+    base = await open();
     await applyMigrations(base, { upTo: "0055" });
     await loadSeed(base);
-    db = (await base.clone()) as Db;
+    db = await clone(base);
     before = await rowCounts(db);
     applied = await applyMigrations(db, { from: "0056", upTo: LAST });
     after = await rowCounts(db);
@@ -482,7 +502,7 @@ describe("0056 to 0065 over existing data", () => {
   });
 
   it("also succeeds in the sequence production will run, with 0061 skipped, and leaves the same release state", async () => {
-    const prod = (await base.clone()) as Db;
+    const prod = await clone(base);
     const run = await applyMigrations(prod, { from: "0056", upTo: LAST, skip: ["0061"] });
     expect(run).toEqual(listMigrations().filter((n) => n >= "0056" && upToLast(n) && !n.startsWith("0061")));
     expect(run.neutralised).toEqual([]); // 0061 never ran, so nothing was rewritten
@@ -492,9 +512,94 @@ describe("0056 to 0065 over existing data", () => {
     await expectReleaseState(prod);
   });
 
+  it("runs the nightly prune (0061) over the seed: it removes only what its comments say, across tenants, and nothing else", async () => {
+    // plpgsql checks table and column names only when a function runs, so the
+    // function has to be called, over rows that are old, fresh and exempt.
+    const pruned = await clone(db);
+    const C = "cccccccc-0000-4000-8000-";
+    const id = (n: number) => `${C}${String(n).padStart(12, "0")}`;
+    const ago = (days: number) => `now() - interval '${days} days'`;
+    const U = { C: "dddddddd-0000-4000-8000-00000000000c", D: "dddddddd-0000-4000-8000-00000000000d", E: "dddddddd-0000-4000-8000-00000000000e", F: "dddddddd-0000-4000-8000-00000000000f" };
+    await pruned.exec(`
+      insert into public.jobs (id, user_id, kind, status, created_at) values
+        ('${id(1)}', '${A}', 'ocr', 'failed', ${ago(200)}),   -- old, terminal: goes
+        ('${id(2)}', '${A}', 'ocr', 'queued', ${ago(200)}),   -- old but queued: stays
+        ('${id(3)}', '${B}', 'ocr', 'done', ${ago(100)}),     -- other tenant, old, terminal: goes
+        ('${id(4)}', '${A}', 'ocr', 'done', ${ago(10)});      -- fresh: stays
+      insert into public.ai_audit_log (id, user_id, tool_name, input, summary, status, created_at) values
+        ('${id(11)}', '${A}', 't', '{}', 's', 'executed', ${ago(200)}),   -- goes
+        ('${id(12)}', '${A}', 't', '{}', 's', 'proposed', ${ago(200)}),   -- live state, never pruned
+        ('${id(13)}', '${B}', 't', '{}', 's', 'rejected', ${ago(10)}),    -- fresh
+        ('${id(14)}', '${A}', 't', '{}', 's', 'executing', ${ago(179)}),  -- inside the window
+        ('${id(15)}', '${B}', 't', '{}', 's', 'error', ${ago(181)});      -- other tenant, goes
+      insert into public.urc_jobs (id, user_id, device_id, folder_key, status, confirmed_auth, created_at) values
+        ('${id(21)}', '${A}', 'aaaaaaaa-0000-4000-8000-000000000801', 'notes', 'stopped', 'oauth:invented', ${ago(31)}),   -- goes
+        ('${id(22)}', '${B}', 'bbbbbbbb-0000-4000-8000-000000000801', 'garden', 'failed', 'oauth:invented', ${ago(40)}),  -- goes
+        ('${id(23)}', '${A}', 'aaaaaaaa-0000-4000-8000-000000000801', 'notes', 'stopped', 'oauth:invented', ${ago(29)});  -- stays
+      insert into public.urc_log (id, user_id, job_id, event, at) values
+        ('${id(31)}', '${A}', null, 'expired', ${ago(91)}),       -- goes
+        ('${id(32)}', '${B}', null, 'expired', ${ago(89)}),       -- stays
+        ('${id(33)}', '${A}', '${id(21)}', 'stopped', ${ago(10)}); -- stays, loses its job link
+      insert into auth.users (id, email, last_sign_in_at) values
+        ('${U.C}', 'c@example.test', ${ago(200)}),
+        ('${U.D}', 'd@example.test', ${ago(5)}),
+        ('${U.E}', 'e@example.test', null),
+        ('${U.F}', 'f@example.test', null);
+      insert into public.google_tokens (user_id, access_token, refresh_token, expires_at, scopes, updated_at) values
+        ('${U.C}', 'x', 'x', now(), 's', ${ago(200)}),   -- unused for 180 days on both signals: goes
+        ('${U.D}', 'x', 'x', now(), 's', ${ago(200)}),   -- token stale but signed in lately: stays
+        ('${U.E}', 'x', 'x', now(), 's', ${ago(5)}),     -- token fresh: stays
+        ('${U.F}', 'x', 'x', now(), 's', ${ago(200)});   -- stale token, never signed in: goes
+    `);
+    const before = await rowCounts(pruned);
+    const ids = async (table: string, col = "id") =>
+      (await rows<Record<string, string>>(pruned, `select ${col} as k from public.${table} order by 1`)).map((r) => r.k);
+
+    const [first] = await rows<{ r: Record<string, number> }>(pruned, "select public.prune_retained_rows() as r");
+    expect(first.r).toEqual({ jobs: 3, ai_audit_log: 2, urc_jobs: 2, urc_log: 1, google_tokens: 2 });
+
+    expect(await ids("jobs")).toEqual(
+      ["aaaaaaaa-0000-4000-8000-000000000502", "bbbbbbbb-0000-4000-8000-000000000501", id(2), id(4)].sort(),
+    );
+    expect(await ids("ai_audit_log")).toEqual(
+      ["aaaaaaaa-0000-4000-8000-000000000621", "aaaaaaaa-0000-4000-8000-000000000622", "bbbbbbbb-0000-4000-8000-000000000621", id(12), id(13), id(14)].sort(),
+    );
+    expect(await ids("urc_jobs")).toEqual(
+      ["aaaaaaaa-0000-4000-8000-000000000811", "aaaaaaaa-0000-4000-8000-000000000812", "bbbbbbbb-0000-4000-8000-000000000811", id(23)].sort(),
+    );
+    expect(await ids("urc_log")).toEqual(
+      ["aaaaaaaa-0000-4000-8000-000000000821", "bbbbbbbb-0000-4000-8000-000000000821", id(32), id(33)].sort(),
+    );
+    expect(await ids("google_tokens", "user_id")).toEqual([A, B, U.D, U.E].sort());
+    // the event history outlives the job it pointed at
+    expect((await rows(pruned, "select job_id from public.urc_log where id = $1", [id(33)]))[0]).toEqual({ job_id: null });
+
+    // nothing the user can see in the product is touched: only the five operational tables changed, by exactly what was returned
+    const after = await rowCounts(pruned);
+    const changed = Object.fromEntries(
+      Object.keys(after).filter((t) => after[t] !== before[t]).map((t) => [t, after[t] - before[t]]),
+    );
+    expect(changed).toEqual({
+      "public.jobs": -3,
+      "public.ai_audit_log": -2,
+      "public.urc_jobs": -2,
+      "public.urc_log": -1,
+      "public.google_tokens": -2,
+    });
+
+    // a second run has nothing left to do
+    const [second] = await rows<{ r: Record<string, number> }>(pruned, "select public.prune_retained_rows() as r");
+    expect(second.r).toEqual({ jobs: 0, ai_audit_log: 0, urc_jobs: 0, urc_log: 0, google_tokens: 0 });
+
+    // and a signed-in client cannot call it
+    await asUser(pruned, A, async () => {
+      await expect(pruned.query("select public.prune_retained_rows()")).rejects.toThrow(/permission denied/);
+    });
+  });
+
   it("is where an existing row that breaks a new constraint shows up, by file name (the point of this harness)", async () => {
     // Tenant A's task filed under tenant B's group: legal under 0001's foreign key, illegal under 0064's.
-    const poisoned = (await base.clone()) as Db;
+    const poisoned = await clone(base);
     await poisoned.query(
       "insert into public.tasks (user_id, group_id, title) values ($1, 'bbbbbbbb-0000-4000-8000-000000000101', 'misfiled')",
       [A],
@@ -522,14 +627,14 @@ describe("neutralised statements", () => {
   it("does not touch the same statement in any other file", async () => {
     const dir = tmpDir("other-ext");
     fs.writeFileSync(path.join(dir, "0001_ext.sql"), "create extension if not exists pg_cron with schema pg_catalog;\n");
-    const db = await createDatabase();
+    const db = await open();
     await expect(applyMigrations(db, { dir })).rejects.toThrow(/0001_ext\.sql/);
   });
 
   it("refuses to carry on if the named file stops containing the statement", async () => {
     const dir = tmpDir("stale-rule");
     fs.writeFileSync(path.join(dir, "0061_retention_prune.sql"), "select 1;\n");
-    const db = await createDatabase();
+    const db = await open();
     await expect(applyMigrations(db, { dir })).rejects.toThrow(/0061_retention_prune\.sql[\s\S]*no longer/);
   });
 });
@@ -649,6 +754,126 @@ describe("rehearsal command line", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 6, continued. An error from real data never carries a value from it.
+// ---------------------------------------------------------------------------
+describe("errors from loading real data", () => {
+  const TASK = "11111111-0000-4000-8000-0000000000a1";
+  const OTHER = "11111111-0000-4000-8000-0000000000a2";
+  let base55: Db;
+  beforeAll(async () => {
+    base55 = await open();
+    await applyMigrations(base55, { upTo: "0055" });
+  });
+
+  // Rewrites tasks.json of a valid export with `mutate`, loads it, and returns what the error says.
+  async function loadFailure(mutate: (rowsOfTasks: Record<string, unknown>[]) => void): Promise<string> {
+    const dir = tmpDir("export-bad-row");
+    writeExport(dir);
+    const file = path.join(dir, "tasks.json");
+    const tasks = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>[];
+    mutate(tasks);
+    fs.writeFileSync(file, JSON.stringify(tasks));
+    const db = await clone(base55);
+    const failure = await loadExport(db, readExport(dir)).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(failure, "the load should have failed").toBeInstanceOf(Error);
+    expect(((await rows(db, "show session_replication_role"))[0] as { session_replication_role: string }).session_replication_role).toBe("origin");
+    return failure!.message;
+  }
+
+  it("reduces an unparseable uuid to its SQLSTATE and the table", async () => {
+    const message = await loadFailure((t) => {
+      t[0].id = "NOT-A-UUID-sentinel-7q2";
+    });
+    expect(message).toContain("22P02");
+    expect(message).toContain("tasks");
+    expect(message).not.toMatch(/sentinel|7q2|NOT-A-UUID/);
+  });
+
+  it.each([
+    ["a string", "73737373737"],
+    ["a number", 73737373737],
+  ])("reduces an out-of-range integer given as %s (a message with no colon in it) to its SQLSTATE and the table", async (_kind, value) => {
+    const message = await loadFailure((t) => {
+      t[0].duration_min = value;
+    });
+    expect(message).toContain("22003");
+    expect(message).toContain("tasks");
+    expect(message).not.toContain("73737373737");
+  });
+
+  it("reduces a duplicate key to the SQLSTATE, table and constraint, without the key", async () => {
+    const message = await loadFailure((t) => {
+      t[1].id = t[0].id;
+    });
+    expect(message).toContain("23505");
+    expect(message).toContain("tasks_pkey");
+    expect(message).not.toContain(TASK);
+    expect(message).not.toContain(OTHER);
+  });
+
+  it("reduces a check violation to the SQLSTATE, table and constraint, without the value", async () => {
+    const message = await loadFailure((t) => {
+      t[0].status = "weird-sentinel-9z";
+    });
+    expect(message).toContain("23514");
+    expect(message).toContain("tasks_status_check");
+    expect(message).not.toMatch(/weird|sentinel|9z|SENTINEL-task-title/);
+  });
+
+  it("reduces a not-null violation to the SQLSTATE, table and column, without the row", async () => {
+    const message = await loadFailure((t) => {
+      for (const row of t) delete row.title;
+    });
+    expect(message).toContain("23502");
+    expect(message).toContain("title");
+    expect(message).not.toMatch(/SENTINEL|No group|redacted/);
+    expect(message).not.toContain(GROUP_1);
+  });
+
+  describe("describeError", () => {
+    const quoted = [
+      { code: "22003", message: 'value "99999999999" is out of range for type integer' },
+      { code: "22003", message: '"1e999" is out of range for type double precision' },
+      { code: "22P02", message: 'invalid input syntax for type uuid: "99999999999"' },
+      { code: "22001", message: "value too long for type character varying(5)", detail: "99999999999" },
+      { code: "22XYZ", message: 'an unlisted data exception quoting "99999999999"' },
+      { code: "23505", message: 'duplicate key value violates unique constraint "t_pkey"', detail: "Key (id)=(99999999999) already exists." },
+      { code: "P0001", message: "bad row 99999999999" },
+      { code: "XX000", message: "should not happen 99999999999" },
+    ];
+    it.each(quoted)("never prints a value from %j", (err) => {
+      const text = describeError({ ...err, table: "t" });
+      expect(text).toContain(`SQLSTATE ${err.code}`);
+      expect(text).not.toContain("99999999999");
+      expect(text).not.toContain("1e999");
+    });
+
+    it("keeps table, column and constraint names from their own fields, and falls back to the caller's table", () => {
+      expect(describeError({ code: "23503", message: "m", table: "tasks", constraint: "tasks_group_id_fkey" })).toBe(
+        "SQLSTATE 23503 foreign key violation (table tasks, constraint tasks_group_id_fkey)",
+      );
+      expect(describeError({ code: "23502", message: "m", table: "tasks", column: "title" })).toBe(
+        "SQLSTATE 23502 not-null violation (table tasks, column title)",
+      );
+      expect(describeError({ code: "22003", message: 'value "1" is out of range' }, { table: "groups" })).toBe(
+        "SQLSTATE 22003 numeric value out of range (table groups)",
+      );
+    });
+
+    it("prints Postgres's own message for classes built from names and SQL text", () => {
+      expect(describeError({ code: "42P01", message: 'relation "public.no_such_table" does not exist' })).toBe(
+        'relation "public.no_such_table" does not exist',
+      );
+      expect(describeError({ code: "22012", message: "division by zero" })).toContain("division by zero");
+      expect(describeError(new Error("not a database error\nsecond line"))).toBe("not a database error");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Catalog fingerprints, for comparing the files with production
 // ---------------------------------------------------------------------------
 describe("catalog mode", () => {
@@ -661,14 +886,14 @@ describe("catalog mode", () => {
     expect(CATALOG_CONSTRAINTS_SQL).toBe(CATALOG_CONSTRAINTS_SQL_AS_DISPATCHED.replace("|| c.contype,", "|| c.contype::text,"));
     expect(CATALOG_CONSTRAINTS_SQL).not.toBe(CATALOG_CONSTRAINTS_SQL_AS_DISPATCHED);
 
-    const db = await createDatabase();
-    await expect(db.query(CATALOG_CONSTRAINTS_SQL_AS_DISPATCHED)).rejects.toThrow(/operator is not unique: text \|\| "char"/);
+    const db = await open();
+    await expect(db.query(CATALOG_CONSTRAINTS_SQL_AS_DISPATCHED)).rejects.toThrow(/not unique/i);
     await db.query(CATALOG_CONSTRAINTS_SQL);
     await db.close();
   });
 
   it("prints two JSON arrays and nothing else, the same as the in-process fingerprints", async () => {
-    const db = await createDatabase();
+    const db = await open();
     await applyMigrations(db, { upTo: LAST });
     const expected = await catalog(db);
     const tasks = expected.constraints.find((c) => c.t === "tasks")!;
