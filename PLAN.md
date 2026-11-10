@@ -393,6 +393,7 @@ Environment names used from here on (values live in the host's settings, never i
 ## Next after this plan
 
 - **Live Today.** `app/v2/today/page.tsx` gets its live branch: a signed-in account whose `v2_rules.enabled` is true reads its day through the stores (session client, select-own policies) and the same `buildTodayView`. Start, Done, Not today and the energy options become server actions that go through the same effect code as a Telegram answer. The old app's capture dock and tour buttons must not show on the new screen.
+- **A go-live script.** Nothing yet writes an account's rules document, lanes and feed expectations, makes a pairing code, or sets `v2_rules.enabled`. `users.save`, the expectation writer and `createPairingCode` have tests and no caller. One script, run by the operator with the values shown before they are written, and never part of a request path. The engine is not switched on for an account before Live Today ships: until then nothing can mark a block as started.
 - **More probes.** The morning brief, the diary and the collector each leave a note in the vault. A probe that looks for today's note turns each into a feed the watchdog can judge.
 - **The outside check.** A small script in the owner's Google account that reads `/api/v2/status` every 15 minutes and sends an email when it is stale or unreachable.
 - **A run against a real database.** `store/supabase.ts` has only ever been type-checked and reviewed. Its first run must be against a staging project or a watched first tick.
