@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "vitest";
 
-import { zonedClock } from "@/app/lib/snapshots/zoned-time";
+import { zonedClock, zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import { parseRules } from "@/app/lib/v2/rules";
 import { dayWindow } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
@@ -559,9 +559,11 @@ describe("behaviour 4: demand, in order", () => {
         ],
       }),
     );
+    // The floor outranks the small block, so it takes the start of the window
+    // and the side quest follows it.
     expect(out.blocks.map((b) => [b.kind, b.taskId, shape(b)])).toEqual([
-      ["small", "s1", "small 09:00-09:10"],
-      ["floor", "step", "floor 09:20-09:45"],
+      ["floor", "step", "floor 09:00-09:25"],
+      ["small", "s1", "small 09:35-09:45"],
     ]);
     expect(out.dropped).toEqual([
       { candidateId: "s2", reason: "capacity" },
@@ -710,6 +712,52 @@ describe("behaviour 6: the floor", () => {
     );
     expect(out.blocks.map((b) => [b.kind, shape(b)])).toEqual([
       ["session", "session 22:55-23:00"],
+    ]);
+    expect(out.dropped).toEqual([]);
+  });
+
+  test("behaviour 6: the floor outranks every optional block when one gap is left", () => {
+    // One free gap, 12:10 to 12:40. The top candidate's own 50 minute block
+    // does not fit it, and a 10 minute side quest would leave too little for
+    // the floor, so the gap belongs to the floor.
+    const fixed = [
+      event({ id: "class", start: utc("08:00"), end: utc("12:00") }),
+      event({ id: "shift", start: utc("12:50"), end: utc("23:30") }),
+    ];
+    const out = planDay(
+      input({
+        rules: parseRules({ capacity: { good: { small: 1 } } }),
+        energy: "good",
+        fixed,
+        candidates: [
+          candidate({ id: "a-top", lane: "lane-a" }),
+          candidate({ id: "q", kind: "side", minutes: 10 }),
+        ],
+      }),
+    );
+    expect(out.blocks.map((b) => [b.kind, b.taskId, shape(b)])).toEqual([
+      ["floor", "a-top", "floor 12:10-12:35"],
+    ]);
+    expect(out.dropped).toEqual([{ candidateId: "q", reason: "no-room" }]);
+    assertNoOverlap(out, fixed);
+  });
+
+  test("the hold is given back when the top candidate gets a real block", () => {
+    // The same two candidates on an empty day: the top one takes the start of
+    // the window itself, so holding a span for the floor costs nothing.
+    const out = planDay(
+      input({
+        rules: parseRules({ capacity: { good: { small: 1 } } }),
+        energy: "good",
+        candidates: [
+          candidate({ id: "a-top", lane: "lane-a" }),
+          candidate({ id: "q", kind: "side", minutes: 10 }),
+        ],
+      }),
+    );
+    expect(out.blocks.map((b) => [b.kind, b.taskId, shape(b)])).toEqual([
+      ["focus", "a-top", "focus 09:00-09:50"],
+      ["small", "q", "small 10:00-10:10"],
     ]);
     expect(out.dropped).toEqual([]);
   });
@@ -1073,6 +1121,54 @@ describe("behaviour 11: the day being planned, not the clock", () => {
       ["touch", "early-touch", DATE],
     ]);
   });
+
+  test("the reference does not slip back across midnight", () => {
+    // x and z share a lane, and the lane allows one block a day. x is inside
+    // the hard window measured from the planned day's start, which exempts it
+    // from that limit. Taking `now` instead whenever it is the same day made
+    // the exemption vanish at 00:00 and come back at wake, so x's block was
+    // removed and then returned to the very same slot.
+    const candidates = [
+      candidate({
+        id: "x",
+        lane: "lane-a",
+        hard: true,
+        due: "2026-03-14T08:30:00+00:00",
+        earlyTouchDone: true,
+      }),
+      candidate({
+        id: "z",
+        lane: "lane-a",
+        hard: true,
+        due: utc("12:00", "2026-03-12"),
+        earlyTouchDone: true,
+      }),
+    ];
+
+    let existing: Block[] = [];
+    const seen: string[][] = [];
+    for (const now of [
+      utc("23:50", "2026-03-10"),
+      utc("00:10", TOMORROW),
+      utc("08:50", TOMORROW),
+      utc("09:30", TOMORROW),
+    ]) {
+      const out = planDay(
+        input({ date: TOMORROW, now, candidates, existing }),
+      );
+      const x = out.blocks.find((b) => b.taskId === "x");
+      seen.push([now, x === undefined ? "gone" : shape(x)]);
+      expect(out.removed, now).toEqual([]);
+      expect(out.dropped, now).toEqual([]);
+      existing = out.blocks;
+    }
+    expect(seen).toEqual([
+      [utc("23:50", "2026-03-10"), "focus 10:00-10:50"],
+      [utc("00:10", TOMORROW), "focus 10:00-10:50"],
+      [utc("08:50", TOMORROW), "focus 10:00-10:50"],
+      [utc("09:30", TOMORROW), "focus 10:00-10:50"],
+    ]);
+  });
 });
 
 describe("whole-day invariants", () => {
@@ -1263,6 +1359,101 @@ describe("whole-day invariants", () => {
       expect(again.removed, where).toEqual([]);
       expect(JSON.stringify(planDay(base)), where).toBe(JSON.stringify(out));
     }
+  });
+
+  // The sweep above varies the inputs at one instant. This one varies the
+  // clock: it walks `now` across two days in ten minute steps, replanning the
+  // current day and tomorrow's draft off their own last output. It is what
+  // catches a classification that slips backwards as time passes, which is how
+  // a block came to be removed at midnight and returned at wake.
+  test("replanning every ten minutes across two days never oscillates", () => {
+    const rules = parseRules({
+      gym: { perWeek: 2, minutes: 60, notBefore: "16:00" },
+      incomeTarget: { lane: "lane-income", weeklyHours: 10, blockMinutes: 120 },
+      capacity: { good: { blocks: 4, small: 1 } },
+    });
+    const candidates = [
+      // Two hard items on one lane: the lane limit bites unless the hard
+      // window exempts them, which is the classification that used to slip.
+      candidate({
+        id: "x",
+        lane: "lane-a",
+        hard: true,
+        due: "2026-03-14T08:30:00+00:00",
+        earlyTouchDone: true,
+      }),
+      candidate({
+        id: "z",
+        lane: "lane-a",
+        hard: true,
+        due: utc("12:00", "2026-03-12"),
+        earlyTouchDone: true,
+      }),
+      candidate({
+        id: "t",
+        lane: "lane-c",
+        hard: true,
+        due: utc("20:00", "2026-03-13"),
+      }),
+      candidate({ id: "s", lane: "lane-b" }),
+      candidate({ id: "q", kind: "side", minutes: 10 }),
+    ];
+    const fixed = [
+      event({ id: "class-10", start: utc("10:00"), end: utc("12:00") }),
+      event({
+        id: "shift-11",
+        start: utc("14:00", "2026-03-11"),
+        end: utc("18:00", "2026-03-11"),
+        countsTowardCap: true,
+      }),
+    ];
+
+    const state = new Map<string, Block[]>();
+    // Each date remembers every block id it has removed. Nothing about this
+    // walk changes except the clock, and the reference instant only ever moves
+    // forward, so a block that leaves the plan has no way back: a return is
+    // oscillation, whether or not it lands on its old slot. (Asserting only
+    // the old slot is too weak to catch it, because the blocks after the gap
+    // shift earlier to fill it and the returning one then lands elsewhere.)
+    const gone = new Map<string, Set<string>>();
+
+    const first = Date.parse(utc("04:00"));
+    const last = Date.parse(utc("04:00", "2026-03-12"));
+    for (let ms = first; ms <= last; ms += 10 * 60_000) {
+      const now = new Date(ms).toISOString();
+      const todayKey = zonedDateKey(ms, "UTC");
+      for (const date of [todayKey, zonedDateKey(ms + 86_400_000, "UTC")]) {
+        const existing = state.get(date) ?? [];
+        const out = planDay(
+          input({ date, now, rules, energy: "good", fixed, candidates, existing }),
+        );
+        const where = `${now} planning ${date}`;
+
+        const ids = out.blocks.map((b) => b.id);
+        expect(new Set(ids).size, where).toBe(ids.length);
+        assertNoOverlap(out, fixed);
+        for (const block of out.blocks) {
+          expect(Date.parse(block.end), where).toBeGreaterThan(
+            Date.parse(block.start),
+          );
+        }
+
+        const history = gone.get(date) ?? new Set<string>();
+        for (const block of out.blocks) {
+          expect(
+            history.has(block.id),
+            `${where}: ${block.id} came back after being removed`,
+          ).toBe(false);
+        }
+        for (const entry of out.removed) history.add(entry.blockId);
+        gone.set(date, history);
+        state.set(date, out.blocks);
+      }
+    }
+
+    // The walk has to have produced something, or it proves nothing.
+    expect((state.get(DATE) ?? []).length).toBeGreaterThan(0);
+    expect((state.get("2026-03-11") ?? []).length).toBeGreaterThan(0);
   });
 
   test("works in UTC, America/Phoenix and Asia/Tokyo", () => {

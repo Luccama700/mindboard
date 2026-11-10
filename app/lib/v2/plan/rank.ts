@@ -18,7 +18,7 @@
 // in planner.ts where the answered energy is known.
 
 import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
-import { instantMs, maybeInstantMs } from "@/app/lib/v2/plan/day";
+import { compareText, instantMs, maybeInstantMs } from "@/app/lib/v2/plan/day";
 import type { Candidate, Instant, PlannerRules } from "@/app/lib/v2/types";
 
 export type CandidateTier = "due-today" | "hard-window" | "lane-step" | "side";
@@ -96,6 +96,6 @@ export function rankCandidates(
       }
       const byClock = compare(clockKey(a), clockKey(b));
       if (byClock !== 0) return byClock;
-      return a.candidate.id.localeCompare(b.candidate.id);
+      return compareText(a.candidate.id, b.candidate.id);
     });
 }

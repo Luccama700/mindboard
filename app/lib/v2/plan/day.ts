@@ -40,6 +40,28 @@ const MINUTES_PER_DAY = 1_440;
 /** An end-of-day wall time earlier than this belongs to the next day. */
 const NEXT_DAY_BEFORE = 6 * 60;
 
+/**
+ * Code point order, never locale order. Every tie-break in the engine goes
+ * through this: the planner runs in the browser and on the server, and their
+ * Intl collations differ, so `localeCompare` would let the same input produce
+ * two different plans.
+ */
+export function compareText(a: string, b: string): number {
+  if (a === b) return 0;
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    const left = a.codePointAt(i) as number;
+    const right = b.codePointAt(j) as number;
+    if (left !== right) return left < right ? -1 : 1;
+    i += left > 0xffff ? 2 : 1;
+    j += right > 0xffff ? 2 : 1;
+  }
+  const restA = a.length - i;
+  const restB = b.length - j;
+  return restA === restB ? 0 : restA < restB ? -1 : 1;
+}
+
 /** Minutes past local midnight of a "HH:MM" wall time. */
 export function wallMinutes(time: WallTime): number {
   const [hour, minute] = time.split(":").map(Number);
@@ -296,6 +318,6 @@ export function leaveByFor(
     out.push({ fixedId: event.id, at: isoOf(ms, rules), ms });
   }
   return out
-    .sort((a, b) => a.ms - b.ms || a.fixedId.localeCompare(b.fixedId))
+    .sort((a, b) => a.ms - b.ms || compareText(a.fixedId, b.fixedId))
     .map(({ fixedId, at }) => ({ fixedId, at }));
 }

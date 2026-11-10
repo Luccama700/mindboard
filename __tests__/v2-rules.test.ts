@@ -165,6 +165,24 @@ describe("parseRules", () => {
     ).toThrow();
   });
 
+  test("throws on a date that does not exist", () => {
+    // Well-shaped and impossible: left alone it would quietly become 03-03.
+    expect(() =>
+      parseRules({ capExemptRanges: [{ from: "2026-02-01", to: "2026-02-31" }] }),
+    ).toThrow();
+    expect(() =>
+      parseRules({ capExemptRanges: [{ from: "2026-02-29", to: "2026-03-01" }] }),
+    ).toThrow();
+    expect(() =>
+      parseRules({ capExemptRanges: [{ from: "2026-04-31", to: "2026-05-01" }] }),
+    ).toThrow();
+    // A real leap day is fine.
+    expect(
+      parseRules({ capExemptRanges: [{ from: "2028-02-29", to: "2028-03-01" }] })
+        .capExemptRanges[0].from,
+    ).toBe("2028-02-29");
+  });
+
   test("throws on an unknown time zone", () => {
     expect(() => parseRules({ timeZone: "Mars/Olympus" })).toThrow();
     expect(() => parseRules({ timeZone: "" })).toThrow();

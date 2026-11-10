@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 
+import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import type { PlannerRules } from "@/app/lib/v2/types";
 
 export const DEFAULT_RULES: PlannerRules = {
@@ -60,6 +61,14 @@ const WALL_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 /** "YYYY-MM-DD", with the month and day ranges checked. */
 const DATE_KEY = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
+// The shape is not enough: "2026-02-31" matches the pattern and would silently
+// become 2026-03-03 the first time anything did arithmetic on it. A real date
+// is one that survives the round trip.
+function isRealDate(value: string): boolean {
+  const [year, month, day] = value.split("-").map(Number);
+  return zonedDateKey(Date.UTC(year, month - 1, day), "UTC") === value;
+}
+
 function isKnownZone(value: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: value });
@@ -70,7 +79,10 @@ function isKnownZone(value: string): boolean {
 }
 
 const wallTime = z.string().regex(WALL_TIME, "expected a wall time like 09:30");
-const dateKey = z.string().regex(DATE_KEY, "expected a date key like 2026-03-08");
+const dateKey = z
+  .string()
+  .regex(DATE_KEY, "expected a date key like 2026-03-08")
+  .refine(isRealDate, "expected a date that exists");
 const timeZone = z
   .string()
   .refine(isKnownZone, "expected an IANA time zone like America/New_York");
