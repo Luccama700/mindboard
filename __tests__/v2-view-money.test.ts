@@ -141,6 +141,11 @@ describe("it says how old it is first", () => {
     );
   });
 
+  test("is zero days and not stale when the desk shows a day before the last line", () => {
+    const age = moneyAge({ ...base(), ledgerLastOn: shiftDateKey(TODAY, 5) });
+    expect(age).toEqual({ days: 0, stale: false, line: null });
+  });
+
   test("says no transaction was recorded at all for an empty ledger", () => {
     const age = moneyAge({ ...base(), ledgerLastOn: null, rows: [] });
     expect(age.days).toBeNull();
@@ -221,6 +226,50 @@ describe("the forecast is the source's own", () => {
     expect(cells.find((cell) => cell.date === "2026-03-20")?.dayOfMonth).toBe(20);
   });
 
+  test("counts the span in calendar days, drawing a day the source skipped with no balance", () => {
+    // No row for Monday 16 March, and a firm day just past the 14 day window.
+    const holed = patchDay(
+      { ...base(), forecast: base().forecast.filter((day) => day.date !== "2026-03-16") },
+      "2026-03-25",
+      { inflow: 2000 },
+    );
+    const view = buildForecastView(holed, 14);
+    expect(view.list).toHaveLength(14);
+    expect(view.list[13].date).toBe("2026-03-24");
+    const hole = view.list.find((cell) => cell.date === "2026-03-16");
+    expect(hole).toMatchObject({ inRange: true, balance: null, marks: [], low: false, negative: false });
+    expect(view.lowest?.date).toBe("Tuesday 24 March");
+    // The day past the window is in neither pane.
+    expect(view.list.some((cell) => cell.date === "2026-03-25")).toBe(false);
+    expect(buildComingView(holed, 14).items).toEqual([]);
+  });
+
+  test("draws the days past the source's last row in range with no balance", () => {
+    const view = buildForecastView({ ...base(), forecast: series(TODAY, 10) }, 14);
+    expect(view.list).toHaveLength(14);
+    expect(view.list.slice(10).map((cell) => cell.balance)).toEqual([null, null, null, null]);
+    expect(view.list.slice(10).every((cell) => cell.inRange && !cell.low)).toBe(true);
+    // The lowest is the last day that has a row, never a day without one.
+    expect(view.lowest?.date).toBe("Friday 20 March");
+  });
+
+  // The rule: rows are put in date order first, and of two rows for one day the
+  // one the source sent first is kept.
+  test("keeps the row the source sent first when a day comes twice", () => {
+    const extra = row("2026-03-20", 1, { outflow: 50 });
+    const first = buildForecastView({ ...base(), forecast: [extra, ...base().forecast] }, 14);
+    expect(first.list.find((cell) => cell.date === "2026-03-20")).toMatchObject({
+      balance: "1",
+      marks: [{ kind: "out", label: "Phone 50" }],
+    });
+    const last = buildForecastView({ ...base(), forecast: [...base().forecast, extra] }, 14);
+    // The series' own row: 5,000 less 30 a day from Monday 9 March.
+    expect(last.list.find((cell) => cell.date === "2026-03-20")).toMatchObject({
+      balance: "4,670",
+      marks: [],
+    });
+  });
+
   test("keeps date order and one row per day whatever order the source sent", () => {
     const data = marked();
     const shuffled = {
@@ -288,6 +337,44 @@ describe("marks are only what is firm", () => {
 
   test("matches the day as a whole number, so day 8 is not day 28", () => {
     expect(cellOn("2026-04-08")?.marks).toEqual([{ kind: "out", label: "Bill 40" }]);
+  });
+
+  /** The one mark on `date` when a single 70 bill with this schedule exists. */
+  const billMark = (schedule: string, date: string, today: string = TODAY) => {
+    const data: MoneyScreenData = {
+      ...base(),
+      today,
+      forecast: series(today, 60),
+      bills: [{ id: "b-only", name: "Water", amount: 70, schedule }],
+    };
+    return buildForecastView(patchDay(data, date, { outflow: 70 }), 60).list.find(
+      (cell) => cell.date === date,
+    )?.marks;
+  };
+
+  test("names a bill only by the monthly phrase, whatever numbers another schedule holds", () => {
+    const every14 = "every 14 days from 2026-03-01";
+    expect(billMark(every14, "2026-03-14")).toEqual([{ kind: "out", label: "Bill 70" }]);
+    expect(billMark(every14, "2026-04-03")).toEqual([{ kind: "out", label: "Bill 70" }]);
+    expect(billMark(every14, "2026-04-01")).toEqual([{ kind: "out", label: "Bill 70" }]);
+    expect(billMark("every 2 weeks", "2026-04-02")).toEqual([{ kind: "out", label: "Bill 70" }]);
+    expect(billMark("bimonthly on day 5", "2026-04-05")).toEqual([{ kind: "out", label: "Bill 70" }]);
+    expect(billMark("monthly on day 123", "2026-04-12")).toEqual([{ kind: "out", label: "Bill 70" }]);
+  });
+
+  test("reads the monthly phrase in any case and anywhere in the schedule", () => {
+    expect(billMark("Monthly On Day 20", "2026-03-20")).toEqual([{ kind: "out", label: "Water 70" }]);
+    expect(billMark("paid monthly on day 5 by card", "2026-04-05")).toEqual([
+      { kind: "out", label: "Water 70" },
+    ]);
+    expect(billMark("monthly on day 05", "2026-04-05")).toEqual([{ kind: "out", label: "Water 70" }]);
+  });
+
+  test("uses the plain word for a bill moved off a day the month does not have", () => {
+    expect(billMark("monthly on day 31", "2026-04-30")).toEqual([{ kind: "out", label: "Bill 70" }]);
+    expect(billMark("monthly on day 29", "2027-02-28", "2027-02-20")).toEqual([
+      { kind: "out", label: "Bill 70" },
+    ]);
   });
 
   test("gives one mark each way on a day with both, money in first", () => {
@@ -382,25 +469,45 @@ describe("the accounts", () => {
   test("lists each account in the source's order with the sum as the total", () => {
     const view = buildAccountsView(base(), "UTC");
     expect(view.accounts).toEqual([
-      { id: "acc-every", name: "Everyday", kind: "checking", balance: "1,500", negative: false },
-      { id: "acc-save", name: "Savings", kind: "savings", balance: "3,000", negative: false },
-      { id: "acc-card", name: "Card", kind: "credit", balance: "-201", negative: true },
+      { id: "acc-every", name: "Everyday", kind: "checking", balance: "1,500", currency: "USD", negative: false },
+      { id: "acc-save", name: "Savings", kind: "savings", balance: "3,000", currency: "USD", negative: false },
+      { id: "acc-card", name: "Card", kind: "credit", balance: "-201", currency: "USD", negative: true },
     ]);
     // 1,500 + 3,000 - 200.75 = 4,299.25.
     expect(view.total).toBe("4,299");
+    expect(view.totalNote).toBeNull();
     expect(view.currency).toBe("USD");
     expect(view.empty).toBe(false);
   });
 
-  test("totals the balances, tenths and all", () => {
-    const accounts = [0.1, 0.2, 0.2].map((balance, index) => ({
+  const jars = (balances: number[], currency = "USD") =>
+    balances.map((balance, index) => ({
       id: `a${index}`,
       name: `Jar ${index}`,
       kind: "savings",
       balance,
-      currency: "USD",
+      currency,
     }));
-    expect(buildAccountsView({ ...base(), accounts }, "UTC").total).toBe("1");
+
+  // 0.1 + 0.7 - 0.3 is 0.49999999999999994 in floats, which prints "0"; in
+  // whole cents it is 50, which prints "1". The total must be the second.
+  test("adds the balances in whole cents, not in floats", () => {
+    const balances = [0.1, 0.7, -0.3];
+    expect(formatAmount(balances.reduce((sum, value) => sum + value, 0))).toBe("0");
+    expect(buildAccountsView({ ...base(), accounts: jars(balances) }, "UTC").total).toBe("1");
+  });
+
+  test("adds nothing up when the accounts are in more than one currency, and says so", () => {
+    const accounts = [...jars([100, 200]), { ...jars([300])[0], id: "a-eur", currency: "EUR" }];
+    const view = buildAccountsView({ ...base(), accounts }, "UTC");
+    expect(view.total).toBeNull();
+    expect(view.totalNote).toBe(MONEY_COPY.mixedCurrencies);
+    expect(view.accounts.map((account) => account.currency)).toEqual(["USD", "USD", "EUR"]);
+  });
+
+  test("names the accounts' own currency when they share one", () => {
+    const view = buildAccountsView({ ...base(), currency: "USD", accounts: jars([100, 250], "EUR") }, "UTC");
+    expect(view).toMatchObject({ total: "350", totalNote: null, currency: "EUR" });
   });
 
   test("says when the source read them, as a day, a month and a clock in the desk's zone", () => {
@@ -410,7 +517,7 @@ describe("the accounts", () => {
 
   test("is empty with no accounts", () => {
     const view = buildAccountsView({ ...base(), accounts: [] }, "UTC");
-    expect(view).toMatchObject({ empty: true, accounts: [], total: "0" });
+    expect(view).toMatchObject({ empty: true, accounts: [], total: "0", totalNote: null, currency: "USD" });
   });
 });
 
@@ -585,6 +692,24 @@ describe("hours come from the planner's own numbers", () => {
     expect(view.cap).toEqual({ hours: 30, used: 33, label: "33 of 30 hours", over: true });
   });
 
+  // The cap is a wall in the planner, so a tenth past it is past it, even when
+  // the label rounds it back down to the cap.
+  test("judges over on the hours themselves, not on the rounded label", () => {
+    const view = buildHoursView(
+      input({ week: { capHoursElsewhere: 25.1, incomeHoursElsewhere: 4, gymSessionsDone: 0 } }),
+      blocks,
+    );
+    expect(view.cap).toEqual({ hours: 30, used: 30, label: "30 of 30 hours", over: true });
+  });
+
+  test("has no cap in travel mode, where the planner lifts it", () => {
+    const view = buildHoursView(input({ mode: "travel" }), blocks);
+    expect(view.cap).toBeNull();
+    expect(view.target).not.toBeNull();
+    // A short night does not lift it: the planner only stops placing income.
+    expect(buildHoursView(input({ mode: "short-night" }), blocks).cap).not.toBeNull();
+  });
+
   test("leaves out an all day event and one that does not count", () => {
     const fixed = [
       ...day.input.fixed,
@@ -662,6 +787,30 @@ describe("formatAmount", () => {
     expect(formatAmount(-2.5)).toBe("-3");
     expect(formatAmount(0.49)).toBe("0");
     expect(formatAmount(1999.5)).toBe("2,000");
+  });
+
+  // Once, on the magnitude: a value just under a half rounds down, however
+  // close it is to the cent that would round up.
+  test("rounds once, so only a half goes up", () => {
+    expect(formatAmount(0.496)).toBe("0");
+    expect(formatAmount(0.5)).toBe("1");
+    expect(formatAmount(2.4961)).toBe("2");
+    expect(formatAmount(2.5)).toBe("3");
+    expect(formatAmount(-0.4)).toBe("0");
+    expect(formatAmount(-0.5)).toBe("-1");
+    expect(formatAmount(999.5)).toBe("1,000");
+  });
+
+  test("prints the word for an unknown amount for a number that is not finite", () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(formatAmount(value)).toBe(MONEY_COPY.unknownAmount);
+    }
+  });
+
+  test("never makes a day whose balance is not a number the lowest", () => {
+    const view = buildForecastView(patchDay(base(), TODAY, { projected: Number.NaN }), 14);
+    expect(view.list[0]).toMatchObject({ balance: MONEY_COPY.unknownAmount, low: false, negative: false });
+    expect(view.lowest?.date).toBe("Tuesday 24 March");
   });
 });
 
@@ -777,16 +926,17 @@ describe("the copy rules", () => {
 });
 
 describe("the view model is browser safe", () => {
-  test("imports nothing local, nothing from next and nothing from node", () => {
-    const source = readFileSync(
-      path.join(process.cwd(), "app/lib/v2/view/money.ts"),
-      "utf8",
-    );
-    const specifiers = Array.from(source.matchAll(/from\s+"([^"]+)"/g), (match) => match[1]);
-    expect(specifiers.length).toBeGreaterThan(0);
-    for (const specifier of specifiers) {
-      expect(specifier).not.toMatch(/\/local(\/|$)|^next(\/|$)|^node:/);
-    }
-    expect(source).not.toMatch(/\bimport\(/);
-  });
+  // The sample is loaded by the browser too: the gallery and the sample desk.
+  test.each(["app/lib/v2/view/money.ts", "app/lib/v2/fixtures/sample-money.ts"])(
+    "%s imports nothing local, nothing from next and nothing from node",
+    (file) => {
+      const source = readFileSync(path.join(process.cwd(), file), "utf8");
+      const specifiers = Array.from(source.matchAll(/from\s+"([^"]+)"/g), (match) => match[1]);
+      expect(specifiers.length).toBeGreaterThan(0);
+      for (const specifier of specifiers) {
+        expect(specifier).not.toMatch(/\/local(\/|$)|^next(\/|$)|^node:/);
+      }
+      expect(source).not.toMatch(/\bimport\(/);
+    },
+  );
 });

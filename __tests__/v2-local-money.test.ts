@@ -160,6 +160,46 @@ describe("the money file of a local folder", () => {
     expect(money?.rows).toEqual([]);
   });
 
+  test("takes the newest row's day when the ledger names no last day", async () => {
+    const money = await load(
+      withValue("ledger", {
+        lastOn: null,
+        rows: [
+          { id: "row-a", on: "2026-04-10", direction: "out", amount: 5, account: "Everyday", category: null, note: "" },
+          { id: "row-b", on: "2026-04-12", direction: "out", amount: 7, account: "Everyday", category: null, note: "" },
+        ],
+      }),
+    );
+    expect(money?.ledgerLastOn).toBe("2026-04-12");
+  });
+
+  test("keeps the first of two entries with one id, and drops the rest quietly", async () => {
+    const file = moneyFile();
+    const accounts = file.accounts as Array<Record<string, unknown>>;
+    accounts.push({ ...accounts[0], name: "Everyday again", balance: 9 });
+    const recurring = file.recurring as Array<Record<string, unknown>>;
+    recurring.push({ ...recurring[1], name: "Water again" });
+    const income = file.income as Array<Record<string, unknown>>;
+    income.unshift({ ...income[1], name: "Tutoring first" });
+    const ledger = file.ledger as { rows: Array<Record<string, unknown>> };
+    ledger.rows.push({ ...ledger.rows[0], note: "Bakery again" });
+
+    const money = await load(file);
+    expect(money?.accounts.map((account) => `${account.id} ${account.name}`)).toEqual([
+      "acc-1 Everyday",
+      "acc-2 Card",
+    ]);
+    expect(money?.bills.map((bill) => `${bill.id} ${bill.name}`)).toEqual([
+      "bill-1 Phone",
+      "bill-2 Water",
+    ]);
+    expect(money?.income.map((entry) => `${entry.id} ${entry.name}`)).toEqual([
+      "inc-2 Tutoring first",
+      "inc-1 Shop pay",
+    ]);
+    expect(money?.rows.map((line) => `${line.id} ${line.note}`)).toEqual(["row-1 Bakery", "row-2 "]);
+  });
+
   test("takes a manual everyday figure", async () => {
     const money = await load(
       withValue("forecast.everydaySpend", { dailyRate: 0, sampledWeeks: 0, confident: false, manualFallback: 45 }),

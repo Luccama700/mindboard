@@ -23,9 +23,9 @@
 // node. Weekday and month names come from format.ts, never from Intl.
 
 import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
-import { weekStartKey } from "@/app/lib/v2/plan/cap";
+import { capRoomHours, weekStartKey } from "@/app/lib/v2/plan/cap";
 import { dayDiff, maybeInstantMs, shiftDateKey } from "@/app/lib/v2/plan/day";
-import type { Block, DateKey, PlanInput, PlannerRules } from "@/app/lib/v2/types";
+import type { Block, DateKey, PlanInput } from "@/app/lib/v2/types";
 import { clockLabel, dayLabel } from "@/app/lib/v2/view/format";
 
 import type { MoneyDay, MoneyScreenData } from "./desk-data";
@@ -36,7 +36,10 @@ export const STALE_AFTER_DAYS = 7;
 export type MoneySpan = 14 | 30 | 60;
 
 export interface MoneyAge {
-  /** Whole days from the newest ledger line to the desk's day, or null for an empty ledger. */
+  /**
+   * Whole days from the newest ledger line to the desk's day, never below zero,
+   * or null for an empty ledger.
+   */
   days: number | null;
   /** True when `days` is null, or greater than STALE_AFTER_DAYS. */
   stale: boolean;
@@ -50,7 +53,10 @@ export interface MoneyCell {
   isToday: boolean;
   /** False for a grid cell that pads the first or last week: nothing is drawn in it. */
   inRange: boolean;
-  /** The source's balance for the day, worded ("1,500"), or null out of range. */
+  /**
+   * The source's balance for the day, worded ("1,500"). Null out of range, and
+   * null for a day of the span the source has no row for: in range, no figure.
+   */
   balance: string | null;
   /** What is firm on the day, worded: "Pay 640", "Phone 50". */
   marks: Array<{ kind: "in" | "out"; label: string }>;
@@ -66,9 +72,9 @@ export interface MoneyForecastView {
   weekdays: string[];
   /** Rows of seven, padded with cells that are not in range. */
   weeks: MoneyCell[][];
-  /** The in range days in order, for a narrow pane. */
+  /** The `span` calendar days of the window in order, for a narrow pane. */
   list: MoneyCell[];
-  /** "Tuesday 24 March", "4,550". Null when there is nothing in range. */
+  /** "Tuesday 24 March", "4,550". Null when no day of the window has a balance. */
   lowest: { date: string; balance: string } | null;
   /** The sentence about the estimate, always present: it is a guess and says so. */
   estimate: string;
@@ -78,9 +84,20 @@ export interface MoneyForecastView {
 
 export interface MoneyAccountsView {
   age: MoneyAge;
-  total: string;
+  /** The sum of the balances, or null when the accounts are in more than one currency. */
+  total: string | null;
+  /** Why there is no total (MONEY_COPY.mixedCurrencies), or null when there is one. */
+  totalNote: string | null;
+  /** The accounts' one currency, or the source's when there are no accounts or several. */
   currency: string;
-  accounts: Array<{ id: string; name: string; kind: string; balance: string; negative: boolean }>;
+  accounts: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    balance: string;
+    currency: string;
+    negative: boolean;
+  }>;
   takenLine: string;
   empty: boolean;
 }
@@ -116,7 +133,11 @@ export interface MoneyLedgerView {
 export interface MoneyHoursView {
   /** Null when the rules set no weekly income target. */
   target: { hours: number; done: number; label: string } | null;
-  /** Null when the rules set no weekly cap, or the planned day is in an exempt range. */
+  /**
+   * Null whenever the planner itself would not hold the day to a cap: none is
+   * set, the planned day is in an exempt range, or the day is planned in travel
+   * mode. `over` is judged on the hours themselves; the figures are rounded.
+   */
   cap: { hours: number; used: number; label: string; over: boolean } | null;
   /** Neither is set. */
   empty: boolean;
@@ -159,7 +180,10 @@ export const MONEY_COPY = {
   },
   when: { today: "Today", tomorrow: "Tomorrow", in: "In", days: "days" },
   kind: { in: "Money in", out: "Money out" },
+  /** What an amount that is not a number prints as, in place of a figure. */
+  unknownAmount: "Unknown",
   total: "Total",
+  mixedCurrencies: "These accounts are in more than one currency, so they are not added up.",
   lowest: "Lowest",
   underZero: "Under zero",
   /** `{count}` is the number of lines not shown. */
@@ -184,12 +208,14 @@ const A_MONDAY = "2024-01-01";
 
 /**
  * Whole units, grouped by thousands with a comma, a minus sign before a
- * negative. Halves round away from zero, judged on whole cents so that a float
- * sum such as 2.4999999 reads as the 2.50 it meant.
+ * negative. Rounded ONCE, on the magnitude, so only a half goes away from zero:
+ * 0.496 is "0", 0.5 is "1". Float noise in a sum is the summer's to absorb (the
+ * accounts' total is added in whole cents), never snapped here. A number that
+ * is not finite has no figure to print and says so in words.
  */
 export function formatAmount(value: number): string {
-  const cents = Math.round(Math.abs(value) * 100);
-  const whole = Math.floor((cents + 50) / 100);
+  if (!Number.isFinite(value)) return MONEY_COPY.unknownAmount;
+  const whole = Math.round(Math.abs(value));
   const grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return value < 0 && whole > 0 ? `-${grouped}` : grouped;
 }
@@ -229,7 +255,9 @@ function hoursLabel(done: number, of: number): string {
 export function moneyAge(data: MoneyScreenData): MoneyAge {
   const copy = MONEY_COPY.age;
   if (data.ledgerLastOn === null) return { days: null, stale: true, line: copy.none };
-  const days = dayDiff(data.ledgerLastOn, data.today);
+  // A desk showing a day before the ledger's last line is looking at numbers
+  // newer than itself: zero days old, never a negative count.
+  const days = Math.max(0, dayDiff(data.ledgerLastOn, data.today));
   if (days <= STALE_AFTER_DAYS) return { days, stale: false, line: null };
   return {
     days,
@@ -250,17 +278,26 @@ function cents(value: number): number {
   return Math.round(value * 100);
 }
 
-/** The whole numbers in a schedule's words: "monthly on day 28" holds 28 and not 8. */
-function scheduleHasDay(schedule: string, dayOfMonth: number): boolean {
-  return (schedule.match(/\d+/g) ?? []).some((token) => Number(token) === dayOfMonth);
+/**
+ * The one schedule form a bill can be named by: "monthly on day N", in any
+ * case, anywhere in the words, N one or two digits. Every other form ("every 14
+ * days from 2026-03-01", "every 2 weeks") holds numbers that are not a day of
+ * the month, so it answers null and its bill is never named.
+ */
+const MONTHLY_ON_DAY = /\bmonthly on day (\d{1,2})(?!\d)/i;
+
+function monthlyDay(schedule: string): number | null {
+  const match = MONTHLY_ON_DAY.exec(schedule);
+  return match === null ? null : Number(match[1]);
 }
 
 /**
  * The firm money of one day, in then out. A mark carries a name only when
  * exactly one bill (or one fixed monthly income) accounts for it to the cent,
- * and for a bill only when its schedule names that day of the month; anything
- * else is the plain word, because a guessed name would be a confident claim
- * about money the source never tied to it.
+ * and for a bill only when its schedule is the monthly form naming that day of
+ * the month; anything else is the plain word, because a guessed name would be
+ * a confident claim about money the source never tied to it. A bill moved off a
+ * day the month does not have (day 31 paid on the 30th) is therefore plain too.
  */
 function marksOf(day: MoneyDay, data: MoneyScreenData): Mark[] {
   const dayOfMonth = Number(day.date.slice(8, 10));
@@ -277,7 +314,7 @@ function marksOf(day: MoneyDay, data: MoneyScreenData): Mark[] {
   }
   if (day.outflow > 0) {
     const matches = data.bills.filter(
-      (bill) => cents(bill.amount) === cents(day.outflow) && scheduleHasDay(bill.schedule, dayOfMonth),
+      (bill) => cents(bill.amount) === cents(day.outflow) && monthlyDay(bill.schedule) === dayOfMonth,
     );
     marks.push({
       kind: "out",
@@ -288,27 +325,40 @@ function marksOf(day: MoneyDay, data: MoneyScreenData): Mark[] {
   return marks;
 }
 
+/** One calendar day of the window: the source's row for it, or null for none. */
+interface SpanDay {
+  date: DateKey;
+  day: MoneyDay | null;
+  marks: Mark[];
+}
+
 /**
- * The rows the panes speak about: from the desk's day on (earlier rows are
- * dropped; a source that starts later starts there), the first `span` of them,
- * each with its marks. The forecast and the list of what is coming both read
- * this, and nothing else.
+ * The days the panes speak about, each with the source's row and its marks.
+ * The forecast and the list of what is coming both read this, and nothing else.
  *
- * The source promises one row per day in order; the order is made sure of here
- * anyway (by the date's own arithmetic, never a locale), and a second row for a
- * day already seen is dropped, so the two panes cannot disagree about either.
+ * A SPAN IS CALENDAR DAYS. The window starts at the desk's day, or at the
+ * source's first day when that is later, and runs `span` days. A day in it the
+ * source has no row for is still a day of the window, with no row: it is drawn
+ * with no balance and no marks, and is never the lowest.
+ *
+ * ONE ROW PER DAY: the rows are put in date order first (by the date's own
+ * arithmetic, never a locale; the sort is stable), and of two rows for one day
+ * the one the source sent first is kept. Rows before the desk's day are dropped.
  */
-function spanOf(data: MoneyScreenData, span: MoneySpan): Array<{ day: MoneyDay; marks: Mark[] }> {
-  const seen = new Set<DateKey>();
-  return data.forecast
-    .filter((day) => {
-      if (dayDiff(data.today, day.date) < 0 || seen.has(day.date)) return false;
-      seen.add(day.date);
-      return true;
-    })
-    .sort((a, b) => dayDiff(b.date, a.date))
-    .slice(0, span)
-    .map((day) => ({ day, marks: marksOf(day, data) }));
+function spanOf(data: MoneyScreenData, span: MoneySpan): SpanDay[] {
+  const byDate = new Map<DateKey, MoneyDay>();
+  const ordered = data.forecast
+    .filter((day) => dayDiff(data.today, day.date) >= 0)
+    .sort((a, b) => dayDiff(b.date, a.date));
+  for (const day of ordered) if (!byDate.has(day.date)) byDate.set(day.date, day);
+  if (ordered.length === 0) return [];
+
+  const start = ordered[0].date;
+  return Array.from({ length: span }, (_, offset) => {
+    const date = shiftDateKey(start, offset);
+    const day = byDate.get(date) ?? null;
+    return { date, day, marks: day === null ? [] : marksOf(day, data) };
+  });
 }
 
 // ---------------------------------------------------------------- forecast
@@ -338,57 +388,56 @@ function padCell(date: DateKey, today: DateKey): MoneyCell {
 }
 
 export function buildForecastView(data: MoneyScreenData, span: MoneySpan): MoneyForecastView {
-  const rows = spanOf(data, span);
+  const days = spanOf(data, span);
   const age = moneyAge(data);
   const weekdays = weekdayNames();
-  const estimate = estimateSentence(
-    data,
-    rows.map((entry) => entry.day),
-  );
+  const rows = days.flatMap((entry) => (entry.day === null ? [] : [entry.day]));
+  const estimate = estimateSentence(data, rows);
 
-  if (rows.length === 0) {
+  if (days.length === 0) {
     return { age, span, weekdays, weeks: [], list: [], lowest: null, estimate, empty: true };
   }
 
-  // The earliest of the lowest: a strict comparison keeps the first on a tie.
-  let lowestIndex = 0;
-  rows.forEach((entry, index) => {
-    if (entry.day.projected < rows[lowestIndex].day.projected) lowestIndex = index;
-  });
+  // The earliest of the lowest, over the days that have a balance to compare:
+  // a strict comparison keeps the first on a tie, and a day with no row or a
+  // balance that is not a number is never it.
+  let lowest: MoneyDay | null = null;
+  for (const day of rows) {
+    if (!Number.isFinite(day.projected)) continue;
+    if (lowest === null || day.projected < lowest.projected) lowest = day;
+  }
 
   const cells = new Map<DateKey, MoneyCell>();
-  rows.forEach(({ day, marks }, index) => {
-    const negative = day.projected < 0;
-    cells.set(day.date, {
-      date: day.date,
-      dayOfMonth: Number(day.date.slice(8, 10)),
-      isToday: day.date === data.today,
+  for (const { date, day, marks } of days) {
+    const negative = day !== null && day.projected < 0;
+    cells.set(date, {
+      ...padCell(date, data.today),
       inRange: true,
-      balance: formatAmount(day.projected),
+      balance: day === null ? null : formatAmount(day.projected),
       marks: marks.map((mark) => ({ kind: mark.kind, label: `${mark.name} ${formatAmount(mark.amount)}` })),
-      low: index === lowestIndex || negative,
+      low: (lowest !== null && day === lowest) || negative,
       negative,
     });
-  });
+  }
 
-  // The grid runs from the Monday of the first day's week to the Sunday of the
-  // last day's. A day the source has no row for is padding: nothing is drawn.
-  const first = weekStartKey(rows[0].day.date);
-  const last = shiftDateKey(weekStartKey(rows[rows.length - 1].day.date), 6);
+  // The grid runs from the Monday of the window's first week to the Sunday of
+  // its last. A cell outside the window is padding: nothing is drawn in it.
+  const first = weekStartKey(days[0].date);
+  const last = shiftDateKey(weekStartKey(days[days.length - 1].date), 6);
   const weeks: MoneyCell[][] = [];
   for (let date = first; dayDiff(date, last) >= 0; date = shiftDateKey(date, 1)) {
     if (weeks.length === 0 || weeks[weeks.length - 1].length === 7) weeks.push([]);
     weeks[weeks.length - 1].push(cells.get(date) ?? padCell(date, data.today));
   }
 
-  const lowestDay = rows[lowestIndex].day;
   return {
     age,
     span,
     weekdays,
     weeks,
     list: weeks.flat().filter((cell) => cell.inRange),
-    lowest: { date: dayLabel(lowestDay.date), balance: formatAmount(lowestDay.projected) },
+    lowest:
+      lowest === null ? null : { date: dayLabel(lowest.date), balance: formatAmount(lowest.projected) },
     estimate,
     empty: false,
   };
@@ -404,17 +453,25 @@ function takenLine(takenAt: string, timeZone: string): string {
 }
 
 export function buildAccountsView(data: MoneyScreenData, timeZone: string): MoneyAccountsView {
-  // In whole cents, so a run of tenths cannot drift. The one sum in this file.
+  // Balances in different currencies have no sum: adding them would print a
+  // confident number that means nothing, so the view says why there is none.
+  const currencies = new Set(data.accounts.map((account) => account.currency));
+  const mixed = currencies.size > 1;
+  // The one sum in this file, in whole cents added as integers, so float noise
+  // cannot carry a total across a half ([0.1, 0.7, -0.3] is 50 cents, not
+  // 0.49999999999999994). formatAmount then rounds the exact figure once.
   const totalCents = data.accounts.reduce((sum, account) => sum + cents(account.balance), 0);
   return {
     age: moneyAge(data),
-    total: formatAmount(totalCents / 100),
-    currency: data.currency,
+    total: mixed ? null : formatAmount(totalCents / 100),
+    totalNote: mixed ? MONEY_COPY.mixedCurrencies : null,
+    currency: currencies.size === 1 ? data.accounts[0].currency : data.currency,
     accounts: data.accounts.map((account) => ({
       id: account.id,
       name: account.name,
       kind: account.kind,
       balance: formatAmount(account.balance),
+      currency: account.currency,
       negative: account.balance < 0,
     })),
     takenLine: takenLine(data.takenAt, timeZone),
@@ -425,11 +482,11 @@ export function buildAccountsView(data: MoneyScreenData, timeZone: string): Mone
 // ---------------------------------------------------------------- coming up
 
 export function buildComingView(data: MoneyScreenData, span: MoneySpan): MoneyComingView {
-  const items = spanOf(data, span).flatMap(({ day, marks }) =>
+  const items = spanOf(data, span).flatMap(({ date, marks }) =>
     marks.map((mark) => ({
-      id: `${day.date}:${mark.kind}`,
-      date: dayLabel(day.date),
-      inDays: dayDiff(data.today, day.date),
+      id: `${date}:${mark.kind}`,
+      date: dayLabel(date),
+      inDays: dayDiff(data.today, date),
       kind: mark.kind,
       name: mark.name,
       amount: formatAmount(mark.amount),
@@ -488,11 +545,23 @@ function spanHours(start: string, end: string): number {
   return (endMs - startMs) / HOUR_MS;
 }
 
-/** The same test as plan/cap.ts `inExemptRange`: inclusive at both ends. */
-function capExempt(date: DateKey, rules: PlannerRules): boolean {
-  return rules.capExemptRanges.some(
-    (range) => dayDiff(range.from, date) >= 0 && dayDiff(date, range.to) >= 0,
-  );
+/**
+ * Does the planner hold this input's day to a cap at all? Answered by the
+ * planner's own code where it has one, and mirrored only where it does not:
+ *
+ *  - `capRoomHours` (plan/cap.ts:44-56) is the planner's own call and answers
+ *    Infinity for "no cap here": `weeklyHourCap` null (cap.ts:50) or the day in
+ *    an exempt range (cap.ts:51). It is called, not copied.
+ *  - Travel mode lifts the cap entirely (plan/planner.ts:421-424: `room` is
+ *    POSITIVE_INFINITY when `mode === "travel"`). There is no exported predicate
+ *    for that, so that one condition is mirrored here.
+ *
+ * A short night or a rough day does not lift it: the planner places no income
+ * then (planner.ts:414), but nothing it places can cross the cap either.
+ */
+function capInForce(input: PlanInput): boolean {
+  if (input.mode === "travel") return false;
+  return capRoomHours(input.date, input.fixed, input.week, input.rules) !== Infinity;
 }
 
 /**
@@ -522,13 +591,17 @@ export function buildHoursView(input: PlanInput, blocks: readonly Block[]): Mone
           return { hours, done, label: hoursLabel(done, hours) };
         })();
 
+  const limit = rules.weeklyHourCap;
   const cap =
-    rules.weeklyHourCap === null || capExempt(date, rules)
+    limit === null || !capInForce(input)
       ? null
       : (() => {
-          const hours = quarterHours(rules.weeklyHourCap);
-          const used = quarterHours(week.capHoursElsewhere + fixedToday + incomeToday);
-          return { hours, used, label: hoursLabel(used, hours), over: used > hours };
+          // The cap is a wall in the planner, so `over` is judged on the hours
+          // themselves: 30.1 of 30 is over even though it reads "30 of 30".
+          const usedHours = week.capHoursElsewhere + fixedToday + incomeToday;
+          const hours = quarterHours(limit);
+          const used = quarterHours(usedHours);
+          return { hours, used, label: hoursLabel(used, hours), over: usedHours > limit };
         })();
 
   return { target, cap, empty: target === null && cap === null };

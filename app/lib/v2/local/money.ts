@@ -20,6 +20,7 @@
 
 import { z } from "zod";
 
+import { dayDiff } from "@/app/lib/v2/plan/day";
 import type { MoneyScreenData } from "@/app/lib/v2/view/desk-data";
 import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
 
@@ -97,6 +98,21 @@ const moneySchema = z.object({
 });
 
 /**
+ * The first entry of each id, in the file's order; later ones are dropped
+ * without a word. The panes key their rows by id, and these lists are for
+ * reading, not a ledger of record, so a repeated id is not worth refusing the
+ * whole of Money over.
+ */
+function firstOfEachId<T extends { id: string }>(entries: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (seen.has(entry.id)) return false;
+    seen.add(entry.id);
+    return true;
+  });
+}
+
+/**
  * Takes the day the same request already loaded, for its clock and its planned
  * day. Null when the folder holds no money file: the panes then say so.
  */
@@ -106,12 +122,19 @@ export async function loadLocalMoney(
 ): Promise<MoneyScreenData | null> {
   const file = await readOptionalFile(dir, MONEY_FILE, moneySchema);
   if (file === null) return null;
+  const rows = firstOfEachId(file.ledger.rows);
+  // A ledger that names no last day but holds lines is as old as its newest
+  // line: null would make the panes say nothing was ever recorded.
+  const newest = rows.reduce<string | null>(
+    (latest, line) => (latest === null || dayDiff(latest, line.on) > 0 ? line.on : latest),
+    null,
+  );
   return {
     today: today.input.date,
     currency: file.currency,
     takenAt: file.takenAt,
-    ledgerLastOn: file.ledger.lastOn,
-    accounts: file.accounts.map((account) => ({
+    ledgerLastOn: file.ledger.lastOn ?? newest,
+    accounts: firstOfEachId(file.accounts).map((account) => ({
       id: account.id,
       name: account.name,
       kind: account.type,
@@ -131,18 +154,18 @@ export async function loadLocalMoney(
       confident: file.forecast.everydaySpend.confident,
       manualFallback: file.forecast.everydaySpend.manualFallback,
     },
-    bills: file.recurring.map((bill) => ({
+    bills: firstOfEachId(file.recurring).map((bill) => ({
       id: bill.id,
       name: bill.name,
       amount: bill.amount,
       schedule: bill.schedule,
     })),
-    income: file.income.map((income) => ({
+    income: firstOfEachId(file.income).map((income) => ({
       id: income.id,
       name: income.name,
       fixedMonthly: income.fixedMonthly,
     })),
-    rows: file.ledger.rows.map((line) => ({
+    rows: rows.map((line) => ({
       id: line.id,
       on: line.on,
       direction: line.direction,
