@@ -1,8 +1,9 @@
 // PLAN-DESK Task 3, the Quests view model. buildQuestsView is the four Quests
 // panes as data, and its one promise is that it reads exactly what Today reads:
-// the same planner input, ranked by the planner's own order, counted the way
-// Today's lane lines count it. The first block below pins that promise on one
-// input; everything after it pins a rule of its own.
+// the same planner input, ordered by the planner's own ordering function,
+// counted by Today's own lane summary. The first block below pins that promise
+// on several inputs, a press on Today included; everything after it pins a rule
+// of its own.
 //
 // EVERYTHING HERE IS INVENTED: the sample day, the extra candidates, the groups
 // and the history of finished things. The zone has no daylight saving.
@@ -18,7 +19,7 @@ import { sampleQuests } from "@/app/lib/v2/fixtures/sample-quests";
 import { dayDiff, planReference } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { rankCandidates } from "@/app/lib/v2/plan/rank";
-import type { Candidate, PlannerRules } from "@/app/lib/v2/types";
+import type { Candidate, PlanOutput, PlannerRules } from "@/app/lib/v2/types";
 import type { QuestDone, QuestsScreenData } from "@/app/lib/v2/view/desk-data";
 import {
   QUESTS_COPY,
@@ -28,23 +29,30 @@ import {
   questDoneTotalLabel,
   questPastLabel,
   questPerWeekLabel,
+  questThroughLabel,
   type QuestsView,
 } from "@/app/lib/v2/view/quests";
 import type { TaskTag, TodayScreenData } from "@/app/lib/v2/view/screen-data";
-import { TODAY_COPY, buildTodayView, identityFor, splitTitle } from "@/app/lib/v2/view/today";
+import {
+  TODAY_COPY,
+  buildTodayView,
+  doneTaskIds,
+  identityFor,
+  splitTitle,
+} from "@/app/lib/v2/view/today";
 
 const at = sampleInstant;
 const NONE: ReadonlySet<string> = new Set<string>();
 
 /** Today's view of a day, built exactly the way the Today screen builds it. */
-function todayViewOf(data: TodayScreenData) {
+function todayViewOf(data: TodayScreenData, plan: PlanOutput = planDay(data.input)) {
   const { input } = data;
   return buildTodayView({
     date: input.date,
     now: input.now,
     reference: planReference(input.now, input.date, input.rules).instant,
     timeZone: input.rules.timeZone,
-    plan: planDay(input),
+    plan,
     fixed: input.fixed,
     lanes: data.lanes,
     candidates: input.candidates,
@@ -57,13 +65,14 @@ function todayViewOf(data: TodayScreenData) {
   });
 }
 
-/** The quests of a day: its own input, lanes and tags, plus a history. */
+/** The quests of a day: its own input, lanes and tags, plus a history up to the day. */
 function questsOf(day: TodayScreenData, over: Partial<QuestsScreenData> = {}): QuestsScreenData {
   return {
     input: day.input,
     lanes: day.lanes,
     tags: day.tags,
     done: [],
+    historyThrough: day.input.date,
     historyDays: 28,
     ...over,
   };
@@ -93,6 +102,10 @@ function finished(
   return { id, title: `Finished ${id}`, lane: null, tag: null, doneAt, ...over };
 }
 
+function withCandidates(day: TodayScreenData, candidates: Candidate[]): TodayScreenData {
+  return { ...day, input: { ...day.input, candidates } };
+}
+
 /**
  * The sample day with more in it than the sample has: two things with no lane
  * (one past its date), one in the lane nothing else feeds, and a group on two of
@@ -109,11 +122,22 @@ function busierDay(): TodayScreenData {
     "t-x-loose": { label: "Balcony", color: "#4A9B6E" },
     "t-glaze": { label: "Kiln club", color: "#9B6EC5" },
   };
-  return {
-    ...day,
-    input: { ...day.input, candidates: [...day.input.candidates, ...extra] },
-    tags,
-  };
+  return { ...withCandidates(day, [...day.input.candidates, ...extra]), tags };
+}
+
+/**
+ * Two candidates the sample never has: one whose date cannot be read, and one
+ * whose lane is not among the user's lanes. Both views treat the second as
+ * belonging to no lane: it is a side quest on Quests and is counted in Today's
+ * "No lane" row, because a lane nobody can see cannot hold it.
+ */
+function oddDay(): TodayScreenData {
+  const day = sampleDay();
+  return withCandidates(day, [
+    ...day.input.candidates,
+    candidate({ id: "t-x-someday", title: "Mend the fence", lane: "craft", due: "someday" }),
+    candidate({ id: "t-x-ghost", title: "Label the spare keys", lane: "ghost", due: at("12:00", "2026-04-17") }),
+  ]);
 }
 
 /** Every string anywhere in a value, so the copy rules can be walked. */
@@ -128,29 +152,60 @@ function strings(value: unknown, into: string[] = []): string[] {
 
 const ids = (items: Array<{ id: string }>) => items.map((item) => item.id);
 
+/** The plan of a day with the first block that carries a laned task marked done. */
+function pressed(day: TodayScreenData): { plan: PlanOutput; taskId: string; lane: string } {
+  const first = planDay(day.input);
+  const block = first.blocks.find((entry) =>
+    day.input.candidates.some((c) => c.id === entry.taskId && c.lane !== null),
+  );
+  if (block === undefined || block.taskId === null) throw new Error("the sample plans no task");
+  const lane = day.input.candidates.find((c) => c.id === block.taskId)?.lane as string;
+  return {
+    taskId: block.taskId,
+    lane,
+    plan: {
+      ...first,
+      blocks: first.blocks.map((entry) =>
+        entry.id === block.id ? { ...entry, state: "done" as const } : entry,
+      ),
+    },
+  };
+}
+
 // --------------------------------------------------------------- behaviour 1
 
 describe("the same input as Today", () => {
-  for (const [name, build] of [
-    ["the sample day", sampleDay],
-    ["a busier day with loose items and groups", busierDay],
-  ] as const) {
+  const cases: Array<{ name: string; day: TodayScreenData; plan?: PlanOutput }> = [
+    { name: "the sample day", day: sampleDay() },
+    { name: "a busier day with loose items and groups", day: busierDay() },
+    { name: "a day with an unreadable date and a lane nobody has", day: oddDay() },
+    (() => {
+      const day = sampleDay();
+      return { name: "the sample day after a press on Today", day, plan: pressed(day).plan };
+    })(),
+  ];
+
+  for (const { name, day, plan: shown } of cases) {
     describe(name, () => {
-      const day = build();
-      const today = todayViewOf(day);
-      const quests = buildQuestsView(questsOf(day), NONE, 7);
+      const plan = shown ?? planDay(day.input);
+      const today = todayViewOf(day, plan);
+      // The ids Today's own rule calls finished in the plan being shown.
+      const quests = buildQuestsView(questsOf(day), doneTaskIds(plan), 7);
+      const lineOf = (key: string) =>
+        today.lanes.find((entry) => entry.color !== null && entry.key === key);
 
       test("every lane's open count is Today's lane line count", () => {
         for (const lane of quests.lanes) {
-          const line = today.lanes.find((entry) => entry.key === lane.key);
-          expect(lane.open, lane.key).toBe(line?.open ?? 0);
+          expect(lane.open, lane.key).toBe(lineOf(lane.key)?.open ?? 0);
+          expect(quests.steps.filter((item) => item.lane === lane.key).length, lane.key).toBe(
+            lane.open,
+          );
         }
       });
 
       test("every lane's nearest date is Today's lane line date", () => {
         for (const lane of quests.lanes) {
-          const line = today.lanes.find((entry) => entry.key === lane.key);
-          expect(lane.due, lane.key).toBe(line?.due ?? null);
+          expect(lane.due, lane.key).toBe(lineOf(lane.key)?.due ?? null);
         }
       });
 
@@ -159,19 +214,19 @@ describe("the same input as Today", () => {
         expect(quests.side.length).toBe(loose?.open ?? 0);
       });
 
-      test("every candidate appears exactly once across steps and side", () => {
+      test("every open candidate appears exactly once across steps and side", () => {
+        const finishedIds = doneTaskIds(plan);
+        const open = day.input.candidates.filter((c) => !finishedIds.has(c.id));
         const seen = [...ids(quests.steps), ...ids(quests.side)].sort();
-        expect(seen).toEqual(ids(day.input.candidates).sort());
+        expect(seen).toEqual(ids(open).sort());
       });
 
-      test("the ranks are the planner's own order", () => {
+      test("rank is the place in the list Quests shows, in the planner's ordering", () => {
+        const finishedIds = doneTaskIds(plan);
         const reference = planReference(day.input.now, day.input.date, day.input.rules).instant;
-        const order = rankCandidates(
-          day.input.candidates,
-          reference,
-          day.input.rules,
-          day.input.date,
-        ).map((entry) => entry.candidate.id);
+        const order = rankCandidates(day.input.candidates, reference, day.input.rules, day.input.date)
+          .map((entry) => entry.candidate.id)
+          .filter((id) => !finishedIds.has(id));
         const byRank = [...quests.steps, ...quests.side].sort((a, b) => a.rank - b.rank);
         expect(ids(byRank)).toEqual(order);
         expect(byRank.map((item) => item.rank)).toEqual(order.map((_, index) => index + 1));
@@ -179,9 +234,25 @@ describe("the same input as Today", () => {
     });
   }
 
-  test("the busier day really has a no lane row, so the test above is not vacuous", () => {
-    const quests = buildQuestsView(questsOf(busierDay()), NONE, 7);
-    expect(ids(quests.side)).toEqual(["t-x-loose", "t-x-loose-late"]);
+  test("the cases are not vacuous: a no lane row, an odd date, a lane nobody has, a press", () => {
+    expect(ids(buildQuestsView(questsOf(busierDay()), NONE, 7).side)).toEqual([
+      "t-x-loose",
+      "t-x-loose-late",
+    ]);
+
+    const odd = buildQuestsView(questsOf(oddDay()), NONE, 7);
+    expect(ids(odd.side)).toEqual(["t-x-ghost"]);
+    expect(odd.side[0]?.lane).toBeNull();
+    expect(odd.steps.find((item) => item.id === "t-x-someday")?.when).toBe("none");
+    const oddToday = todayViewOf(oddDay());
+    expect(oddToday.lanes.find((entry) => entry.label === TODAY_COPY.noLane)?.open).toBe(1);
+
+    const day = sampleDay();
+    const { plan, taskId, lane } = pressed(day);
+    const before = todayViewOf(day).lanes.find((entry) => entry.key === lane)?.open ?? 0;
+    const after = todayViewOf(day, plan).lanes.find((entry) => entry.key === lane)?.open ?? 0;
+    expect(after).toBe(before - 1);
+    expect(doneTaskIds(plan).has(taskId)).toBe(true);
   });
 
   test("a step with a side quest's kind still belongs to its lane, as Today counts it", () => {
@@ -194,7 +265,7 @@ describe("the same input as Today", () => {
 
   // Before wake the planner reads every date against the start of the day's
   // window, not against the clock. An item due between the two is already past
-  // its date for the planner and for Today; ranking it from the clock would put
+  // its date for the planner and for Today; ordering it from the clock would put
   // it first while calling it past.
   describe("before wake, dates are read from the planner's reference, not the clock", () => {
     const base = sampleDay();
@@ -214,7 +285,7 @@ describe("the same input as Today", () => {
     const quests = buildQuestsView(questsOf(day), NONE, 7);
     const item = (id: string) => quests.steps.find((entry) => entry.id === id);
 
-    test("the item due before the reference ranks after the live one and reads past", () => {
+    test("the item due before the reference comes after the live one and reads past", () => {
       expect(item("t-undated")?.rank).toBeLessThan(item("t-early")?.rank ?? 0);
       expect(item("t-early")?.when).toBe("past");
       expect(quests.lanes.find((lane) => lane.key === "study")?.past).toBe(1);
@@ -261,16 +332,16 @@ describe("a press on Today is seen here", () => {
     expect(after.lanes.find((lane) => lane.key === "craft")?.done).toBe(1);
   });
 
-  test("nothing is replanned: every other step keeps its rank", () => {
-    const rankOf = (view: QuestsView) =>
-      Object.fromEntries([...view.steps, ...view.side].map((item) => [item.id, item.rank]));
-    const was = rankOf(before);
-    for (const [id, rank] of Object.entries(rankOf(after))) expect(rank, id).toBe(was[id]);
+  test("nothing is replanned: the rest keep their order, and the places close up", () => {
+    const order = (view: QuestsView) =>
+      ids([...view.steps, ...view.side].sort((a, b) => a.rank - b.rank));
+    expect(order(after)).toEqual(order(before).filter((id) => id !== "t-glaze"));
+    const ranks = [...after.steps, ...after.side].map((item) => item.rank).sort((a, b) => a - b);
+    expect(ranks).toEqual(ranks.map((_, index) => index + 1));
   });
 
   test("a side quest pressed done leaves the side list too", () => {
-    const busy = busierDay();
-    const view = buildQuestsView(questsOf(busy), new Set(["t-x-loose"]), 7);
+    const view = buildQuestsView(questsOf(busierDay()), new Set(["t-x-loose"]), 7);
     expect(ids(view.side)).toEqual(["t-x-loose-late"]);
     expect(ids(view.done.days[0]?.items ?? [])).toEqual(["t-x-loose"]);
   });
@@ -291,7 +362,7 @@ describe("a press on Today is seen here", () => {
 // --------------------------------------------------------------- behaviour 3
 
 describe("lanes that nothing feeds stay quiet", () => {
-  test("a lane with nothing open and nothing done says nothing", () => {
+  test("a lane with nothing open and nothing done says nothing, not even a zero", () => {
     const view = buildQuestsView(questsOf(sampleDay()), NONE, 7);
     const work = view.lanes.find((lane) => lane.key === "work");
     expect(work).toEqual({
@@ -302,7 +373,7 @@ describe("lanes that nothing feeds stay quiet", () => {
       next: null,
       due: null,
       past: 0,
-      done: 0,
+      done: null,
       quiet: true,
     });
   });
@@ -313,24 +384,21 @@ describe("lanes that nothing feeds stay quiet", () => {
     expect(view.lanes.map((lane) => lane.key)).toEqual(day.lanes.map((lane) => lane.key));
   });
 
-  test("with no history a quiet lane has no count at all, not a zero", () => {
-    const view = buildQuestsView(questsOf(sampleDay(), { historyDays: 0 }), NONE, 7);
-    const work = view.lanes.find((lane) => lane.key === "work");
-    expect(work?.quiet).toBe(true);
-    expect(work?.done).toBeNull();
-  });
-
-  test("a lane with only something finished is not quiet, even with no history", () => {
+  test("a lane with only something finished is not quiet, and counts it when known", () => {
     const day = sampleDay();
-    const view = buildQuestsView(
-      questsOf(day, { historyDays: 0, done: [finished("d-shift", at("09:30"), { lane: "work" })] }),
-      NONE,
-      7,
-    );
-    const work = view.lanes.find((lane) => lane.key === "work");
-    expect(work?.quiet).toBe(false);
-    expect(work?.done).toBeNull();
-    expect(work?.open).toBe(0);
+    const done = [finished("d-shift", at("09:30"), { lane: "work" })];
+    const known = buildQuestsView(questsOf(day, { done }), NONE, 7);
+    expect(known.lanes.find((lane) => lane.key === "work")).toMatchObject({
+      quiet: false,
+      open: 0,
+      done: 1,
+    });
+
+    const unknown = buildQuestsView(questsOf(day, { done, historyDays: 0 }), NONE, 7);
+    expect(unknown.lanes.find((lane) => lane.key === "work")).toMatchObject({
+      quiet: false,
+      done: null,
+    });
   });
 });
 
@@ -375,14 +443,9 @@ describe("where an item's date stands", () => {
   });
 
   test("soon does not need a hard date", () => {
-    const base = sampleDay();
-    const day: TodayScreenData = {
-      ...base,
-      input: {
-        ...base.input,
-        candidates: [candidate({ id: "t-soft", lane: "craft", due: at("12:00", "2026-04-16") })],
-      },
-    };
+    const day = withCandidates(sampleDay(), [
+      candidate({ id: "t-soft", lane: "craft", due: at("12:00", "2026-04-16") }),
+    ]);
     const soft = buildQuestsView(questsOf(day), NONE, 7).steps[0];
     expect(soft?.hard).toBe(false);
     expect(soft?.when).toBe("soon");
@@ -397,14 +460,30 @@ describe("where an item's date stands", () => {
   });
 
   test("a date that cannot be read is no date", () => {
-    const base = sampleDay();
-    const day: TodayScreenData = {
-      ...base,
-      input: { ...base.input, candidates: [candidate({ id: "t-odd", lane: "craft", due: "someday" })] },
-    };
+    const day = withCandidates(sampleDay(), [candidate({ id: "t-odd", lane: "craft", due: "someday" })]);
     const odd = buildQuestsView(questsOf(day), NONE, 7).steps[0];
     expect(odd?.due).toBeNull();
     expect(odd?.when).toBe("none");
+  });
+
+  // A due date is read on the CALENDAR day, as the planner's "closes today" and
+  // Today's label read it; a finish is read on the PLANNING day. With lights out
+  // after midnight the two differ, and each is pinned here as it is meant.
+  test("a due date after midnight is the next calendar day, even before lights out", () => {
+    const base = sampleDay();
+    const late: PlannerRules = { ...sampleRules(), lightsOut: "01:30" };
+    const day: TodayScreenData = {
+      ...base,
+      input: {
+        ...base.input,
+        rules: late,
+        candidates: [candidate({ id: "t-small-hours", lane: "craft", hard: true, due: at("00:50", "2026-04-16") })],
+      },
+    };
+    const view = buildQuestsView(questsOf(day), NONE, 7);
+    expect(view.steps[0]?.due).toBe("16 April");
+    expect(view.steps[0]?.when).toBe("soon");
+    expect(doneDayOf(at("00:50", "2026-04-16"), late)).toBe(SAMPLE_DATE);
   });
 });
 
@@ -437,6 +516,7 @@ describe("done lately", () => {
     ]);
     expect(ids(view.done.days[1]?.items ?? [])).toEqual(["d-evening", "q-a", "q-b"]);
     expect(view.done.days[0]?.label).toBe("Wednesday 15 April");
+    expect(view.done.through).toBeNull();
   });
 
   test("the total, and the rate per week over exactly the span", () => {
@@ -455,16 +535,24 @@ describe("done lately", () => {
     expect(twentyEight.perWeek).toBe(1.8);
   });
 
+  test("a known span with nothing finished has no rate: zero is never a rate", () => {
+    const view = buildQuestsView(questsOf(day), NONE, 7);
+    expect(view.done.known).toBe(true);
+    expect(view.done.total).toBe(0);
+    expect(view.done.perWeek).toBeNull();
+  });
+
   test("a lane's done is what it finished inside the span", () => {
     const view = buildQuestsView(data, NONE, 7);
     const doneOf = (key: string) => view.lanes.find((lane) => lane.key === key)?.done;
     expect(doneOf("study")).toBe(1);
     expect(doneOf("money")).toBe(1);
     expect(doneOf("craft")).toBe(1);
+    // Open, nothing finished, history known: a true zero.
     expect(doneOf("people")).toBe(0);
   });
 
-  test("a span the source cannot see has no rate and no lane counts", () => {
+  test("a span the history does not reach has no rate and no lane counts", () => {
     const view = buildQuestsView(questsOf(day, { done: history, historyDays: 7 }), NONE, 14);
     expect(view.done.known).toBe(false);
     expect(view.done.perWeek).toBeNull();
@@ -475,9 +563,59 @@ describe("done lately", () => {
 
   test("a source with no history at all knows no span", () => {
     for (const span of QUEST_SPANS) {
-      const view = buildQuestsView(questsOf(day, { historyDays: 0 }), NONE, span);
-      expect(view.done).toEqual({ span, days: [], total: 0, perWeek: null, known: false });
+      const view = buildQuestsView(
+        questsOf(day, { historyThrough: null, historyDays: 0 }),
+        NONE,
+        span,
+      );
+      expect(view.done).toEqual({
+        span,
+        days: [],
+        total: 0,
+        perWeek: null,
+        known: false,
+        through: null,
+      });
     }
+  });
+
+  test("history that ends nowhere is not known, whatever its length says", () => {
+    const view = buildQuestsView(questsOf(day, { done: history, historyThrough: null }), NONE, 7);
+    expect(view.done.known).toBe(false);
+    expect(view.done.perWeek).toBeNull();
+  });
+
+  // A copy taken three days before the planned day cannot speak for the three
+  // days since. Lately ends on the copy's day, and says so.
+  describe("a copy older than the planned day", () => {
+    const stale = questsOf(day, { done: history, historyThrough: "2026-04-12" });
+
+    test("lately is the span ending on the day the copy was taken", () => {
+      const view = buildQuestsView(stale, NONE, 7);
+      expect(view.done.days.map((entry) => entry.date)).toEqual(["2026-04-09", "2026-04-08"]);
+      expect(view.done.total).toBe(2);
+      expect(view.done.known).toBe(true);
+      expect(view.done.perWeek).toBe(2);
+      expect(view.done.through).toBe("Sunday 12 April");
+      expect(questThroughLabel(view.done.through as string)).toBe("Up to Sunday 12 April");
+    });
+
+    test("a press in this session falls after it, so it leaves the lists and not into lately", () => {
+      const view = buildQuestsView(stale, new Set(["t-glaze"]), 7);
+      expect(ids(view.steps)).not.toContain("t-glaze");
+      expect(view.done.total).toBe(2);
+      expect(view.lanes.find((lane) => lane.key === "craft")).toMatchObject({
+        open: 0,
+        quiet: true,
+        done: null,
+      });
+    });
+
+    test("a history that runs past the planned day still ends on the planned day", () => {
+      const view = buildQuestsView(questsOf(day, { done: history, historyThrough: "2026-04-20" }), NONE, 7);
+      expect(view.done.through).toBeNull();
+      expect(view.done.total).toBe(5);
+    });
   });
 
   test("a finish after midnight belongs to the day still being lived", () => {
@@ -492,7 +630,7 @@ describe("done lately", () => {
   });
 
   test("empty only when nothing is open anywhere and nothing is done", () => {
-    const bare: TodayScreenData = { ...day, input: { ...day.input, candidates: [] } };
+    const bare = withCandidates(day, []);
     expect(buildQuestsView(questsOf(bare), NONE, 7).empty).toBe(true);
     expect(
       buildQuestsView(questsOf(bare, { done: [finished("d-one", at("09:00"))] }), NONE, 7).empty,
@@ -554,29 +692,24 @@ describe("titles and identities, as Today has them", () => {
 // --------------------------------------------------------------- behaviour 8
 
 describe("ordering never depends on the locale", () => {
-  test("ties in the planner's order break on the id", () => {
-    const base = sampleDay();
-    const day: TodayScreenData = {
-      ...base,
-      input: {
-        ...base.input,
-        candidates: [
-          candidate({ id: "t-zeta", lane: "craft" }),
-          candidate({ id: "t-alpha", lane: "craft" }),
-        ],
-      },
-    };
+  test("ties in the planner's ordering break on the id", () => {
+    const day = withCandidates(sampleDay(), [
+      candidate({ id: "t-zeta", lane: "craft" }),
+      candidate({ id: "t-alpha", lane: "craft" }),
+    ]);
     expect(ids(buildQuestsView(questsOf(day), NONE, 7).steps)).toEqual(["t-alpha", "t-zeta"]);
   });
 
-  test("the view is loadable by a browser and reads no locale", () => {
-    const source = readFileSync(
-      path.resolve(__dirname, "..", "app/lib/v2/view/quests.ts"),
-      "utf8",
-    );
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
-    expect(code).not.toMatch(/from\s+["'](node:|next\/|@\/app\/lib\/v2\/local\/|\.\.\/local\/)/);
-    expect(code).not.toMatch(/localeCompare|toLocale|new Intl\./);
+  test("the view and its sample are loadable by a browser and read no locale", () => {
+    for (const file of ["app/lib/v2/view/quests.ts", "app/lib/v2/fixtures/sample-quests.ts"]) {
+      const source = readFileSync(path.resolve(__dirname, "..", file), "utf8");
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
+      expect(code, file).toMatch(/\bfrom\s+["']/);
+      expect(code, file).not.toMatch(
+        /from\s+["'](node:|next\/|@\/app\/lib\/v2\/local\/|\.\.\/local\/)/,
+      );
+      expect(code, file).not.toMatch(/localeCompare|toLocale|new Intl\./);
+    }
   });
 });
 
@@ -588,10 +721,11 @@ describe("the sample", () => {
   const titles = new Set(day.input.candidates.map((entry) => entry.title));
   const laneKeys = new Set(day.lanes.map((lane) => lane.key));
 
-  test("is the sample day's own input, lanes and tags", () => {
+  test("is the sample day's own input, lanes and tags, with history up to that day", () => {
     expect(data.input).toBe(day.input);
     expect(data.lanes).toBe(day.lanes);
     expect(data.tags).toBe(day.tags);
+    expect(data.historyThrough).toBe(SAMPLE_DATE);
     expect(data.historyDays).toBe(28);
   });
 
@@ -632,11 +766,12 @@ describe("the sample", () => {
     expect(sampleQuests(sampleDay())).toEqual(sampleQuests(sampleDay()));
   });
 
-  test("gives a rate for every span", () => {
+  test("gives a rate for every span, ending on the sample day", () => {
     for (const span of QUEST_SPANS) {
       const view = buildQuestsView(data, NONE, span);
       expect(view.done.known, String(span)).toBe(true);
       expect(view.done.total, String(span)).toBeGreaterThan(0);
+      expect(view.done.through, String(span)).toBeNull();
     }
   });
 });
@@ -649,10 +784,12 @@ describe("the copy rules", () => {
     ...strings(QUESTS_COPY),
     ...strings(buildQuestsView(sampleQuests(sampleDay()), NONE, 28)),
     ...strings(buildQuestsView(questsOf(day), new Set(["t-glaze"]), 7)),
+    ...strings(buildQuestsView(questsOf(day, { historyThrough: "2026-04-12" }), NONE, 7)),
     questPastLabel(1),
     questPastLabel(3),
     questDoneTotalLabel(4),
     questPerWeekLabel(2.5),
+    questThroughLabel("Sunday 12 April"),
   ];
 
   test("has something to walk", () => {
@@ -682,8 +819,20 @@ describe("the copy rules", () => {
     expect(questPastLabel(3)).toBe("3 past their date");
     expect(questDoneTotalLabel(4)).toBe("4 finished");
     expect(questPerWeekLabel(2.5)).toBe("2.5 a week");
-    for (const text of [questPastLabel(2), questDoneTotalLabel(2), questPerWeekLabel(2)]) {
+    expect(questThroughLabel("Sunday 12 April")).toBe("Up to Sunday 12 April");
+    for (const text of [
+      questPastLabel(2),
+      questDoneTotalLabel(2),
+      questPerWeekLabel(2),
+      questThroughLabel("Monday 13 April"),
+    ]) {
       expect(text).not.toMatch(/[{}]/);
     }
+  });
+
+  test("has a sentence for each way there is no rate", () => {
+    expect(QUESTS_COPY.doneNone.length).toBeGreaterThan(0);
+    expect(QUESTS_COPY.noHistory.length).toBeGreaterThan(0);
+    expect(QUESTS_COPY.shortHistory.length).toBeGreaterThan(0);
   });
 });

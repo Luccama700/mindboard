@@ -38,9 +38,20 @@ export interface QuestsScreenData {
   /** What was finished lately, newest first. Empty when the source keeps no history. */
   done: QuestDone[];
   /**
-   * How many days back `done` can speak for, counted from the planned day.
-   * 0 means the source has no history at all, and then no rate is shown: a rate
-   * over days nobody can see would be an invented number.
+   * The last day the source's history can speak for, or null when it keeps no
+   * history at all.
+   *
+   * A local copy stops knowing on the day it was taken, however long ago that
+   * was; the live stores know up to the planned day. "Lately" ends on this day
+   * and never later, so a copy three days old shows what was finished before it
+   * was taken and says so, instead of counting three days nobody can see as
+   * three days in which nothing was finished.
+   */
+  historyThrough: DateKey | null;
+  /**
+   * How many days back from `historyThrough` the history reaches. 0 when there
+   * is none, and then no rate is shown: a rate over days nobody can see would be
+   * an invented number.
    */
   historyDays: number;
 }

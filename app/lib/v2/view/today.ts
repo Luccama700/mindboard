@@ -486,24 +486,56 @@ function sentence(parts: Array<string | null | undefined>): string {
  * live in format.ts for a reason (no Intl long format anywhere on this screen,
  * since Node and the browser punctuate them differently and this screen renders
  * in both). Two copies of the month list is how one of them ends up wrong.
+ *
+ * Exported so the Quests panes word a date exactly as this screen does.
  */
-function dayAndMonth(date: DateKey): string {
+export function dayAndMonth(date: DateKey): string {
   const [, ...rest] = dayLabel(date).split(" ");
   return rest.join(" ");
+}
+
+/**
+ * The lane a task is shown under: its own when it is one of the user's lanes,
+ * else none.
+ *
+ * A lane the user does not have cannot be shown, so what claims it belongs to no
+ * lane on screen: counted under its own key it appeared on no row at all. Today
+ * counts it in "No lane" and the Quests panes list it with the side quests, both
+ * through this.
+ */
+export function shownLane(
+  lane: LaneKey | null,
+  lanes: ReadonlyArray<{ key: LaneKey }>,
+): LaneKey | null {
+  if (lane === null) return null;
+  return lanes.some((entry) => entry.key === lane) ? lane : null;
 }
 
 /**
  * One line per lane that has anything waiting: how much, and when the nearest of
  * it closes. Lanes keep the user's own order and a lane with nothing waiting is
  * left out rather than printed as a zero.
+ *
+ * `candidates` are the ones still open. `referenceMs` is the planner's reference
+ * instant (see TodayInput.reference), and `timeZone` the user's.
+ *
+ * EXPORTED SO THERE IS ONE COUNT. The Quests panes show every lane's count and
+ * next date too, and they get both by calling this on the same list rather than
+ * by counting the same way: two loops that agree today are two loops that can
+ * stop agreeing.
  */
-function laneLines(input: TodayInput, referenceMs: number): LaneLine[] {
+export function laneSummary(
+  candidates: readonly Candidate[],
+  lanes: TodayInput["lanes"],
+  referenceMs: number,
+  timeZone: string,
+): LaneLine[] {
   /** The key the items with no lane at all are counted under. */
   const NO_LANE = "";
 
   const counts = new Map<LaneKey, { open: number; dueMs: number | null }>();
-  for (const candidate of input.candidates) {
-    const key = candidate.lane ?? NO_LANE;
+  for (const candidate of candidates) {
+    const key = shownLane(candidate.lane, lanes) ?? NO_LANE;
     const held = counts.get(key) ?? { open: 0, dueMs: null };
     held.open += 1;
     if (candidate.due !== null) {
@@ -520,10 +552,10 @@ function laneLines(input: TodayInput, referenceMs: number): LaneLine[] {
   // The zone is the user's, not the process's: a deadline at 23:30 local is that
   // day, and on the UTC process clock it would read as the next one.
   const day = (dueMs: number | null) =>
-    dueMs === null ? null : dayAndMonth(zonedDateKey(dueMs, input.timeZone));
+    dueMs === null ? null : dayAndMonth(zonedDateKey(dueMs, timeZone));
 
   const lines: LaneLine[] = [];
-  for (const lane of input.lanes) {
+  for (const lane of lanes) {
     const held = counts.get(lane.key);
     if (held === undefined || held.open === 0) continue;
     lines.push({
@@ -627,6 +659,19 @@ export function identityFor(
     if (entry.key === lane) found = { label: entry.label, color: entry.color, source: "lane" };
   }
   return found;
+}
+
+/**
+ * The tasks the plan being shown has finished: every task with a block in state
+ * `done`. One rule for "finished in this session", so the Today screen and the
+ * Quests panes leave out exactly the same tasks.
+ */
+export function doneTaskIds(plan: Pick<PlanOutput, "blocks">): Set<string> {
+  const ids = new Set<string>();
+  for (const block of plan.blocks) {
+    if (block.state === "done" && block.taskId !== null) ids.add(block.taskId);
+  }
+  return ids;
 }
 
 export function buildTodayView(input: TodayInput): TodayView {
@@ -761,6 +806,7 @@ export function buildTodayView(input: TodayInput): TodayView {
     identityOf(candidate.id, candidate.lane),
   );
   const overdueIds = new Set(pastDue.map((entry) => entry.id));
+  const finishedTasks = doneTaskIds(plan);
 
   // Nothing is dropped from this list except what the past due section already
   // names, so nothing is listed twice. A name the candidates do not cover
@@ -791,7 +837,15 @@ export function buildTodayView(input: TodayInput): TodayView {
     },
     notToday,
     pastDue,
-    lanes: laneLines(input, referenceMs),
+    // A task finished in this session is no longer waiting, so its lane stops
+    // counting it in the same render as the press. The Quests panes call the same
+    // function on the same list (`doneTaskIds` decides it for both).
+    lanes: laneSummary(
+      input.candidates.filter((candidate) => !finishedTasks.has(candidate.id)),
+      input.lanes,
+      referenceMs,
+      input.timeZone,
+    ),
     feed: {
       line: feedLine(input.feeds, input.feedLabels, (at) =>
         sinceLabel(at, now, timeZone),

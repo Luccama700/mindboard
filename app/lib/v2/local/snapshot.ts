@@ -58,6 +58,7 @@ import { localCalendarFrom, type FolderSoFar } from "./calendar";
 
 import {
   LocalSnapshotError,
+  groupTag,
   isRealDateKey,
   readCalendarEvents,
   readGroupRows,
@@ -228,9 +229,8 @@ function tagsFor(
 ): Record<string, TaskTag> {
   const byGroup = new Map<string, TaskTag>();
   for (const group of groups) {
-    const { name, color } = group;
-    if (name === null || name.length === 0 || color === null || color.length === 0) continue;
-    byGroup.set(group.id, { label: name, color });
+    const tag = groupTag(group);
+    if (tag !== null) byGroup.set(group.id, tag);
   }
   const groupOfTask = new Map(tasks.map((task) => [task.id, task.group_id]));
 

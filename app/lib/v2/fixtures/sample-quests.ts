@@ -16,7 +16,10 @@ import type { LaneKey } from "@/app/lib/v2/types";
 import type { QuestDone, QuestsScreenData } from "@/app/lib/v2/view/desk-data";
 import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
 
-/** The sample's history reaches back four weeks, the longest span the panes show. */
+/**
+ * The sample's history reaches back four weeks, the longest span the panes show,
+ * from the sample day itself: the sample is not a copy taken earlier.
+ */
 const SAMPLE_HISTORY_DAYS = 28;
 
 /** [id, date, clock, lane, title], newest first. */
@@ -63,6 +66,7 @@ export function sampleQuests(today: TodayScreenData): QuestsScreenData {
     lanes: today.lanes,
     tags: today.tags,
     done,
+    historyThrough: SAMPLE_DATE,
     historyDays: SAMPLE_HISTORY_DAYS,
   };
 }

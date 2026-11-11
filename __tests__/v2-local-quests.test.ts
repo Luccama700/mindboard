@@ -91,7 +91,7 @@ const TASK_ROWS = [
     status: "doing",
     completed_at: "2026-04-14T18:00:00+00:00",
   },
-  // Postgres spellings: fractional seconds, and a space with a short offset.
+  // Postgres spellings: fractional seconds, and a space before the time.
   {
     id: "tb-recent",
     user_id: MINE,
@@ -107,7 +107,7 @@ const TASK_ROWS = [
     group_id: GROUP_SHOP,
     title: "Restock the counter",
     status: "done",
-    completed_at: "2026-04-14 23:05:00+00",
+    completed_at: "2026-04-14 23:05:00+00:00",
   },
   {
     id: "tb-plain",
@@ -136,6 +136,7 @@ const TASK_ROWS = [
   { id: "tb-null-time", user_id: MINE, group_id: GROUP_SHOP, title: "Null time", status: "done", completed_at: null },
   { id: "tb-words", user_id: MINE, group_id: GROUP_SHOP, title: "Words", status: "done", completed_at: "last week" },
   { id: "tb-naive", user_id: MINE, group_id: GROUP_SHOP, title: "No offset", status: "done", completed_at: "2026-04-14T10:00:00" },
+  { id: "tb-short", user_id: MINE, group_id: GROUP_SHOP, title: "Short offset", status: "done", completed_at: "2026-04-14 10:00:00+00" },
   { id: "tb-day-only", user_id: MINE, group_id: GROUP_SHOP, title: "Day only", status: "done", completed_at: "2026-04-14" },
   { id: "tb-number", user_id: MINE, group_id: GROUP_SHOP, title: "Number", status: "done", completed_at: 1776182700000 },
   // The other account's rows, one of them malformed: neither is this account's.
@@ -167,10 +168,34 @@ async function folder(overrides: Record<string, string | Buffer | null> = {}): P
 /** The quests of a folder, beside the day the same folder loads. */
 async function load(
   overrides: Record<string, string | Buffer | null> = {},
+  dateParam: string | null = null,
 ): Promise<{ today: TodayScreenData; quests: QuestsScreenData | null }> {
   const dir = await folder(overrides);
-  const today = await loadLocalToday(dir, NOW, null);
+  const today = await loadLocalToday(dir, NOW, dateParam);
   return { today, quests: await loadLocalQuests(dir, today) };
+}
+
+/** A snapshot taken at another instant. */
+const takenAt = (instant: string) => JSON.stringify({ ...SNAPSHOT, takenAt: instant });
+
+/** The rules with lights out after midnight. */
+const LATE_RULES = JSON.stringify({
+  ...RULES_DOC,
+  planner: { ...RULES_DOC.planner, lightsOut: "01:30" },
+});
+
+/** Finished rows of this account, one per completed_at, in the shop group. */
+function finishedRows(times: Record<string, unknown>): string {
+  return JSON.stringify(
+    Object.entries(times).map(([id, completed_at]) => ({
+      id,
+      user_id: MINE,
+      group_id: GROUP_SHOP,
+      title: `Finished ${id}`,
+      status: "done",
+      completed_at,
+    })),
+  );
 }
 
 async function thrown(dir: string, today: TodayScreenData): Promise<LocalSnapshotError> {
@@ -238,7 +263,9 @@ describe("the quests of a local folder", () => {
     expect(byId["tb-nogroup"]).toMatchObject({ lane: null, tag: null, title: "untitled" });
   });
 
-  test("speak for 28 days when the file holds a finished row", () => {
+  test("speak for 28 days up to the day the copy was taken", () => {
+    // Taken at 09:05 on the planned day itself.
+    expect(quests?.historyThrough).toBe(DAY);
     expect(quests?.historyDays).toBe(28);
   });
 
@@ -249,10 +276,11 @@ describe("the quests of a local folder", () => {
     ];
     const { quests: loaded } = await load({ "tasks.json": JSON.stringify(rows) });
     expect(loaded?.done).toEqual([]);
+    expect(loaded?.historyThrough).toBe(DAY);
     expect(loaded?.historyDays).toBe(28);
   });
 
-  test("speak for no days when nothing finished has a time", async () => {
+  test("speak for no day at all when nothing finished has a time", async () => {
     const rows = [
       { id: "ta-open", user_id: MINE, group_id: GROUP_READING, title: "Open", status: "todo" },
       { id: "tb-no-time", user_id: MINE, group_id: GROUP_SHOP, title: "No time", status: "done" },
@@ -260,7 +288,115 @@ describe("the quests of a local folder", () => {
     ];
     const { quests: loaded } = await load({ "tasks.json": JSON.stringify(rows) });
     expect(loaded?.done).toEqual([]);
+    expect(loaded?.historyThrough).toBeNull();
     expect(loaded?.historyDays).toBe(0);
+  });
+});
+
+// A copy stops knowing on the day it was taken. Its history is the 28 days up
+// to that day, never up to a planned day it cannot see.
+describe("a copy taken before the planned day", () => {
+  test("its history ends on the day it was taken", async () => {
+    const { today: day, quests: loaded } = await load({
+      "snapshot.json": takenAt(at("20:00", "2026-04-12")),
+    });
+    expect(day.input.date).toBe(DAY);
+    expect(loaded?.historyThrough).toBe("2026-04-12");
+    expect(loaded?.historyDays).toBe(28);
+    // The 28 days up to the 12th: the two finishes after it are not the copy's
+    // to speak for, and the 18 March one is now inside the window.
+    expect(loaded?.done.map((entry) => entry.id)).toEqual([
+      "tb-plain",
+      "tb-loose",
+      "tb-nogroup",
+      "tb-old",
+    ]);
+  });
+
+  test("and never later than the planned day", async () => {
+    const { today: day, quests: loaded } = await load({}, "2026-04-13");
+    expect(day.input.date).toBe("2026-04-13");
+    expect(loaded?.historyThrough).toBe("2026-04-13");
+    expect(loaded?.done.map((entry) => entry.id)).toEqual([
+      "tb-plain",
+      "tb-loose",
+      "tb-nogroup",
+      "tb-old",
+    ]);
+  });
+});
+
+// A finish is read on its PLANNING day: with lights out at 01:30, 00:30 is still
+// the day before. The window and the day the copy was taken both follow it.
+describe("with lights out after midnight", () => {
+  test("a finish at 00:30 belongs to the day before", async () => {
+    const tasks = finishedRows({
+      "tb-edge": at("00:30", "2026-03-19"),
+      "tb-inside": at("02:00", "2026-03-19"),
+    });
+    const late = await load({ "rules.json": LATE_RULES, "tasks.json": tasks });
+    // The 18th is 28 days back, one outside the window; the 19th is inside.
+    expect(late.quests?.done.map((entry) => entry.id)).toEqual(["tb-inside"]);
+
+    const early = await load({ "tasks.json": tasks });
+    expect(early.quests?.done.map((entry) => entry.id)).toEqual(["tb-inside", "tb-edge"]);
+  });
+
+  test("a copy taken at 00:30 speaks for the day before", async () => {
+    const { quests: loaded } = await load({
+      "rules.json": LATE_RULES,
+      "snapshot.json": takenAt(at("00:30")),
+    });
+    expect(loaded?.historyThrough).toBe("2026-04-14");
+    expect(loaded?.done.map((entry) => entry.id)).not.toContain("tb-recent");
+  });
+});
+
+// The full offset is required, in either of Postgres's spellings, so the same
+// file reads the same instant in every engine.
+describe("finish time spellings", () => {
+  test("each accepted spelling reads the same instant", async () => {
+    const instant = at("09:05", "2026-04-14");
+    const { quests: loaded } = await load({
+      "tasks.json": finishedRows({
+        "s-z": "2026-04-14T16:05:00Z",
+        "s-colon": "2026-04-14T16:05:00+00:00",
+        "s-compact": "2026-04-14T16:05:00+0000",
+        "s-local": "2026-04-14T09:05:00-07:00",
+        "s-local-compact": "2026-04-14T09:05:00-0700",
+        "s-micro": "2026-04-14T16:05:00.123456+00:00",
+        "s-space": "2026-04-14 16:05:00+00:00",
+        "s-space-compact": "2026-04-14 16:05:00.5+0000",
+        "s-no-seconds": "2026-04-14T16:05Z",
+      }),
+    });
+    expect(loaded?.done.map((entry) => entry.id)).toEqual([
+      "s-colon",
+      "s-compact",
+      "s-local",
+      "s-local-compact",
+      "s-micro",
+      "s-no-seconds",
+      "s-space",
+      "s-space-compact",
+      "s-z",
+    ]);
+    for (const entry of loaded?.done ?? []) expect(entry.doneAt, entry.id).toBe(instant);
+  });
+
+  test("a short offset, no offset, a bare day or another letter case is skipped", async () => {
+    const { quests: loaded } = await load({
+      "tasks.json": finishedRows({
+        "r-short": "2026-04-14T16:05:00+00",
+        "r-space-short": "2026-04-14 16:05:00+00",
+        "r-naive": "2026-04-14T16:05:00",
+        "r-day": "2026-04-14",
+        "r-lower": "2026-04-14t16:05:00z",
+        "r-hour-only": "2026-04-14T16Z",
+      }),
+    });
+    expect(loaded?.done).toEqual([]);
+    expect(loaded?.historyThrough).toBeNull();
   });
 });
 

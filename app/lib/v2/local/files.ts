@@ -34,6 +34,7 @@ import { parseRules } from "@/app/lib/v2/rules";
 import { RowShapeError, parseRulesDocument } from "@/app/lib/v2/store/mappers";
 import type { RulesDocument } from "@/app/lib/v2/store/types";
 import type { DateKey, Instant, PlannerRules } from "@/app/lib/v2/types";
+import type { TaskTag } from "@/app/lib/v2/view/screen-data";
 
 /** The folder's contents. Fixed names: nothing is ever derived from a request. */
 export const SNAPSHOT_FILES = {
@@ -367,6 +368,20 @@ export interface LocalGroup {
    * and the colour the user chose, when the folder carries no calendar list.
    */
   google_calendar_id: string | null;
+}
+
+/**
+ * A group's tag: its name and the colour the user chose for it. None for a
+ * group with no name or no colour, because the screen derives a readable text
+ * colour from the tag and cannot do that with an empty string.
+ *
+ * The one rule for it: the day's tags (`tagsFor` in ./snapshot.ts) and the
+ * history's (./quests.ts) both read a group through this.
+ */
+export function groupTag(group: LocalGroup): TaskTag | null {
+  const { name, color } = group;
+  if (name === null || name.length === 0 || color === null || color.length === 0) return null;
+  return { label: name, color };
 }
 
 const groupRowSchema = z.object({

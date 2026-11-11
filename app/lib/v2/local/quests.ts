@@ -4,53 +4,50 @@
 //
 // Server only: reads files. Never imported by anything a browser loads.
 //
-// THE SAME READS AS THE DAY. A finished task's lane is the lane whose `groupIds`
-// holds its group, exactly as `tasksToCandidates` (engine/sources.ts) gives an
-// open one its lane, and its tag is its group's name and colour by the rule
-// `tagsFor` (./snapshot.ts) gives an open one its tag. Both of those are private
-// to files this one may not change, so the two small rules are written out again
-// below, each beside the name of the one it mirrors.
+// THE SAME READS AS THE DAY. A finished task's lane and title come from the two
+// rules an open one's do (`laneOfGroup` and `titleOf`, engine/task-rules.ts),
+// and its tag from the one group rule the day's tags use (`groupTag`,
+// ./files.ts). Nothing here is a second spelling of any of them.
+//
+// A COPY STOPS KNOWING ON THE DAY IT WAS TAKEN. Its history is the 28 days up to
+// that day (never later than the planned day), and `historyThrough` says which
+// day that is, so the panes can say where "lately" ends instead of counting the
+// days since the copy as days in which nothing was finished.
 
 import { z } from "zod";
 
 import { zonedIso } from "@/app/lib/snapshots/zoned-time";
+import { laneOfGroup, titleOf } from "@/app/lib/v2/engine/task-rules";
 import { compareText } from "@/app/lib/v2/plan/day";
-import type { RulesDocument } from "@/app/lib/v2/store/types";
-import type { LaneKey } from "@/app/lib/v2/types";
 import type { QuestDone, QuestsScreenData } from "@/app/lib/v2/view/desk-data";
 import { QUEST_HISTORY_DAYS, doneDayOf, withinDays } from "@/app/lib/v2/view/quests";
 import type { TaskTag, TodayScreenData } from "@/app/lib/v2/view/screen-data";
 
 import {
   SNAPSHOT_FILES,
+  groupTag,
   readGroupRows,
   readOptionalRows,
   readRules,
   readSnapshotMeta,
-  type LocalGroup,
 } from "./files";
 
 /** The one status that means finished. */
 const DONE = "done";
 
 /**
- * What a task with no title is called: the engine's own word for an open one
- * (`titleOf` in engine/sources.ts), copied by value because that module is the
- * live engine's and reaches the database and Google with it.
- */
-const UNTITLED = "untitled";
-
-/**
- * A finish time this reader trusts: a date, a time and an explicit offset.
+ * A finish time this reader trusts: a date, `T` or a space, a time, and a FULL
+ * offset (`Z`, or a sign with hours and minutes, with or without the colon).
  *
- * The offset is required, not assumed. Without one `Date.parse` reads the time
- * in the zone of whatever process happens to run it, so the same file would put
- * the same finish on two different days on two machines. Postgres writes every
- * `timestamptz` with one, in either spelling below, so a value without it was
- * written by hand and is skipped like any other time nobody can read.
+ * The offset is required, not assumed: without one `Date.parse` reads the time
+ * in the zone of whatever process runs it. Postgres writes every `timestamptz`
+ * with one, in either separator. A short "+00", a bare day or any other spelling
+ * is skipped like a time nobody can read, and every accepted spelling is
+ * rewritten into the one format the language defines (`normalFinish`) before it
+ * is parsed, so no engine is left to guess.
  */
 const FINISH_TIME =
-  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/i;
+  /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+-]\d{2}:?\d{2})$/;
 
 /**
  * The columns this reader needs, and nothing stricter than the day's own read.
@@ -75,38 +72,23 @@ const doneRowSchema = z.object({
   completed_at: z.unknown(),
 });
 
+/** An accepted finish time in the ECMAScript date time format, or null. */
+function normalFinish(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = FINISH_TIME.exec(value.trim());
+  if (match === null) return null;
+  const [, date, clock, seconds, fraction, offset] = match;
+  const millis = fraction === undefined ? "" : `.${fraction.slice(0, 3).padEnd(3, "0")}`;
+  const zone = offset === "Z" ? "Z" : `${offset.slice(0, 3)}:${offset.slice(-2)}`;
+  return `${date}T${clock}:${seconds ?? "00"}${millis}${zone}`;
+}
+
 /** Epoch milliseconds of a finish time, or null for one this reader does not trust. */
 function finishMs(value: unknown): number | null {
-  if (typeof value !== "string") return null;
-  const text = value.trim();
-  if (!FINISH_TIME.test(text)) return null;
+  const text = normalFinish(value);
+  if (text === null) return null;
   const ms = Date.parse(text);
   return Number.isFinite(ms) ? ms : null;
-}
-
-/** The row's own title, or the word for a row that has none. Blank counts as none. */
-function titleOf(value: string | null): string {
-  const text = (value ?? "").trim();
-  return text === "" ? UNTITLED : text;
-}
-
-/** The lane whose `groupIds` holds the group: `tasksToCandidates`'s rule. */
-function laneOf(groupId: string | null, document: RulesDocument): LaneKey | null {
-  if (groupId === null) return null;
-  return document.lanes.find((lane) => lane.groupIds.includes(groupId))?.key ?? null;
-}
-
-/**
- * Each group's tag, by `tagsFor`'s rule: a group with no name or no colour has
- * none, because the screen derives a readable text colour from it.
- */
-function tagsByGroup(groups: LocalGroup[]): Map<string, TaskTag> {
-  const out = new Map<string, TaskTag>();
-  for (const { id, name, color } of groups) {
-    if (name === null || name.length === 0 || color === null || color.length === 0) continue;
-    out.set(id, { label: name, color });
-  }
-  return out;
 }
 
 /**
@@ -114,11 +96,14 @@ function tagsByGroup(groups: LocalGroup[]): Map<string, TaskTag> {
  * very planner input Today plans from. What it adds is read from the folder:
  * the history of what was finished.
  *
- * `done` holds the finished rows whose finish falls on the planned day or one of
- * the 27 before it, by the same day rule the panes read them with
- * (`doneDayOf`), newest first. `historyDays` is 28 when the file holds any
- * finished row with a readable time at all, older ones included, and 0 when it
- * holds none: a file that records no finishes cannot speak for a rate.
+ * - `historyThrough` is the planning day the copy was taken on (`doneDayOf` of
+ *   the snapshot's own `takenAt`), or the planned day when that is earlier; null
+ *   when the file holds no finished row with a readable time at all.
+ * - `done` is the finished rows whose finish falls on that day or one of the 27
+ *   before it, by the same day rule, newest first. A finish after it is not the
+ *   copy's to speak for as of the planned day.
+ * - `historyDays` is 28 whenever there is a history: the export holds every task
+ *   the account has, so it reaches back further than any span.
  *
  * Null only when the folder has no task file. A file that is there and cannot
  * be read throws the `LocalSnapshotError` every file of the folder throws: a
@@ -133,10 +118,18 @@ export async function loadLocalQuests(
   if (rows === null) return null;
 
   const { document } = await readRules(dir, meta.timeZone);
-  const tags = tagsByGroup(await readGroupRows(dir, meta.userId));
+  const tags = new Map<string, TaskTag>();
+  for (const group of await readGroupRows(dir, meta.userId)) {
+    const tag = groupTag(group);
+    if (tag !== null) tags.set(group.id, tag);
+  }
 
   const { input } = today;
   const rules = input.rules;
+  const takenDay = doneDayOf(meta.takenAt, rules);
+  const through =
+    takenDay !== null && compareText(takenDay, input.date) < 0 ? takenDay : input.date;
+
   let finishes = 0;
   const done: QuestDone[] = [];
   for (const row of rows) {
@@ -148,14 +141,15 @@ export async function loadLocalQuests(
     // One spelling, in the user's zone, so the panes read it as the day reads
     // every other instant.
     const doneAt = zonedIso(ms, rules.timeZone);
+    // Planning day, by `doneDayOf`, as the panes read it.
     const day = doneDayOf(doneAt, rules);
-    if (day === null || !withinDays(day, input.date, QUEST_HISTORY_DAYS)) continue;
+    if (day === null || !withinDays(day, through, QUEST_HISTORY_DAYS)) continue;
 
     const tag = row.group_id === null ? undefined : tags.get(row.group_id);
     done.push({
       id: row.id,
       title: titleOf(row.title),
-      lane: laneOf(row.group_id, document),
+      lane: laneOfGroup(row.group_id, document.lanes)?.key ?? null,
       tag: tag === undefined ? null : { ...tag },
       doneAt,
     });
@@ -165,11 +159,13 @@ export async function loadLocalQuests(
     (a, b) => Date.parse(b.doneAt) - Date.parse(a.doneAt) || compareText(a.id, b.id),
   );
 
+  const known = finishes > 0;
   return {
     input,
     lanes: today.lanes,
     tags: today.tags,
     done,
-    historyDays: finishes > 0 ? QUEST_HISTORY_DAYS : 0,
+    historyThrough: known ? through : null,
+    historyDays: known ? QUEST_HISTORY_DAYS : 0,
   };
 }

@@ -19,6 +19,7 @@ import { zonedDateKey, zonedIso, zonedWallTimeToUtcMs } from "@/app/lib/snapshot
 import { createTelegramClient } from "@/app/lib/v2/channel/telegram";
 import { CALENDAR_FEED, TASK_FIXED_PREFIX, type TickDeps } from "@/app/lib/v2/engine/tick";
 import { createProbes } from "@/app/lib/v2/engine/probes";
+import { laneOfGroup, titleOf } from "@/app/lib/v2/engine/task-rules";
 import { dayBounds, shiftDateKey } from "@/app/lib/v2/plan/day";
 import { parseRules } from "@/app/lib/v2/rules";
 import { createSupabaseStores } from "@/app/lib/v2/store/supabase";
@@ -119,21 +120,6 @@ export const SOURCE_QUERIES = [
   },
 ] as const satisfies readonly QueryShape[];
 
-/** A title is the user's own text; this is only for a row that has none. */
-const UNTITLED = "untitled";
-
-/**
- * The row's own title, or the word for a row that has none.
- *
- * Blank counts as none. A title of "" or of spaces is a title the user never
- * wrote, and it reached the screen as an empty heading on the lit card and a
- * status line that read " marked done." Trimmed as well, so the two levels of a
- * name (view/today.ts splitTitle) are not measuring padding.
- */
-function titleOf(value: string | null): string {
-  const text = (value ?? "").trim();
-  return text === "" ? UNTITLED : text;
-}
 /** A task with no due time closes at the end of its local day. */
 const END_OF_DAY = { hour: 23, minute: 59 };
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -220,11 +206,7 @@ export function tasksToCandidates(
   const out: Candidate[] = [];
   for (const row of rows) {
     if (!isOpen(row.status)) continue;
-    const lane =
-      row.group_id === null
-        ? null
-        : (user.rules.lanes.find((candidate) => candidate.groupIds.includes(row.group_id as string)) ??
-          null);
+    const lane = laneOfGroup(row.group_id, user.rules.lanes);
     const time = wallParts(row.due_time) ?? END_OF_DAY;
     const due = row.due_date === null ? null : localIso(row.due_date, time.hour, time.minute, zone);
     out.push({
