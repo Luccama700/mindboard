@@ -233,9 +233,15 @@ const ROOT = path.resolve(__dirname, "..");
 
 const sourceOf = (file: string) => readFileSync(path.join(ROOT, file), "utf8");
 
-/** The file, parsed. Parents are kept, because every rule walks upwards. */
+/**
+ * The file, parsed. Parents are kept, because every rule walks upwards.
+ *
+ * The script kind follows the extension: in a `.ts` file `<string>x` is a cast,
+ * and parsed as TSX it is an unclosed tag that swallows the rest of the file.
+ */
 function parse(file: string, source: string): ts.SourceFile {
-  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const kind = file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, kind);
 }
 
 function walk(node: ts.Node, visit: (node: ts.Node) => void): void {
@@ -318,11 +324,114 @@ const GATE_HELPERS = ["localSnapshotDir", "fixturesEnabled"];
 /** What a route handler exports: these are entries, not helpers. */
 const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
+/** The environment has a module spelling as well as a global one. */
+const PROCESS_MODULES = ["process", "node:process"];
+
+/** The gate itself, which reads the two environment variables on purpose. */
+const GATE_MODULE = "app/lib/v2/source";
+
+/** The folders that read somebody's day. Anything under them is a loader. */
+function readsTheFolder(target: string): boolean {
+  return target.startsWith("app/lib/v2/local/") || target.startsWith("app/lib/v2/fixtures/");
+}
+
+/** The extensionless repository path a file is known by. */
+const moduleKey = (file: string) => file.replace(/\.tsx?$/, "");
+
+/**
+ * Does an import clause bring a value in, or only a type?
+ *
+ * A type cannot read anything, so a type only import does not make the importer
+ * a way of reaching a loader. `import { type A, b }` brings `b` in, so it does.
+ */
+function importsAValue(clause: ts.ImportClause | undefined): boolean {
+  if (clause === undefined || clause.isTypeOnly) return false;
+  if (clause.name !== undefined) return true;
+  const named = clause.namedBindings;
+  if (named === undefined) return false;
+  if (ts.isNamespaceImport(named)) return true;
+  return named.elements.some((element) => !element.isTypeOnly);
+}
+
+/**
+ * Every module that can reach a loader, as extensionless repository paths.
+ *
+ * WHY THIS EXISTS. The rules used to ask whether an import came from under
+ * `local/` or `fixtures/`, so a loader reached through a WRAPPER was invisible:
+ * a page importing `getWeek` from its own folder, where `getWeek` calls
+ * `loadLocalCalendar`, passed every rule, and the wrapper is not a route file so
+ * nothing walked it either. A read is a read however many modules it is behind,
+ * so the question is now transitive: a module that imports a loader is itself a
+ * loader, to a fixed point.
+ *
+ * Two exclusions, both deliberate. The GATE (`app/lib/v2/source`) reads the two
+ * environment variables for a living and is what every page is supposed to ask.
+ * And modules already under `local/` or `fixtures/` are matched by the base rule,
+ * so marking them again would say nothing.
+ */
+function dataModulesIn(sources: Map<string, string>): Set<string> {
+  const marked = new Set<string>();
+  for (;;) {
+    let grew = false;
+    for (const [file, source] of sources) {
+      const key = moduleKey(file);
+      if (marked.has(key) || key === GATE_MODULE || readsTheFolder(key)) continue;
+
+      let reaches = false;
+      const consider = (specifier: string) => {
+        if (reaches) return;
+        const target = resolvedModule(file, specifier);
+        if (target !== null && (readsTheFolder(target) || marked.has(target))) reaches = true;
+      };
+
+      walk(parse(file, source), (node) => {
+        if (reaches) return;
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          if (importsAValue(node.importClause)) consider(node.moduleSpecifier.text);
+          return;
+        }
+        if (!ts.isCallExpression(node) || node.arguments.length === 0) return;
+        const callee = node.expression;
+        const dynamic =
+          callee.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(callee) && callee.text === "require");
+        const first = node.arguments[0];
+        if (dynamic && ts.isStringLiteral(first)) consider(first.text);
+      });
+
+      if (reaches) {
+        marked.add(key);
+        grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+  return marked;
+}
+
+/** Every module of the two v2 trees, by path, for the set above. */
+function v2Sources(): Map<string, string> {
+  const sources = new Map<string, string>();
+  const collect = (dir: string) => {
+    for (const entry of readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      const next = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) collect(next);
+      else if (/\.tsx?$/.test(entry.name)) sources.set(next, sourceOf(next));
+    }
+  };
+  collect("app/lib/v2");
+  collect("app/v2");
+  return sources;
+}
+
+/** The real tree's answer, computed once. */
+const DATA_MODULES = dataModulesIn(v2Sources());
+
 /** Does this specifier name a module that reads somebody's day? */
-function isDataModule(file: string, specifier: string): boolean {
+function isDataModule(file: string, specifier: string, wrappers: Set<string>): boolean {
   const target = resolvedModule(file, specifier);
   if (target === null) return false;
-  return target.startsWith("app/lib/v2/local/") || target.startsWith("app/lib/v2/fixtures/");
+  return readsTheFolder(target) || wrappers.has(target);
 }
 
 type FunctionNode = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction;
@@ -367,34 +476,101 @@ function topLevelFunctions(tree: ts.SourceFile): TopLevel[] {
   return found;
 }
 
+/**
+ * Is this identifier a reference to a value, rather than a name being declared,
+ * a property of something else, or a mention in a type?
+ *
+ * The rules below count any reference to a loader, not only a call on it: a
+ * loader put in a variable, passed as an argument, reached through `.call`, or
+ * dropped in an array and invoked later is the same read, and each of those
+ * walked past a rule that looked for `name(`.
+ */
+function isValueReference(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (parent === undefined) return false;
+
+  const named = parent as { name?: ts.Node };
+  if (
+    named.name === node &&
+    (ts.isFunctionDeclaration(parent) ||
+      ts.isFunctionExpression(parent) ||
+      ts.isClassDeclaration(parent) ||
+      ts.isVariableDeclaration(parent) ||
+      ts.isParameter(parent) ||
+      ts.isBindingElement(parent) ||
+      ts.isPropertyAssignment(parent) ||
+      ts.isPropertySignature(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isMethodDeclaration(parent) ||
+      ts.isMethodSignature(parent) ||
+      ts.isEnumMember(parent) ||
+      ts.isTypeParameterDeclaration(parent) ||
+      ts.isInterfaceDeclaration(parent) ||
+      ts.isTypeAliasDeclaration(parent) ||
+      ts.isModuleDeclaration(parent))
+  ) {
+    return false;
+  }
+  // The property half of `a.b`, and the right half of a qualified type name.
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
+  if (ts.isQualifiedName(parent) && parent.right === node) return false;
+
+  // A JSX TAG IS NOT A CALL. `<Screen source={source} />` hands React an
+  // element and returns; the child's own body runs afterwards, inside its own
+  // function, where its own guard sits first. Counting the tag as a read would
+  // refuse the one shape this whole gate is built on, and it would refuse it in
+  // the entry, where the child is always named. A child called outright,
+  // `Screen()`, is a call like any other and is still counted.
+  if (
+    (ts.isJsxSelfClosingElement(parent) ||
+      ts.isJsxOpeningElement(parent) ||
+      ts.isJsxClosingElement(parent)) &&
+    parent.tagName === node
+  ) {
+    return false;
+  }
+
+  for (let current: ts.Node | undefined = parent; current !== undefined; current = current.parent) {
+    if (
+      ts.isImportDeclaration(current) ||
+      ts.isExportDeclaration(current) ||
+      ts.isImportEqualsDeclaration(current) ||
+      ts.isImportClause(current)
+    ) {
+      return false;
+    }
+    if (ts.isTypeNode(current)) return false;
+  }
+  return true;
+}
+
 /** The names this file can read data through, and what is wrong with how. */
 interface Bindings {
-  /** Local names that read data when called. Aliases are the local name. */
+  /** Local names that read data. Aliases are the local name. */
   names: Set<string>;
-  /** Namespace imports of a data module: every property call on one is a read. */
+  /** Namespace imports of a data module: a mention of one is a read. */
   namespaces: Set<string>;
   /** The subset that came in through an import, which is what a shell may not do. */
   imported: Set<string>;
   problems: string[];
 }
 
-function isDataCall(node: ts.CallExpression, bindings: Bindings): string | null {
-  const callee = node.expression;
-  if (ts.isIdentifier(callee) && bindings.names.has(callee.text)) return callee.text;
-  if (ts.isPropertyAccessExpression(callee)) {
-    let root: ts.Expression = callee.expression;
-    while (ts.isPropertyAccessExpression(root)) root = root.expression;
-    if (ts.isIdentifier(root) && bindings.namespaces.has(root.text)) {
-      return `${root.text}.${callee.name.text}`;
-    }
-  }
-  return null;
-}
-
-function callsData(node: ts.Node, bindings: Bindings): boolean {
-  let found = false;
+/** Every mention of a loader in this node, and the name it was reached by. */
+function readsIn(node: ts.Node, bindings: Bindings): Array<{ node: ts.Node; name: string }> {
+  const found: Array<{ node: ts.Node; name: string }> = [];
   walk(node, (child) => {
-    if (!found && ts.isCallExpression(child) && isDataCall(child, bindings) !== null) found = true;
+    if (!ts.isIdentifier(child) || !isValueReference(child)) return;
+    const { text } = child;
+    if (bindings.namespaces.has(text)) {
+      const parent = child.parent;
+      const property =
+        ts.isPropertyAccessExpression(parent) && parent.expression === child
+          ? `.${parent.name.text}`
+          : "";
+      found.push({ node: child, name: `${text}${property}` });
+      return;
+    }
+    if (bindings.names.has(text)) found.push({ node: child, name: text });
   });
   return found;
 }
@@ -403,15 +579,13 @@ function callsData(node: ts.Node, bindings: Bindings): boolean {
  * Rule a: every name this file can read somebody's day through.
  *
  * The imports first, by their LOCAL name, so an alias is followed; a namespace
- * import makes every property call on it a read; a dynamic `import()` or
- * `require` of such a module is a finding in itself, because nothing after it
- * can be followed. Then, to a fixed point, every function declared at the top
- * level whose body calls one of those names: a local helper that reads data is
+ * import makes every mention of it a read; a dynamic `import()` or `require` of
+ * such a module is a finding in itself, because nothing after it can be
+ * followed. Then, to a fixed point, every function declared at the top level
+ * whose body mentions one of those names: a local helper that reads data is
  * itself a way of reading data, however it is spelled.
- *
- * A type only import is not one of these: a type cannot be called.
  */
-function dataBindings(file: string, tree: ts.SourceFile): Bindings {
+function dataBindings(file: string, tree: ts.SourceFile, wrappers: Set<string>): Bindings {
   const bindings: Bindings = {
     names: new Set(),
     namespaces: new Set(),
@@ -421,7 +595,7 @@ function dataBindings(file: string, tree: ts.SourceFile): Bindings {
 
   walk(tree, (node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      if (!isDataModule(file, node.moduleSpecifier.text)) return;
+      if (!isDataModule(file, node.moduleSpecifier.text, wrappers)) return;
       const clause = node.importClause;
       if (clause === undefined || clause.isTypeOnly) return;
       if (clause.name !== undefined) {
@@ -446,7 +620,7 @@ function dataBindings(file: string, tree: ts.SourceFile): Bindings {
       ts.isExportDeclaration(node) &&
       node.moduleSpecifier !== undefined &&
       ts.isStringLiteral(node.moduleSpecifier) &&
-      isDataModule(file, node.moduleSpecifier.text)
+      isDataModule(file, node.moduleSpecifier.text, wrappers)
     ) {
       bindings.problems.push(`sends ${node.moduleSpecifier.text} straight out again`);
       return;
@@ -459,7 +633,9 @@ function dataBindings(file: string, tree: ts.SourceFile): Bindings {
     if (!dynamic) return;
     const first = node.arguments[0];
     if (ts.isStringLiteral(first)) {
-      if (isDataModule(file, first.text)) bindings.problems.push(`loads ${first.text} at run time`);
+      if (isDataModule(file, first.text, wrappers)) {
+        bindings.problems.push(`loads ${first.text} at run time`);
+      }
     } else {
       bindings.problems.push("loads a module nothing can name at run time");
     }
@@ -470,7 +646,7 @@ function dataBindings(file: string, tree: ts.SourceFile): Bindings {
     let grew = false;
     for (const local of locals) {
       if (bindings.names.has(local.name)) continue;
-      if (!callsData(local.node, bindings)) continue;
+      if (readsIn(local.node, bindings).length === 0) continue;
       bindings.names.add(local.name);
       grew = true;
     }
@@ -478,6 +654,49 @@ function dataBindings(file: string, tree: ts.SourceFile): Bindings {
   }
 
   return bindings;
+}
+
+/**
+ * The gate's three names, as THIS file calls them.
+ *
+ * By origin, not by spelling: `screenSource` and `requireLoopback` are the names
+ * imported from the gate and `notFound` the one from next/navigation, each
+ * followed through an alias. A local function of the same name, or the same name
+ * imported from somewhere that does nothing, is not the gate, and a page built
+ * on one was passing every rule while checking nothing.
+ */
+interface GateNames {
+  screenSource: Set<string>;
+  requireLoopback: Set<string>;
+  notFound: Set<string>;
+}
+
+function gateNames(file: string, tree: ts.SourceFile): GateNames {
+  const names: GateNames = {
+    screenSource: new Set(),
+    requireLoopback: new Set(),
+    notFound: new Set(),
+  };
+  walk(tree, (node) => {
+    if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier)) return;
+    const written = node.moduleSpecifier.text;
+    const fromGate = resolvedModule(file, written) === GATE_MODULE;
+    const fromNext = written === "next/navigation";
+    if (!fromGate && !fromNext) return;
+    const clause = node.importClause;
+    if (clause === undefined || clause.isTypeOnly) return;
+    const named = clause.namedBindings;
+    if (named === undefined || !ts.isNamedImports(named)) return;
+    for (const element of named.elements) {
+      if (element.isTypeOnly) continue;
+      const original = (element.propertyName ?? element.name).text;
+      const local = element.name.text;
+      if (fromGate && original === "screenSource") names.screenSource.add(local);
+      if (fromGate && original === "requireLoopback") names.requireLoopback.add(local);
+      if (fromNext && original === "notFound") names.notFound.add(local);
+    }
+  });
+  return names;
 }
 
 /** The functions this node sits inside, nearest first. */
@@ -497,8 +716,8 @@ function within(node: ts.Node, container: ts.Node): boolean {
 }
 
 /**
- * Rule c, the guard itself: `await requireLoopback(<one argument>)` as a
- * statement of this function's OWN top-level block, and the end of it.
+ * Rule c, the guard itself: `await <the gate's requireLoopback>(<one argument>)`
+ * as a statement of this function's OWN top-level block, and the end of it.
  *
  * Nothing else counts, and each exclusion is a shape that used to pass. Inside
  * an `if`, a `try` or a loop it is not a statement of the block, so the check
@@ -506,7 +725,7 @@ function within(node: ts.Node, container: ts.Node): boolean {
  * call rather than the check, so a refusal is swallowed and the page renders.
  * Two arguments, or none, is not this function.
  */
-function guardEnd(fn: FunctionNode): number | null {
+function guardEnd(fn: FunctionNode, guards: Set<string>): number | null {
   const { body } = fn;
   if (body === undefined || !ts.isBlock(body)) return null;
   for (const statement of body.statements) {
@@ -515,28 +734,32 @@ function guardEnd(fn: FunctionNode): number | null {
     if (!ts.isAwaitExpression(awaited)) continue;
     const call = awaited.expression;
     if (!ts.isCallExpression(call) || call.arguments.length !== 1) continue;
-    if (!ts.isIdentifier(call.expression) || call.expression.text !== "requireLoopback") continue;
+    if (!ts.isIdentifier(call.expression) || !guards.has(call.expression.text)) continue;
     return statement.end;
   }
   return null;
 }
 
-function callsNamed(node: ts.Node, name: string, before = Number.POSITIVE_INFINITY): boolean {
+function callsOneOf(
+  node: ts.Node,
+  names: Set<string>,
+  before = Number.POSITIVE_INFINITY,
+): boolean {
   let found = false;
   walk(node, (child) => {
     if (found || !ts.isCallExpression(child)) return;
-    if (!ts.isIdentifier(child.expression) || child.expression.text !== name) return;
+    if (!ts.isIdentifier(child.expression) || !names.has(child.expression.text)) return;
     if (child.getStart() < before) found = true;
   });
   return found;
 }
 
-/** Is this node inside the argument of a `screenSource(...)` call? */
-function insideScreenSource(node: ts.Node): boolean {
+/** Is this node inside the argument of the gate's own `screenSource` call? */
+function insideScreenSource(node: ts.Node, picks: Set<string>): boolean {
   let child: ts.Node = node;
   for (let parent = node.parent; parent !== undefined; child = parent, parent = parent.parent) {
     if (!ts.isCallExpression(parent)) continue;
-    if (!ts.isIdentifier(parent.expression) || parent.expression.text !== "screenSource") continue;
+    if (!ts.isIdentifier(parent.expression) || !picks.has(parent.expression.text)) continue;
     if (parent.arguments.some((argument) => argument === child)) return true;
   }
   return false;
@@ -546,15 +769,36 @@ function insideScreenSource(node: ts.Node): boolean {
  * Rule d: the environment, which a route may only ever read through the gate.
  *
  * Any mention of `process` is refused unless it is `process.env` inside the
- * argument of `screenSource(`, naming one of the three keys. Every other shape
- * is a second gate: `process["env"]`, `const { env } = process`,
- * `const p = process`, `globalThis.process`, a destructuring that names a
- * fourth key, or the right key read somewhere the gate cannot see.
+ * argument of the gate's `screenSource(`, naming one of the three keys. Every
+ * other shape is a second gate: `process["env"]`, `const { env } = process`,
+ * `const p = process`, `globalThis.process`, a destructuring that names a fourth
+ * key, the right key read somewhere the gate cannot see, and the module
+ * spellings (`node:process` and `process`), which are the same environment by
+ * another door.
  */
-function processProblems(tree: ts.SourceFile): string[] {
+function processProblems(tree: ts.SourceFile, picks: Set<string>): string[] {
   const found: string[] = [];
 
   walk(tree, (node) => {
+    if (
+      ts.isImportDeclaration(node) &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      PROCESS_MODULES.includes(node.moduleSpecifier.text)
+    ) {
+      found.push("reads the environment as a module");
+      return;
+    }
+    if (ts.isCallExpression(node) && node.arguments.length > 0) {
+      const callee = node.expression;
+      const dynamic =
+        callee.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(callee) && callee.text === "require");
+      const first = node.arguments[0];
+      if (dynamic && ts.isStringLiteral(first) && PROCESS_MODULES.includes(first.text)) {
+        found.push("reads the environment as a module");
+        return;
+      }
+    }
     // `globalThis.process`, `globalThis["process"]`: the name is not a reference
     // to the identifier, so it is caught here rather than below.
     if (ts.isPropertyAccessExpression(node) && node.name.text === "process") {
@@ -573,8 +817,14 @@ function processProblems(tree: ts.SourceFile): string[] {
     if (!ts.isIdentifier(node) || node.text !== "process") return;
 
     const parent = node.parent;
-    // A property named `process` was handled above; do not count it twice.
+    // A property named `process` was handled above; do not count it twice. The
+    // module spellings are handled above as well, so their local name is not a
+    // second finding here.
     if (ts.isPropertyAccessExpression(parent) && parent.name === node) return;
+    for (let current: ts.Node | undefined = parent; current !== undefined; current = current.parent) {
+      if (ts.isImportDeclaration(current) || ts.isImportClause(current)) return;
+    }
+
     const isEnv =
       ts.isPropertyAccessExpression(parent) &&
       parent.expression === node &&
@@ -588,7 +838,7 @@ function processProblems(tree: ts.SourceFile): string[] {
     const use = env.parent;
     const complain = (key: string) => {
       if (!GATE_ENV.includes(key)) found.push(`reads process.env.${key} itself`);
-      else if (!insideScreenSource(env)) {
+      else if (!insideScreenSource(env, picks)) {
         found.push(`reads process.env.${key} outside the screenSource( argument`);
       }
     };
@@ -615,7 +865,7 @@ function processProblems(tree: ts.SourceFile): string[] {
       );
       if (!named || use.name.elements.length === 0) {
         found.push("reads process.env without naming a key");
-      } else if (!insideScreenSource(env)) {
+      } else if (!insideScreenSource(env, picks)) {
         found.push("reads process.env outside the screenSource( argument");
       }
       return;
@@ -636,25 +886,34 @@ function processProblems(tree: ts.SourceFile): string[] {
  * itself: starting a read and passing the promise down is the same thing as
  * reading it, and it starts BEFORE the check has run.
  *
- * EVERY READ waits for the check: a call that reads data sits in a function
- * whose own block awaited `requireLoopback` first, or in a local helper whose
- * call sites do (that is how a `readFolder` stays legal, wherever in the file it
- * is written), and such a helper is not exported.
+ * EVERY READ waits for the check: a mention of a loader sits in a function whose
+ * own block awaited `requireLoopback` first, or in a local helper whose call
+ * sites do (that is how a `readFolder` stays legal, wherever in the file it is
+ * written), and such a helper is not exported.
  *
  * A ROUTE HANDLER obeys the same rules per exported function, and asks the gate
  * and answers the not-found case before its first read. A SHELL (`layout`,
  * `template`, `default`, `loading`, `error`, and the rest) may not import a
  * loader at all: it renders for every route under it, including the ones the
  * gate refused.
+ *
+ * `wrappers` is the set of modules that can reach a loader through other
+ * modules, which the walk computes from the real tree once. It is an argument so
+ * that every case in the suite can stay a source string.
  */
-function gateProblems(file: string, source: string): string[] {
+function gateProblems(
+  file: string,
+  source: string,
+  wrappers: Set<string> = DATA_MODULES,
+): string[] {
   const kind = routeKind(file);
   if (kind === null) return [];
 
   const tree = parse(file, source);
-  const bindings = dataBindings(file, tree);
+  const gate = gateNames(file, tree);
+  const bindings = dataBindings(file, tree, wrappers);
   const locals = topLevelFunctions(tree);
-  const found: string[] = [...bindings.problems, ...processProblems(tree)];
+  const found: string[] = [...bindings.problems, ...processProblems(tree, gate.screenSource)];
 
   for (const helper of GATE_HELPERS) {
     let used = false;
@@ -672,12 +931,7 @@ function gateProblems(file: string, source: string): string[] {
     return found;
   }
 
-  const reads: Array<{ node: ts.CallExpression; name: string }> = [];
-  walk(tree, (node) => {
-    if (!ts.isCallExpression(node)) return;
-    const name = isDataCall(node, bindings);
-    if (name !== null) reads.push({ node, name });
-  });
+  const reads = readsIn(tree, bindings);
 
   /** The helper a function node is, when it is one that reads data. */
   const helperOf = (fn: FunctionNode): TopLevel | null =>
@@ -689,14 +943,16 @@ function gateProblems(file: string, source: string): string[] {
    * Does this read wait for the check?
    *
    * Either it sits in a function that awaited the check first, or it sits in a
-   * local helper that is only ever called from somewhere that did. The second
+   * local helper that is only ever reached from somewhere that did. The second
    * needs at least one call site: a function nothing calls would otherwise
    * satisfy "every call site waits" by having none, and that is exactly the
    * sibling-function shape this rule exists to refuse.
    */
-  const waits = (node: ts.CallExpression, seen: Set<string>): boolean => {
+  const waits = (node: ts.Node, seen: Set<string>): boolean => {
     const chain = enclosingFunctions(node);
-    if (chain.some((fn) => (guardEnd(fn) ?? Number.POSITIVE_INFINITY) <= node.getStart())) {
+    if (
+      chain.some((fn) => (guardEnd(fn, gate.requireLoopback) ?? Number.POSITIVE_INFINITY) <= node.getStart())
+    ) {
       return true;
     }
     const holder = chain[0];
@@ -705,14 +961,10 @@ function gateProblems(file: string, source: string): string[] {
     if (helper === null || seen.has(helper.name)) return false;
     seen.add(helper.name);
 
-    const sites: ts.CallExpression[] = [];
-    walk(tree, (child) => {
-      if (!ts.isCallExpression(child)) return;
-      if (ts.isIdentifier(child.expression) && child.expression.text === helper.name) {
-        sites.push(child);
-      }
-    });
-    return sites.length > 0 && sites.every((site) => waits(site, new Set(seen)));
+    const sites = reads.filter(
+      (read) => read.name === helper.name && !within(read.node, helper.node),
+    );
+    return sites.length > 0 && sites.every((site) => waits(site.node, new Set(seen)));
   };
 
   for (const read of reads) {
@@ -732,8 +984,8 @@ function gateProblems(file: string, source: string): string[] {
   }
 
   if (kind === "entry") {
-    if (!callsNamed(tree, "screenSource")) found.push("does not call screenSource(");
-    if (!callsNamed(tree, "requireLoopback")) found.push("does not call requireLoopback(");
+    if (!callsOneOf(tree, gate.screenSource)) found.push("does not call screenSource(");
+    if (!callsOneOf(tree, gate.requireLoopback)) found.push("does not call requireLoopback(");
 
     const entry = locals.find((local) => local.isDefault) ?? null;
     if (entry === null) found.push("has no synchronous default export");
@@ -745,10 +997,10 @@ function gateProblems(file: string, source: string): string[] {
       ) {
         found.push("has an async default export");
       }
-      if (!callsNamed(entry.node, "screenSource")) {
+      if (!callsOneOf(entry.node, gate.screenSource)) {
         found.push("does not call screenSource( in its default export");
       }
-      if (!callsNamed(entry.node, "notFound")) {
+      if (!callsOneOf(entry.node, gate.notFound)) {
         found.push("does not call notFound() in its default export");
       }
       for (const read of reads) {
@@ -765,10 +1017,10 @@ function gateProblems(file: string, source: string): string[] {
       const inside = reads.filter((read) => within(read.node, local.node));
       if (inside.length === 0) continue;
       const first = Math.min(...inside.map((read) => read.node.getStart()));
-      if (!callsNamed(local.node, "screenSource", first)) {
+      if (!callsOneOf(local.node, gate.screenSource, first)) {
         found.push(`${local.name} does not call screenSource( before reading data`);
       }
-      if (!callsNamed(local.node, "notFound", first)) {
+      if (!callsOneOf(local.node, gate.notFound, first)) {
         found.push(`${local.name} does not answer the not-found case before reading data`);
       }
     }
@@ -787,6 +1039,74 @@ function routeFilesUnder(dir: string): string[] {
   }
   return found;
 }
+
+// A read is a read however many modules it is behind. The gate's rules used to
+// ask only whether an import came from under local/ or fixtures/, so a loader
+// reached through a wrapper was invisible, and the wrapper was not a route file
+// so nothing walked it either.
+describe("the modules that can reach a loader", () => {
+  test("follows a wrapper to a fixed point, and stops at a type", () => {
+    const graph = new Map([
+      ["app/lib/v2/view/a.ts", 'import { loadLocalToday } from "@/app/lib/v2/local/snapshot";'],
+      ["app/lib/v2/view/b.ts", 'import { a } from "./a";'],
+      ["app/lib/v2/view/c.ts", 'import type { B } from "./b";'],
+    ]);
+    expect([...dataModulesIn(graph)].sort()).toEqual([
+      "app/lib/v2/view/a",
+      "app/lib/v2/view/b",
+    ]);
+  });
+
+  test("follows a value brought in beside a type, and a run time import", () => {
+    const graph = new Map([
+      ["app/lib/v2/view/a.ts", 'import { type Day, sampleDay } from "@/app/lib/v2/fixtures/sample-day";'],
+      ["app/lib/v2/view/b.ts", 'const { a } = require("./a");'],
+      ["app/lib/v2/view/c.ts", 'const later = () => import("./b");'],
+    ]);
+    expect([...dataModulesIn(graph)].sort()).toEqual([
+      "app/lib/v2/view/a",
+      "app/lib/v2/view/b",
+      "app/lib/v2/view/c",
+    ]);
+  });
+
+  test("never counts the gate itself, which reads the environment for a living", () => {
+    const graph = new Map([
+      ["app/lib/v2/source.ts", 'import { localSnapshotDir } from "@/app/lib/v2/local/snapshot";'],
+      ["app/v2/x/page.tsx", 'import { screenSource } from "@/app/lib/v2/source";'],
+    ]);
+    expect([...dataModulesIn(graph)]).toEqual([]);
+  });
+
+  test("and says nothing about the loaders themselves, which the base rule has", () => {
+    const graph = new Map([
+      ["app/lib/v2/local/calendar.ts", 'import { readRules } from "./files";'],
+      ["app/lib/v2/fixtures/sample-week.ts", 'import { SAMPLE_DATE } from "./sample-base";'],
+    ]);
+    expect([...dataModulesIn(graph)]).toEqual([]);
+  });
+
+  // What the real tree says today. The first is a fact to keep an eye on; the
+  // second is the one that matters: the layers a browser loads, and the view
+  // models the pane is built from, must not be able to reach a loader at all.
+  test("is only the pages that read, in the tree as it stands", () => {
+    expect([...DATA_MODULES]).toContain("app/v2/today/page");
+    expect([...DATA_MODULES]).not.toContain(GATE_MODULE);
+  });
+
+  test("and reaches no view model, no component and no engine file", () => {
+    const shouldNotRead = [...DATA_MODULES].filter((module) =>
+      [
+        "app/lib/v2/view/",
+        "app/lib/v2/calendar/",
+        "app/lib/v2/plan/",
+        "app/lib/v2/tiles/",
+        "app/v2/_components/",
+      ].some((folder) => module.startsWith(folder)),
+    );
+    expect(shouldNotRead).toEqual([]);
+  });
+});
 
 describe("every v2 route goes through the gate", () => {
   const files = routeFilesUnder("app/v2");
@@ -820,8 +1140,8 @@ describe("every v2 route goes through the gate", () => {
 // The checker, checked. Every case here is a page that passed some earlier
 // version of this test while being wrong.
 describe("the gate checker catches", () => {
-  const complain = (source: string, file = "app/v2/x/page.tsx") =>
-    gateProblems(file, source).join("; ");
+  const complain = (source: string, file = "app/v2/x/page.tsx", wrappers?: Set<string>) =>
+    gateProblems(file, source, wrappers).join("; ");
 
   const GOOD = [
     'import { notFound } from "next/navigation";',
@@ -1194,6 +1514,180 @@ describe("the gate checker catches", () => {
     expect(problems).toContain("GET does not call screenSource( before reading data");
     expect(problems).toContain("GET does not answer the not-found case before reading data");
     expect(problems).toContain("calls data before awaiting requireLoopback (sampleWeek)");
+  });
+
+  // ------------------------------------------------------- round 3: the holes
+
+  // HOLE A, the realistic one. A loader reached through a wrapper that is not
+  // itself under local/ or fixtures/ was invisible: the wrapper is not a route
+  // file, so nothing walked it, and the page could read through it anywhere,
+  // including in the synchronous entry. The set of modules that can reach a
+  // loader is now computed from the tree and handed to the checker.
+  const WRAPPED = new Set(["app/v2/week/week-data", "app/lib/v2/view/week-data"]);
+
+  const throughWrapper = (specifier: string, where: "entry" | "child") => {
+    const read = "  const week = getWeek(source.dir);";
+    const lines = [
+      'import { notFound } from "next/navigation";',
+      `import { getWeek } from "${specifier}";`,
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      ...(where === "entry" ? [read] : []),
+      "  return <Screen source={source} />;",
+      "}",
+      "async function Screen({ source }) {",
+      ...(where === "child" ? [read] : []),
+      "  await requireLoopback(source);",
+      "  return <div>{(await week).week[0]}</div>;",
+      "}",
+    ];
+    return lines.join("\n");
+  };
+
+  test("a loader reached through a wrapper beside the page", () => {
+    const entry = complain(throughWrapper("./week-data", "entry"), "app/v2/week/page.tsx", WRAPPED);
+    expect(entry).toContain("reads data in its default export (getWeek)");
+
+    const child = complain(throughWrapper("./week-data", "child"), "app/v2/week/page.tsx", WRAPPED);
+    expect(child).toContain("calls data before awaiting requireLoopback (getWeek)");
+  });
+
+  test("a loader reached through a wrapper under the view layer", () => {
+    const specifier = "@/app/lib/v2/view/week-data";
+    const entry = complain(throughWrapper(specifier, "entry"), "app/v2/week/page.tsx", WRAPPED);
+    expect(entry).toContain("reads data in its default export (getWeek)");
+
+    const child = complain(throughWrapper(specifier, "child"), "app/v2/week/page.tsx", WRAPPED);
+    expect(child).toContain("calls data before awaiting requireLoopback (getWeek)");
+  });
+
+  test("and a wrapper nothing has marked is still just a module", () => {
+    // The same page, with the set that does not know that module: this is what
+    // the checker used to do for every wrapper, and it is why the set exists.
+    expect(complain(throughWrapper("./week-data", "entry"), "app/v2/week/page.tsx", new Set()))
+      .toBe("");
+  });
+
+  // HOLE B. Only a direct call on the binding counted, so every other way of
+  // getting at the same function went unseen. Any mention of the name is a read
+  // now, wherever it is: what matters is that the value is in hand.
+  test("a loader reached without calling it by name", () => {
+    const shapes = [
+      "  const load = source.kind === 'local' ? loadLocalCalendar : loadLocalCalendar;",
+      "  const day = await Promise.resolve().then(loadLocalCalendar);",
+      "  const day = loadLocalCalendar.call(null, source.dir);",
+      "  const day = [loadLocalCalendar].map((one) => one())[0];",
+      "  const all = { read: loadLocalCalendar };",
+    ];
+    for (const line of shapes) {
+      const source = [
+        'import { notFound } from "next/navigation";',
+        'import { loadLocalCalendar } from "@/app/lib/v2/local/calendar";',
+        'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+        "export default function Page() {",
+        "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+        "  if (source === null) notFound();",
+        "  return <Screen source={source} />;",
+        "}",
+        "async function Screen({ source }) {",
+        line,
+        "  await requireLoopback(source);",
+        "  return <div>{String(day ?? load ?? all)}</div>;",
+        "}",
+      ].join("\n");
+      expect(complain(source), line).toContain(
+        "calls data before awaiting requireLoopback (loadLocalCalendar)",
+      );
+    }
+  });
+
+  test("but a type that happens to be named after one is not a read", () => {
+    const source = [
+      'import { notFound } from "next/navigation";',
+      'import type { LocalCalendarEvent } from "@/app/lib/v2/local/files";',
+      'import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";',
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      "  return <Screen source={source} />;",
+      "}",
+      "async function Screen({ source }) {",
+      "  await requireLoopback(source);",
+      "  const rows: LocalCalendarEvent[] = [];",
+      "  return <div>{rows.length + sampleDay().lanes.length}</div>;",
+      "}",
+    ].join("\n");
+    expect(complain(source)).toBe("");
+  });
+
+  // BY ORIGIN. The three names were matched as words, so a page could satisfy
+  // the gate with a local function of the same name, or with one imported from
+  // somewhere that does nothing.
+  test("a gate name that does not come from the gate", () => {
+    const local = GOOD.replace(
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "async function requireLoopback(source) {}\nfunction screenSource(env) { return { kind: 'sample' }; }",
+    );
+    expect(complain(local)).toContain("does not call screenSource(");
+    expect(complain(local)).toContain("does not call requireLoopback(");
+
+    const elsewhere = GOOD.replace(
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      'import { requireLoopback, screenSource } from "./my-own-gate";',
+    );
+    expect(complain(elsewhere)).toContain("does not call screenSource(");
+    expect(complain(elsewhere)).toContain("does not call requireLoopback(");
+  });
+
+  test("a not-found that is somebody else's", () => {
+    const source = GOOD.replace(
+      'import { notFound } from "next/navigation";',
+      'import { notFound } from "./my-own-404";',
+    );
+    expect(complain(source)).toContain("does not call notFound() in its default export");
+  });
+
+  test("and the gate's names still count when they are renamed on the way in", () => {
+    const renamed = GOOD.replace(
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      'import { requireLoopback as guard, screenSource as pick } from "@/app/lib/v2/source";',
+    )
+      .replace("screenSource({", "pick({")
+      .replace("await requireLoopback(source);", "await guard(source);");
+    expect(complain(renamed)).toBe("");
+  });
+
+  // The environment has a module spelling as well as a global one.
+  test("the environment imported as a module", () => {
+    for (const line of [
+      'import { env } from "node:process";',
+      'import process from "node:process";',
+      'const { env } = require("process");',
+    ]) {
+      const source = GOOD.replace(
+        'import { notFound } from "next/navigation";',
+        `${line}\nimport { notFound } from "next/navigation";`,
+      );
+      expect(complain(source), line).toContain("reads the environment as a module");
+    }
+  });
+
+  // A `.ts` file has no JSX, so `<string>x` is a cast there. Parsed as TSX it is
+  // an unclosed tag, and everything after it is misread.
+  test("a handler written as .ts, with an angle bracket cast in it", () => {
+    const source = [
+      'import { loadLocalToday } from "@/app/lib/v2/local/snapshot";',
+      "export async function GET(request) {",
+      "  const dir = <string>request.headers.get('x-dir');",
+      "  return Response.json(await loadLocalToday(dir, now, null));",
+      "}",
+    ].join("\n");
+    const problems = complain(source, "app/v2/day/route.ts");
+    expect(problems).toContain("GET does not call screenSource( before reading data");
+    expect(problems).toContain("calls data before awaiting requireLoopback (loadLocalToday)");
   });
 
   test("nothing in a route handler that asks the gate first", () => {
