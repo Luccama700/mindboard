@@ -10,7 +10,7 @@
 // A new scheme cannot be added unreadable, and the stylesheet cannot drift from
 // the module that is supposed to describe it.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import postcss from "postcss";
@@ -55,7 +55,13 @@ const CSS = readFileSync(path.join(ROOT, "app/v2/v2.css"), "utf8");
  * its defaults block; the others say which token each thing uses and nothing
  * more, so a scheme the owner picks reaches them too.
  */
-const SHEETS = ["app/v2/v2.css", "app/v2/calendar.css"].map((file) => ({
+// Found by reading the folder, so a stylesheet nobody registered is still held
+// to the rule.
+const SHEETS = readdirSync(path.join(ROOT, "app/v2"))
+  .filter((name) => name.endsWith(".css"))
+  .sort()
+  .map((name) => `app/v2/${name}`)
+  .map((file) => ({
   file,
   css: readFileSync(path.join(ROOT, file), "utf8"),
 }));

@@ -8,7 +8,7 @@
 // stop above the line, an all day event, a leave by, something not taken today,
 // and three energies that visibly differ.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { createElement } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
@@ -402,36 +402,26 @@ describe("the copy rules", () => {
 // differently in the two renders. That is a hydration mismatch and it is
 // invisible in a test that only runs one of them, so it is caught statically.
 describe("ordering never depends on the locale", () => {
-  const owned = [
-    "app/lib/v2/view/today.ts",
-    "app/lib/v2/view/calendar.ts",
-    "app/lib/v2/view/format.ts",
-    "app/lib/v2/fixtures/sample-day.ts",
-    "app/lib/v2/fixtures/sample-week.ts",
-    "app/v2/layout.tsx",
-    "app/v2/today/page.tsx",
-    "app/v2/today/today-client.tsx",
-    "app/lib/v2/view/appearance.ts",
-    "app/v2/_components/all-day-row.tsx",
-    "app/v2/_components/appearance-panel.tsx",
-    "app/v2/_components/appearance-root.tsx",
-    "app/v2/_components/day-header.tsx",
-    "app/v2/_components/day-line.tsx",
-    "app/v2/_components/energy-row.tsx",
-    "app/v2/_components/feed-strip.tsx",
-    "app/v2/_components/lane-summary.tsx",
-    "app/v2/_components/list-row.tsx",
-    "app/v2/_components/stop-card.tsx",
-    "app/v2/_components/not-today-list.tsx",
-    "app/v2/_components/nav-bar.tsx",
-    "app/v2/_components/past-due-list.tsx",
-    "app/v2/_components/calendar/calendar-pane.tsx",
-    "app/v2/_components/calendar/calendar-grid.tsx",
-    "app/v2/_components/calendar/calendar-agenda.tsx",
-    "app/v2/_components/calendar/calendar-chip.tsx",
-    "app/v2/week/page.tsx",
-    "app/v2/week/week-client.tsx",
-  ];
+  // Every file the v2 screens are made of, found by walking the folders rather
+  // than kept as a list: a screen file nobody registered is exactly the one
+  // that would slip a locale-aware compare past this guard.
+  const SCREEN_ROOTS = ["app/v2", "app/lib/v2/view", "app/lib/v2/fixtures"];
+  const filesUnder = (dir: string): string[] =>
+    readdirSync(path.join(path.resolve(__dirname, ".."), dir), { withFileTypes: true }).flatMap(
+      (entry) => {
+        const child = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) return filesUnder(child);
+        return /.tsx?$/.test(entry.name) ? [child] : [];
+      },
+    );
+  const owned = SCREEN_ROOTS.flatMap(filesUnder);
+
+  test("the walk finds the screen's files", () => {
+    // An empty walk would pass every check below.
+    expect(owned.length).toBeGreaterThan(25);
+    expect(owned).toContain("app/v2/today/today-client.tsx");
+    expect(owned).toContain("app/lib/v2/view/today.ts");
+  });
 
   // Comments are stripped first: these files explain at length why they do not
   // use localeCompare or an Intl date format, and a guard that cannot tell the
