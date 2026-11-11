@@ -1,0 +1,575 @@
+/* The Quests panes: every lane with its next stop, the open steps of the lanes,
+ * the side quests, and what was finished lately.
+ *
+ * Loaded after desk.css (app/v2/layout.tsx), and scoped the same way: every
+ * selector starts at [data-v2-root], so nothing here can reach a page outside
+ * app/v2. Every class here starts with v2-quests-; the shared leaves of v2.css
+ * are not touched at all, so no rule here can win over one on Today's page.
+ *
+ * NO COLOUR IS WRITTEN HERE. Every colour is a scheme token from v2.css, or an
+ * identity token a row sets from its own lane or group (identityTokens):
+ * --v2-lane for a mark, --v2-ident for text. __tests__/v2-appearance.test.ts
+ * reads every stylesheet in this folder for a hex, an rgb() or an hsl() and
+ * must find none.
+ *
+ * THE SAME SURFACES AS THE LISTS. A row is the side lists' row as a pane draws
+ * it: the card surface, 12px corners, the title in the display face over a
+ * quiet detail, and one quiet line at its foot. No new font, no new surface.
+ *
+ * DANGER IS ONE ALIAS, as on the Money panes. v2.css has no danger token, so
+ * the panes read --v2-quests-danger, set once on their root to --v2-warn: a
+ * state colour derived per scheme to clear 3:1 as a MARK on the card. It is only
+ * ever a dot, never the colour of a word: every danger mark has its word beside
+ * it, in an ink. Where a date stands (past, today, soon) is likewise a word with
+ * a dot, so no mark is a colour alone.
+ *
+ * WORKED IS NOT FINISHED. A step with a block done today gains a short phrase
+ * and nothing else: no strike, no fade, no change of place or of ink.
+ *
+ * SIZED BY THE PANE, NOT THE WINDOW. Each body sits in the desk's `v2-pane`
+ * box, an inline-size container, and answers to it in range syntax:
+ *   lanes   under 300px a lane is its name, its count and its next date; from
+ *           300px its next stop and what is past its date join it, under the
+ *           name; from 520px the stop sits beside the name, on a track every
+ *           lane shares, and the count and the dates in a column at the right.
+ *   rows    one column under 560px of pane, two from there, three from 900px.
+ *
+ * QUIET AND READ ONLY. Nothing animates on load. The one change on a row is a
+ * hairline on hover, at the quick duration; the steps pane's lane filter is the
+ * only control. Reduced motion is v2.css's one rule, which stops every
+ * transition under [data-v2-root].
+ */
+
+/* ------------------------------------------------------------------ the body */
+
+/* One column of blocks, with the side column's own spacing. */
+[data-v2-root] .v2-quests {
+  --v2-quests-danger: var(--v2-warn);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------ what every row shares */
+
+/* What a row belongs to: the lane's or the group's own name, in its colour
+   lifted for text, after the dot the side lists use. It is the user's own word
+   and can be any length, so it gives way (with an ellipsis) before the date. */
+[data-v2-root] .v2-quests-ident {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-ident);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-quests-ident::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+/* Where a date stands: a word, and a dot that says the same. Past is the
+   danger mark with the word in the full ink; today is the accent; soon is a
+   ring. A date further off, or none, has no mark at all. */
+[data-v2-root] .v2-quests-when {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--v2-ink-2);
+  font: 600 12px/1.3 var(--v2-display);
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-quests-when::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+[data-v2-root] .v2-quests-when[data-when="past"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-quests-when[data-when="past"]::before {
+  background: var(--v2-quests-danger);
+}
+
+[data-v2-root] .v2-quests-when[data-when="today"] {
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-quests-when[data-when="today"]::before {
+  background: var(--v2-accent);
+}
+
+[data-v2-root] .v2-quests-when[data-when="soon"]::before {
+  box-shadow: inset 0 0 0 1.5px var(--v2-ink-2);
+}
+
+/* Worked on today, not finished: a small outlined phrase in the quiet ink. The
+   row it sits in keeps every other thing it had. */
+[data-v2-root] .v2-quests-worked {
+  display: inline-block;
+  align-self: flex-start;
+  padding: 1px 7px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 6px;
+  color: var(--v2-ink-2);
+  font: 600 12px/1.3 var(--v2-display);
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------- steps and side */
+
+/* The rows by the pane's own width. minmax(0, ...) so one long word in a title
+   cannot widen its track. */
+[data-v2-root] .v2-quests-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@container v2-pane (width >= 560px) {
+  [data-v2-root] .v2-quests-rows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container v2-pane (width >= 900px) {
+  [data-v2-root] .v2-quests-rows {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* STACKED, as the side lists draw a row: the title owns the width, the detail
+   and the worked phrase under it, and the quiet line at the foot. */
+[data-v2-root] .v2-quests-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--v2-card);
+  transition: box-shadow var(--v2-quick) var(--v2-ease);
+}
+
+/* A hairline, not a new surface: the row is not a control, and every ink on it
+   was measured against the card. */
+[data-v2-root] .v2-quests-row:hover {
+  box-shadow: inset 0 0 0 1px var(--v2-edge);
+}
+
+[data-v2-root] .v2-quests-title {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-ink);
+  font: 600 14px/1.3 var(--v2-display);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+[data-v2-root] .v2-quests-detail {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  margin-top: 1px;
+  color: var(--v2-ink-3);
+  font: 400 13px/1.35 var(--v2-text);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+[data-v2-root] .v2-quests-row .v2-quests-worked {
+  margin-top: 3px;
+}
+
+/* What it belongs to at the left, where its date stands and the date at the
+   right. Opposite ends of the line separate them, with no glyph between. */
+[data-v2-root] .v2-quests-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  min-width: 0;
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+[data-v2-root] .v2-quests-due {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-quests-date {
+  color: var(--v2-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- the lane filter: the one control on the layout ---- */
+
+[data-v2-root] .v2-quests-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+[data-v2-root] .v2-quests-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+  color: var(--v2-ink-2);
+  font: 600 13px/1.2 var(--v2-display);
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+/* The shared focus ring rounds a button to 10px; a chip keeps its own corners,
+   so taking focus moves nothing. No transition on a chip: its colours start from
+   the platform's button until this sheet applies, and a transition there would
+   be a fade on load. */
+[data-v2-root] .v2-quests-chip:focus-visible {
+  border-radius: 12px;
+}
+
+[data-v2-root] .v2-quests-chip[data-lane]::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+[data-v2-root] .v2-quests-chip:hover {
+  background-color: var(--v2-card);
+}
+
+/* Pressed is said by aria-pressed, and shown by more than colour: the edge, the
+   surface and the ink all change. */
+[data-v2-root] .v2-quests-chip[aria-pressed="true"] {
+  border-color: var(--v2-accent);
+  background-color: var(--v2-card-2);
+  color: var(--v2-ink);
+}
+
+/* ---- the group option: rows under their identity's name ---- */
+
+[data-v2-root] .v2-quests-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+[data-v2-root] .v2-quests-group-head {
+  min-width: 0;
+  color: var(--v2-ident);
+  font: 600 13px/1.2 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-quests-group-head::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+/* --------------------------------------------------------------- the lanes */
+
+/* Held to a column, so on a wide pane a lane's stop is never a hand's width
+   from its name. */
+[data-v2-root] .v2-quests-lane-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 880px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Under 520px a lane is stacked: its name, its next stop, its count and dates. */
+[data-v2-root] .v2-quests-lane {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: baseline;
+  row-gap: 3px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--v2-card);
+  transition: box-shadow var(--v2-quick) var(--v2-ease);
+}
+
+[data-v2-root] .v2-quests-lane:not([data-quiet]):hover {
+  box-shadow: inset 0 0 0 1px var(--v2-edge);
+}
+
+/* The lane's name, after its colour as a dot: quieter than its next stop. */
+[data-v2-root] .v2-quests-lane-name {
+  min-width: 0;
+  color: var(--v2-ink-2);
+  font: 600 14px/1.3 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-quests-lane-name::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+/* A QUIET LANE IS ITS NAME ALONE, in the dim ink, off the card: no surface for
+   a count it does not have. The dot fades, which is fine on a mark that carries
+   no text. */
+[data-v2-root] .v2-quests-lane[data-quiet] {
+  background: none;
+}
+
+[data-v2-root] .v2-quests-lane[data-quiet] .v2-quests-lane-name {
+  color: var(--v2-ink-3);
+  font-weight: 500;
+}
+
+[data-v2-root] .v2-quests-lane[data-quiet] .v2-quests-lane-name::before {
+  opacity: 0.45;
+}
+
+/* The next stop: the brightest text in the row. Hidden under 300px of pane,
+   where the lane is its name, its count and its next date. */
+[data-v2-root] .v2-quests-next {
+  display: none;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+[data-v2-root] .v2-quests-next-title {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-ink);
+  font: 600 15px/1.3 var(--v2-display);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* The count and the dates, Today's own words: quieter than the stop. */
+[data-v2-root] .v2-quests-lane-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+  color: var(--v2-ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-v2-root] .v2-quests-lane-due {
+  color: var(--v2-ink-3);
+}
+
+/* How many are past their date: the danger dot and the words, in the full ink.
+   Shown from 300px of pane, with the stop. */
+[data-v2-root] .v2-quests-lane-past {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--v2-ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-quests-lane-past::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--v2-quests-danger);
+}
+
+@container v2-pane (width >= 300px) {
+  [data-v2-root] .v2-quests-next {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-quests-lane-past {
+    display: inline-flex;
+  }
+}
+
+/* FROM 520PX, ONE LINE A LANE, on tracks every lane shares: the list is the
+   grid and each lane a subgrid of it, so the names, the stops and the counts
+   line up down the pane whatever their lengths. The count and the dates stack
+   at the right, so their column is as wide as one of them. */
+@container v2-pane (width >= 520px) {
+  [data-v2-root] .v2-quests-lane-list {
+    display: grid;
+    grid-template-columns: fit-content(11rem) minmax(0, 1fr) max-content;
+    column-gap: 16px;
+    row-gap: 4px;
+  }
+
+  [data-v2-root] .v2-quests-lane {
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    column-gap: 16px;
+  }
+
+  [data-v2-root] .v2-quests-lane-name {
+    grid-column: 1;
+  }
+
+  [data-v2-root] .v2-quests-next {
+    grid-column: 2;
+  }
+
+  [data-v2-root] .v2-quests-lane-meta {
+    grid-column: 3;
+    flex-direction: column;
+    align-items: flex-end;
+    text-align: right;
+  }
+}
+
+/* ------------------------------------------------------------- done lately */
+
+/* The day lately ends on, when the history stops before the planned day: set
+   apart and in the full ink, as the Money panes say how old their numbers are,
+   so nothing under it reads as more current than it is. */
+[data-v2-root] .v2-quests-through {
+  padding: 10px 12px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+  color: var(--v2-ink);
+  font: 400 14px/1.45 var(--v2-text);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-quests-sum {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+[data-v2-root] .v2-quests-sum-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+
+[data-v2-root] .v2-quests-span {
+  color: var(--v2-ink-3);
+  font: 600 13px/1.3 var(--v2-display);
+}
+
+[data-v2-root] .v2-quests-total {
+  color: var(--v2-ink);
+  font-family: var(--v2-display);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The rate: one quiet line, a rate and nothing more. */
+[data-v2-root] .v2-quests-rate {
+  color: var(--v2-ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The days, newest first, flowing into as many columns as the pane holds at
+   about 17rem each: one in a tab, several across a wide pane. A day is never
+   split between two columns. */
+[data-v2-root] .v2-quests-days {
+  column-width: 17rem;
+  column-gap: 28px;
+}
+
+[data-v2-root] .v2-quests-day {
+  break-inside: avoid;
+  padding-bottom: 14px;
+}
+
+[data-v2-root] .v2-quests-day-head {
+  margin-bottom: 2px;
+  color: var(--v2-ink-3);
+  font: 600 13px/1.2 var(--v2-display);
+}
+
+[data-v2-root] .v2-quests-done-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* What was finished, in the quieter ink: it is the record, not the news. Its
+   identity at the right, as a row's is. */
+[data-v2-root] .v2-quests-done-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--v2-card-2);
+}
+
+[data-v2-root] .v2-quests-done-title {
+  min-width: 0;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-quests-done-item .v2-quests-ident {
+  margin-left: auto;
+  font-size: 12px;
+}

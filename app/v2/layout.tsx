@@ -21,9 +21,11 @@ import { AppearanceRoot } from "./_components/appearance-root";
 import "./v2.css";
 // After v2.css, whose tokens it reads and whose frame it sits in.
 import "./calendar.css";
-// Last: the box a pane is drawn in, around the leaves of both sheets above.
+// The box a pane is drawn in, around the leaves of both sheets above.
 import "./desk.css";
+// Last: what each group of panes draws inside that box.
 import "./money.css";
+import "./quests.css";
 
 const display = Chakra_Petch({
   weight: ["500", "600", "700"],
