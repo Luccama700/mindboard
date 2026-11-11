@@ -655,6 +655,7 @@ describe("the all day row", () => {
     expect(whole.allDay).toEqual([
       {
         id: "ev-term",
+        eventId: "ev-term",
         title: "ev-term",
         color: "#7C9BFF",
         firstIndex: 0,
@@ -732,6 +733,9 @@ describe("the all day row", () => {
     // Two rows of one list need two keys, so a cut span's pieces are told apart.
     expect(view.allDay[0].id).not.toBe(view.allDay[1].id);
     for (const span of view.allDay) expect(span.id).toContain("ev-term");
+    // The event itself is still one event, and both rows say which one: the key
+    // is for drawing, and only `eventId` answers "which event is this".
+    expect(view.allDay.map((span) => span.eventId)).toEqual(["ev-term", "ev-term"]);
     expect(view.allDayRows).toBe(1);
     expect(dayOf(view, WEDNESDAY).allDay).toEqual([]);
     expect(dayOf(view, WEEK[1]).allDay).toEqual(["ev-term"]);
@@ -743,6 +747,7 @@ describe("the all day row", () => {
       [],
     );
     expect(view.allDay.map((span) => span.id)).toEqual(["ev-term"]);
+    expect(view.allDay.map((span) => span.eventId)).toEqual(["ev-term"]);
   });
 
   test("lists each covered day's all day titles for the agenda", () => {

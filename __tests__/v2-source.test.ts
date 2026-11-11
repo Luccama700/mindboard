@@ -14,6 +14,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
+import ts from "typescript";
 import { describe, expect, test, vi } from "vitest";
 
 import {
@@ -207,214 +208,582 @@ describe("isLoopbackHost", () => {
 // ---------------------------------------------------------------------------
 // The static guards: one gate, one engine boundary, and no import cycles.
 //
-// WHY THESE ARE TEXTUAL AT ALL. A page that reads an environment variable
-// itself, or a view that reaches into the calendar engine's write half, is wrong
-// before it ever runs: there is no input that makes it fail, so no ordinary test
-// can catch it.
+// WHY THESE ARE STATIC AT ALL. A page that reads an environment variable
+// itself, or one that starts reading the owner's folder before the request has
+// been checked, is wrong before it ever runs: there is no input that makes it
+// fail, so no ordinary test can catch it.
 //
-// EACH RULE IS A FUNCTION WITH A NEGATIVE TEST. The first version of this was
-// substring matching over the whole file, and it was weak: a page whose comment
-// mentioned the gate passed, and so did one that read `process.env` itself. A
-// checker tested only against code that already passes proves nothing about the
-// next page somebody writes, so every rule below is also handed a file that
-// breaks exactly that rule and must complain about it.
+// WHY THEY READ A SYNTAX TREE AND NOT TEXT. The first version matched strings,
+// and every hole it had was a hole a regex cannot close: a guard mentioned in a
+// comment, a page whose props annotation swallowed its own body, a read started
+// in the synchronous entry and passed down as a promise, a guard in one function
+// with the read in a sibling, `await requireLoopback(x).catch(...)`, a key
+// pulled out of `process.env` by destructuring. Each fix was one more regex and
+// the next shape walked through anyway. These rules are now stated on the tree
+// TypeScript itself parses (`ts.createSourceFile`, no program and no type
+// checking), where "this call happens inside that function, after that
+// statement" is a fact rather than a guess about word order.
 //
-// Comments are stripped first, because a file that explains at length why it
-// does NOT do something would otherwise satisfy a search for the very words it
-// is warning about.
+// EACH RULE STILL HAS A NEGATIVE TEST. A checker exercised only against code
+// that already passes proves nothing about the next page somebody writes, so
+// every rule below is also handed a file that breaks exactly that rule.
 // ---------------------------------------------------------------------------
 
 const ROOT = path.resolve(__dirname, "..");
 
 const sourceOf = (file: string) => readFileSync(path.join(ROOT, file), "utf8");
 
-/** Source with its comments taken out. Every check below runs on this. */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\/\/.*$/gm, " ");
+/** The file, parsed. Parents are kept, because every rule walks upwards. */
+function parse(file: string, source: string): ts.SourceFile {
+  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 }
 
-/** The calls that put somebody's day on the screen. */
-const DATA_CALLS: RegExp[] = [
-  /\bsampleDay\s*\(/,
-  /\bsampleWeek\s*\(/,
-  /\bloadLocal\w*\s*\(/,
-  /\breadFolder\s*\(/,
-];
-
-/** The only three variables a v2 route may be built from, and only via the gate. */
-const GATE_ENV = ["V2_FIXTURES", "V2_LOCAL_SNAPSHOT", "VERCEL_ENV"];
-
-function firstDataCall(body: string): number {
-  let first = -1;
-  for (const pattern of DATA_CALLS) {
-    const found = body.search(pattern);
-    if (found !== -1 && (first === -1 || found < first)) first = found;
-  }
-  return first;
+function walk(node: ts.Node, visit: (node: ts.Node) => void): void {
+  visit(node);
+  node.forEachChild((child) => walk(child, visit));
 }
 
-/**
- * The body of `export default function ...`, braces matched, or null.
- *
- * The parameter list is skipped by matching ITS brackets first, because a page's
- * props are annotated inline and that annotation is full of braces: taking the
- * first `{` after the name read `{ searchParams?: Promise<Search> }` as the
- * whole function, and a page that does everything right then looked like one
- * that had never heard of the gate.
- */
-function defaultExportBody(body: string): string | null {
-  const start = body.indexOf("export default function");
-  if (start === -1) return null;
-  const paren = body.indexOf("(", start);
-  if (paren === -1) return null;
-  let brackets = 0;
-  let cursor = paren;
-  for (; cursor < body.length; cursor += 1) {
-    if (body[cursor] === "(") brackets += 1;
-    else if (body[cursor] === ")") {
-      brackets -= 1;
-      if (brackets === 0) break;
-    }
-  }
-  const open = body.indexOf("{", cursor);
-  if (open === -1) return null;
-  let depth = 0;
-  for (let index = open; index < body.length; index += 1) {
-    if (body[index] === "{") depth += 1;
-    else if (body[index] === "}") {
-      depth -= 1;
-      if (depth === 0) return body.slice(open, index + 1);
-    }
+/** Which module a specifier names, as a repository path, or null for a package. */
+function resolvedModule(file: string, specifier: string): string | null {
+  const bare = specifier.replace(/\.(ts|tsx|js)$/, "");
+  if (bare.startsWith("@/")) return bare.slice(2);
+  if (bare.startsWith(".")) {
+    return path.posix.normalize(path.posix.join(path.posix.dirname(file), bare));
   }
   return null;
 }
 
-/** The spans between the brackets of each `call` in this source. */
-function argumentRanges(body: string, call: string): Array<[number, number]> {
-  const ranges: Array<[number, number]> = [];
-  let from = 0;
-  for (;;) {
-    const at = body.indexOf(call, from);
-    if (at === -1) return ranges;
-    const open = at + call.length - 1;
-    let depth = 0;
-    let index = open;
-    for (; index < body.length; index += 1) {
-      if (body[index] === "(") depth += 1;
-      else if (body[index] === ")") {
-        depth -= 1;
-        if (depth === 0) break;
-      }
+/** Every module this file imports from or re-exports, as written. */
+function specifiersOf(file: string, source: string): string[] {
+  const found: string[] = [];
+  walk(parse(file, source), (node) => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier !== undefined &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      found.push(node.moduleSpecifier.text);
+      return;
     }
-    ranges.push([open, index]);
-    from = index + 1;
-  }
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      const literal = node.argument.literal;
+      if (ts.isStringLiteral(literal)) found.push(literal.text);
+      return;
+    }
+    if (!ts.isCallExpression(node) || node.arguments.length === 0) return;
+    const callee = node.expression;
+    const dynamic =
+      callee.kind === ts.SyntaxKind.ImportKeyword ||
+      (ts.isIdentifier(callee) && callee.text === "require");
+    const first = node.arguments[0];
+    if (dynamic && ts.isStringLiteral(first)) found.push(first.text);
+  });
+  return found;
 }
 
+// ------------------------------------------------------------------- the gate
+
+/** A page, a route handler, or a file that renders outside the entry. */
+type RouteKind = "entry" | "route" | "shell";
+
 /**
- * Every reading of the environment, and whether the gate can see it.
- *
- * TWO RULES, because the first version had only the first and the reviewer's own
- * example walked through it: the key has to be one of the three, AND the reading
- * has to sit inside the argument of `screenSource(`. A page that pulls
- * `V2_LOCAL_SNAPSHOT` out of the environment anywhere else has a second gate in
- * it whatever it does with the value, and a page that destructures
- * `process.env` names no key at all, so nothing can be checked about it.
+ * The files that render for every route under them, or instead of the one the
+ * gate refused. None of them may touch data at all.
  */
-function envProblems(body: string): string[] {
-  const found: string[] = [];
-  const allowed = argumentRanges(body, "screenSource(");
-  const inside = (at: number) => allowed.some(([open, close]) => at > open && at < close);
+const SHELL_FILES = [
+  "layout",
+  "template",
+  "default",
+  "loading",
+  "error",
+  "global-error",
+  "not-found",
+  "forbidden",
+  "unauthorized",
+];
 
-  for (const match of body.matchAll(/process\.env/g)) {
-    const at = match.index ?? 0;
-    const rest = body.slice(at + "process.env".length);
-    const named = /^\.([A-Za-z0-9_$]+)/.exec(rest);
-    const quoted = /^\[\s*(["'])([^"']*)\1\s*\]/.exec(rest);
-    const key = named?.[1] ?? quoted?.[2] ?? null;
+function routeKind(file: string): RouteKind | null {
+  const name = path.posix.basename(file).replace(/\.tsx?$/, "");
+  if (name === "page") return "entry";
+  if (name === "route") return "route";
+  return SHELL_FILES.includes(name) ? "shell" : null;
+}
 
-    if (key === null) {
-      // A computed key cannot be read here, so it is refused rather than
-      // guessed at; anything else names nothing at all.
-      found.push(
-        /^\[/.test(rest)
-          ? "reads process.env by a computed key"
-          : "reads process.env without naming a key",
-      );
-    } else if (!GATE_ENV.includes(key)) {
-      found.push(`reads process.env.${key} itself`);
-    } else if (!inside(at)) {
-      found.push(`reads process.env.${key} outside the screenSource( argument`);
+/** The only three variables a v2 route may be built from, and only via the gate. */
+const GATE_ENV = ["V2_FIXTURES", "V2_LOCAL_SNAPSHOT", "VERCEL_ENV"];
+
+/** The gate's own environment helpers. A route asks the gate, never these. */
+const GATE_HELPERS = ["localSnapshotDir", "fixturesEnabled"];
+
+/** What a route handler exports: these are entries, not helpers. */
+const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
+/** Does this specifier name a module that reads somebody's day? */
+function isDataModule(file: string, specifier: string): boolean {
+  const target = resolvedModule(file, specifier);
+  if (target === null) return false;
+  return target.startsWith("app/lib/v2/local/") || target.startsWith("app/lib/v2/fixtures/");
+}
+
+type FunctionNode = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction;
+
+function isFunctionNode(node: ts.Node): node is FunctionNode {
+  return (
+    ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)
+  );
+}
+
+/** One function the file declares at its top level, by the name it is called by. */
+interface TopLevel {
+  name: string;
+  node: FunctionNode;
+  exported: boolean;
+  isDefault: boolean;
+}
+
+function topLevelFunctions(tree: ts.SourceFile): TopLevel[] {
+  const found: TopLevel[] = [];
+  for (const statement of tree.statements) {
+    const modifiers = ts.canHaveModifiers(statement) ? (ts.getModifiers(statement) ?? []) : [];
+    const exported = modifiers.some((one) => one.kind === ts.SyntaxKind.ExportKeyword);
+    const isDefault = modifiers.some((one) => one.kind === ts.SyntaxKind.DefaultKeyword);
+
+    if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
+      found.push({ name: statement.name.text, node: statement, exported, isDefault });
+      continue;
+    }
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      const { initializer } = declaration;
+      if (
+        ts.isIdentifier(declaration.name) &&
+        initializer !== undefined &&
+        isFunctionNode(initializer)
+      ) {
+        found.push({ name: declaration.name.text, node: initializer, exported, isDefault });
+      }
     }
   }
   return found;
 }
 
-function helperProblems(body: string): string[] {
-  return ["localSnapshotDir", "fixturesEnabled"]
-    .filter((helper) => body.includes(helper))
-    .map((helper) => `reads the gate's own ${helper}`);
+/** The names this file can read data through, and what is wrong with how. */
+interface Bindings {
+  /** Local names that read data when called. Aliases are the local name. */
+  names: Set<string>;
+  /** Namespace imports of a data module: every property call on one is a read. */
+  namespaces: Set<string>;
+  /** The subset that came in through an import, which is what a shell may not do. */
+  imported: Set<string>;
+  problems: string[];
+}
+
+function isDataCall(node: ts.CallExpression, bindings: Bindings): string | null {
+  const callee = node.expression;
+  if (ts.isIdentifier(callee) && bindings.names.has(callee.text)) return callee.text;
+  if (ts.isPropertyAccessExpression(callee)) {
+    let root: ts.Expression = callee.expression;
+    while (ts.isPropertyAccessExpression(root)) root = root.expression;
+    if (ts.isIdentifier(root) && bindings.namespaces.has(root.text)) {
+      return `${root.text}.${callee.name.text}`;
+    }
+  }
+  return null;
+}
+
+function callsData(node: ts.Node, bindings: Bindings): boolean {
+  let found = false;
+  walk(node, (child) => {
+    if (!found && ts.isCallExpression(child) && isDataCall(child, bindings) !== null) found = true;
+  });
+  return found;
+}
+
+/**
+ * Rule a: every name this file can read somebody's day through.
+ *
+ * The imports first, by their LOCAL name, so an alias is followed; a namespace
+ * import makes every property call on it a read; a dynamic `import()` or
+ * `require` of such a module is a finding in itself, because nothing after it
+ * can be followed. Then, to a fixed point, every function declared at the top
+ * level whose body calls one of those names: a local helper that reads data is
+ * itself a way of reading data, however it is spelled.
+ *
+ * A type only import is not one of these: a type cannot be called.
+ */
+function dataBindings(file: string, tree: ts.SourceFile): Bindings {
+  const bindings: Bindings = {
+    names: new Set(),
+    namespaces: new Set(),
+    imported: new Set(),
+    problems: [],
+  };
+
+  walk(tree, (node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      if (!isDataModule(file, node.moduleSpecifier.text)) return;
+      const clause = node.importClause;
+      if (clause === undefined || clause.isTypeOnly) return;
+      if (clause.name !== undefined) {
+        bindings.names.add(clause.name.text);
+        bindings.imported.add(clause.name.text);
+      }
+      const named = clause.namedBindings;
+      if (named === undefined) return;
+      if (ts.isNamespaceImport(named)) {
+        bindings.namespaces.add(named.name.text);
+        bindings.imported.add(named.name.text);
+        return;
+      }
+      for (const element of named.elements) {
+        if (element.isTypeOnly) continue;
+        bindings.names.add(element.name.text);
+        bindings.imported.add(element.name.text);
+      }
+      return;
+    }
+    if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier !== undefined &&
+      ts.isStringLiteral(node.moduleSpecifier) &&
+      isDataModule(file, node.moduleSpecifier.text)
+    ) {
+      bindings.problems.push(`sends ${node.moduleSpecifier.text} straight out again`);
+      return;
+    }
+    if (!ts.isCallExpression(node) || node.arguments.length === 0) return;
+    const callee = node.expression;
+    const dynamic =
+      callee.kind === ts.SyntaxKind.ImportKeyword ||
+      (ts.isIdentifier(callee) && callee.text === "require");
+    if (!dynamic) return;
+    const first = node.arguments[0];
+    if (ts.isStringLiteral(first)) {
+      if (isDataModule(file, first.text)) bindings.problems.push(`loads ${first.text} at run time`);
+    } else {
+      bindings.problems.push("loads a module nothing can name at run time");
+    }
+  });
+
+  const locals = topLevelFunctions(tree);
+  for (;;) {
+    let grew = false;
+    for (const local of locals) {
+      if (bindings.names.has(local.name)) continue;
+      if (!callsData(local.node, bindings)) continue;
+      bindings.names.add(local.name);
+      grew = true;
+    }
+    if (!grew) break;
+  }
+
+  return bindings;
+}
+
+/** The functions this node sits inside, nearest first. */
+function enclosingFunctions(node: ts.Node): FunctionNode[] {
+  const chain: FunctionNode[] = [];
+  for (let current = node.parent; current !== undefined; current = current.parent) {
+    if (isFunctionNode(current)) chain.push(current);
+  }
+  return chain;
+}
+
+function within(node: ts.Node, container: ts.Node): boolean {
+  for (let current = node.parent; current !== undefined; current = current.parent) {
+    if (current === container) return true;
+  }
+  return false;
+}
+
+/**
+ * Rule c, the guard itself: `await requireLoopback(<one argument>)` as a
+ * statement of this function's OWN top-level block, and the end of it.
+ *
+ * Nothing else counts, and each exclusion is a shape that used to pass. Inside
+ * an `if`, a `try` or a loop it is not a statement of the block, so the check
+ * may not run at all. `await requireLoopback(x).catch(...)` awaits a member
+ * call rather than the check, so a refusal is swallowed and the page renders.
+ * Two arguments, or none, is not this function.
+ */
+function guardEnd(fn: FunctionNode): number | null {
+  const { body } = fn;
+  if (body === undefined || !ts.isBlock(body)) return null;
+  for (const statement of body.statements) {
+    if (!ts.isExpressionStatement(statement)) continue;
+    const awaited = statement.expression;
+    if (!ts.isAwaitExpression(awaited)) continue;
+    const call = awaited.expression;
+    if (!ts.isCallExpression(call) || call.arguments.length !== 1) continue;
+    if (!ts.isIdentifier(call.expression) || call.expression.text !== "requireLoopback") continue;
+    return statement.end;
+  }
+  return null;
+}
+
+function callsNamed(node: ts.Node, name: string, before = Number.POSITIVE_INFINITY): boolean {
+  let found = false;
+  walk(node, (child) => {
+    if (found || !ts.isCallExpression(child)) return;
+    if (!ts.isIdentifier(child.expression) || child.expression.text !== name) return;
+    if (child.getStart() < before) found = true;
+  });
+  return found;
+}
+
+/** Is this node inside the argument of a `screenSource(...)` call? */
+function insideScreenSource(node: ts.Node): boolean {
+  let child: ts.Node = node;
+  for (let parent = node.parent; parent !== undefined; child = parent, parent = parent.parent) {
+    if (!ts.isCallExpression(parent)) continue;
+    if (!ts.isIdentifier(parent.expression) || parent.expression.text !== "screenSource") continue;
+    if (parent.arguments.some((argument) => argument === child)) return true;
+  }
+  return false;
+}
+
+/**
+ * Rule d: the environment, which a route may only ever read through the gate.
+ *
+ * Any mention of `process` is refused unless it is `process.env` inside the
+ * argument of `screenSource(`, naming one of the three keys. Every other shape
+ * is a second gate: `process["env"]`, `const { env } = process`,
+ * `const p = process`, `globalThis.process`, a destructuring that names a
+ * fourth key, or the right key read somewhere the gate cannot see.
+ */
+function processProblems(tree: ts.SourceFile): string[] {
+  const found: string[] = [];
+
+  walk(tree, (node) => {
+    // `globalThis.process`, `globalThis["process"]`: the name is not a reference
+    // to the identifier, so it is caught here rather than below.
+    if (ts.isPropertyAccessExpression(node) && node.name.text === "process") {
+      found.push("reads the process object itself");
+      return;
+    }
+    if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression !== undefined &&
+      ts.isStringLiteralLike(node.argumentExpression) &&
+      node.argumentExpression.text === "process"
+    ) {
+      found.push("reads the process object itself");
+      return;
+    }
+    if (!ts.isIdentifier(node) || node.text !== "process") return;
+
+    const parent = node.parent;
+    // A property named `process` was handled above; do not count it twice.
+    if (ts.isPropertyAccessExpression(parent) && parent.name === node) return;
+    const isEnv =
+      ts.isPropertyAccessExpression(parent) &&
+      parent.expression === node &&
+      parent.name.text === "env";
+    if (!isEnv) {
+      found.push("reads the process object itself");
+      return;
+    }
+
+    const env = parent;
+    const use = env.parent;
+    const complain = (key: string) => {
+      if (!GATE_ENV.includes(key)) found.push(`reads process.env.${key} itself`);
+      else if (!insideScreenSource(env)) {
+        found.push(`reads process.env.${key} outside the screenSource( argument`);
+      }
+    };
+
+    if (ts.isPropertyAccessExpression(use) && use.expression === env) {
+      complain(use.name.text);
+      return;
+    }
+    if (ts.isElementAccessExpression(use) && use.expression === env) {
+      const key = use.argumentExpression;
+      if (key !== undefined && ts.isStringLiteralLike(key)) complain(key.text);
+      else found.push("reads process.env by a computed key");
+      return;
+    }
+    if (
+      ts.isVariableDeclaration(use) &&
+      use.initializer === env &&
+      ts.isObjectBindingPattern(use.name)
+    ) {
+      const named = use.name.elements.every(
+        (element) =>
+          element.dotDotDotToken === undefined &&
+          GATE_ENV.includes((element.propertyName ?? element.name).getText()),
+      );
+      if (!named || use.name.elements.length === 0) {
+        found.push("reads process.env without naming a key");
+      } else if (!insideScreenSource(env)) {
+        found.push("reads process.env outside the screenSource( argument");
+      }
+      return;
+    }
+    // Passed whole, spread, or assigned: no key is named, so nothing can be
+    // checked about what it reads.
+    found.push("reads process.env without naming a key");
+  });
+
+  return found;
 }
 
 /**
  * What is wrong with one route file under app/v2, in plain words.
  *
- * A PAGE decides what it may show through the gate, synchronously, and answers a
- * real 404 before anything streams; the loopback check is awaited before any
- * data is touched; and it never reads the environment or the gate's own helpers
- * itself.
+ * AN ENTRY (`page`) decides what it may show through the gate, synchronously,
+ * and answers a real 404 before anything streams, so it may not read data
+ * itself: starting a read and passing the promise down is the same thing as
+ * reading it, and it starts BEFORE the check has run.
  *
- * The ORDER rule holds in every page even though `requireLoopback` is a no-op
- * for the sample: the next page somebody writes learns its shape from this one,
- * and a page whose folder read sits above the check is one edit away from
- * serving a stranger the owner's day.
+ * EVERY READ waits for the check: a call that reads data sits in a function
+ * whose own block awaited `requireLoopback` first, or in a local helper whose
+ * call sites do (that is how a `readFolder` stays legal, wherever in the file it
+ * is written), and such a helper is not exported.
  *
- * A ROUTE HANDLER obeys the same rules minus the default export. A LAYOUT may
- * not touch data at all: it renders for every route under it, including the ones
- * the gate refused.
+ * A ROUTE HANDLER obeys the same rules per exported function, and asks the gate
+ * and answers the not-found case before its first read. A SHELL (`layout`,
+ * `template`, `default`, `loading`, `error`, and the rest) may not import a
+ * loader at all: it renders for every route under it, including the ones the
+ * gate refused.
  */
 function gateProblems(file: string, source: string): string[] {
-  const body = stripComments(source);
-  const found: string[] = [];
-  const data = firstDataCall(body);
+  const kind = routeKind(file);
+  if (kind === null) return [];
 
-  if (file.endsWith("layout.tsx")) {
-    if (data !== -1) found.push("a layout must not read data");
-    return [...found, ...envProblems(body), ...helperProblems(body)];
+  const tree = parse(file, source);
+  const bindings = dataBindings(file, tree);
+  const locals = topLevelFunctions(tree);
+  const found: string[] = [...bindings.problems, ...processProblems(tree)];
+
+  for (const helper of GATE_HELPERS) {
+    let used = false;
+    walk(tree, (node) => {
+      if (ts.isIdentifier(node) && node.text === helper) used = true;
+    });
+    if (used) found.push(`reads the gate's own ${helper}`);
   }
 
-  if (!/\bscreenSource\s*\(/.test(body)) found.push("does not call screenSource(");
-  if (!/\brequireLoopback\s*\(/.test(body)) found.push("does not call requireLoopback(");
-
-  const guard = body.indexOf("await requireLoopback(");
-  if (data !== -1 && (guard === -1 || guard > data)) {
-    found.push("calls data before awaiting requireLoopback");
+  if (kind === "shell") {
+    const name = path.posix.basename(file).replace(/\.tsx?$/, "");
+    for (const imported of [...bindings.imported].sort()) {
+      found.push(`a ${name} must not read data (${imported})`);
+    }
+    return found;
   }
 
-  if (file.endsWith("page.tsx")) {
-    if (/export default async function/.test(body)) found.push("has an async default export");
-    const entry = defaultExportBody(body);
+  const reads: Array<{ node: ts.CallExpression; name: string }> = [];
+  walk(tree, (node) => {
+    if (!ts.isCallExpression(node)) return;
+    const name = isDataCall(node, bindings);
+    if (name !== null) reads.push({ node, name });
+  });
+
+  /** The helper a function node is, when it is one that reads data. */
+  const helperOf = (fn: FunctionNode): TopLevel | null =>
+    locals.find(
+      (local) => local.node === fn && bindings.names.has(local.name) && !local.isDefault,
+    ) ?? null;
+
+  /**
+   * Does this read wait for the check?
+   *
+   * Either it sits in a function that awaited the check first, or it sits in a
+   * local helper that is only ever called from somewhere that did. The second
+   * needs at least one call site: a function nothing calls would otherwise
+   * satisfy "every call site waits" by having none, and that is exactly the
+   * sibling-function shape this rule exists to refuse.
+   */
+  const waits = (node: ts.CallExpression, seen: Set<string>): boolean => {
+    const chain = enclosingFunctions(node);
+    if (chain.some((fn) => (guardEnd(fn) ?? Number.POSITIVE_INFINITY) <= node.getStart())) {
+      return true;
+    }
+    const holder = chain[0];
+    if (holder === undefined) return false;
+    const helper = helperOf(holder);
+    if (helper === null || seen.has(helper.name)) return false;
+    seen.add(helper.name);
+
+    const sites: ts.CallExpression[] = [];
+    walk(tree, (child) => {
+      if (!ts.isCallExpression(child)) return;
+      if (ts.isIdentifier(child.expression) && child.expression.text === helper.name) {
+        sites.push(child);
+      }
+    });
+    return sites.length > 0 && sites.every((site) => waits(site, new Set(seen)));
+  };
+
+  for (const read of reads) {
+    if (!waits(read.node, new Set())) {
+      found.push(`calls data before awaiting requireLoopback (${read.name})`);
+    }
+  }
+
+  // A helper that reads data leans on its call sites being checked, so it must
+  // not be callable from outside this file, where there are no call sites to
+  // check. The file's own entry is not one of those: a page's default export and
+  // a route handler's method ARE the thing being entered.
+  for (const local of locals) {
+    if (!local.exported || local.isDefault) continue;
+    if (kind === "route" && HTTP_METHODS.includes(local.name)) continue;
+    if (bindings.names.has(local.name)) found.push(`exports the loader ${local.name}`);
+  }
+
+  if (kind === "entry") {
+    if (!callsNamed(tree, "screenSource")) found.push("does not call screenSource(");
+    if (!callsNamed(tree, "requireLoopback")) found.push("does not call requireLoopback(");
+
+    const entry = locals.find((local) => local.isDefault) ?? null;
     if (entry === null) found.push("has no synchronous default export");
     else {
-      if (!/\bnotFound\s*\(/.test(entry)) {
+      const modifiers = ts.canHaveModifiers(entry.node) ? (ts.getModifiers(entry.node) ?? []) : [];
+      if (
+        modifiers.some((one) => one.kind === ts.SyntaxKind.AsyncKeyword) ||
+        entry.node.modifiers?.some((one) => one.kind === ts.SyntaxKind.AsyncKeyword)
+      ) {
+        found.push("has an async default export");
+      }
+      if (!callsNamed(entry.node, "screenSource")) {
+        found.push("does not call screenSource( in its default export");
+      }
+      if (!callsNamed(entry.node, "notFound")) {
         found.push("does not call notFound() in its default export");
       }
-      if (!/\bscreenSource\s*\(/.test(entry)) {
-        found.push("does not call screenSource( in its default export");
+      for (const read of reads) {
+        if (within(read.node, entry.node)) {
+          found.push(`reads data in its default export (${read.name})`);
+        }
       }
     }
   }
 
-  return [...found, ...envProblems(body), ...helperProblems(body)];
+  if (kind === "route") {
+    for (const local of locals) {
+      if (!local.exported) continue;
+      const inside = reads.filter((read) => within(read.node, local.node));
+      if (inside.length === 0) continue;
+      const first = Math.min(...inside.map((read) => read.node.getStart()));
+      if (!callsNamed(local.node, "screenSource", first)) {
+        found.push(`${local.name} does not call screenSource( before reading data`);
+      }
+      if (!callsNamed(local.node, "notFound", first)) {
+        found.push(`${local.name} does not answer the not-found case before reading data`);
+      }
+    }
+  }
+
+  return found;
 }
 
-/** Every route file under a folder, found by walking it. */
+/** Every file under a folder that renders a route, or renders around one. */
 function routeFilesUnder(dir: string): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
     const next = `${dir}/${entry.name}`;
     if (entry.isDirectory()) found.push(...routeFilesUnder(next));
-    else if (["page.tsx", "layout.tsx", "route.ts"].includes(entry.name)) found.push(next);
+    else if (routeKind(next) !== null && /\.tsx?$/.test(entry.name)) found.push(next);
   }
   return found;
 }
@@ -423,6 +792,8 @@ describe("every v2 route goes through the gate", () => {
   const files = routeFilesUnder("app/v2");
 
   test("finds the route files at all", () => {
+    // An empty walk must not pass for want of looking.
+    expect(files.length).toBeGreaterThanOrEqual(2);
     expect(files).toContain("app/v2/today/page.tsx");
     expect(files).toContain("app/v2/layout.tsx");
   });
@@ -432,10 +803,22 @@ describe("every v2 route goes through the gate", () => {
       expect(gateProblems(file, sourceOf(file)), file).toEqual([]);
     }
   });
+
+  test("knows every file kind that renders a route or renders around one", () => {
+    expect(routeKind("app/v2/week/page.ts")).toBe("entry");
+    expect(routeKind("app/v2/api/route.tsx")).toBe("route");
+    for (const name of SHELL_FILES) {
+      expect(routeKind(`app/v2/${name}.tsx`), name).toBe("shell");
+      expect(routeKind(`app/v2/${name}.ts`), name).toBe("shell");
+    }
+    // Not a route file, so not this checker's business.
+    expect(routeKind("app/v2/today/today-client.tsx")).toBeNull();
+    expect(routeKind("app/v2/_components/calendar/calendar-pane.tsx")).toBeNull();
+  });
 });
 
-// The checker, checked. Every case here is a page that would have passed the
-// substring version of this test while being wrong.
+// The checker, checked. Every case here is a page that passed some earlier
+// version of this test while being wrong.
 describe("the gate checker catches", () => {
   const complain = (source: string, file = "app/v2/x/page.tsx") =>
     gateProblems(file, source).join("; ");
@@ -463,15 +846,41 @@ describe("the gate checker catches", () => {
     expect(complain(GOOD)).toBe("");
   });
 
-  // The checker's own first bug: a page's props are annotated inline, and the
-  // braces of that annotation were read as the whole function body, so a page
-  // that does everything right looked like one with no gate in it at all.
+  // The text checker's own first bug: a page's props are annotated inline, and
+  // the braces of that annotation were read as the whole function body, so a
+  // page that does everything right looked like one with no gate in it.
   test("nothing in one whose props are annotated inline either", () => {
     const annotated = GOOD.replace(
       "export default function Page() {",
       "export default function Page(props?: { searchParams?: Promise<Search> }) {",
     );
     expect(complain(annotated)).toBe("");
+  });
+
+  // A local helper that reads the folder is legal WHEREVER it is written, as
+  // long as every place that calls it has waited for the check. The text
+  // checker refused this on the position of the declaration alone, which was
+  // never the real question: what matters is that nothing reads before the
+  // check, and a hoisted declaration reads nothing by existing.
+  test("nothing in one whose folder helper is declared above the check", () => {
+    const source = [
+      'import { notFound } from "next/navigation";',
+      'import { loadLocalToday } from "@/app/lib/v2/local/snapshot";',
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "async function readFolder(dir) {",
+      "  return loadLocalToday(dir, now, null);",
+      "}",
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      "  return <Screen source={source} />;",
+      "}",
+      "async function Screen({ source }) {",
+      "  await requireLoopback(source);",
+      "  return <div>{(await readFolder(source.dir)).notice}</div>;",
+      "}",
+    ].join("\n");
+    expect(complain(source)).toBe("");
   });
 
   test("a gate that lives only in a comment", () => {
@@ -494,25 +903,143 @@ describe("the gate checker catches", () => {
     expect(complain(source)).toContain("calls data before awaiting requireLoopback");
   });
 
-  test("a helper defined above the check that reads the folder", () => {
+  // The shape the text checker could never see: the read is STARTED in the
+  // synchronous entry and the promise handed down to a child that awaits the
+  // check. The guard text comes first in the file and the read runs first in
+  // time, which is the whole point of the entry rule.
+  test("a read started in the entry and passed down as a promise", () => {
     const source = [
       'import { notFound } from "next/navigation";',
-      'import { loadLocalToday } from "@/app/lib/v2/local/snapshot";',
+      'import { loadLocalCalendar } from "@/app/lib/v2/local/calendar";',
       'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
-      "async function readFolder(dir) {",
-      "  return loadLocalToday(dir, now, null);",
+      "async function Screen({ source, week }) {",
+      "  await requireLoopback(source);",
+      "  return <div>{(await week).week[0]}</div>;",
+      "}",
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      "  const week = loadLocalCalendar(source.dir, now, null);",
+      "  return <Screen source={source} week={week} />;",
+      "}",
+    ].join("\n");
+    expect(complain(source)).toContain("reads data in its default export (loadLocalCalendar)");
+    expect(complain(source)).toContain("calls data before awaiting requireLoopback");
+  });
+
+  test("a guard in one function and the read in a sibling", () => {
+    const source = [
+      'import { notFound } from "next/navigation";',
+      'import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";',
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "async function check(source) {",
+      "  await requireLoopback(source);",
+      "}",
+      "async function Screen({ source }) {",
+      "  await check(source);",
+      "  return <div>{sampleDay().notice}</div>;",
       "}",
       "export default function Page() {",
       "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
       "  if (source === null) notFound();",
       "  return <Screen source={source} />;",
       "}",
-      "async function Screen({ source }) {",
-      "  await requireLoopback(source);",
-      "  return <div>{(await readFolder(source.dir)).notice}</div>;",
-      "}",
     ].join("\n");
+    expect(complain(source)).toContain("calls data before awaiting requireLoopback (sampleDay)");
+  });
+
+  test("a file reader called straight from the page", () => {
+    for (const reader of [
+      "readCalendarEvents",
+      "readTaskRows",
+      "readSnapshotMeta",
+      "readRules",
+      "readGroupRows",
+    ]) {
+      const source = [
+        'import { notFound } from "next/navigation";',
+        `import { ${reader} } from "@/app/lib/v2/local/files";`,
+        'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+        "export default function Page() {",
+        "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+        "  if (source === null) notFound();",
+        "  return <Screen source={source} />;",
+        "}",
+        "async function Screen({ source }) {",
+        `  const rows = await ${reader}(source.dir);`,
+        "  await requireLoopback(source);",
+        "  return <div>{rows.length}</div>;",
+        "}",
+      ].join("\n");
+      expect(complain(source), reader).toContain(
+        `calls data before awaiting requireLoopback (${reader})`,
+      );
+    }
+  });
+
+  test("an aliased import, and a namespace one", () => {
+    const aliased = GOOD.replace(
+      'import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";',
+      'import { sampleDay as day } from "@/app/lib/v2/fixtures/sample-day";',
+    ).replace("sampleDay().notice", "day().notice");
+    expect(complain(aliased)).toBe("");
+
+    const early = aliased.replace(
+      "  await requireLoopback(source);",
+      "  const it = day();\n  await requireLoopback(source);",
+    );
+    expect(complain(early)).toContain("calls data before awaiting requireLoopback (day)");
+
+    const namespaced = GOOD.replace(
+      'import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";',
+      'import * as fixtures from "@/app/lib/v2/fixtures/sample-day";',
+    ).replace(
+      "  await requireLoopback(source);",
+      "  const it = fixtures.sampleDay();\n  await requireLoopback(source);",
+    );
+    expect(complain(namespaced)).toContain(
+      "calls data before awaiting requireLoopback (fixtures.sampleDay)",
+    );
+  });
+
+  test("a loader pulled in at run time", () => {
+    const source = GOOD.replace(
+      "  await requireLoopback(source);",
+      '  const { sampleWeek } = await import("@/app/lib/v2/fixtures/sample-week");\n  await requireLoopback(source);',
+    );
+    expect(complain(source)).toContain(
+      "loads @/app/lib/v2/fixtures/sample-week at run time",
+    );
+  });
+
+  // `stripComments` ate the rest of the line after a `//` inside a string, so a
+  // read on that line went unseen. A syntax tree knows a string from a comment.
+  test("a read hiding on the same line as a string that looks like a comment", () => {
+    const source = GOOD.replace(
+      "  await requireLoopback(source);",
+      '  const where = "https://example.test/day"; const day = sampleDay();\n  await requireLoopback(source);',
+    );
+    expect(complain(source)).toContain("calls data before awaiting requireLoopback (sampleDay)");
+  });
+
+  test("a check whose refusal is swallowed", () => {
+    const source = GOOD.replace(
+      "  await requireLoopback(source);",
+      "  await requireLoopback(source).catch(() => {});",
+    );
     expect(complain(source)).toContain("calls data before awaiting requireLoopback");
+  });
+
+  test("a check that only sometimes runs", () => {
+    for (const guard of [
+      "  if (source.kind === 'local') await requireLoopback(source);",
+      "  try { await requireLoopback(source); } catch {}",
+      "  for (const one of [source]) await requireLoopback(one);",
+      "  await Promise.all([requireLoopback(source)]);",
+    ]) {
+      const source = GOOD.replace("  await requireLoopback(source);", guard);
+      expect(complain(source), guard).toContain("calls data before awaiting requireLoopback");
+    }
   });
 
   test("a check that is never awaited", () => {
@@ -550,6 +1077,27 @@ describe("the gate checker catches", () => {
     expect(complain(source)).toContain("does not call screenSource( in its default export");
   });
 
+  test("a page that exports the helper that reads the folder", () => {
+    const source = [
+      'import { notFound } from "next/navigation";',
+      'import { loadLocalToday } from "@/app/lib/v2/local/snapshot";',
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "export async function readFolder(dir) {",
+      "  return loadLocalToday(dir, now, null);",
+      "}",
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      "  return <Screen source={source} />;",
+      "}",
+      "async function Screen({ source }) {",
+      "  await requireLoopback(source);",
+      "  return <div>{(await readFolder(source.dir)).notice}</div>;",
+      "}",
+    ].join("\n");
+    expect(complain(source)).toContain("exports the loader readFolder");
+  });
+
   test("a page that reads the environment itself", () => {
     const source = GOOD.replace(
       "  if (source === null) notFound();",
@@ -558,44 +1106,35 @@ describe("the gate checker catches", () => {
     expect(complain(source)).toContain("reads process.env.V2_SECRET_FOLDER itself");
   });
 
-  // The first version of this rule read `process.env.KEY` and nothing else, so
-  // the two shapes below walked straight through it: one never writes a key at
-  // all, and the other writes an allowed key somewhere the gate cannot see.
-  test("a page that takes the environment apart instead of naming a key", () => {
-    for (const line of [
-      "  const { V2_LOCAL_SNAPSHOT: dir } = process.env;",
-      "  const env = process.env;",
-      "  const { ...rest } = process.env;",
-    ]) {
-      const source = GOOD.replace("  if (source === null) notFound();", `${line}\n  if (source === null) notFound();`);
-      expect(complain(source), line).toContain("reads process.env without naming a key");
+  // The text rule read `process.env.KEY` and nothing else, so each of these
+  // walked straight through it.
+  test("every other way of getting at the environment", () => {
+    const shapes: Array<[string, string]> = [
+      [
+        // It names an allowed key, and nowhere the gate can see it.
+        "  const { V2_LOCAL_SNAPSHOT: dir } = process.env;",
+        "reads process.env outside the screenSource( argument",
+      ],
+      ["  const env = process.env;", "reads process.env without naming a key"],
+      ["  const { ...rest } = process.env;", "reads process.env without naming a key"],
+      ["  const { env } = process;", "reads the process object itself"],
+      ["  const dir = process['env'].V2_LOCAL_SNAPSHOT;", "reads the process object itself"],
+      ["  const p = process;", "reads the process object itself"],
+      ["  const dir = globalThis.process.env.V2_LOCAL_SNAPSHOT;", "reads the process object itself"],
+      [
+        "  const dir = process.env.V2_LOCAL_SNAPSHOT;",
+        "reads process.env.V2_LOCAL_SNAPSHOT outside the screenSource( argument",
+      ],
+      ["  const dir = process.env[key];", "reads process.env by a computed key"],
+      ['  const dir = process.env["V2_OTHER_FOLDER"];', "reads process.env.V2_OTHER_FOLDER itself"],
+    ];
+    for (const [line, expected] of shapes) {
+      const source = GOOD.replace(
+        "  if (source === null) notFound();",
+        `${line}\n  if (source === null) notFound();`,
+      );
+      expect(complain(source), line).toContain(expected);
     }
-  });
-
-  test("a page that reads one of the three keys somewhere else", () => {
-    const source = GOOD.replace(
-      "  if (source === null) notFound();",
-      "  const dir = process.env.V2_LOCAL_SNAPSHOT;\n  if (source === null) notFound();",
-    );
-    expect(complain(source)).toContain(
-      "reads process.env.V2_LOCAL_SNAPSHOT outside the screenSource( argument",
-    );
-  });
-
-  test("a page that reads the environment by a key nothing can read", () => {
-    const source = GOOD.replace(
-      "  if (source === null) notFound();",
-      "  const dir = process.env[key];\n  if (source === null) notFound();",
-    );
-    expect(complain(source)).toContain("reads process.env by a computed key");
-  });
-
-  test("a page that reads the environment by a name in brackets", () => {
-    const source = GOOD.replace(
-      "  if (source === null) notFound();",
-      '  const dir = process.env["V2_OTHER_FOLDER"];\n  if (source === null) notFound();',
-    );
-    expect(complain(source)).toContain("reads process.env.V2_OTHER_FOLDER itself");
   });
 
   test("a page that keeps its own copy of the gate's helpers", () => {
@@ -616,6 +1155,20 @@ describe("the gate checker catches", () => {
     expect(complain(source, "app/v2/layout.tsx")).toContain("a layout must not read data");
   });
 
+  // The file a parallel slot falls back to. It renders instead of the page the
+  // gate refused, so it is the last place a loader may be imported.
+  test("a default slot that imports a loader at all", () => {
+    const source = [
+      'import { loadLocalToday } from "@/app/lib/v2/local/snapshot";',
+      "export default function Slot() {",
+      "  return <div>{String(loadLocalToday)}</div>;",
+      "}",
+    ].join("\n");
+    expect(complain(source, "app/v2/@pane/default.tsx")).toContain(
+      "a default must not read data (loadLocalToday)",
+    );
+  });
+
   test("a route handler that serves the folder without the gate", () => {
     const source = [
       'import { loadLocalToday } from "@/app/lib/v2/local/snapshot";',
@@ -629,6 +1182,34 @@ describe("the gate checker catches", () => {
     // A route handler has no default export, and is not asked for one.
     expect(problems).not.toContain("default export");
   });
+
+  test("the same handler written as a .tsx file", () => {
+    const source = [
+      'import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";',
+      "export async function GET() {",
+      "  return Response.json(sampleWeek(null));",
+      "}",
+    ].join("\n");
+    const problems = complain(source, "app/v2/week/route.tsx");
+    expect(problems).toContain("GET does not call screenSource( before reading data");
+    expect(problems).toContain("GET does not answer the not-found case before reading data");
+    expect(problems).toContain("calls data before awaiting requireLoopback (sampleWeek)");
+  });
+
+  test("nothing in a route handler that asks the gate first", () => {
+    const source = [
+      'import { notFound } from "next/navigation";',
+      'import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";',
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "export async function GET() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      "  await requireLoopback(source);",
+      "  return Response.json(sampleWeek(null));",
+      "}",
+    ].join("\n");
+    expect(complain(source, "app/v2/week/route.ts")).toBe("");
+  });
 });
 
 // The engine's write half has open defects, so a screen may reach only its two
@@ -638,31 +1219,10 @@ describe("the calendar engine's boundary", () => {
   const ENGINE = "app/lib/v2/calendar";
   const ALLOWED = [`${ENGINE}/types`, `${ENGINE}/grid`];
 
-  /** Every module specifier a file imports from, however it is spelled. */
-  function specifiers(body: string): string[] {
-    const found: string[] = [];
-    for (const match of body.matchAll(/from\s*["']([^"']+)["']/g)) found.push(match[1]);
-    for (const match of body.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
-      found.push(match[1]);
-    }
-    for (const match of body.matchAll(/\bimport\s+["']([^"']+)["']/g)) found.push(match[1]);
-    return found;
-  }
-
-  /** Which module a specifier names, as a repository path, or null for a package. */
-  function resolved(file: string, specifier: string): string | null {
-    const bare = specifier.replace(/\.(ts|tsx|js)$/, "");
-    if (bare.startsWith("@/")) return bare.slice(2);
-    if (bare.startsWith(".")) {
-      return path.posix.normalize(path.posix.join(path.posix.dirname(file), bare));
-    }
-    return null;
-  }
-
   function engineProblems(file: string, source: string): string[] {
     const found: string[] = [];
-    for (const specifier of specifiers(stripComments(source))) {
-      const target = resolved(file, specifier);
+    for (const specifier of specifiersOf(file, source)) {
+      const target = resolvedModule(file, specifier);
       if (target === null) continue;
       if (target !== ENGINE && !target.startsWith(`${ENGINE}/`)) continue;
       if (!ALLOWED.includes(target)) found.push(`imports ${specifier}`);
@@ -754,10 +1314,7 @@ describe("the calendar engine's boundary", () => {
 // const out of the file that would have crashed on whichever side loaded first.
 // Both are split now, and these read the import lines so neither can come back.
 describe("no import cycles", () => {
-  const imports = (file: string) =>
-    [...stripComments(sourceOf(file)).matchAll(/from\s*["']([^"']+)["']/g)].map(
-      (match) => match[1],
-    );
+  const imports = (file: string) => specifiersOf(file, sourceOf(file));
 
   test("the loopback check is a leaf, and both sides read it from there", () => {
     expect(imports("app/lib/v2/loopback.ts")).toEqual([]);

@@ -92,7 +92,14 @@ export interface CalendarDayView {
 }
 
 export interface CalendarAllDaySpan {
+  /**
+   * The row's key, which is NOT always the event's id: a span cut by a day the
+   * source cannot speak for becomes two rows, and two rows of one list cannot
+   * share a key. Use it to draw, never to say which event this is.
+   */
   id: string;
+  /** The event, always, cut or not. This is the one to match an event by. */
+  eventId: string;
   title: string;
   color: string | null;
   firstIndex: number;
@@ -130,6 +137,8 @@ export const CALENDAR_COPY = {
   /** A day this source has no calendar data for. Never "nothing on". */
   notCovered: "Not in this copy",
   nothing: "Nothing on the calendar",
+  /** A source that holds no calendar at all (the Week page says so). */
+  noCalendar: "No calendar in this copy",
   allDay: "All day",
   previous: "Previous week",
   next: "Next week",
@@ -462,6 +471,7 @@ export function buildCalendarView(
     days,
     allDay: spans.map((item) => ({
       id: item.id,
+      eventId: item.event.id,
       title: item.event.title,
       color: byId.get(item.event.calendarId)?.color ?? null,
       firstIndex: item.firstIndex,
