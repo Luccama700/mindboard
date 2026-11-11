@@ -466,6 +466,19 @@ export function resetClass(set: TileSet, cls: ScreenClass): TileSet;
 
 ---
 
+## Known open edges after stage 1
+
+Found by the whole-branch review or by the controller's own checks, and left open by ruling. None of them shows data to anyone it should not.
+
+- **With the flags off, a v2 page answers 200 with the not-found page, not 404.** Checked on a production build with no flag set: `/v2/today` and `/v2/week` return the not-found screen and none of the screen's markup, but the status is 200, because the root `app/loading.tsx` boundary has started the response before the page's own `notFound()` runs. A path with no route under `/v2` answers a real 404. The gate holds for data; the status does not. A real 404 needs the check above that boundary (the proxy is the place). To do before this branch serves anyone, and to be pinned by a test that reads a status code from a running build.
+- **A `"use server"` module under `app/v2` that imports a loader** is marked by the gate test's data-module set, but no rule forces a guard on it. Nothing in this stage writes. The stage that introduces server actions owns it.
+- **Nothing keeps two chips in one day from sharing a key.** The local export uses ids that already hold the calendar's id. The Google adapter will hand over raw event ids, so that stage must make ids unique per screen.
+- **Between 520 and 1023 px the Week page's bottom bar** is the phone's 430 px pill under a pane as wide as the window.
+- **In the three day layout** a trailing all day row whose bars are all hidden leaves a blank 22 px row, and an event that continues past midnight does not say so.
+- **Browsers without `:has()`** lose the 1760 px tier's rules, with and without a calendar.
+- **Some stylesheet tests pin exact text**, so an equivalent rewrite fails them with no change in behaviour, and the gate is tested in three files.
+- **The tile engine's saved form** has no way to say "this is the default", saves the focus with the layout, and takes the pane catalog as a parameter where it could be fixed. Nothing has been saved by anyone yet. `PLAN-SHELL.md` Task 2 amends it before the desk first writes anything.
+
 ## After this stage
 
 - **Stage 2, the tiled shell.** Panes that always fill the screen, dividers that resize, panes that dock against each other or stack as tabs, three saved arrangements, one saved layout per screen size. Task 3 above is its pure engine. The shell itself (the workspace, the panes, the rail, the motion, where the layout is saved) has no plan yet, and Today is not restructured into panes until the owner has seen stage 1 and said yes.

@@ -122,7 +122,7 @@ export function useDay(): DayValue;   // throws outside a provider, with a sente
 **Behaviour the tests pin**
 
 1. `TodayClient` renders the same markup as before for the sample day, before and after a Start, a Done, a Not today and an energy answer (compare against the existing render tests' own assertions: they pass unedited).
-2. The provider's state is seeded once. New `data` props re-render without resetting presses (the week link case).
+2. The provider's state is seeded once per planned day. New `data` props for the same day re-render without resetting presses (the week link case); a different planned day starts fresh, because the provider is keyed on `data.input.date` wherever it is rendered (stage 1's final review found the header and the plan could otherwise be on different days).
 3. `useDay()` outside a provider throws.
 4. `planned` equals what `today-client.tsx` computed before the move, for the same sequence of presses.
 
@@ -136,12 +136,19 @@ export function useDay(): DayValue;   // throws outside a provider, with a sente
 
 ### Task 2: the engine's geometry as CSS, and the saved form the server reads
 
-Pure code, no screen. Wait for the whole-branch review of stage 1 before starting: it was asked what in the engine will hurt a shell, and its answer may change these signatures.
+Pure code, no screen. It starts by amending the engine: the whole-branch review of stage 1 was asked what in it would hurt a shell, and named four things. Nothing has been saved by anyone yet, so this is the moment to change the saved form.
 
 **Files:**
 - Create: `app/lib/v2/tiles/css.ts`, `app/lib/v2/tiles/cookie.ts`
-- Modify: `app/lib/v2/tiles/index.ts` (exports only)
-- Test: create `__tests__/v2-tiles-css.test.ts`, `__tests__/v2-tiles-cookie.test.ts`
+- Modify: `app/lib/v2/tiles/{tree,store,catalog,index}.ts` (the four amendments below, and exports)
+- Test: create `__tests__/v2-tiles-css.test.ts`, `__tests__/v2-tiles-cookie.test.ts`; amend `__tests__/v2-tiles-tree.test.ts` and `__tests__/v2-tiles-store.test.ts` for the four amendments only
+
+**The engine, amended first (each with its test, each keeping behaviours 1 to 18 of `PLAN-OS.md` Task 3)**
+
+- **A. A layout nobody changed is not saved as a tree.** In the saved form a class whose working tree is still the saved or default tree of its current arrangement stores no tree at all, and parses back to that arrangement as it is defined today. So a default that changes in a later release reaches everyone who never rearranged it. A pane the catalog has gained, which a stored tree does not hold and `lastSpot` does not name as closed, is opened with `openPane` when the tree is parsed. A stored set of an OLDER version is migrated through a table of steps (empty today, with a test that walks it); a NEWER version than the code knows is left alone in storage and the defaults are used, never overwritten.
+- **B. Focus is not saved.** `focus` leaves the saved form. On load it is the maximized pane, or the tab the first leaf is showing. Changing a tab or the focus alone changes nothing that is stored, so it writes nothing.
+- **C. The catalog is the default, and a measurement is not an argument.** Every operation that takes `specs` defaults it to `PANES`, and a pane that has no spec cannot be closed. `openPane` takes the `Workspace` (or null) and computes the rects itself, so a reducer's action never carries a measurement of the DOM beyond the workspace's size.
+- **D. One default object per class and name.** `classState` and `defaultArrangement` return the same frozen object every time for the same arguments, so a memo or an effect keyed on it does not rerun on every render.
 
 **Interfaces**
 
@@ -180,11 +187,12 @@ export function decodeTileCookie(value: string | undefined): TileSet;
 3. **A maximized pane** gets the whole box (`0`, `0`, `100%`, `100%`); the others keep their own boxes, as `layoutTree` returns them.
 4. **Linear, not exponential.** Shared sub-expressions go into `vars`, so the total length of a layout's strings grows linearly with the number of splits. A 12 deep chain stays under 8 KB.
 5. **Only what the engine wrote.** Every string is built from numbers the module formatted and ids matching `^[ls][0-9]+$`. A tree carrying any other id throws. Nothing from a title or a pane id reaches a CSS string.
-6. **The cookie holds `current` and `working` per class**, in a compact form, and round trips: `decodeTileCookie(encodeTileCookie(set))` equals `set` with every `saved` emptied. The worst arrangement the five panes allow, for both classes, encodes under `TILE_COOKIE_MAX_BYTES`. Measured before this plan was written: the full saved form is 3108 bytes as JSON and 5800 once URI encoded, which is why the named trees stay out of the cookie.
+6. **The cookie holds, per class, `current` and (only when it was changed, amendment A) the working arrangement**, in a compact form, and round trips: `decodeTileCookie(encodeTileCookie(set))` equals `set` with every `saved` emptied. The worst arrangement the five panes allow, for both classes, encodes under `TILE_COOKIE_MAX_BYTES`. Measured before this plan was written: the full saved form is 3108 bytes as JSON and 5800 once URI encoded, which is why the named trees stay out of the cookie.
 7. **Decoding is the engine's parser.** Anything malformed, oversized, or carrying an unknown pane gives exactly what `parseTileSet` would give for it: `EMPTY_TILE_SET` or a repaired class. The test feeds it CSS and markup injection strings, `__proto__` keys and a value of 100 KB.
 
 **Steps**
 
+- [ ] Amendments A to D, each test first: write it, see it fail, change the engine, run the engine's four test files.
 - [ ] Write the evaluator and the failing equality test. Run, fail.
 - [ ] Implement `css.ts`. Run, pass.
 - [ ] Write the failing cookie tests. Implement `cookie.ts`. Run, pass.
@@ -263,7 +271,7 @@ Everything that changes the layout without dragging a pane.
 | { type: "equalize"; splitId: string }
 | { type: "tab"; pane: PaneId }
 | { type: "close"; pane: PaneId }
-| { type: "open"; pane: PaneId; rects: TileRects | null }
+| { type: "open"; pane: PaneId; workspace: Workspace | null }
 | { type: "maximize"; pane: PaneId }
 | { type: "arrangement"; name: string }
 | { type: "saveOver"; name: string }
@@ -275,7 +283,7 @@ Everything that changes the layout without dragging a pane.
 1. **A divider** is a `role="separator"` with `aria-orientation`, `aria-valuenow`, `aria-valuemin` and `aria-valuemax` from `shareLimits`, focusable. Left and right (or up and down) move it by 2 percent of the split, with Shift by 10; Home and End go to the limits; Enter makes both sides equal, as a double click does.
 2. **Dragging it** writes the ratio's custom property straight onto the workspace element on each pointer move, clamped to `shareLimits`, with no React render; on release one `ratio` action commits it through `setRatio`. Pointer capture is taken, and Escape during a drag restores the ratio the drag started from.
 3. **Tabs.** A click or Enter on a tab is `activateTab`. Arrow keys move along the strip. The close button on a tab is `closePane`, absent on a pane that is not closable.
-4. **Close and reopen.** A closed pane's mark in the rail goes hollow; pressing it there is `openPane` with the current rects, and the pane returns where it was. The rail's entry for an open pane focuses it.
+4. **Close and reopen.** A closed pane's mark in the rail goes hollow; pressing it there is `openPane` with the workspace's measured size, and the pane returns where it was. The rail's entry for an open pane focuses it.
 5. **Maximize** is a button in the frame's header and a double click on the header. While a pane is maximized every other body is `inert` and one press restores.
 6. **Arrangements.** Pressing a name applies it. When the working tree differs from the saved or default one, the name shows a quiet "changed", and "Save this layout over" offers the three names. Reset returns the class to its defaults after one confirmation in the rail, not a browser dialog.
 7. **Saving.** After any committed change the cookie is rewritten (debounced, and never with a value over the limit: then the previous cookie is kept and the announcer says the layout could not be saved). Named trees are kept in `localStorage` under `mb-v2-tiles-saved`, parsed through `parseTileSet`. Switching screen class (the window crossing 1600 px) loads that class's own state and never copies one class into the other.
