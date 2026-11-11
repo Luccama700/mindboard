@@ -143,7 +143,14 @@ Pure code, no screen. It starts by amending the engine: the whole-branch review 
 - Modify: `app/lib/v2/tiles/{tree,store,catalog,index}.ts` (the four amendments below, and exports)
 - Test: create `__tests__/v2-tiles-css.test.ts`, `__tests__/v2-tiles-cookie.test.ts`; amend `__tests__/v2-tiles-tree.test.ts` and `__tests__/v2-tiles-store.test.ts` for the four amendments only
 
-**The engine, amended first (each with its test, each keeping behaviours 1 to 18 of `PLAN-OS.md` Task 3)**
+**The engine, amended first.** Each amendment has its own test and changes exactly the behaviours of `PLAN-OS.md` Task 3 named beside it; every other behaviour there stays as written. `PLAN-OS.md`'s text of those behaviours is updated in the same commit, so the two plans never disagree.
+
+| Amendment | Behaviours of the engine it changes |
+|---|---|
+| A | 12 (what a stored class is), 13 (parsing: a class with no stored tree, a pane the catalog gained, an older or newer version), 14 (the round trip is over the saved form, which no longer holds an unchanged tree), 15 (`isEdited` is what decides whether a tree is stored) |
+| B | 13 (focus is not read from storage; it is set on load), 14 (the round trip does not include focus), 18 (unchanged in memory: focus is still the tab its leaf shows) |
+| C | 4 (`closePane`'s catalog defaults to `PANES`; no spec means not closable), 5 (`openPane` takes the workspace's size, not rects), 6 and 8 (the same default for `setRatio`, `minSize`, `shareLimits`, `layoutTree`) |
+| D | 11 and 12 (the same object for the same arguments; no behaviour changes) |
 
 - **A. A layout nobody changed is not saved as a tree.** In the saved form a class whose working tree is still the saved or default tree of its current arrangement stores no tree at all, and parses back to that arrangement as it is defined today. So a default that changes in a later release reaches everyone who never rearranged it. A pane the catalog has gained, which a stored tree does not hold and `lastSpot` does not name as closed, is opened with `openPane` when the tree is parsed. A stored set of an OLDER version is migrated through a table of steps (empty today, with a test that walks it); a NEWER version than the code knows is left alone in storage and the defaults are used, never overwritten.
 - **B. Focus is not saved.** `focus` leaves the saved form. On load it is the maximized pane, or the tab the first leaf is showing. Changing a tab or the focus alone changes nothing that is stored, so it writes nothing.
@@ -187,7 +194,7 @@ export function decodeTileCookie(value: string | undefined): TileSet;
 3. **A maximized pane** gets the whole box (`0`, `0`, `100%`, `100%`); the others keep their own boxes, as `layoutTree` returns them.
 4. **Linear, not exponential.** Shared sub-expressions go into `vars`, so the total length of a layout's strings grows linearly with the number of splits. A 12 deep chain stays under 8 KB.
 5. **Only what the engine wrote.** Every string is built from numbers the module formatted and ids matching `^[ls][0-9]+$`. A tree carrying any other id throws. Nothing from a title or a pane id reaches a CSS string.
-6. **The cookie holds, per class, `current` and (only when it was changed, amendment A) the working arrangement**, in a compact form, and round trips: `decodeTileCookie(encodeTileCookie(set))` equals `set` with every `saved` emptied. The worst arrangement the five panes allow, for both classes, encodes under `TILE_COOKIE_MAX_BYTES`. Measured before this plan was written: the full saved form is 3108 bytes as JSON and 5800 once URI encoded, which is why the named trees stay out of the cookie.
+6. **The cookie holds, per class, `current` and (only when it was changed, amendment A) the working arrangement**, in a compact form, and round trips over what it holds: `decodeTileCookie(encodeTileCookie(set))` equals `set` with every `saved` emptied and every `focus` set as amendment B sets it on load. The worst arrangement the five panes allow, for both classes, encodes under `TILE_COOKIE_MAX_BYTES`. Measured before this plan was written: the full saved form is 3108 bytes as JSON and 5800 once URI encoded, which is why the named trees stay out of the cookie.
 7. **Decoding is the engine's parser.** Anything malformed, oversized, or carrying an unknown pane gives exactly what `parseTileSet` would give for it: `EMPTY_TILE_SET` or a repaired class. The test feeds it CSS and markup injection strings, `__proto__` keys and a value of 100 KB.
 
 **Steps**
@@ -243,7 +250,8 @@ export const PANE_BODIES: Record<PaneId, () => JSX.Element>;   // keys are exact
 6. **One live region.** The desk's `Announcer` is the only `role="status"` on the page, outside every pane, and speaks `useDay().said`. The Status pane's sentence has no role.
 7. **A leaf sizes by its pane.** `.v2-pane` is `container-type: inline-size` named `v2-pane`. The rules in `v2.css` that restyle a leaf because it sits in the page's side column (`.v2-side .v2-feeds`, `.v2-allday-label`, `.v2-energy`, `.v2-said`, `.v2-allday`, `.v2-sub`, `.v2-row`, `.v2-row b`, `.v2-more`) also apply inside a pane, written as `:where(.v2-side, .v2-pane)`, with no change in specificity for the existing page. The two font sizes that use `vw` take `cqw` inside a pane. The lists take two and three columns from the pane's width, as they do from the window's now. Nothing else in `v2.css` changes, and the tier tests pass unedited.
 8. **The rail** lists the five panes with an open or closed mark, and the three arrangement names with the current one marked. In this task they are not controls yet.
-9. **The window is filled.** The workspace is the height of the window beside the rail, with `min-width` and `min-height` from `cssLayout`. A window too short for the tree scrolls the page; no pane overflows its box.
+9. **The first client render is the server's HTML.** The reducer's initial state is built only from the props the server sent (the set decoded from the cookie). The screen class is `null` on the first render, on the server and in the browser alike, and both classes' layouts are in the markup; the class is read from `matchMedia` in an effect, after hydration. The named trees in `localStorage` are read in an effect too, never in an initial state. A test renders the desk to a string as the server does, hydrates that markup in the test's DOM with a different window width and a filled `localStorage`, and asserts React reports no hydration mismatch and the markup is unchanged until the effects have run.
+10. **The window is filled.** The workspace is the height of the window beside the rail, with `min-width` and `min-height` from `cssLayout`. A window too short for the tree scrolls the page; no pane overflows its box.
 
 **Steps**
 
