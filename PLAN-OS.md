@@ -321,8 +321,9 @@ The engine under the tiled shell the owner chose: panes that always fill the wor
 **The model is the split tree of the prototype he chose**, not either of the other two tile models written up during the research (a 12 column snapping grid; tiles with up to two floated windows). The reference implementation is `docs/rebuild/mockups/os-b-tiled.html` (outside git): the tree and its operations are at about lines 340 to 506, saving at 584 to 606, the divider and drop zone geometry at 846 to 932. Port its behaviour. Do not port its style: it mutates one global tree and takes ids from a counter; this engine is pure.
 
 **Files:**
-- Create: `app/lib/v2/tiles/types.ts`, `tree.ts`, `layout.ts`, `store.ts`, `catalog.ts`, `index.ts`
-- Test: `__tests__/v2-tiles-tree.test.ts`, `__tests__/v2-tiles-layout.test.ts`, `__tests__/v2-tiles-store.test.ts`
+- Create: `app/lib/v2/tiles/types.ts`, `tree.ts`, `geometry.ts`, `store.ts`, `catalog.ts`, `index.ts`
+- Test: `__tests__/v2-tiles-tree.test.ts`, `__tests__/v2-tiles-geometry.test.ts`, `__tests__/v2-tiles-store.test.ts`, `__tests__/v2-reserved-filenames.test.ts`
+- **Not `layout.ts`.** The first draft of this task named the geometry file `layout.ts`, and Next reads any `layout.ts` under `app/` as a route layout: the production build failed on it while the type check and every test passed. The file is `geometry.ts`, and `v2-reserved-filenames.test.ts` walks `app/lib` and fails on any file named like a route file (`page`, `layout`, `route`, `loading`, `error`, `global-error`, `not-found`, `template`, `default`, `forbidden`, `unauthorized`).
 - Read for house style: `app/lib/v2/view/appearance.ts` (a pure module with a tolerant parser)
 - Do not touch anything else.
 
@@ -380,7 +381,7 @@ export function toggleMaximize(arr: Arrangement, pane: PaneId): Arrangement;
 ```
 
 ```ts
-// layout.ts
+// geometry.ts
 export const GAP = 6;
 export function minSize(node: TileNode, specs: readonly PaneSpec[]): { w: number; h: number };
 export function shareLimits(split: Split, size: number, specs: readonly PaneSpec[]): [number, number];
@@ -453,9 +454,9 @@ export function resetClass(set: TileSet, cls: ScreenClass): TileSet;
 - [ ] Write the failing tests for `normalize`, ids, `movePane`, `closePane`, `openPane`, the tab and maximize operations.
 - [ ] Implement `types.ts` and `tree.ts`. Run, pass.
 - [ ] Write the failing tests for `layoutTree`, the tiling property, `neighbourOf`, `zoneAt`, the six defaults.
-- [ ] Implement `layout.ts` and `catalog.ts`. Run, pass.
+- [ ] Implement `geometry.ts` and `catalog.ts`. Run, pass.
 - [ ] Write the failing tests for the store and the parser, then the sequence test.
-- [ ] Implement `store.ts` and `index.ts`. Run the three test files, `npx eslint` on your files, `npx tsc --noEmit`.
+- [ ] Implement `store.ts` and `index.ts`. Run the four test files, `npx eslint` on your files, `npx tsc --noEmit`.
 
 ---
 
