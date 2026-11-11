@@ -5,10 +5,11 @@
 // running script. So what the page carries cannot be a list of rectangles: it
 // has to be the formula itself, for the browser to evaluate. layoutTree in
 // geometry.ts is that formula as numbers, which is what hit testing and the
-// keyboard use on the measured workspace. This module is the same formula as
-// CSS. __tests__/v2-tiles-css.test.ts evaluates these strings the way a browser
-// does and holds every box to layoutTree's rectangle to the pixel, at whole and
-// fractional workspace sizes, so the two cannot drift apart.
+// keyboard use on the workspace the browser computed. This module is the same
+// formula as CSS. __tests__/v2-tiles-css.test.ts evaluates these strings the
+// way a browser does and holds every box to layoutTree's rectangle to the
+// pixel, at whole and fractional workspace sizes, so the two cannot drift
+// apart.
 //
 // THE CONTRACT WITH THE PAGE. Four things, all required:
 //
@@ -21,8 +22,8 @@
 //     until the browser's cap on substitution throws the declaration away.
 //  2. The workspace box is a size container: `container-type: size`, not
 //     inline-size, because the height is read from it too. It has no padding
-//     and no border, so its container size is the box hit testing measures,
-//     and it takes min-width and min-height from `min`.
+//     and no border, so the stage that covers it is exactly the box `100cqw`
+//     and `100cqh` measure, and it takes min-width and min-height from `min`.
 //  3. ONE element inside it, the stage, carries `vars` as its style. Nothing
 //     between the stage and the workspace is a size container, so `100cqw` and
 //     `100cqh` in its properties are the workspace's own width and height (an
@@ -33,9 +34,14 @@
 //     positioned against it, with left, top, width and height from `leaves` and
 //     `dividers`. The properties inherit, so a box reads the stage's values.
 //
-// And hit testing measures the workspace (getBoundingClientRect, which keeps
-// the fraction) and passes the size through hitTestWorkspace before layoutTree,
-// because the CSS floors it the same way.
+// And hit testing reads what the browser computed. The two names extentVars
+// gives are read off the stage with getComputedStyle, turned into a Workspace
+// by workspaceFromComputed, and that is what layoutTree, shareLimits and
+// openPane are handed. No script measures a rectangle and floors it: a measured
+// float can land on the other side of a whole pixel from the browser's own
+// layout (at a device scale of 0.9, Edge measured a workspace 820.0000610351562
+// tall while the stage computed its height as 819px), and then every box is a
+// pixel off.
 //
 // THE POOL. Names are fixed so they can be registered statically, and a split
 // is addressed by its pre-order index k (1 first), never by its id: an id can be
@@ -159,17 +165,42 @@ function firstVar(scope: string, index: number): string {
   return poolName(scope, `a${index}`);
 }
 
-/** A measurement in whole pixels, floored as the CSS floors the workspace. */
-function wholePixels(value: number): number {
-  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+/**
+ * The names of the two properties that hold the workspace's extent for a
+ * scope: what hit testing reads off the stage with getComputedStyle.
+ */
+export function extentVars(scope: string): { w: string; h: string } {
+  checkScope(scope);
+  return { w: poolName(scope, "w"), h: poolName(scope, "h") };
 }
 
 /**
- * The workspace as hit testing must hand it to layoutTree: floored to whole
- * pixels, exactly as `round(down, 100cqw, 1px)` floors it for the drawing.
+ * One computed registered length: a number and `px` and nothing else, the way
+ * getComputedStyle serializes one. Whitespace around it is not a token.
  */
-export function hitTestWorkspace(width: number, height: number): Workspace {
-  return { width: wholePixels(width), height: wholePixels(height) };
+const COMPUTED_LENGTH = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:e[+-]?[0-9]+)?px$/;
+
+function computedLength(value: string): number | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!COMPUTED_LENGTH.test(text)) return null;
+  const number = Number(text.slice(0, -"px".length));
+  return Number.isFinite(number) ? number : null;
+}
+
+/**
+ * The workspace as the browser computed it, from the two strings
+ * getComputedStyle gives for the names extentVars returns. Anything that is
+ * not one non-negative `<number>px` answers null: an empty string (the
+ * stylesheet has not applied), `auto`, a percentage, a negative number, the
+ * declared text of a property nobody registered, or a second token. Nothing is
+ * rounded: the browser already floored it.
+ */
+export function workspaceFromComputed(w: string, h: string): Workspace | null {
+  const width = computedLength(w);
+  const height = computedLength(h);
+  if (width === null || height === null) return null;
+  return { width, height };
 }
 
 function lengthRule(name: string): string {
@@ -313,8 +344,7 @@ export function cssLayout(
     throw new Error(`cssLayout: a tree has at most ${MAX_SPLITS} splits`);
   }
 
-  const width = poolName(scope, "w");
-  const height = poolName(scope, "h");
+  const { w: width, h: height } = extentVars(scope);
   out.vars[width] = "round(down, 100cqw, 1px)";
   out.vars[height] = "round(down, 100cqh, 1px)";
 

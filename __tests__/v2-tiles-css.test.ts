@@ -3,9 +3,10 @@
 // THE PROPERTY THIS FILE EXISTS FOR. cssLayout and layoutTree are one formula
 // written twice. The browser paints with the first, from a page the server
 // wrote without knowing the window's size; the desk hit tests and moves focus
-// with the second, on the measured workspace. A pixel of disagreement is a
-// divider drawn in one place and dragged from another, so the two are held to
-// each other here box by box, to the pixel, at whole and fractional sizes.
+// with the second, on the workspace extent the stage computed. A pixel of
+// disagreement is a divider drawn in one place and dragged from another, so
+// the two are held to each other here box by box, to the pixel, at whole and
+// fractional sizes.
 //
 // HOW, WITHOUT A BROWSER. The file carries a small model of what a browser does
 // with the module's output. The stage's properties are registered, from the
@@ -22,6 +23,14 @@
 // unit it does not know, an unregistered property, a registered one nobody set,
 // and a value of the wrong type for its registration all throw rather than
 // compute something a browser would not.
+//
+// Hit testing reads what the stage computed, serialized as getComputedStyle
+// serializes it and read back through workspaceFromComputed, so the floor this
+// model applies to the workspace is the only floor anywhere. What ties the
+// model to a real engine is the controller's browser check, outside git at
+// docs/rebuild/os/spikes/css-geometry/spike.html: it builds this contract in a
+// real page and compares every frame's box with layoutTree on the computed
+// extents, across device scales.
 
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -32,9 +41,10 @@ import { PANES } from "@/app/lib/v2/tiles/catalog";
 import {
   MAX_SPLITS,
   cssLayout,
-  hitTestWorkspace,
+  extentVars,
   propertyRules,
   ratioVar,
+  workspaceFromComputed,
 } from "@/app/lib/v2/tiles/css";
 import type { CssBox, CssLayout } from "@/app/lib/v2/tiles/css";
 import { layoutTree, minSize, shareLimits } from "@/app/lib/v2/tiles/geometry";
@@ -456,6 +466,17 @@ class Stage {
     return value;
   }
 
+  /**
+   * What getComputedStyle(stage).getPropertyValue(name) gives: a computed
+   * length as `<number>px`, a computed number as itself, and an empty string
+   * for a property the stage did not compute.
+   */
+  computedStyle(name: string): string {
+    const value = this.values.get(name);
+    if (value === undefined) return "";
+    return value.kind === "length" ? `${value.value}px` : String(value.value);
+  }
+
   /** A frame's box property: one term of lengths and the stage's values, or a bare `0`. */
   length(text: string): number {
     if (text === "0") return 0;
@@ -628,15 +649,30 @@ function sameRect(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
-/** A measurement handed to layoutTree as it came, without the floor hit testing must apply. */
-function unfloored(width: number, height: number): Workspace {
-  return { width, height };
+/** Where hit testing gets the workspace it hands layoutTree, given the stage and its container. */
+type HitTest = (stage: Stage, scope: string, container: Workspace) => Workspace;
+
+/**
+ * What the module tells a consumer to do: read the stage's two computed extent
+ * properties, as getComputedStyle gives them, through workspaceFromComputed.
+ */
+const fromComputed: HitTest = (stage, scope) => {
+  const names = extentVars(scope);
+  const workspace = workspaceFromComputed(stage.computedStyle(names.w), stage.computedStyle(names.h));
+  if (workspace === null) throw new Error("the stage computed no workspace");
+  return workspace;
+};
+
+/** The workspace as the browser computed it for this layout in a container of this size. */
+function computedWorkspace(layout: CssLayout, scope: string, container: Workspace): Workspace {
+  return fromComputed(new Stage(registryFor(scope), layout.vars, container), scope, container);
 }
 
 /**
  * Every box where the drawing and the hit test differ at this container size,
  * in words. The CSS is evaluated on a stage whose container is `size`; the
- * engine is given what hit testing measures, through `measure`.
+ * engine is given what `hitTest` hands it, by default the stage's own computed
+ * extents.
  */
 function disagreements(
   layout: CssLayout,
@@ -645,10 +681,10 @@ function disagreements(
   specs: readonly PaneSpec[],
   size: Workspace,
   scope: string,
-  measure: (width: number, height: number) => Workspace = hitTestWorkspace,
+  hitTest: HitTest = fromComputed,
 ): string[] {
-  const rects = layoutTree(arrangementFor(tree, maximizedPane), measure(size.width, size.height), specs);
   const stage = new Stage(registryFor(scope), layout.vars, size);
+  const rects = layoutTree(arrangementFor(tree, maximizedPane), hitTest(stage, scope, size), specs);
   const at = `${size.width}x${size.height}`;
   const out: string[] = [];
   if (layout.leaves.length !== rects.leaves.length) {
@@ -951,7 +987,7 @@ describe("behaviour 1 and 2: the same formula, proven against layoutTree", () =>
       expect(layout.min).toEqual(minSize(tree, specs));
       for (const size of sizesFor(layout.min, rand)) {
         problems.push(...disagreements(layout, tree, maximized?.pane ?? null, specs, size, "wide"));
-        countShares(tree, hitTestWorkspace(size.width, size.height), specs, shares);
+        countShares(tree, computedWorkspace(layout, "wide", size), specs, shares);
         if (!Number.isInteger(size.width) || !Number.isInteger(size.height)) fractional += 1;
         compared += 1;
       }
@@ -984,7 +1020,7 @@ describe("behaviour 1 and 2: the same formula, proven against layoutTree", () =>
     expect(layout.min.h).toBeLessThan(LARGEST.height - 900);
     const shares = { low: 0, high: 0, free: 0 };
     const problems = sizesFor(layout.min, rand).flatMap((size) => {
-      countShares(tree, hitTestWorkspace(size.width, size.height), specs, shares);
+      countShares(tree, computedWorkspace(layout, "regular", size), specs, shares);
       return disagreements(layout, tree, null, specs, size, "regular");
     });
     expect(problems.slice(0, 8)).toEqual([]);
@@ -1007,11 +1043,12 @@ describe("behaviour 1 and 2: the same formula, proven against layoutTree", () =>
     expect(disagreements(layout, tree, null, specs, { width: 405, height: 100 }, "wide")).not.toEqual([]);
   });
 
-  test("a fractional workspace is drawn and hit tested at its whole pixel floor", () => {
+  test("a fractional workspace is drawn and hit tested at the extent the stage computed", () => {
     // The first pass's counterexample. The root's share is held at its upper
     // limit; at 700.6 the engine on the raw size gave its second child 299.6,
     // under the 300 the split inside needs, and shared that split evenly where
-    // the CSS did not. Floored on both sides, the two agree.
+    // the CSS did not. With the stage flooring the workspace and hit testing
+    // reading what the stage computed, the two agree.
     const tree = splitNode(
       "s1",
       "h",
@@ -1025,11 +1062,42 @@ describe("behaviour 1 and 2: the same formula, proven against layoutTree", () =>
     for (const width of [700, 700.6, 700.999, 701]) {
       expect(disagreements(layout, tree, null, specs, { width, height: 400.5 }, "wide")).toEqual([]);
     }
-    // Handed the raw measurement, layoutTree parts from the drawing. That is
-    // why hit testing measures through hitTestWorkspace.
+    // Handed the raw measurement instead, layoutTree parts from the drawing.
+    const raw: HitTest = (_stage, _scope, container) => container;
     expect(
-      disagreements(layout, tree, null, specs, { width: 700.6, height: 400 }, "wide", unfloored),
+      disagreements(layout, tree, null, specs, { width: 700.6, height: 400 }, "wide", raw),
     ).toContain("700.6x400: leaf l4 css 400,0 200x400 engine 401,0 147x400");
+  });
+
+  test("a measured rectangle floored by script can land a pixel from the layout; the computed extents cannot", () => {
+    // What Edge did at a device scale of 0.9 (the controller's browser check):
+    // its layout held the workspace just under 820 tall, so the stage computed
+    // 819px, while getBoundingClientRect measured 820.0000610351562. A script
+    // that floors the measurement hands layoutTree 820 and every box is a
+    // pixel off. Reading the stage's computed extents hands it 819.
+    const tree = splitNode(
+      "s1",
+      "h",
+      0.5,
+      splitNode(
+        "s2",
+        "h",
+        0.5,
+        splitNode("s3", "v", 0.67, leafNode("l4", "today"), leafNode("l5", "status")),
+        splitNode("s6", "v", 0.5, leafNode("l7", "past-due"), leafNode("l8", "not-today")),
+      ),
+      leafNode("l9", "calendar"),
+    );
+    const layout = cssLayout(tree, null, PANES, "wide");
+    const container: Workspace = { width: 1826.666748046875, height: 819.9999389648438 };
+    const measured: Workspace = { width: 1826.666748046875, height: 820.0000610351562 };
+    expect(computedWorkspace(layout, "wide", container)).toEqual({ width: 1826, height: 819 });
+    expect(disagreements(layout, tree, null, PANES, container, "wide")).toEqual([]);
+    const flooredMeasurement: HitTest = () => ({
+      width: Math.floor(measured.width),
+      height: Math.floor(measured.height),
+    });
+    expect(disagreements(layout, tree, null, PANES, container, "wide", flooredMeasurement)).not.toEqual([]);
   });
 });
 
@@ -1288,11 +1356,62 @@ describe("propertyRules: the pool, registered", () => {
   });
 });
 
-describe("hitTestWorkspace: what hit testing hands layoutTree", () => {
-  test("floors to whole pixels as the CSS does, and reads nothing usable as zero", () => {
-    expect(hitTestWorkspace(700.6, 400.999)).toEqual({ width: 700, height: 400 });
-    expect(hitTestWorkspace(1366, 768)).toEqual({ width: 1366, height: 768 });
-    expect(hitTestWorkspace(0.4, -3)).toEqual({ width: 0, height: 0 });
-    expect(hitTestWorkspace(Number.NaN, Number.POSITIVE_INFINITY)).toEqual({ width: 0, height: 0 });
+describe("extentVars and workspaceFromComputed: what hit testing reads", () => {
+  test("extentVars names the two properties cssLayout writes the workspace's extent into", () => {
+    expect(extentVars("wide")).toEqual({ w: "--v2-wide-w", h: "--v2-wide-h" });
+    expect(extentVars("regular")).toEqual({ w: "--v2-regular-w", h: "--v2-regular-h" });
+    const layout = cssLayout(leafNode("l1", "pane1"), null, [paneSpec("pane1", 300, 200)], "wide");
+    const names = extentVars("wide");
+    expect(layout.vars[names.w]).toBe("round(down, 100cqw, 1px)");
+    expect(layout.vars[names.h]).toBe("round(down, 100cqh, 1px)");
+    expect(registryFor("wide").get(names.w)).toBe("length");
+    expect(registryFor("wide").get(names.h)).toBe("length");
+  });
+
+  test.each(["", "Wide", "wide1", "wide-x", "__proto__"])("extentVars refuses a scope of %j", (scope) => {
+    expect(() => extentVars(scope)).toThrow();
+  });
+
+  test("reads two computed lengths as they are, without rounding", () => {
+    expect(workspaceFromComputed("1826px", "819px")).toEqual({ width: 1826, height: 819 });
+    expect(workspaceFromComputed("1366px", "768px")).toEqual({ width: 1366, height: 768 });
+    expect(workspaceFromComputed("819.5px", "0.25px")).toEqual({ width: 819.5, height: 0.25 });
+    expect(workspaceFromComputed(".5px", "0px")).toEqual({ width: 0.5, height: 0 });
+    expect(workspaceFromComputed("1e3px", "2.5e2px")).toEqual({ width: 1000, height: 250 });
+    expect(workspaceFromComputed(" 1826px ", "819px")).toEqual({ width: 1826, height: 819 });
+  });
+
+  test.each([
+    ["an empty string, before the stylesheet applies", ""],
+    ["auto", "auto"],
+    ["a percentage", "50%"],
+    ["a negative number", "-1px"],
+    ["a second token", "1826px 819px"],
+    ["a number with no unit", "1826"],
+    ["a unit with no number", "px"],
+    ["another unit", "1826em"],
+    ["a unit in capitals", "1826PX"],
+    ["the declared text of a property nobody registered", "round(down, 100cqw, 1px)"],
+    ["a calc() nobody computed", "calc(1826px)"],
+    ["a number that is not one", "NaNpx"],
+    ["an infinite length", "Infinitypx"],
+    ["an exponent past what a double holds", "1e999px"],
+    ["a trailing point", "1826.px"],
+  ])("answers null for %s", (_name, value) => {
+    expect(workspaceFromComputed(value, "819px")).toBeNull();
+    expect(workspaceFromComputed("1826px", value)).toBeNull();
+  });
+
+  test("reads what the stage computed back as the floored workspace", () => {
+    // The browser check measured this at a device scale of 0.9.
+    const layout = cssLayout(leafNode("l1", "pane1"), null, [paneSpec("pane1", 300, 200)], "wide");
+    const stage = new Stage(registryFor("wide"), layout.vars, { width: 1826.666748046875, height: 819.9999389648438 });
+    const names = extentVars("wide");
+    expect(stage.computedStyle(names.w)).toBe("1826px");
+    expect(stage.computedStyle(names.h)).toBe("819px");
+    expect(workspaceFromComputed(stage.computedStyle(names.w), stage.computedStyle(names.h))).toEqual({
+      width: 1826,
+      height: 819,
+    });
   });
 });
