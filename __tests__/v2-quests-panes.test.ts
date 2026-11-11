@@ -405,38 +405,45 @@ describe("lanes", () => {
     });
   });
 
-  // No zeros: a lane with nothing open that finished something lately says how
-  // many, in Done lately's words, and never "0 open".
-  test("a lane with only something finished is not quiet, and says what it finished", () => {
-    const second: QuestDone = { ...workFinished(), id: "d-x-float", doneAt: at("15:00", "2026-04-10") };
-    const desk = withQuests((quests) => ({ done: [workFinished(), second, ...quests.done] }));
-    const view = viewOf(desk);
-    const work = view.lanes.find((lane) => lane.key === "work");
-    expect(work).toMatchObject({ quiet: false, open: 0, next: null, done: 2 });
-    const rows = laneRows(drawPane("lanes", desk));
-    const row = rows[view.lanes.findIndex((lane) => lane.key === "work")];
-    expect(row.hasAttribute("data-quiet")).toBe(false);
-    expect(row.querySelector(".v2-quests-lane-open")).toBeNull();
-    expect(row.querySelector(".v2-quests-lane-done")?.textContent).toBe(questDoneTotalLabel(2));
-    expect(row.querySelector(".v2-quests-lane-due")).toBeNull();
-    expect(row.querySelector(".v2-quests-lane-past")).toBeNull();
-    expect(row.querySelector(".v2-quests-next")).toBeNull();
-    expect(row.textContent?.replace(/\s+/g, " ")).toBe(`Work ${questDoneTotalLabel(2)}`);
+  // A lane with nothing open that did finish something lately is not quiet: it
+  // keeps its card and the normal ink, and prints its name alone. No "0 open",
+  // and no finished count either: that would count a window of its own beside
+  // Done lately's, which counts over the span the user picked.
+  const second: QuestDone = { ...workFinished(), id: "d-x-float", doneAt: at("15:00", "2026-04-10") };
+  test.each([
+    ["a history that counts the span", { historyDays: 28 }, 2],
+    ["a history too short to count it", { historyDays: 7 }, null],
+  ] as const)(
+    "a lane with only something finished, over %s, is not quiet and is its name alone",
+    (_name, history, done) => {
+      const desk = withQuests((quests) => ({
+        done: [workFinished(), second, ...quests.done],
+        ...history,
+      }));
+      const view = viewOf(desk);
+      const work = view.lanes.find((lane) => lane.key === "work");
+      // The view does hold the count (or knows it cannot): the pane chooses not to print it.
+      expect(work).toMatchObject({ quiet: false, open: 0, next: null, done });
+      const rows = laneRows(drawPane("lanes", desk));
+      const row = rows[view.lanes.findIndex((lane) => lane.key === "work")];
+      expect(row.hasAttribute("data-quiet")).toBe(false);
+      expect(row.querySelector(".v2-quests-lane-meta")).toBeNull();
+      expect(row.querySelector(".v2-quests-next")).toBeNull();
+      expect(row.textContent?.trim()).toBe("Work");
+    },
+  );
+
+  /** "0 open" as a whole token: not the tail of "10 open". */
+  const ZERO_OPEN = new RegExp(`(?<![0-9.])${laneOpenLabel(0)}(?![0-9A-Za-z])`);
+
+  test("the zero check matches a whole token only", () => {
+    expect(ZERO_OPEN.test(laneOpenLabel(0))).toBe(true);
+    expect(ZERO_OPEN.test(`Work ${laneOpenLabel(0)}`)).toBe(true);
+    expect(ZERO_OPEN.test(laneOpenLabel(10))).toBe(false);
+    expect(ZERO_OPEN.test(laneOpenLabel(20))).toBe(false);
   });
 
-  test("a lane with only something finished, over a history too short to count it, is its name alone", () => {
-    const desk = withQuests((quests) => ({ done: [workFinished(), ...quests.done], historyDays: 7 }));
-    const view = viewOf(desk);
-    const work = view.lanes.find((lane) => lane.key === "work");
-    expect(work).toMatchObject({ quiet: false, open: 0, done: null });
-    const rows = laneRows(drawPane("lanes", desk));
-    const row = rows[view.lanes.findIndex((lane) => lane.key === "work")];
-    expect(row.hasAttribute("data-quiet")).toBe(false);
-    expect(row.querySelector(".v2-quests-lane-meta")).toBeNull();
-    expect(row.textContent?.trim()).toBe("Work");
-  });
-
-  test("never prints a zero count, on any desk", () => {
+  test("never prints a zero count, nor any finished count, on any desk", () => {
     const desks = [
       sampleDesk(null),
       withSide(),
@@ -446,8 +453,12 @@ describe("lanes", () => {
     ];
     for (const desk of desks) {
       const root = drawPane("lanes", desk);
-      expect(root.textContent).not.toContain(laneOpenLabel(0));
-      expect(root.textContent).not.toContain(questDoneTotalLabel(0));
+      expect(root.textContent).not.toMatch(ZERO_OPEN);
+      for (const count of root.querySelectorAll(".v2-quests-lane-open")) {
+        expect(count.textContent).not.toBe(laneOpenLabel(0));
+      }
+      // Done lately owns that number.
+      expect(root.textContent).not.toMatch(/\bfinished\b/);
       cleanup();
     }
   });
@@ -1182,7 +1193,6 @@ test("prints no word of its own invention", () => {
       laneOpenLabel(lane.open),
       ...(lane.due === null ? [] : [laneDueLabel(lane.due)]),
       ...(lane.past > 0 ? [questPastLabel(lane.past)] : []),
-      ...(lane.done !== null && lane.done > 0 ? [questDoneTotalLabel(lane.done)] : []),
     ]),
     ...[...view.steps, ...view.side].flatMap((item) => [
       item.title,
@@ -1208,7 +1218,11 @@ test("prints no word of its own invention", () => {
     expect(allowed.has(text), JSON.stringify(text)).toBe(true);
   }
   expect(seen).toBeGreaterThan(40);
-  // Not vacuous: the lane with only something finished is on this desk.
+  // Not vacuous: the lane with only something finished is on this desk, and
+  // its row is its name alone.
   expect(view.lanes.find((lane) => lane.key === "work")).toMatchObject({ open: 0, done: 1 });
-  expect(container.textContent).toContain(questDoneTotalLabel(1));
+  const work = Array.from(container.querySelectorAll<HTMLElement>(".v2-quests-lane")).find(
+    (row) => row.querySelector(".v2-quests-lane-name")?.textContent === "Work",
+  );
+  expect(work?.textContent?.trim()).toBe("Work");
 });
