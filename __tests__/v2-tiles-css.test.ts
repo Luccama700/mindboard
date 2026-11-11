@@ -1478,13 +1478,21 @@ describe("extentVars and workspaceFromComputed: what hit testing reads", () => {
     expect(() => extentVars(scope)).toThrow();
   });
 
-  test("reads two computed lengths as they are, without rounding", () => {
+  test("reads two whole computed lengths as they are", () => {
     expect(workspaceFromComputed("1826px", "819px")).toEqual({ width: 1826, height: 819 });
     expect(workspaceFromComputed("1366px", "768px")).toEqual({ width: 1366, height: 768 });
-    expect(workspaceFromComputed("819.5px", "0.25px")).toEqual({ width: 819.5, height: 0.25 });
-    expect(workspaceFromComputed(".5px", "0px")).toEqual({ width: 0.5, height: 0 });
     expect(workspaceFromComputed("1e3px", "2.5e2px")).toEqual({ width: 1000, height: 250 });
     expect(workspaceFromComputed(" 1826px ", "819px")).toEqual({ width: 1826, height: 819 });
+  });
+
+  test("reads 0px as a workspace of 0 by 0, which can also be a broken page", () => {
+    // An empty or collapsed workspace is real. It is also the registered
+    // initial value a browser hands back when the stage lacks the scope's
+    // vars, when round() is unsupported, or when the expression is invalid at
+    // computed-value time; the module's comment says so, and a consumer can
+    // compare against min.
+    expect(workspaceFromComputed("0px", "0px")).toEqual({ width: 0, height: 0 });
+    expect(workspaceFromComputed("1826px", "0px")).toEqual({ width: 1826, height: 0 });
   });
 
   test.each([
@@ -1492,6 +1500,9 @@ describe("extentVars and workspaceFromComputed: what hit testing reads", () => {
     ["auto", "auto"],
     ["a percentage", "50%"],
     ["a negative number", "-1px"],
+    ["a fraction of a pixel, which the stylesheet's floor never computes", "819.5px"],
+    ["a fraction written with a leading point", ".5px"],
+    ["a fraction written with an exponent", "8.195e2px"],
     ["a second token", "1826px 819px"],
     ["a number with no unit", "1826"],
     ["a unit with no number", "px"],

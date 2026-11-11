@@ -26,11 +26,20 @@
 //     back to the small viewport's, so the layout looks nearly right and is
 //     wrong. It has no padding and no border, so the stage that covers it is
 //     exactly the box `100cqw` and `100cqh` measure.
-//  3. THE WORKSPACE IS NEVER SMALLER THAN `min`: its min-width and min-height
-//     are the shown class's `min`, in px. Below `min` some split's two minimums
-//     do not fit, and there the CSS gives the first child its minimum where
-//     layoutTree shares the split evenly, so the drawing and the hit testing
-//     part (see "Where the two forms stop agreeing").
+//  3. THE WORKSPACE IS NEVER SMALLER THAN `min`, WITH ONE PIXEL OF SLACK: its
+//     min-width and min-height are the shown class's `min` PLUS ONE PIXEL, in
+//     px. Below `min` some split's two minimums do not fit, and there the CSS
+//     gives the first child its minimum where layoutTree shares the split
+//     evenly, so the drawing and the hit testing part by a whole split (see
+//     "Where the two forms stop agreeing"). The pixel of slack is because under
+//     a fractional zoom a browser holds a box a fraction under the length it
+//     was given (a 1006px box computed to an extent of 1005 at 90 percent), the
+//     stylesheet floors that, and without the slack the extent would compute
+//     to `min` minus one exactly where this precondition binds. And the size
+//     container's block size must be DEFINITE, an explicit height, never the
+//     result of stretching in a flex container or of min-height alone, because
+//     a browser can compute the descendants' container units as zero on the
+//     first layout in that case.
 //  4. ONE element inside it, the stage, carries `vars` as its style. Nothing
 //     between the stage and the workspace is a size container, so `100cqw` and
 //     `100cqh` in its properties are the workspace's own width and height (an
@@ -197,21 +206,35 @@ export function extentVars(scope: string): { w: string; h: string } {
  */
 const COMPUTED_LENGTH = /^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:e[+-]?[0-9]+)?px$/;
 
+/**
+ * A computed extent as a number of pixels, or null. Only a whole number is
+ * one: the stylesheet's `round(down, ..., 1px)` never computes anything else,
+ * so a fraction is a value this module did not write, and handing it to
+ * layoutTree would part the two forms all over again.
+ */
 function computedLength(value: string): number | null {
   if (typeof value !== "string") return null;
   const text = value.trim();
   if (!COMPUTED_LENGTH.test(text)) return null;
   const number = Number(text.slice(0, -"px".length));
-  return Number.isFinite(number) ? number : null;
+  return Number.isInteger(number) ? number : null;
 }
 
 /**
  * The workspace as the browser computed it, from the two strings
  * getComputedStyle gives for the names extentVars returns. Anything that is
- * not one non-negative `<number>px` answers null: an empty string (the
- * stylesheet has not applied), `auto`, a percentage, a negative number, the
- * declared text of a property nobody registered, or a second token. Nothing is
- * rounded: the browser already floored it.
+ * not one non-negative whole `<number>px` answers null: an empty string (the
+ * stylesheet has not applied), `auto`, a percentage, a negative number, a
+ * fraction of a pixel, the declared text of a property nobody registered, or a
+ * second token. Nothing is rounded: the browser already floored it.
+ *
+ * `0px` reads as a workspace of 0 by 0, because an empty or collapsed
+ * workspace is real. But it is also the registered initial value, which a
+ * browser hands back when something is WRONG: the stage does not carry the
+ * shown scope's `vars`; the browser does not support `round()`, so the
+ * declaration is dropped; or the expression is invalid at computed-value
+ * time. A consumer that cares can compare the result against `min`: a desk
+ * that keeps contract point 3 is never smaller than it.
  */
 export function workspaceFromComputed(w: string, h: string): Workspace | null {
   const width = computedLength(w);
