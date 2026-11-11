@@ -36,9 +36,9 @@ import type { TaskTag, TodayScreenData } from "@/app/lib/v2/view/screen-data";
 import {
   TODAY_COPY,
   buildTodayView,
-  doneTaskIds,
   identityFor,
   splitTitle,
+  workedTaskIds,
 } from "@/app/lib/v2/view/today";
 
 const at = sampleInstant;
@@ -189,8 +189,8 @@ describe("the same input as Today", () => {
     describe(name, () => {
       const plan = shown ?? planDay(day.input);
       const today = todayViewOf(day, plan);
-      // The ids Today's own rule calls finished in the plan being shown.
-      const quests = buildQuestsView(questsOf(day), doneTaskIds(plan), 7);
+      // The ids Today's own rule calls worked on in the plan being shown.
+      const quests = buildQuestsView(questsOf(day), workedTaskIds(plan), 7);
       const lineOf = (key: string) =>
         today.lanes.find((entry) => entry.color !== null && entry.key === key);
 
@@ -214,22 +214,29 @@ describe("the same input as Today", () => {
         expect(quests.side.length).toBe(loose?.open ?? 0);
       });
 
-      test("every open candidate appears exactly once across steps and side", () => {
-        const finishedIds = doneTaskIds(plan);
-        const open = day.input.candidates.filter((c) => !finishedIds.has(c.id));
+      test("every candidate appears exactly once across steps and side", () => {
         const seen = [...ids(quests.steps), ...ids(quests.side)].sort();
-        expect(seen).toEqual(ids(open).sort());
+        expect(seen).toEqual(ids(day.input.candidates).sort());
       });
 
       test("rank is the place in the list Quests shows, in the planner's ordering", () => {
-        const finishedIds = doneTaskIds(plan);
         const reference = planReference(day.input.now, day.input.date, day.input.rules).instant;
-        const order = rankCandidates(day.input.candidates, reference, day.input.rules, day.input.date)
-          .map((entry) => entry.candidate.id)
-          .filter((id) => !finishedIds.has(id));
+        const order = rankCandidates(
+          day.input.candidates,
+          reference,
+          day.input.rules,
+          day.input.date,
+        ).map((entry) => entry.candidate.id);
         const byRank = [...quests.steps, ...quests.side].sort((a, b) => a.rank - b.rank);
         expect(ids(byRank)).toEqual(order);
         expect(byRank.map((item) => item.rank)).toEqual(order.map((_, index) => index + 1));
+      });
+
+      test("worked is exactly the tasks with a done block in the plan shown", () => {
+        const worked = workedTaskIds(plan);
+        for (const item of [...quests.steps, ...quests.side]) {
+          expect(item.worked, item.id).toBe(worked.has(item.id));
+        }
       });
     });
   }
@@ -247,12 +254,22 @@ describe("the same input as Today", () => {
     const oddToday = todayViewOf(oddDay());
     expect(oddToday.lanes.find((entry) => entry.label === TODAY_COPY.noLane)?.open).toBe(1);
 
+    // A press is work on the task, not its end: after it both views count the
+    // same, unchanged number, and the pressed item reads worked on Quests.
     const day = sampleDay();
     const { plan, taskId, lane } = pressed(day);
-    const before = todayViewOf(day).lanes.find((entry) => entry.key === lane)?.open ?? 0;
-    const after = todayViewOf(day, plan).lanes.find((entry) => entry.key === lane)?.open ?? 0;
-    expect(after).toBe(before - 1);
-    expect(doneTaskIds(plan).has(taskId)).toBe(true);
+    const todayBefore = todayViewOf(day).lanes.find((entry) => entry.key === lane)?.open;
+    const todayAfter = todayViewOf(day, plan).lanes.find((entry) => entry.key === lane)?.open;
+    const questsBefore = buildQuestsView(questsOf(day), NONE, 7);
+    const questsAfter = buildQuestsView(questsOf(day), workedTaskIds(plan), 7);
+    const laneOf = (view: QuestsView) => view.lanes.find((entry) => entry.key === lane);
+    expect(todayBefore).toBeGreaterThan(0);
+    expect(todayAfter).toBe(todayBefore);
+    expect(laneOf(questsAfter)?.open).toBe(todayBefore);
+    expect(laneOf(questsAfter)?.open).toBe(laneOf(questsBefore)?.open);
+    expect(workedTaskIds(plan).has(taskId)).toBe(true);
+    expect(questsAfter.steps.find((item) => item.id === taskId)?.worked).toBe(true);
+    expect(questsBefore.steps.find((item) => item.id === taskId)?.worked).toBe(false);
   });
 
   test("a step with a side quest's kind still belongs to its lane, as Today counts it", () => {
@@ -311,51 +328,58 @@ describe("the same input as Today", () => {
 
 // --------------------------------------------------------------- behaviour 2
 
-describe("a press on Today is seen here", () => {
+// A press on Today is work on a task, not its end: a touch, a session or a block
+// of focus served the task for the day. So the task stays exactly where it was
+// and only reads as worked on today.
+describe("a press on Today is seen here, as work and not as a finish", () => {
   const day = sampleDay();
   const before = buildQuestsView(questsOf(day), NONE, 7);
   const after = buildQuestsView(questsOf(day), new Set(["t-glaze"]), 7);
+  const without = (view: QuestsView) => ({
+    ...view,
+    steps: view.steps.map((item) => ({ ...item, worked: false })),
+    side: view.side.map((item) => ({ ...item, worked: false })),
+    lanes: view.lanes.map((lane) =>
+      lane.next === null ? lane : { ...lane, next: { ...lane.next, worked: false } },
+    ),
+  });
 
-  test("the finished step leaves the steps and its lane's count and next", () => {
-    expect(ids(after.steps)).not.toContain("t-glaze");
+  test("the worked step stays in the steps, its lane's count and its lane's next", () => {
+    const glaze = after.steps.find((item) => item.id === "t-glaze");
+    expect(glaze?.worked).toBe(true);
     const craft = after.lanes.find((lane) => lane.key === "craft");
-    expect(craft?.open).toBe(0);
-    expect(craft?.next).toBeNull();
-    expect(craft?.due).toBeNull();
+    expect(craft?.open).toBe(1);
+    expect(craft?.next?.id).toBe("t-glaze");
+    expect(craft?.next?.worked).toBe(true);
     expect(craft?.quiet).toBe(false);
   });
 
-  test("it joins the planned day in done", () => {
-    expect(after.done.days[0]?.date).toBe(SAMPLE_DATE);
-    expect(ids(after.done.days[0]?.items ?? [])).toContain("t-glaze");
-    expect(after.done.total).toBe(before.done.total + 1);
-    expect(after.lanes.find((lane) => lane.key === "craft")?.done).toBe(1);
+  test("everything else reads as before: same places, same counts, nothing in done", () => {
+    expect(without(after)).toEqual(before);
+    expect(after.done).toEqual(before.done);
+    for (const item of [...after.steps, ...after.side]) {
+      if (item.id !== "t-glaze") expect(item.worked, item.id).toBe(false);
+    }
   });
 
-  test("nothing is replanned: the rest keep their order, and the places close up", () => {
-    const order = (view: QuestsView) =>
-      ids([...view.steps, ...view.side].sort((a, b) => a.rank - b.rank));
-    expect(order(after)).toEqual(order(before).filter((id) => id !== "t-glaze"));
-    const ranks = [...after.steps, ...after.side].map((item) => item.rank).sort((a, b) => a - b);
-    expect(ranks).toEqual(ranks.map((_, index) => index + 1));
-  });
-
-  test("a side quest pressed done leaves the side list too", () => {
+  test("a side quest worked on stays a side quest", () => {
     const view = buildQuestsView(questsOf(busierDay()), new Set(["t-x-loose"]), 7);
-    expect(ids(view.side)).toEqual(["t-x-loose-late"]);
-    expect(ids(view.done.days[0]?.items ?? [])).toEqual(["t-x-loose"]);
+    expect(ids(view.side)).toEqual(["t-x-loose", "t-x-loose-late"]);
+    expect(view.side.map((item) => item.worked)).toEqual([true, false]);
+    expect(view.done.total).toBe(0);
   });
 
   test("an id that is not a candidate changes nothing", () => {
     expect(buildQuestsView(questsOf(day), new Set(["not-a-task"]), 7)).toEqual(before);
   });
 
-  test("a step already in the history is counted once", () => {
+  test("done is the source's history and nothing else", () => {
     const data = questsOf(day, {
-      done: [finished("t-glaze", at("08:00"), { lane: "craft", title: "Glaze the test tiles" })],
+      done: [finished("d-earlier", at("08:00"), { lane: "craft", title: "Sand the frames" })],
     });
-    const view = buildQuestsView(data, new Set(["t-glaze"]), 7);
+    const view = buildQuestsView(data, new Set(["t-glaze", "t-grant"]), 7);
     expect(view.done.total).toBe(1);
+    expect(ids(view.done.days[0]?.items ?? [])).toEqual(["d-earlier"]);
   });
 });
 
@@ -600,17 +624,6 @@ describe("done lately", () => {
       expect(questThroughLabel(view.done.through as string)).toBe("Up to Sunday 12 April");
     });
 
-    test("a press in this session falls after it, so it leaves the lists and not into lately", () => {
-      const view = buildQuestsView(stale, new Set(["t-glaze"]), 7);
-      expect(ids(view.steps)).not.toContain("t-glaze");
-      expect(view.done.total).toBe(2);
-      expect(view.lanes.find((lane) => lane.key === "craft")).toMatchObject({
-        open: 0,
-        quiet: true,
-        done: null,
-      });
-    });
-
     test("a history that runs past the planned day still ends on the planned day", () => {
       const view = buildQuestsView(questsOf(day, { done: history, historyThrough: "2026-04-20" }), NONE, 7);
       expect(view.done.through).toBeNull();
@@ -834,5 +847,11 @@ describe("the copy rules", () => {
     expect(QUESTS_COPY.doneNone.length).toBeGreaterThan(0);
     expect(QUESTS_COPY.noHistory.length).toBeGreaterThan(0);
     expect(QUESTS_COPY.shortHistory.length).toBeGreaterThan(0);
+  });
+
+  // Worked on, never "done": the press served the task for the day.
+  test("names a step worked on today without calling it finished", () => {
+    expect(QUESTS_COPY.worked).toBe("Worked on today");
+    expect(QUESTS_COPY.worked).not.toMatch(/\b(done|finished|complete)/i);
   });
 });

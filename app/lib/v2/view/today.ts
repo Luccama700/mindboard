@@ -516,8 +516,9 @@ export function shownLane(
  * it closes. Lanes keep the user's own order and a lane with nothing waiting is
  * left out rather than printed as a zero.
  *
- * `candidates` are the ones still open. `referenceMs` is the planner's reference
- * instant (see TodayInput.reference), and `timeZone` the user's.
+ * `candidates` are the open tasks, a task worked on today included (see
+ * `workedTaskIds`). `referenceMs` is the planner's reference instant (see
+ * TodayInput.reference), and `timeZone` the user's.
  *
  * EXPORTED SO THERE IS ONE COUNT. The Quests panes show every lane's count and
  * next date too, and they get both by calling this on the same list rather than
@@ -662,11 +663,18 @@ export function identityFor(
 }
 
 /**
- * The tasks the plan being shown has finished: every task with a block in state
- * `done`. One rule for "finished in this session", so the Today screen and the
- * Quests panes leave out exactly the same tasks.
+ * The tasks worked on in the plan being shown: every task with a block in state
+ * `done`, whatever the block's kind.
+ *
+ * WORKED, NOT FINISHED. A done block is a touch ("open it and read it"), a
+ * session or fifty minutes of focus on the task, and nothing on this screen can
+ * tell one that finished its task from one that did not; the planner itself only
+ * treats a done block as having served the task for the day. So a task in this
+ * set is still open: it stays in its lane's count and on every list, and the
+ * Quests panes mark it as worked on today. Calling it finished would invent a
+ * fact.
  */
-export function doneTaskIds(plan: Pick<PlanOutput, "blocks">): Set<string> {
+export function workedTaskIds(plan: Pick<PlanOutput, "blocks">): Set<string> {
   const ids = new Set<string>();
   for (const block of plan.blocks) {
     if (block.state === "done" && block.taskId !== null) ids.add(block.taskId);
@@ -806,7 +814,6 @@ export function buildTodayView(input: TodayInput): TodayView {
     identityOf(candidate.id, candidate.lane),
   );
   const overdueIds = new Set(pastDue.map((entry) => entry.id));
-  const finishedTasks = doneTaskIds(plan);
 
   // Nothing is dropped from this list except what the past due section already
   // names, so nothing is listed twice. A name the candidates do not cover
@@ -837,15 +844,10 @@ export function buildTodayView(input: TodayInput): TodayView {
     },
     notToday,
     pastDue,
-    // A task finished in this session is no longer waiting, so its lane stops
-    // counting it in the same render as the press. The Quests panes call the same
-    // function on the same list (`doneTaskIds` decides it for both).
-    lanes: laneSummary(
-      input.candidates.filter((candidate) => !finishedTasks.has(candidate.id)),
-      input.lanes,
-      referenceMs,
-      input.timeZone,
-    ),
+    // Every candidate counts, a task with a done block included: a done block
+    // served the task for the day and did not finish it (`workedTaskIds`). The
+    // Quests panes call this same function on this same list.
+    lanes: laneSummary(input.candidates, input.lanes, referenceMs, input.timeZone),
     feed: {
       line: feedLine(input.feeds, input.feedLabels, (at) =>
         sinceLabel(at, now, timeZone),

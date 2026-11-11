@@ -11,11 +11,16 @@
 // opinion: `__tests__/v2-view-quests.test.ts` builds both views on one input,
 // a press on Today included, to prove it.
 //
+// A PRESS IS WORK, NOT A FINISH. A block done on Today served its task for the
+// day (`workedTaskIds`); it did not finish it. So a task worked on today stays
+// on every list and in its lane's count, and only wears `worked`. Done lately is
+// the source's own history of finished tasks and nothing else.
+//
 // TWO DAY RULES, ON PURPOSE. A due date is read on its CALENDAR day in the
 // user's zone (the planner's "closes today" and Today's labels read it so). A
-// finish is read on its PLANNING day (`doneDayOf`), the day being lived, as a
-// press on Today is. They differ only with lights out after midnight; each site
-// below says which it uses.
+// finish is read on its PLANNING day (`doneDayOf`), the day being lived, the
+// one the desk calls today. They differ only with lights out after midnight;
+// each site below says which it uses.
 //
 // Loaded by the browser. It imports nothing under app/lib/v2/local, nothing from
 // next and nothing from node. Ordering is code point order through
@@ -45,7 +50,7 @@ import {
 
 export { laneDueLabel, laneOpenLabel } from "@/app/lib/v2/view/today";
 
-/** A task as the Quests panes show it, open or finished. */
+/** An open task as the Quests panes show it. */
 export interface QuestItem {
   id: string;
   /** Split exactly as Today splits a title (`splitTitle`). */
@@ -68,12 +73,17 @@ export interface QuestItem {
   when: "past" | "today" | "soon" | "later" | "none";
   hard: boolean;
   /**
-   * Its place in the list Quests shows, 1 first: the open candidates once this
-   * session's finished ones are removed, in the planner's ordering function
-   * (`rankCandidates`). Not the planner's own index, which also leaves out a task
-   * with a skipped block and counts the finished ones.
+   * Its place in the list Quests shows, 1 first: every open candidate, in the
+   * planner's ordering function (`rankCandidates`). Not the planner's own index,
+   * which also leaves out a task with a skipped block.
    */
   rank: number;
+  /**
+   * A block of it is done in the plan on screen (`workedTaskIds`): it was worked
+   * on today. Worked, not finished, so it stays on every list and in its lane's
+   * count.
+   */
+  worked: boolean;
 }
 
 export interface QuestLane {
@@ -112,6 +122,7 @@ export interface QuestsView {
   steps: QuestItem[];
   /** Everything with no lane, in the list's order. */
   side: QuestItem[];
+  /** The source's history of finished tasks, and nothing else: a press on Today never lands here. */
   done: {
     span: number;
     /** The days of the span that have something, newest first, items newest first. */
@@ -171,6 +182,8 @@ export const QUESTS_COPY = {
     later: "",
     none: "",
   } satisfies Record<QuestItem["when"], string>,
+  /** Beside a step with a block done today. Worked on, not finished. */
+  worked: "Worked on today",
   /** Beside a date that is a real deadline. */
   hard: "Hard date",
   /** The steps pane's lane filter. */
@@ -229,9 +242,9 @@ export function questSpanLabel(span: QuestSpan): string {
  *
  * Not the calendar date, unlike a due date (see `whenOf` below). With lights out
  * after midnight, something finished at 00:20 was finished on the day still
- * being lived, and a press on Today at that hour lands on the planned day;
- * reading the history's 00:20 as the next date would put two finishes of one
- * night on two different days. A due date at 00:50 is a different question
+ * being lived, the day the desk is showing as today; reading it as the next date
+ * would put two finishes of one night on two different days. A due date at
+ * 00:50 is a different question
  * (when does it close), and the planner answers that one on the calendar.
  *
  * Exported because the local loader picks its window of history, and the day a
@@ -259,21 +272,21 @@ interface DoneEntry {
   item: QuestDoneItem;
   lane: LaneKey | null;
   day: DateKey;
-  /** null for something finished in this session, which has no instant yet. */
-  ms: number | null;
+  ms: number;
 }
 
 /**
  * The Quests panes, from what the desk was handed.
  *
- * `doneIds` are the tasks finished in this session (`doneTaskIds` of the plan on
- * screen). Each leaves the open lists, and joins the planned day in Done lately
- * when lately reaches the planned day. Nothing is replanned: the rest keep their
- * order.
+ * `workedIds` are the tasks worked on today (`workedTaskIds` of the plan on
+ * screen). Worked is not finished: each stays exactly where it is, in its list,
+ * its lane's count and possibly as its lane's next, and only wears
+ * `worked: true`. Nothing joins Done lately from a press: that is the source's
+ * history and nothing else.
  */
 export function buildQuestsView(
   data: QuestsScreenData,
-  doneIds: ReadonlySet<string>,
+  workedIds: ReadonlySet<string>,
   span: QuestSpan,
 ): QuestsView {
   const { input } = data;
@@ -305,8 +318,8 @@ export function buildQuestsView(
   };
 
   // ------------------------------------------------------------- open items
-  // The one list both views count: the candidates minus this session's finished.
-  const open = input.candidates.filter((candidate) => !doneIds.has(candidate.id));
+  // The one list both views count: every candidate, worked on today or not.
+  const open = input.candidates;
 
   const entries: OpenEntry[] = rankCandidates(open, reference.instant, rules, input.date).map(
     ({ candidate }, index) => {
@@ -325,6 +338,7 @@ export function buildQuestsView(
           when: whenOf(dueMs),
           hard: candidate.hard,
           rank: index + 1,
+          worked: workedIds.has(candidate.id),
         },
       };
     },
@@ -344,9 +358,11 @@ export function buildQuestsView(
   const counted = new Set<string>();
 
   for (const done of data.done) {
-    // Planning day, by `doneDayOf`.
+    // Planning day, by `doneDayOf`. A readable instant is what gives one.
     const day = doneDayOf(done.doneAt, rules);
-    if (day === null || !withinDays(day, end, span) || counted.has(done.id)) continue;
+    const ms = maybeInstantMs(done.doneAt);
+    if (day === null || ms === null || !withinDays(day, end, span)) continue;
+    if (counted.has(done.id)) continue;
     counted.add(done.id);
     // The one identity rule, fed this task's own group: `data.tags` covers the
     // open candidates only, and a finished task is not one of them.
@@ -354,7 +370,7 @@ export function buildQuestsView(
     finished.push({
       lane: done.lane,
       day,
-      ms: maybeInstantMs(done.doneAt),
+      ms,
       item: {
         id: done.id,
         title: splitTitle(done.title).title,
@@ -363,38 +379,11 @@ export function buildQuestsView(
     });
   }
 
-  // This session's finishes belong to the planned day, so they are part of
-  // lately only when lately reaches it.
-  if (withinDays(input.date, end, span)) {
-    for (const candidate of input.candidates) {
-      if (!doneIds.has(candidate.id) || counted.has(candidate.id)) continue;
-      counted.add(candidate.id);
-      finished.push({
-        lane: laneOf(candidate),
-        day: input.date,
-        ms: null,
-        item: {
-          id: candidate.id,
-          title: splitTitle(candidate.title).title,
-          identity: identityOf(candidate),
-        },
-      });
-    }
-  }
-
-  // Newest day first. Inside a day, this session's finishes first (they came
-  // after anything the source recorded), then the newest instant; a tie is the
-  // id, in code point order.
-  finished.sort((a, b) => {
-    const byDay = compareText(b.day, a.day);
-    if (byDay !== 0) return byDay;
-    if (a.ms === null || b.ms === null) {
-      if (a.ms !== b.ms) return a.ms === null ? -1 : 1;
-    } else if (a.ms !== b.ms) {
-      return b.ms - a.ms;
-    }
-    return compareText(a.item.id, b.item.id);
-  });
+  // Newest day first, then the newest instant; a tie is the id, in code point
+  // order.
+  finished.sort(
+    (a, b) => compareText(b.day, a.day) || b.ms - a.ms || compareText(a.item.id, b.item.id),
+  );
 
   const days: QuestsView["done"]["days"] = [];
   for (const entry of finished) {
