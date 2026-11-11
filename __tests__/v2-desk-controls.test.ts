@@ -135,6 +135,7 @@ import {
   deskCookie,
   mergeSaved,
   mergeThree,
+  otherVersion,
   saveStep,
   useSavedDesk,
 } from "@/app/v2/_desk/persist";
@@ -2349,6 +2350,35 @@ describe("a desk saved by another version (last pass, item 2)", () => {
       closeOn(container, "status");
       expect(leafOf(arrangementOf(saved(), "today", "regular").tree, "status"), unreadable).toBeNull();
     }
+  });
+
+  // Only a NEWER desk freezes saving. A version this build did not write and
+  // that is not greater than its own (a hand edit, an older shape) is nothing
+  // stored, as unreadable storage is: freezing on it would never end, and the
+  // sentence would blame a newer version that does not exist.
+  test("a version that is a string, null, lower or missing is nothing stored, and the session saves over it", () => {
+    const shape = { layouts: [{ id: "today" }], hidden: [], current: "today", slots: {} };
+    const cases: Array<[string, string]> = [
+      ["a string version", JSON.stringify({ ...shape, version: "1" })],
+      ["a null version", JSON.stringify({ ...shape, version: null })],
+      ["a lower version", JSON.stringify({ ...shape, version: 0 })],
+      ["no version", JSON.stringify(shape)],
+    ];
+    for (const [name, text] of cases) {
+      expect(otherVersion(text), name).toBe(false);
+      cleanup();
+      vi.restoreAllMocks();
+      window.localStorage.setItem(DESK_STORAGE_KEY, text);
+      stubMedia(1366);
+      stubExtents({ wide: WIDE, regular: REGULAR });
+      const { container } = drawDesk();
+      closeOn(container, "status");
+      expect(window.localStorage.getItem(DESK_STORAGE_KEY), name).not.toBe(text);
+      expect(leafOf(arrangementOf(saved(), "today", "regular").tree, "status"), name).toBeNull();
+      expect(spoken(container), name).not.toContain(DESK_COPY.savedByNewer);
+    }
+    expect(otherVersion(NEWER)).toBe(true);
+    expect(otherVersion(JSON.stringify({ ...shape, version: 3 }))).toBe(true);
   });
 
   test("a storage event carrying another version stops this session's saving, said once", () => {

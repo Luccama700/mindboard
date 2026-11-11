@@ -323,18 +323,21 @@ function storedDesk(text: string | null): TileSet | null {
 }
 
 /**
- * Whether storage holds a desk written by another version of this code:
- * readable JSON, an object, with a `version` that is not this build's. Such a
- * desk is not "nothing stored": this build cannot read it, and must not write
- * over it either (a newer build's desk is the owner's latest). Anything that is
- * not readable at all still counts as nothing stored.
+ * Whether storage holds a desk written by a NEWER version of this code:
+ * readable JSON, an object, whose `version` is a number greater than this
+ * build's. Such a desk is not "nothing stored": this build cannot read it, and
+ * must not write over it either (it is the owner's latest). Anything else that
+ * is not this build's desk (a version as a string, null, lower, or missing; not
+ * JSON at all) counts as nothing stored, and is written over at the next change.
  */
 export function otherVersion(text: string | null): boolean {
   if (text === null) return false;
   try {
     const value: unknown = JSON.parse(text);
     if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-    return Object.hasOwn(value, "version") && (value as { version: unknown }).version !== EMPTY_TILE_SET.version;
+    if (!Object.hasOwn(value, "version")) return false;
+    const version = (value as { version: unknown }).version;
+    return typeof version === "number" && version > EMPTY_TILE_SET.version;
   } catch {
     return false;
   }
