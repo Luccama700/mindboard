@@ -5,6 +5,7 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent,
 } from "react";
 
 import {
@@ -13,6 +14,7 @@ import {
   type PaneId,
   type PaneSpec,
   type ScreenClass,
+  type TileSet,
 } from "@/app/lib/v2/tiles";
 import { DESK_COPY, deskLine } from "@/app/lib/v2/view/desk";
 import { PaneBox } from "./pane-box";
@@ -69,17 +71,28 @@ export interface FrameActions {
   menuItems(cls: ScreenClass, pane: PaneId): PaneMenuItem[];
   /** One item of the pane menu taken; `button` is the menu's own button. */
   onMenu(cls: ScreenClass, pane: PaneId, item: PaneMenuItem, button: HTMLElement): void;
+  /**
+   * A press on a handle: the header's empty part or its title for the frame's
+   * own pane, or a tab for that tab's pane. It is a drag only after it travels
+   * (use-dock-drag.ts); until then it is a press like any other.
+   */
+  onDragStart(pane: PaneId, event: globalThis.PointerEvent, handle: HTMLElement): void;
 }
 
 /**
- * The class a frame's menu acts on: the class on screen where the frame is
- * drawn there, and otherwise, before the browser has said its class, the first
- * class the frame is drawn in.
+ * The tiled class a frame's menu acts on: the class on screen where the frame
+ * is drawn there, and otherwise, before the browser has said its class, the
+ * first tiled class the frame is drawn in. Never the phone's: a phone's frame
+ * has no header row and no menu.
  */
-function menuTarget(cls: ScreenClass | null, frame: DeskFrame): ScreenClass | null {
-  if (cls !== null) return frame.shown.includes(cls) ? cls : null;
-  return tiledTarget(null, tiledShown(frame)) ?? (frame.shown.includes("compact") ? "compact" : null);
+function menuTarget(cls: ScreenClass | null, frame: DeskFrame): TiledClass | null {
+  const tiled = tiledShown(frame);
+  if (cls === null) return tiled[0] ?? null;
+  return (cls === "regular" || cls === "wide") && tiled.includes(cls) ? cls : null;
 }
+
+/** What a press on a header never starts a drag from: a control, or the open menu. */
+const NOT_A_HANDLE = 'button, a, input, select, textarea, [role="menu"]';
 
 /**
  * The property a frame's box is written in, for one class and one side. Not to
@@ -226,10 +239,14 @@ function TabStrip({
  * close control by its title, except the last pane open. Maximize is a button
  * here and a double click on the header; while a pane fills the desk every
  * other frame is not shown, so it is inert. The pane menu (pane-menu.tsx) is
- * the tools' first control, on every class the frame is drawn in, the phone
- * included, where it is the header's only one. Each control is drawn for the
- * classes it applies to (`data-in`), like the strips, and the class on screen
- * is the one it acts on.
+ * the tools' first control. Each control is drawn for the classes it applies
+ * to (`data-in`), like the strips, and the class on screen is the one it acts
+ * on. The tools are tiled only: a phone's frame has no header row.
+ *
+ * THE HEADER IS THE HANDLE. A press on its empty part or on the title may
+ * become a drag of this pane, and a press on a tab one of that tab's pane; a
+ * press on a control never does (use-dock-drag.ts). A drag starts only after
+ * 6px of travel, so a click and a double click stay what they were.
  *
  * ONE SHAPE, ALWAYS. The header and the box are the section's two children
  * whatever the arrangement, so no change of layout, class or tab can change the
@@ -244,11 +261,14 @@ function TabStrip({
 export function PaneFrame({
   frame,
   cls,
+  desk,
   options,
   actions,
 }: {
   frame: DeskFrame;
   cls: ScreenClass | null;
+  /** The set on screen: the pane menu belongs to the one it was opened on. */
+  desk: TileSet;
   options: Readonly<Record<string, string>>;
   actions: FrameActions;
 }) {
@@ -271,6 +291,13 @@ export function PaneFrame({
     actions.onMaximize(maximizeTarget, pane.id, button ?? header);
   };
 
+  const onPointerDown = (event: PointerEvent<HTMLElement>) => {
+    const target = event.target as Element;
+    const tab = target.closest<HTMLElement>(".v2-frame-tab");
+    if (tab === null && target.closest(NOT_A_HANDLE) !== null) return;
+    actions.onDragStart(tab?.dataset.tab ?? pane.id, event.nativeEvent, tab ?? event.currentTarget);
+  };
+
   return (
     <section
       className="v2-frame"
@@ -282,7 +309,7 @@ export function PaneFrame({
       inert={cls !== null && !frame.shown.includes(cls)}
       style={frameStyle(frame.boxes)}
     >
-      <header className="v2-frame-head" onDoubleClick={onDoubleClick}>
+      <header className="v2-frame-head" onDoubleClick={onDoubleClick} onPointerDown={onPointerDown}>
         <h2 className="v2-hidden" id={titleId}>
           {pane.title}
         </h2>
@@ -297,11 +324,12 @@ export function PaneFrame({
             actions={actions}
           />
         ))}
-        <span className="v2-frame-tools" data-in={frame.shown.join(" ")}>
+        <span className="v2-frame-tools" data-in={tiled.join(" ")}>
           <PaneMenu
             paneId={pane.id}
             title={pane.title}
             target={menuTarget(cls, frame)}
+            desk={desk}
             itemsFor={(on) => actions.menuItems(on, pane.id)}
             onPick={(on, item, button) => actions.onMenu(on, pane.id, item, button)}
           />
@@ -320,7 +348,6 @@ export function PaneFrame({
           <button
             type="button"
             className="v2-frame-max"
-            data-in={tiled.join(" ")}
             aria-label={deskLine(DESK_COPY.maximizePane, { pane: pane.title })}
             title={deskLine(DESK_COPY.maximizePane, { pane: pane.title })}
             aria-pressed={maximizedNow}

@@ -54,9 +54,14 @@ import {
  * in, and when it draws the same as what is on screen the merge takes the other
  * tab's object; an identity test would refuse a release that is perfectly good
  * on the same layout and class.
+ *
+ * REQUIRED where an action names a split or a leaf by id (a divider's ratio
+ * and evening, a move, a move to another layout); optional where it names
+ * only a pane (close and maximize from the header carry none; from the menu
+ * they do).
  */
 interface WorkedOn {
-  layout?: LayoutId;
+  layout: LayoutId;
 }
 
 /**
@@ -74,14 +79,14 @@ export type TilesAction =
   | ({ type: "ratio"; cls: ScreenClass; splitId: string; ratio: number; size: number } & WorkedOn)
   /** Both sides of a divider the same: `equalize`. */
   | ({ type: "equalize"; cls: ScreenClass; splitId: string } & WorkedOn)
-  | ({ type: "close"; cls: ScreenClass; pane: PaneId } & WorkedOn)
+  | ({ type: "close"; cls: ScreenClass; pane: PaneId } & Partial<WorkedOn>)
   /**
    * Open a pane, placed by the engine on the workspace the browser computed. On
    * the phone there is none to give (its arrangement is one stack, which has no
    * geometry), and null is the engine's own answer for that: the first leaf.
    */
   | { type: "open"; cls: ScreenClass; pane: PaneId; workspace: Workspace | null }
-  | ({ type: "maximize"; cls: ScreenClass; pane: PaneId } & WorkedOn)
+  | ({ type: "maximize"; cls: ScreenClass; pane: PaneId } & Partial<WorkedOn>)
   /** A tab moved along its own stack: the phone's list. */
   | { type: "moveTab"; cls: ScreenClass; pane: PaneId; to: number }
   /** A pane put against a leaf, or made one of its tabs: `movePane`, what a drop and the pane menu do. */

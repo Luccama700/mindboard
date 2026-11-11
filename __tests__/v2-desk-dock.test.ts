@@ -70,11 +70,14 @@ import {
   openPane,
   openPanes,
   parseTileSet,
+  serializeTileSet,
   setCurrent,
   setHidden,
   setRatio,
   toggleMaximize,
   withArrangement,
+  zoneAt,
+  zoneRect,
   type Arrangement,
   type Direction,
   type ScreenClass,
@@ -97,6 +100,7 @@ import {
 import { paneMenuItems, type PaneMenuItem } from "@/app/v2/_desk/pane-menu";
 import type { TiledClass } from "@/app/v2/_desk/pane-frame";
 import { DESK_STORAGE_KEY } from "@/app/v2/_desk/persist";
+import { dockTarget, type DockTarget } from "@/app/v2/_desk/use-dock-drag";
 import { tilesReducer, type TilesAction, type TilesState } from "@/app/v2/_desk/use-tiles";
 
 const ROOT = path.resolve(__dirname, "..");
@@ -200,6 +204,25 @@ class ReportingObserver {
   disconnect() {}
 }
 
+/** jsdom has no PointerEvent: a MouseEvent that carries a pointer's id, kind and primacy. */
+class PointerStub extends MouseEvent {
+  readonly pointerId: number;
+  readonly isPrimary: boolean;
+  readonly pointerType: string;
+  constructor(
+    type: string,
+    init: MouseEventInit & { pointerId?: number; isPrimary?: boolean; pointerType?: string } = {},
+  ) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 1;
+    this.isPrimary = init.isPrimary ?? true;
+    this.pointerType = init.pointerType ?? "mouse";
+  }
+}
+
+/** Which element holds which pointer, as setPointerCapture leaves it. */
+const captured = new Map<Element, number>();
+
 // ------------------------------------------------------------ boxes and plays
 
 /**
@@ -290,6 +313,20 @@ beforeEach(() => {
   }
   window.history.replaceState(null, "", "/v2/desk");
   vi.stubGlobal("ResizeObserver", ReportingObserver);
+  captured.clear();
+  Object.assign(Element.prototype, {
+    setPointerCapture(this: Element, id: number) {
+      captured.set(this, id);
+    },
+    releasePointerCapture(this: Element, id: number) {
+      if (captured.get(this) !== id) return;
+      captured.delete(this);
+      this.dispatchEvent(new PointerStub("lostpointercapture", { pointerId: id }));
+    },
+    hasPointerCapture(this: Element, id: number) {
+      return captured.get(this) === id;
+    },
+  });
 });
 
 afterEach(() => {
@@ -297,6 +334,9 @@ afterEach(() => {
   Reflect.deleteProperty(window, "matchMedia");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  for (const name of ["setPointerCapture", "releasePointerCapture", "hasPointerCapture"]) {
+    Reflect.deleteProperty(Element.prototype, name);
+  }
 });
 
 // --------------------------------------------------------------- the desk
@@ -380,12 +420,12 @@ function engineCandidates(set: TileSet, cls: TiledClass, pane: string, workspace
   const rects = layoutTree({ ...arrangement, maximized: null }, workspace);
   for (const { dir, zone } of DIRECTIONS) {
     const next = neighbourOf(rects, leaf.id, dir);
-    if (next !== null && changes({ type: "move", cls, pane, leafId: next, zone })) out.push(dir);
+    if (next !== null && changes({ type: "move", cls, pane, leafId: next, zone, layout: set.current })) out.push(dir);
   }
   for (const other of openPanes(arrangement.tree)) {
     if (other === pane) continue;
     const holder = leafOf(arrangement.tree, other);
-    if (holder !== null && changes({ type: "move", cls, pane, leafId: holder.id, zone: "centre" })) {
+    if (holder !== null && changes({ type: "move", cls, pane, leafId: holder.id, zone: "centre", layout: set.current })) {
       out.push(`tab:${other}`);
     }
   }
@@ -394,7 +434,7 @@ function engineCandidates(set: TileSet, cls: TiledClass, pane: string, workspace
   if (changes({ type: "close", cls, pane })) out.push("close");
   for (const meta of set.layouts) {
     if (meta.id === set.current || set.hidden.includes(meta.id)) continue;
-    if (changes({ type: "sendPane", cls, pane, to: meta.id, workspace })) out.push(`send:${meta.id}`);
+    if (changes({ type: "sendPane", cls, pane, to: meta.id, workspace, layout: set.current })) out.push(`send:${meta.id}`);
   }
   return out;
 }
@@ -509,29 +549,15 @@ describe("what the pane menu offers (behaviour 1)", () => {
     expect(ids).toEqual(["tab:today", "tab:status", "tab:past-due", "tab:not-today", "maximize", "close"]);
   });
 
-  test("on the phone, only a move to another layout and the way to the list that arranges the stack", () => {
-    const set = EMPTY_TILE_SET;
-    const items = paneMenuItems(set, "compact", "status", null);
-    const expected = BUILT_IN_LAYOUTS.filter((meta) => meta.id !== "today")
-      .filter((meta) => leafOf(arrangementOf(set, meta.id, "compact").tree, "status") === null)
-      .map((meta) => `send:${meta.id}`);
-    expect(expected.length).toBeGreaterThan(0);
-    expect(itemIds(items)).toEqual([...expected, "arrange"]);
-    const arrange = items.at(-1) as PaneMenuItem;
-    expect(arrange.action).toBeNull();
-    expect(arrange.label).toBe(DESK_COPY.arrangePanesName);
-    // The last pane in a layout cannot leave it.
-    let alone = setCurrent(set, "week");
-    let compact = arrangementOf(alone, "week", "compact");
-    for (const pane of openPanes(compact.tree).slice(1)) compact = closePane(compact, pane);
-    alone = withArrangement(alone, "week", "compact", compact);
-    const last = openPanes(compact.tree)[0];
-    expect(itemIds(paneMenuItems(alone, "compact", last, null))).toEqual(["arrange"]);
+  test("offers nothing on the phone, whose way to arrange the stack is its own list", () => {
+    for (const pane of openPanes(arrangementOf(EMPTY_TILE_SET, "today", "compact").tree)) {
+      expect(paneMenuItems(EMPTY_TILE_SET, "compact", pane, null), pane).toEqual([]);
+    }
   });
 
   test("Move to layout is one change: closed here, opened there on the class on screen, and the desk stays here", () => {
     const set = EMPTY_TILE_SET;
-    const after = applied(set, "regular", { type: "sendPane", cls: "regular", pane: "calendar", to: "money", workspace: REGULAR }).set;
+    const after = applied(set, "regular", { type: "sendPane", cls: "regular", pane: "calendar", to: "money", workspace: REGULAR, layout: "today" }).set;
     expect(after.current).toBe("today");
     expect(arrangementOf(after, "today", "regular")).toEqual(closePane(arrangementOf(set, "today", "regular"), "calendar"));
     expect(arrangementOf(after, "money", "regular")).toEqual(
@@ -545,9 +571,9 @@ describe("what the pane menu offers (behaviour 1)", () => {
     }
     // Already there, or the last pane here, or a layout the desk lacks: nothing.
     const state: TilesState = { set, cls: "regular" };
-    expect(tilesReducer(state, { type: "sendPane", cls: "regular", pane: "calendar", to: "week", workspace: REGULAR })).toBe(state);
-    expect(tilesReducer(state, { type: "sendPane", cls: "regular", pane: "calendar", to: "nowhere", workspace: REGULAR })).toBe(state);
-    expect(tilesReducer(state, { type: "sendPane", cls: "regular", pane: "calendar", to: "today", workspace: REGULAR })).toBe(state);
+    expect(tilesReducer(state, { type: "sendPane", cls: "regular", pane: "calendar", to: "week", workspace: REGULAR, layout: "today" })).toBe(state);
+    expect(tilesReducer(state, { type: "sendPane", cls: "regular", pane: "calendar", to: "nowhere", workspace: REGULAR, layout: "today" })).toBe(state);
+    expect(tilesReducer(state, { type: "sendPane", cls: "regular", pane: "calendar", to: "today", workspace: REGULAR, layout: "today" })).toBe(state);
   });
 });
 
@@ -570,13 +596,41 @@ describe("the pane menu (behaviour 1)", () => {
       expect(menu.getAttribute("aria-labelledby")).toBe(button.id);
       expect(menu.hidden).toBe(true);
       expect(menu.children).toHaveLength(0);
-      // Drawn wherever the frame is displayed, the phone included.
-      expect(frame.querySelector(".v2-frame-tools")?.getAttribute("data-in")).toBe(frame.dataset.shown);
-      // Maximize stays a tiled control.
-      expect(frame.querySelector(".v2-frame-max")?.getAttribute("data-in")).toBe(
-        (frame.dataset.shown ?? "").split(" ").filter((cls) => cls !== "compact" && cls !== "").join(" "),
+      // Drawn on the tiled classes the frame is displayed in, never the phone's.
+      expect(frame.querySelector(".v2-frame-tools")?.getAttribute("data-in")).toBe(
+        (frame.dataset.shown ?? "").split(" ").filter((cls) => cls === "regular" || cls === "wide").join(" "),
       );
     }
+  });
+
+  test("on the phone a frame has no header row and no menu: the pane's content sits where it did", () => {
+    stubMedia(390);
+    stubStage();
+    const container = drawDesk();
+    const front = arrangementOf(EMPTY_TILE_SET, "today", "compact").tree;
+    const pane = front?.kind === "leaf" ? front.active : "";
+    const frame = frameOf(container, pane);
+    // Nothing in the header is drawn or reachable there: every control sits
+    // inside something drawn for tiled classes only, and the h2 is read, not seen.
+    const header = frame.querySelector(":scope > header") as HTMLElement;
+    for (const control of Array.from(header.querySelectorAll<HTMLElement>("button, [tabindex]"))) {
+      expect(control.closest("[data-in]")?.getAttribute("data-in")?.split(" ") ?? [], control.className).not.toContain(
+        "compact",
+      );
+    }
+    expect(header.querySelector("h2")?.className).toBe("v2-hidden");
+    // The stylesheet's phone block keeps the header at nothing and draws no tools.
+    const media = "(width < 1024px)";
+    expect(declsIn("[data-v2-root] .v2-frame-head", media)).toEqual({ "min-height": "0", padding: "0" });
+    expect(declsIn("[data-v2-root] .v2-frame-tools", null).display).toBe("none");
+    SHEET.walkRules((rule) => {
+      if (!rule.selectors.some((selector) => /v2-frame-(tools|menu)/.test(selector))) return;
+      const block = rule.parent?.type === "atrule" ? (rule.parent as AtRule).params : null;
+      if (block === null || block === "(hover: none)") return;
+      expect([REGULAR_BLOCK, WIDE_BLOCK], `${rule.selector} in ${block}`).toContain(block);
+    });
+    // And the pane menu is not reachable on the phone.
+    expect(paneMenuItems(EMPTY_TILE_SET, "compact", pane, null)).toEqual([]);
   });
 
   test("opens on a press with the focus on its first item; the arrows wrap, Home and End go to the ends, a letter jumps", () => {
@@ -728,27 +782,36 @@ describe("the pane menu (behaviour 1)", () => {
     expectNoRemount();
   });
 
-  test("on the phone it moves the pane in front to another layout, and its last item opens the existing list", () => {
-    stubMedia(390);
+  test("closes when the set is replaced (another tab's write merged in): no item acts on ids held from before", () => {
+    stubMedia(1366);
     stubStage();
     const container = drawDesk();
-    const front = arrangementOf(EMPTY_TILE_SET, "today", "compact").tree;
-    const pane = front?.kind === "leaf" ? front.active : "";
-    const items = openMenu(container, pane);
-    expect(items.map((item) => item.textContent)).toEqual(
-      paneMenuItems(EMPTY_TILE_SET, "compact", pane, null).map((item) => item.label),
+    // A first change, so this tab has written and takes other tabs' writes in.
+    pick(container, "calendar", DESK_COPY.moveLeft);
+    openMenu(container, "calendar");
+    expect(menuOf(container, "calendar").hidden).toBe(false);
+    const theirs = withArrangement(
+      saved(),
+      "money",
+      "regular",
+      closePane(arrangementOf(saved(), "money", "regular"), "hours"),
     );
+    // What the other tab does: write storage, and every other tab is told.
+    window.localStorage.setItem(DESK_STORAGE_KEY, serializeTileSet(theirs));
     act(() => {
-      fireEvent.click(items.at(-1) as HTMLElement);
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: DESK_STORAGE_KEY,
+          newValue: serializeTileSet(theirs),
+          oldValue: null,
+          storageArea: window.localStorage,
+        }),
+      );
     });
-    const toggle = container.querySelector(".v2-desk-bar .v2-desk-arrange-toggle") as HTMLElement;
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(document.activeElement).toBe(toggle);
-    expect(menuOf(container, pane).hidden).toBe(true);
-
-    pick(container, pane, deskLine(DESK_COPY.sendTo, { layout: "Money" }));
-    expect(leafOf(arrangementOf(saved(), "today", "compact").tree, pane)).toBeNull();
-    expect(leafOf(arrangementOf(saved(), "money", "compact").tree, pane)).not.toBeNull();
+    // The merge took the other tab's Money in, and the open menu is gone.
+    expect(leafOf(arrangementOf(saved(), "money", "regular").tree, "hours")).toBeNull();
+    expect(menuOf(container, "calendar").hidden).toBe(true);
+    expect(itemsOf(container, "calendar")).toHaveLength(0);
   });
 
   test("a double click on the menu does not maximize the pane", () => {
@@ -833,28 +896,26 @@ describe("an action carries the layout it was worked out on", () => {
     expect(evened.tree?.kind === "split" && evened.tree.ratio).toBe(0.5);
   });
 
-  test("a pick from a menu left open across a change of layout changes nothing", () => {
+  test("a menu left open across a change of layout closes, and what it held would change nothing there", () => {
     stubMedia(1366);
     stubStage();
     const container = drawDesk();
     openMenu(container, "calendar");
+    const held = paneMenuItems(EMPTY_TILE_SET, "regular", "calendar", REGULAR).find((item) => item.id === "left");
     // Back or Forward to Week while the menu is open: the calendar is drawn on
-    // Week too, so the menu stays, holding Today's leaf ids.
+    // Week too, so only the set it was opened on can tell it is stale.
     window.history.pushState(null, "", "/v2/desk?layout=week");
     act(() => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
-    expect((container.querySelector(".v2-desk") as HTMLElement).dataset.layout).toBe("week");
-    const items = itemsOf(container, "calendar");
-    const left = items.find((item) => item.dataset.item === "left");
-    expect(left).toBeDefined();
-    const weekBefore = arrangementOf(saved(), "week", "regular");
-    act(() => {
-      fireEvent.click(left as HTMLElement);
-    });
-    expect(arrangementOf(saved(), "week", "regular")).toEqual(weekBefore);
-    expect(arrangementOf(saved(), "today", "regular")).toEqual(arrangementOf(EMPTY_TILE_SET, "today", "regular"));
-    expect(spoken(container)).not.toBe(deskLine(DESK_COPY.paneMovedLeft, { pane: "Calendar" }));
+    const desk = saved();
+    expect(desk.current).toBe("week");
+    expect(leafOf(arrangementOf(desk, "week", "regular").tree, "calendar")).not.toBeNull();
+    expect(menuOf(container, "calendar").hidden).toBe(true);
+    expect(itemsOf(container, "calendar")).toHaveLength(0);
+    // And the item it held, Today's leaf id and all, is refused on Week.
+    const state: TilesState = { set: desk, cls: "regular" };
+    expect(tilesReducer(state, held?.action as TilesAction)).toBe(state);
   });
 });
 
@@ -862,6 +923,8 @@ describe("an action carries the layout it was worked out on", () => {
 
 const DESK_CSS = readFileSync(path.join(ROOT, "app/v2/desk.css"), "utf8");
 const SHEET = postcss.parse(DESK_CSS, { from: "app/v2/desk.css" });
+const REGULAR_BLOCK = "(1024px <= width < 1600px)";
+const WIDE_BLOCK = "(min-width: 1600px)";
 
 /** The first rule with this selector directly in the first media block of that query, or at the top level. */
 function declsIn(selector: string, media: string | null): Record<string, string> {
@@ -902,10 +965,6 @@ describe("where the menu is drawn", () => {
     expect(list["max-height"]).toBe("min(calc(100% - 42px), calc(100dvh - 24px))");
     expect(list["overflow-y"]).toBe("auto");
     expect(declsIn("[data-v2-root] .v2-frame-menu-list[hidden]", null).display).toBe("none");
-    // On the phone the header is the 44px row the button needs.
-    const phone = declsIn("[data-v2-root] .v2-frame-menu-list", "(width < 1024px)");
-    expect(phone.top).toBe("48px");
-    expect(phone["max-height"]).toBe("min(calc(100% - 54px), calc(100dvh - 24px))");
   });
 
   test("nothing between the menu and its frame is positioned, so the frame is what it is placed against", () => {
@@ -947,15 +1006,6 @@ describe("where the menu is drawn", () => {
     expect(base).toBeLessThan(touch);
   });
 
-  test("the phone draws the header's tools for the menu, never maximize", () => {
-    const media = "(width < 1024px)";
-    expect(declsIn('[data-v2-root] .v2-frame-tools[data-in~="compact"]', media).display).toBe("flex");
-    expect(declsIn("[data-v2-root] .v2-frame-max", media).display).toBe("none");
-    const button = declsIn("[data-v2-root] .v2-frame-menu-button", media);
-    expect(button.width).toBe("44px");
-    expect(button.height).toBe("44px");
-    expect(declsIn("[data-v2-root] .v2-frame-menu-item", media)["min-height"]).toBe("44px");
-  });
 });
 
 // ============================================================ behaviour 3: the plan
@@ -1243,6 +1293,544 @@ describe("the glide on the desk (behaviours 3 and 4)", () => {
   });
 });
 
+// ============================================================ behaviour 2: the drag
+
+const POINTER = 3;
+
+/** One pointer event at a client point, a mouse with its button held unless it is a release. */
+function pointerAt(
+  type: string,
+  target: EventTarget,
+  x: number,
+  y: number,
+  extra: MouseEventInit & { pointerId?: number; pointerType?: string; isPrimary?: boolean } = {},
+) {
+  const event = new PointerStub(type, {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    buttons: type === "pointerup" ? 0 : 1,
+    clientX: x,
+    clientY: y,
+    pointerId: POINTER,
+    ...extra,
+  });
+  act(() => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
+const headerOf = (container: HTMLElement, pane: string) =>
+  frameOf(container, pane).querySelector(":scope > header") as HTMLElement;
+
+/** The drop overlay: on the stage only while a pane is up. */
+const overlayOf = (container: HTMLElement) => stageOf(container).querySelector<HTMLElement>(":scope > .v2-dock");
+
+/** A leaf's rectangle as the engine lays the arrangement out on the workspace the stage computes. */
+function leafRect(arrangement: Arrangement, pane: string, workspace: Workspace) {
+  const leaf = leafOf(arrangement.tree, pane);
+  const rect = layoutTree(arrangement, workspace).leaves.find((candidate) => candidate.leafId === leaf?.id);
+  if (rect === undefined) throw new Error(`${pane} is not open`);
+  return rect;
+}
+
+/** A point inside a rectangle, at fractions of its width and height. */
+const inside = (rect: { x: number; y: number; w: number; h: number }, fx: number, fy: number) => ({
+  x: rect.x + rect.w * fx,
+  y: rect.y + rect.h * fy,
+});
+
+/** Presses a pane's header at its middle and moves it past the threshold: the drag is up. */
+function lift(container: HTMLElement, pane: string) {
+  const header = headerOf(container, pane);
+  const rect = leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), pane, REGULAR);
+  const start = { x: rect.x + rect.w / 2, y: rect.y + 10 };
+  pointerAt("pointerdown", header, start.x, start.y);
+  pointerAt("pointermove", header, start.x + 8, start.y);
+  return header;
+}
+
+const framePlays = () => plays.filter((play) => (play.frame as HTMLElement).classList.contains("v2-frame"));
+const overlayPlays = () => plays.filter((play) => (play.frame as HTMLElement).classList.contains("v2-dock"));
+
+describe("where a drop lands (behaviour 2)", () => {
+  const set = EMPTY_TILE_SET;
+  const arrangement = arrangementOf(set, "today", "regular");
+  const calendar = leafRect(arrangement, "calendar", REGULAR);
+  const tabs = leafRect(arrangement, "today", REGULAR);
+
+  test("is the engine's zone of the leaf under the point, its part of the leaf, and the words for it", () => {
+    const zones = new Set<Zone>();
+    for (const [fx, fy] of [
+      [0.5, 0.5],
+      [0.05, 0.5],
+      [0.95, 0.5],
+      [0.5, 0.05],
+      [0.5, 0.95],
+    ]) {
+      const { x, y } = inside(calendar, fx, fy);
+      const target = dockTarget(set, "regular", "today", REGULAR, x, y);
+      const zone = zoneAt(calendar, x, y);
+      zones.add(zone);
+      expect(target, `${fx} ${fy}`).toEqual({
+        leafId: calendar.leafId,
+        zone,
+        over: "calendar",
+        box: zoneRect(calendar, zone),
+        words: `${TILE_COPY.zone[zone]} ${titleOf("calendar")}`,
+        said:
+          zone === "centre"
+            ? deskLine(DESK_COPY.paneTabbed, { pane: "The day", first: "Calendar" })
+            : deskLine(
+                {
+                  left: DESK_COPY.paneDockedLeft,
+                  right: DESK_COPY.paneDockedRight,
+                  top: DESK_COPY.paneDockedTop,
+                  bottom: DESK_COPY.paneDockedBottom,
+                }[zone],
+                { pane: "The day", first: "Calendar" },
+              ),
+        action: { type: "move", cls: "regular", pane: "today", leafId: calendar.leafId, zone, layout: "today" },
+      });
+      expect(applied(set, "regular", target?.action as TilesAction).set).toEqual(
+        withArrangement(set, "today", "regular", movePane(arrangement, "today", calendar.leafId, zone)),
+      );
+    }
+    expect(zones.size).toBe(5);
+  });
+
+  test("is nothing on the pane's own leaf, in a gap, outside the workspace, or for a pane that is not open", () => {
+    const own = inside(tabs, 0.5, 0.5);
+    expect(dockTarget(set, "regular", "today", REGULAR, own.x, own.y)).toBeNull();
+    // Its own frame's edge too, where the engine itself would split a stack:
+    // a drop on its own frame is no drop.
+    const edge = inside(tabs, 0.03, 0.5);
+    expect(zoneAt(tabs, edge.x, edge.y)).toBe("left");
+    expect(movePane(arrangement, "today", tabs.leafId, "left")).not.toBe(arrangement);
+    expect(dockTarget(set, "regular", "today", REGULAR, edge.x, edge.y)).toBeNull();
+    // A background tab's own leaf is its own too: a drop there changes nothing.
+    expect(dockTarget(set, "regular", "status", REGULAR, own.x, own.y)).toBeNull();
+    expect(dockTarget(set, "regular", "today", REGULAR, tabs.x + tabs.w + 3, 300)).toBeNull();
+    expect(dockTarget(set, "regular", "today", REGULAR, REGULAR.width + 40, 300)).toBeNull();
+    expect(dockTarget(set, "regular", "today", REGULAR, 300, -1)).toBeNull();
+    const onCalendar = inside(calendar, 0.5, 0.5);
+    expect(dockTarget(set, "regular", "lanes", REGULAR, onCalendar.x, onCalendar.y)).toBeNull();
+  });
+
+  test("under a maximize, only the pane that fills the desk can be dropped on", () => {
+    const filled = withArrangement(set, "today", "regular", toggleMaximize(arrangement, "calendar"));
+    // Where the stack of four would be is the calendar now.
+    const where = inside(tabs, 0.5, 0.5);
+    const target = dockTarget(filled, "regular", "status", REGULAR, where.x, where.y);
+    expect(target?.over).toBe("calendar");
+    expect(target?.box).toEqual(
+      zoneRect({ x: 0, y: 0, w: REGULAR.width, h: REGULAR.height }, zoneAt({ x: 0, y: 0, w: REGULAR.width, h: REGULAR.height }, where.x, where.y)),
+    );
+  });
+});
+
+describe("the drag (behaviour 2)", () => {
+  test("a press is a press until it travels 6px; then the pane is up, its frame dims, and the pointer is held", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const header = headerOf(container, "today");
+    pointerAt("pointerdown", header, 100, 10);
+    pointerAt("pointermove", header, 103, 14);
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    expect(frameOf(container, "today").hasAttribute("data-lifted")).toBe(false);
+    expect(captured.has(header)).toBe(false);
+    pointerAt("pointermove", header, 106, 10);
+    expect(stageOf(container).getAttribute("data-dock")).toBe("today");
+    expect(frameOf(container, "today").hasAttribute("data-lifted")).toBe(true);
+    expect(captured.get(header)).toBe(POINTER);
+    // The divider's own attribute is not this one.
+    expect(stageOf(container).hasAttribute("data-drag")).toBe(false);
+    expectNoRemount();
+  });
+
+  test("aims at the zone under the pointer: the overlay sits on the engine's part of the leaf, says what a release does, and fades in once per zone", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const header = lift(container, "today");
+    const calendar = leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "calendar", REGULAR);
+    const overlay = overlayOf(container) as HTMLElement;
+    expect(overlay).not.toBeNull();
+    expect(overlay.getAttribute("aria-hidden")).toBe("true");
+    expect(overlay.hasAttribute("data-zone")).toBe(false);
+
+    const middle = inside(calendar, 0.5, 0.5);
+    pointerAt("pointermove", header, middle.x, middle.y);
+    const centre = dockTarget(EMPTY_TILE_SET, "regular", "today", REGULAR, middle.x, middle.y) as DockTarget;
+    expect(overlay.getAttribute("data-zone")).toBe("centre");
+    expect(overlay.getAttribute("data-target")).toBe("calendar");
+    expect(overlay.querySelector(".v2-dock-words")?.textContent).toBe(centre.words);
+    expect([overlay.style.left, overlay.style.top, overlay.style.width, overlay.style.height]).toEqual(
+      [centre.box.x, centre.box.y, centre.box.w, centre.box.h].map((value) => `${value}px`),
+    );
+    expect(overlayPlays()).toHaveLength(1);
+    expect(overlayPlays()[0].keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+    expect(overlayPlays()[0].options).toMatchObject({ duration: READ.quick, easing: READ.ease });
+
+    // Within the same zone it stays put: no slide after the pointer, no new fade.
+    const nearby = inside(calendar, 0.52, 0.48);
+    pointerAt("pointermove", header, nearby.x, nearby.y);
+    expect(overlayPlays()).toHaveLength(1);
+    expect(overlay.style.left).toBe(`${centre.box.x}px`);
+
+    // Another zone: it moves there by fading in again.
+    const edge = inside(calendar, 0.05, 0.5);
+    pointerAt("pointermove", header, edge.x, edge.y);
+    const left = dockTarget(EMPTY_TILE_SET, "regular", "today", REGULAR, edge.x, edge.y) as DockTarget;
+    expect(overlay.getAttribute("data-zone")).toBe("left");
+    expect(overlay.querySelector(".v2-dock-words")?.textContent).toBe(left.words);
+    expect(overlay.style.width).toBe(`${left.box.w}px`);
+    expect(overlayPlays()).toHaveLength(2);
+    expect(overlayPlays()[0].cancelled).toBe(true);
+
+    // Its own leaf, or a gap: no overlay at all.
+    pointerAt("pointermove", header, 40, 300);
+    expect(overlay.hasAttribute("data-zone")).toBe(false);
+  });
+
+  test("a release on a zone is one movePane, played with the same glide; everything the drag wrote is gone, and the focus follows the pane", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const header = lift(container, "today");
+    const arrangement = arrangementOf(EMPTY_TILE_SET, "today", "regular");
+    const calendar = leafRect(arrangement, "calendar", REGULAR);
+    const edge = inside(calendar, 0.05, 0.5);
+    pointerAt("pointermove", header, edge.x, edge.y);
+    const before = shownBoxes(container, "regular");
+    pointerAt("pointerup", header, edge.x, edge.y);
+    expect(arrangementOf(saved(), "today", "regular").tree).toEqual(
+      movePane(arrangement, "today", calendar.leafId, "left").tree,
+    );
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    expect(frameOf(container, "today").hasAttribute("data-lifted")).toBe(false);
+    expect(overlayOf(container)).toBeNull();
+    expect(captured.has(header)).toBe(false);
+    // The glide: frames play from where they were, by translation, at the standard pace.
+    const after = shownBoxes(container, "regular");
+    expect(framePlays().length).toBeGreaterThan(0);
+    for (const play of framePlays()) {
+      const pane = paneOfPlay(play);
+      if (!before.has(pane)) continue;
+      expect(offsetOf(play.keyframes)).toEqual({
+        x: (before.get(pane)?.left as number) - (after.get(pane)?.left as number),
+        y: (before.get(pane)?.top as number) - (after.get(pane)?.top as number),
+      });
+      expect(play.options.duration).toBe(READ.std);
+    }
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.paneDockedLeft, { pane: "The day", first: "Calendar" }));
+    expect(document.activeElement).toBe(menuButtonOf(container, "today"));
+    expectNoRemount();
+  });
+
+  test("Escape puts everything back with no motion, and the release after it does nothing", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    // Before it travels a press is a press: Escape is not its to take.
+    const pressed = headerOf(container, "today");
+    pointerAt("pointerdown", pressed, 100, 10);
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    act(() => {
+      document.body.dispatchEvent(escape);
+    });
+    expect(escape.defaultPrevented).toBe(false);
+    pointerAt("pointerup", pressed, 100, 10);
+
+    const header = lift(container, "today");
+    const calendar = leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "calendar", REGULAR);
+    const middle = inside(calendar, 0.5, 0.5);
+    pointerAt("pointermove", header, middle.x, middle.y);
+    key(document.body, "Escape");
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    expect(frameOf(container, "today").hasAttribute("data-lifted")).toBe(false);
+    expect(overlayOf(container)).toBeNull();
+    expect(captured.has(header)).toBe(false);
+    pointerAt("pointerup", header, middle.x, middle.y);
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+    expect(framePlays()).toHaveLength(0);
+  });
+
+  test("a release in a gap or outside the workspace cancels", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const tabs = leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "today", REGULAR);
+    for (const [x, y] of [
+      [tabs.x + tabs.w + 3, 300],
+      [REGULAR.width + 50, 300],
+    ]) {
+      const header = lift(container, "today");
+      pointerAt("pointermove", header, x, y);
+      pointerAt("pointerup", header, x, y);
+      expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    }
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+    expect(framePlays()).toHaveLength(0);
+  });
+
+  test("a cancelled pointer and a lost capture both cancel", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const calendar = leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "calendar", REGULAR);
+    const middle = inside(calendar, 0.5, 0.5);
+    for (const ending of ["pointercancel", "lostpointercapture"]) {
+      const header = lift(container, "today");
+      pointerAt("pointermove", header, middle.x, middle.y);
+      pointerAt(ending, header, middle.x, middle.y);
+      expect(stageOf(container).hasAttribute("data-dock"), ending).toBe(false);
+      expect(overlayOf(container), ending).toBeNull();
+      pointerAt("pointerup", header, middle.x, middle.y);
+    }
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+  });
+
+  test("a drag can die: the next press ends it and starts afresh, a move with no button held ends it, a modifier alone never does", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    lift(container, "today");
+    // A missed release: the next press finds it, ends it without a drop, and is a press of its own.
+    const calendarHeader = headerOf(container, "calendar");
+    pointerAt("pointerdown", calendarHeader, 900, 10, { pointerId: 4 });
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    expect(frameOf(container, "today").hasAttribute("data-lifted")).toBe(false);
+    pointerAt("pointermove", calendarHeader, 920, 10, { pointerId: 4 });
+    expect(stageOf(container).getAttribute("data-dock")).toBe("calendar");
+    // Modifiers on their own, and keys that do nothing, leave it be.
+    for (const name of ["Shift", "Control", "Alt", "Meta", "a"]) {
+      key(document.body, name);
+      expect(stageOf(container).getAttribute("data-dock"), name).toBe("calendar");
+    }
+    // A move with no button held: the release was missed.
+    pointerAt("pointermove", calendarHeader, 940, 10, { pointerId: 4, buttons: 0 });
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    // A press on something that is no handle (a pane's body) ends one too.
+    lift(container, "today");
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(true);
+    pointerAt("pointerdown", frameOf(container, "calendar").querySelector(".v2-pane-body") as Element, 900, 300, {
+      pointerId: 5,
+    });
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    expect(overlayOf(container)).toBeNull();
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+  });
+
+  test("nothing drags on a touch pointer, with another button, or from a control in the header", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const header = headerOf(container, "today");
+    const tryFrom = (target: Element, extra: Parameters<typeof pointerAt>[4] = {}) => {
+      pointerAt("pointerdown", target, 100, 10, extra);
+      pointerAt("pointermove", target, 140, 30, extra);
+      const up = stageOf(container).hasAttribute("data-dock");
+      pointerAt("pointerup", target, 140, 30, extra);
+      return up;
+    };
+    expect(tryFrom(header, { pointerType: "touch" })).toBe(false);
+    expect(tryFrom(header, { button: 2 })).toBe(false);
+    expect(tryFrom(header, { isPrimary: false })).toBe(false);
+    for (const selector of [".v2-frame-menu-button", ".v2-frame-max", '.v2-frame-close[data-close="status"]']) {
+      expect(tryFrom(header.querySelector(selector) as Element), selector).toBe(false);
+    }
+    // A pen does, from the title.
+    expect(tryFrom(header.querySelector(".v2-frame-name") as Element, { pointerType: "pen" })).toBe(true);
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+  });
+
+  test("a tab is a handle for its own pane; a click on a tab still switches; a tab dragged and let go does not also switch", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const tab = headerOf(container, "today").querySelector('[role="tab"][data-tab="status"]') as HTMLElement;
+    pointerAt("pointerdown", tab, 60, 10);
+    pointerAt("pointermove", tab, 80, 10);
+    expect(stageOf(container).getAttribute("data-dock")).toBe("status");
+    expect(captured.get(tab)).toBe(POINTER);
+    // Let go in a gap: nothing moves, and the click that follows is not a press on the tab.
+    const tabs = leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "today", REGULAR);
+    pointerAt("pointerup", tab, tabs.x + tabs.w + 3, 300);
+    act(() => {
+      fireEvent.click(tab);
+    });
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+    expect(frameOf(container, "today").dataset.shown).toContain("regular");
+    // A click with no travel is a click: Status comes to the front.
+    pointerAt("pointerdown", tab, 60, 10);
+    pointerAt("pointerup", tab, 61, 10);
+    act(() => {
+      fireEvent.click(tab);
+    });
+    expect(frameOf(container, "status").dataset.shown).toContain("regular");
+  });
+
+  test("a tab dragged, cancelled with Escape and let go a moment later over itself is not switched to", async () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const tab = headerOf(container, "today").querySelector('[role="tab"][data-tab="status"]') as HTMLElement;
+    pointerAt("pointerdown", tab, 60, 10);
+    pointerAt("pointermove", tab, 80, 10);
+    expect(stageOf(container).getAttribute("data-dock")).toBe("status");
+    key(document.body, "Escape");
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    // The button is still held: the release, and its click, come in a later task.
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
+    pointerAt("pointerup", tab, 62, 10);
+    act(() => {
+      fireEvent.click(tab);
+    });
+    expect(frameOf(container, "today").dataset.shown).toContain("regular");
+    expect(frameOf(container, "status").dataset.shown ?? "").not.toContain("regular");
+    // And the next click is a click again.
+    pointerAt("pointerdown", tab, 60, 10);
+    pointerAt("pointerup", tab, 60, 10);
+    act(() => {
+      fireEvent.click(tab);
+    });
+    expect(frameOf(container, "status").dataset.shown).toContain("regular");
+  });
+
+  test("a double click on the header still maximizes: a press that does not travel is never a drag", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const header = headerOf(container, "calendar");
+    for (let press = 0; press < 2; press += 1) {
+      pointerAt("pointerdown", header, 900, 10);
+      pointerAt("pointermove", header, 902, 11);
+      pointerAt("pointerup", header, 902, 11);
+    }
+    act(() => {
+      fireEvent.doubleClick(header);
+    });
+    expect(arrangementOf(saved(), "today", "regular").maximized).toBe("calendar");
+  });
+
+  test("its own leaf shows nothing and a release there does nothing", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const header = lift(container, "calendar");
+    const own = inside(leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "calendar", REGULAR), 0.1, 0.5);
+    pointerAt("pointermove", header, own.x, own.y);
+    expect(overlayOf(container)?.hasAttribute("data-zone")).toBe(false);
+    pointerAt("pointerup", header, own.x, own.y);
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+    // A pane of a stack on its own frame's edge, where the engine would split it off: nothing too.
+    const stack = lift(container, "today");
+    const edge = inside(leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "today", REGULAR), 0.03, 0.5);
+    pointerAt("pointermove", stack, edge.x, edge.y);
+    expect(overlayOf(container)?.hasAttribute("data-zone")).toBe(false);
+    pointerAt("pointerup", stack, edge.x, edge.y);
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+  });
+
+  test("belongs to its layout and class: a switch under it ends it, and nothing lands on the other layout", () => {
+    const media = stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const container = drawDesk();
+    const calendar = leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "calendar", REGULAR);
+    const middle = inside(calendar, 0.05, 0.5);
+    let header = lift(container, "today");
+    pointerAt("pointermove", header, middle.x, middle.y);
+    window.history.pushState(null, "", "/v2/desk?layout=week");
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    expect(overlayOf(container)).toBeNull();
+    const weekBefore = arrangementOf(saved(), "week", "regular");
+    pointerAt("pointerup", header, middle.x, middle.y);
+    expect(arrangementOf(saved(), "week", "regular")).toEqual(weekBefore);
+    expect(arrangementOf(saved(), "today", "regular")).toEqual(arrangementOf(EMPTY_TILE_SET, "today", "regular"));
+
+    // Back on Today: a change of class under a drag ends it too.
+    window.history.pushState(null, "", "/v2/desk?layout=today");
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    header = lift(container, "today");
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(true);
+    media.resize(2000);
+    expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+    pointerAt("pointerup", header, middle.x, middle.y);
+    expect(arrangementOf(saved(), "today", "wide")).toEqual(arrangementOf(EMPTY_TILE_SET, "today", "wide"));
+  });
+
+  test("unmounting mid drag takes its attribute and its overlay off the stage, and leaves nothing listening", () => {
+    stubMedia(1366);
+    stubStage();
+    stubBoxesAndMotion();
+    const { container, unmount } = render(
+      createElement(DeskClient, { data: sampleDesk(null), initial: EMPTY_TILE_SET, date: null }),
+    );
+    const header = lift(container, "today");
+    const calendar = leafRect(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "calendar", REGULAR);
+    const middle = inside(calendar, 0.5, 0.5);
+    pointerAt("pointermove", header, middle.x, middle.y);
+    const stage = stageOf(container);
+    expect(overlayOf(container)).not.toBeNull();
+    const frame = frameOf(container, "today");
+    unmount();
+    expect(stage.hasAttribute("data-dock")).toBe(false);
+    expect(stage.querySelector(".v2-dock")).toBeNull();
+    expect(frame.hasAttribute("data-lifted")).toBe(false);
+    expect(captured.has(header)).toBe(false);
+    // Nothing is left listening: a move and a release reach no drag.
+    expect(() => {
+      pointerAt("pointermove", document.body, middle.x + 20, middle.y);
+      pointerAt("pointerup", document.body, middle.x + 20, middle.y);
+    }).not.toThrow();
+  });
+});
+
+describe("the drop overlay and the handles in the stylesheet", () => {
+  test("the overlay is drawn only while a drag aims at a drop, quietly: the accent at low alpha, a hairline, the frame's radius, never in the pointer's way", () => {
+    const base = declsIn("[data-v2-root] .v2-dock", null);
+    expect(base.display).toBe("none");
+    expect(base.position).toBe("absolute");
+    expect(base["pointer-events"]).toBe("none");
+    expect(base["border-radius"]).toBe(declsIn("[data-v2-root] .v2-frame", null)["border-radius"]);
+    expect(base.border).toBe("1px solid var(--v2-accent)");
+    expect(base.background).toMatch(/^color-mix\(in srgb, var\(--v2-accent\) \d+%, transparent\)$/);
+    expect(Number(base["z-index"])).toBeGreaterThan(Number(declsIn("[data-v2-root] .v2-frame-menu-list", null)["z-index"]));
+    expect(declsIn('[data-v2-root] .v2-desk-stage[data-dock] > .v2-dock[data-zone]', null).display).toBe("block");
+    const words = declsIn("[data-v2-root] .v2-dock-words", null);
+    expect(words["font-size"] ?? words.font).toBeDefined();
+    expect(declsIn("[data-v2-root] .v2-frame[data-lifted]", null).opacity).toBeDefined();
+  });
+
+  test("the header is the handle on a fine pointer, and nothing is selected while a pane is carried", () => {
+    expect(declsIn("[data-v2-root] .v2-frame-head", "(pointer: fine)").cursor).toBe("grab");
+    const carried = declsIn("[data-v2-root] .v2-desk-stage[data-dock]", null);
+    expect(carried["user-select"]).toBe("none");
+    expect(carried.cursor).toBe("grabbing");
+  });
+});
+
 // ============================================================ behaviour 5
 
 /** A small seeded generator, so a failing run can be replayed. */
@@ -1256,7 +1844,7 @@ function seeded(seed: number) {
 
 describe("no remounts (behaviour 5)", () => {
   test(
-    "a hundred seeded moves through the menu, across layouts and classes, mount every body once",
+    "a hundred seeded moves, through the menu and by drag, across layouts and classes, mount every body once",
     () => {
       const media = stubMedia(1366);
       stubStage();
@@ -1266,28 +1854,10 @@ describe("no remounts (behaviour 5)", () => {
       const widths: Record<ScreenClass, number> = { compact: 390, regular: 1366, wide: 2000 };
       let cls: ScreenClass = "regular";
       let moves = 0;
+      let drops = 0;
       for (let step = 0; step < 100; step += 1) {
-        if (step % 17 === 16) {
-          const classes: ScreenClass[] = ["regular", "wide", "compact"];
-          cls = classes[Math.floor(random() * classes.length)];
-          media.resize(widths[cls]);
-        }
-        const shown = Array.from(container.querySelectorAll<HTMLElement>("section.v2-frame")).filter((frame) =>
-          (frame.dataset.shown ?? "").split(" ").includes(cls),
-        );
-        const frame = shown[Math.floor(random() * shown.length)];
-        const pane = frame.dataset.pane as string;
-        const items = openMenu(container, pane).filter((item) => item.dataset.item !== "arrange");
-        if (items.length === 0) {
-          key(menuOf(container, pane), "Escape");
-          continue;
-        }
-        const item = items[Math.floor(random() * items.length)];
-        act(() => {
-          fireEvent.click(item);
-        });
-        moves += 1;
         if (step % 10 === 9) {
+          // Another layout, from the rail (the phone's sheet holds the same anchors).
           const layouts = BUILT_IN_LAYOUTS.map((meta) => meta.title);
           const link = within(container.querySelector(cls === "compact" ? ".v2-desk-menu" : ".v2-desk-rail") as HTMLElement)
             .getAllByRole("link", { hidden: true })
@@ -1298,8 +1868,63 @@ describe("no remounts (behaviour 5)", () => {
             });
           }
         }
+        if (step % 17 === 16) {
+          const classes: ScreenClass[] = ["regular", "wide", "compact"];
+          cls = classes[Math.floor(random() * classes.length)];
+          media.resize(widths[cls]);
+        }
+        const shown = Array.from(container.querySelectorAll<HTMLElement>("section.v2-frame")).filter((frame) =>
+          (frame.dataset.shown ?? "").split(" ").includes(cls),
+        );
+        const frame = shown[Math.floor(random() * shown.length)];
+        const pane = frame.dataset.pane as string;
+        if (cls === "compact") {
+          // The phone has no menu and no drag: its bar.
+          const tabs = Array.from(container.querySelectorAll<HTMLElement>('.v2-desk-bar [role="tab"]'));
+          act(() => {
+            fireEvent.click(tabs[Math.floor(random() * tabs.length)]);
+          });
+          moves += 1;
+          continue;
+        }
+        // A drag from the frame's header to a seeded point of another leaf
+        // drawn now (none under a maximize), read off the desk as saved.
+        const desk = saved();
+        const arrangement = arrangementOf(desk, desk.current, cls);
+        const own = leafOf(arrangement.tree, pane)?.id;
+        const others =
+          arrangement.maximized === null
+            ? layoutTree(arrangement, SIZE[cls]).leaves.filter((rect) => rect.leafId !== own)
+            : [];
+        if (others.length > 0 && random() < 0.45) {
+          const header = headerOf(container, pane);
+          pointerAt("pointerdown", header, 10, 10);
+          pointerAt("pointermove", header, 30, 10);
+          const rect = others[Math.floor(random() * others.length)];
+          const x = rect.x + rect.w * (0.03 + 0.94 * random());
+          const y = rect.y + rect.h * (0.03 + 0.94 * random());
+          pointerAt("pointermove", header, x, y);
+          const aimed = overlayOf(container)?.getAttribute("data-zone") ?? null;
+          pointerAt("pointerup", header, x, y);
+          expect(stageOf(container).hasAttribute("data-dock")).toBe(false);
+          expect(overlayOf(container)).toBeNull();
+          if (aimed !== null) drops += 1;
+          moves += 1;
+          continue;
+        }
+        const items = openMenu(container, pane);
+        if (items.length === 0) {
+          key(menuOf(container, pane), "Escape");
+          continue;
+        }
+        const item = items[Math.floor(random() * items.length)];
+        act(() => {
+          fireEvent.click(item);
+        });
+        moves += 1;
       }
       expect(moves).toBeGreaterThan(80);
+      expect(drops).toBeGreaterThan(10);
       expect(plays.length).toBeGreaterThan(0);
       expectNoRemount();
     },

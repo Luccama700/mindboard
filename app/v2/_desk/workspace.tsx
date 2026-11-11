@@ -310,6 +310,7 @@ export function Workspace({
             key={frame.pane.id}
             frame={frame}
             cls={cls}
+            desk={set}
             options={options.get(frame.pane.id) as Readonly<Record<string, string>>}
             actions={act}
           />
@@ -342,6 +343,7 @@ const NO_ACTIONS: WorkspaceActions = {
   onMaximize: () => {},
   menuItems: () => [],
   onMenu: () => {},
+  onDragStart: () => {},
   onRatio: () => {},
   onEqualize: () => {},
 };

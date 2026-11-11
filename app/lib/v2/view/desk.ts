@@ -114,6 +114,14 @@ export const DESK_COPY = {
   paneTabbed: "{pane} is now a tab of {first}.",
   paneSplit: "{pane} split off.",
   paneSent: "{pane} moved to {layout}.",
+
+  // A pane dropped against another. `{pane}` and `{first}` (the pane dropped
+  // against) are filled; a drop as a tab says paneTabbed above. What the drop
+  // will do, while it is aimed, is TILE_COPY.zone and the target's title.
+  paneDockedLeft: "{pane} is now left of {first}.",
+  paneDockedRight: "{pane} is now right of {first}.",
+  paneDockedTop: "{pane} is now above {first}.",
+  paneDockedBottom: "{pane} is now below {first}.",
 } as const;
 
 /**

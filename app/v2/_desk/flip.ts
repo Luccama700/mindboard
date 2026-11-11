@@ -221,6 +221,20 @@ function reducedMotion(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION).matches;
 }
 
+/** Whether anything may play on this stage now: no divider drag, and no wish for reduced motion. */
+export function mayMove(stage: HTMLElement): boolean {
+  return !stage.hasAttribute("data-drag") && !reducedMotion();
+}
+
+/** One animation through the runner; an easing the browser refuses falls back to v2.css's own curve. */
+export function playOn(element: Element, keyframes: Keyframe[], options: KeyframeAnimationOptions): Animation | null {
+  try {
+    return flipRunner.animate(element, keyframes, options);
+  } catch {
+    return flipRunner.animate(element, keyframes, { ...options, easing: FLIP_FALLBACK.ease });
+  }
+}
+
 /** The layout on screen, as the desk's root says it. */
 function layoutOn(stage: HTMLElement): string | null {
   return stage.closest(".v2-desk")?.getAttribute("data-layout") ?? null;
@@ -237,7 +251,7 @@ export function flipChange(stage: HTMLElement | null, cls: ScreenClass | null, c
     change();
     return;
   }
-  const still = stage.hasAttribute("data-drag") || reducedMotion();
+  const still = !mayMove(stage);
   // Where each frame is drawn, read BEFORE what is running is cancelled.
   const before = still ? null : snapshot(stage, cls);
   const was = layoutOn(stage);
@@ -253,20 +267,12 @@ export function flipChange(stage: HTMLElement | null, cls: ScreenClass | null, c
   for (const play of plays) {
     const frame = byPane.get(play.pane);
     if (frame === undefined) continue;
-    const keyframes = flipKeyframes(play);
-    const options: KeyframeAnimationOptions = {
+    const animation = playOn(frame, flipKeyframes(play), {
       duration: play.duration,
       delay: play.delay,
       easing: times.ease,
       fill: "backwards",
-    };
-    let animation: Animation | null;
-    try {
-      animation = flipRunner.animate(frame, keyframes, options);
-    } catch {
-      // An easing the browser does not take: v2.css's own curve instead.
-      animation = flipRunner.animate(frame, keyframes, { ...options, easing: FLIP_FALLBACK.ease });
-    }
+    });
     if (animation !== null) running.set(frame, [...(running.get(frame) ?? []), animation]);
   }
 }

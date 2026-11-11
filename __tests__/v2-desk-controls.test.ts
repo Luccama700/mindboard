@@ -2276,10 +2276,10 @@ describe("the reducer's new actions", () => {
   test("each is one engine call on the class it names, and a refusal is the same state", () => {
     const wide = arrangementOf(EMPTY_TILE_SET, "today", "wide");
     const id = splitAt(wide.tree, 1).id;
-    const ratio = tilesReducer(start, { type: "ratio", cls: "wide", splitId: id, ratio: 0.6, size: 1472 });
+    const ratio = tilesReducer(start, { type: "ratio", cls: "wide", splitId: id, ratio: 0.6, size: 1472, layout: "today" });
     expect(arrangementOf(ratio.set, "today", "wide")).toEqual(setRatio(wide, id, 0.6, 1472));
     expect(arrangementOf(ratio.set, "today", "regular")).toBe(arrangementOf(EMPTY_TILE_SET, "today", "regular"));
-    expect(tilesReducer(start, { type: "equalize", cls: "wide", splitId: id })).toBe(start);
+    expect(tilesReducer(start, { type: "equalize", cls: "wide", splitId: id, layout: "today" })).toBe(start);
     expect(tilesReducer(start, { type: "close", cls: "wide", pane: "ledger" })).toBe(start);
     expect(tilesReducer(start, { type: "maximize", cls: "wide", pane: "ledger" })).toBe(start);
     const opened = tilesReducer(start, { type: "open", cls: "wide", pane: "ledger", workspace: WIDE });

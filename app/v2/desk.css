@@ -495,6 +495,69 @@
   background: var(--v2-edge);
 }
 
+/* ---- carrying a pane (use-dock-drag.ts) ---- */
+
+/* The header is the handle, where a pointer can carry: an open hand over its
+   empty part and its title. Its controls keep their own cursor. */
+@media (pointer: fine) {
+  [data-v2-root] .v2-frame-head {
+    cursor: grab;
+  }
+}
+
+/* While a pane is carried nothing on the stage is selected, and the hand is
+   closed wherever it goes. */
+[data-v2-root] .v2-desk-stage[data-dock] {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grabbing;
+}
+
+[data-v2-root] .v2-desk-stage[data-dock] * {
+  cursor: grabbing;
+}
+
+/* The pane carried dims where it was, at once. */
+[data-v2-root] .v2-frame[data-lifted] {
+  opacity: 0.45;
+}
+
+/* WHERE IT WOULD LAND: the part of the leaf a release takes, the accent at a
+   low alpha inside a hairline of it, at the frame's own radius, above the
+   frames and the pane menu, and never in the pointer's way. Drawn only while
+   a drag aims at a drop that changes something; it fades in by script, once
+   per zone. */
+[data-v2-root] .v2-dock {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border: 1px solid var(--v2-accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--v2-accent) 14%, transparent);
+}
+
+[data-v2-root] .v2-desk-stage[data-dock] > .v2-dock[data-zone] {
+  display: block;
+}
+
+/* What a release will do, in one small line at its top left, so what is
+   under the overlay stays readable. */
+[data-v2-root] .v2-dock-words {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  padding: 3px 7px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-radius: 6px;
+  background: var(--v2-card);
+  color: var(--v2-ink);
+  font: 600 11px/1.3 var(--v2-display);
+}
+
 /* The gap a divider is dragged in. Nothing is drawn at rest: the page shows
    through it. Its hit area reaches 3px into each frame beside it (12px in
    all), which stops well short of a header's controls (8px in), and a cursor
@@ -1233,34 +1296,6 @@
 
   [data-v2-root] .v2-desk-menu a[data-changed~="compact"] .v2-desk-changed {
     display: inline-block;
-  }
-
-  /* The pane menu is the header's one control here: a row of a finger's
-     height, the button at its right end. Maximize is a tiled control. */
-  [data-v2-root] .v2-frame-tools[data-in~="compact"] {
-    display: flex;
-    margin-right: 4px;
-  }
-
-  [data-v2-root] .v2-frame-max {
-    display: none;
-  }
-
-  [data-v2-root] .v2-frame-menu-button {
-    width: 44px;
-    height: 44px;
-    border-radius: 10px;
-  }
-
-  [data-v2-root] .v2-frame-menu-list {
-    top: 48px;
-    max-height: min(calc(100% - 54px), calc(100dvh - 24px));
-  }
-
-  [data-v2-root] .v2-frame-menu-item {
-    min-height: 44px;
-    padding: 0 12px;
-    font-size: 15px;
   }
 }
 

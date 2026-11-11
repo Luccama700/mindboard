@@ -37,9 +37,10 @@ import { tilesReducer, type TilesAction, type TilesState } from "./use-tiles";
 // another layout, so a pick after a layout switched under the open menu is
 // refused by the reducer.
 //
-// THE PHONE holds what one stack allows: a move to another layout, and the way
-// to the list that orders, hides and shows the stack (pane-list.tsx), which is
-// not repeated here.
+// NOT ON THE PHONE. A phone's frame has no header row: the screen is for the
+// content, and the list that orders, hides and shows the stack
+// (pane-list.tsx) is the phone's way to arrange it. The builder answers
+// nothing for the compact class.
 //
 // WHERE IT IS DRAWN. Inside its frame (desk.css): the header, the tools and the
 // menu's wrapper are not positioned, so the frame is what the menu is placed
@@ -47,14 +48,14 @@ import { tilesReducer, type TilesAction, type TilesState } from "./use-tiles";
 // window and scrolling inside itself. The frame's overflow can never clip it,
 // and on opening it is scrolled into view, whole.
 
-/** One thing the menu offers. `action` is null for the phone's way to its list. */
+/** One thing the menu offers. */
 export interface PaneMenuItem {
   id: string;
   label: string;
   /** The sentence the live region says once it is done. */
   said: string;
-  group: "move" | "tab" | "size" | "send" | "arrange";
-  action: TilesAction | null;
+  group: "move" | "tab" | "size" | "send";
+  action: TilesAction;
 }
 
 const MOVES: ReadonlyArray<{ dir: Direction; zone: Zone; label: string; said: string }> = [
@@ -69,10 +70,10 @@ function titleOf(pane: PaneId): string {
 }
 
 /**
- * What the menu offers for one pane of the layout on screen, on one class.
- * `workspace` is the one the browser computed for a tiled class (null before
- * the sheet has applied, and on the phone): without it nothing that needs a
- * size is offered on a tiled class.
+ * What the menu offers for one pane of the layout on screen, on one tiled
+ * class (nothing on the phone). `workspace` is the one the browser computed
+ * (null before the sheet has applied): without it nothing that needs a size
+ * is offered.
  */
 export function paneMenuItems(
   set: TileSet,
@@ -80,6 +81,7 @@ export function paneMenuItems(
   pane: PaneId,
   workspace: Workspace | null,
 ): PaneMenuItem[] {
+  if (cls === "compact") return [];
   const state: TilesState = { set, cls };
   const arrangement = arrangementOf(set, set.current, cls);
   const tree = arrangement.tree;
@@ -88,72 +90,69 @@ export function paneMenuItems(
   const title = titleOf(pane);
   const items: PaneMenuItem[] = [];
   const offer = (item: PaneMenuItem) => {
-    if (item.action !== null && tilesReducer(state, item.action) !== state) items.push(item);
+    if (tilesReducer(state, item.action) !== state) items.push(item);
   };
-  const tiled = cls !== "compact";
 
-  if (tiled) {
-    // Neighbours on the layout as it is arranged: a move clears a maximize.
-    const rects = workspace === null ? null : layoutTree({ ...arrangement, maximized: null }, workspace);
-    if (rects !== null) {
-      for (const move of MOVES) {
-        const next = neighbourOf(rects, leaf.id, move.dir);
-        if (next === null) continue;
-        offer({
-          id: move.dir,
-          group: "move",
-          label: move.label,
-          said: deskLine(move.said, { pane: title }),
-          action: { type: "move", cls, pane, leafId: next, zone: move.zone, layout: set.current },
-        });
-      }
-    }
-    for (const other of openPanes(tree)) {
-      const holder = other === pane ? null : leafOf(tree, other);
-      if (holder === null) continue;
+  // Neighbours on the layout as it is arranged: a move clears a maximize.
+  const rects = workspace === null ? null : layoutTree({ ...arrangement, maximized: null }, workspace);
+  if (rects !== null) {
+    for (const move of MOVES) {
+      const next = neighbourOf(rects, leaf.id, move.dir);
+      if (next === null) continue;
       offer({
-        id: `tab:${other}`,
-        group: "tab",
-        label: `${TILE_COPY.zone.centre} ${titleOf(other)}`,
-        said: deskLine(DESK_COPY.paneTabbed, { pane: title, first: titleOf(other) }),
-        action: { type: "move", cls, pane, leafId: holder.id, zone: "centre", layout: set.current },
+        id: move.dir,
+        group: "move",
+        label: move.label,
+        said: deskLine(move.said, { pane: title }),
+        action: { type: "move", cls, pane, leafId: next, zone: move.zone, layout: set.current },
       });
     }
-    const own = rects?.leaves.find((rect) => rect.leafId === leaf.id);
+  }
+  for (const other of openPanes(tree)) {
+    const holder = other === pane ? null : leafOf(tree, other);
+    if (holder === null) continue;
     offer({
-      id: "split",
+      id: `tab:${other}`,
       group: "tab",
-      label: DESK_COPY.splitOff,
-      said: deskLine(DESK_COPY.paneSplit, { pane: title }),
-      action: {
-        type: "move",
-        cls,
-        pane,
-        leafId: leaf.id,
-        zone: own === undefined || own.w >= own.h ? "right" : "bottom",
-        layout: set.current,
-      },
-    });
-    const filled = arrangement.maximized === pane;
-    offer({
-      id: "maximize",
-      group: "size",
-      label: filled ? DESK_COPY.restore : DESK_COPY.maximize,
-      said: deskLine(filled ? DESK_COPY.paneRestored : DESK_COPY.paneMaximized, { pane: title }),
-      action: { type: "maximize", cls, pane, layout: set.current },
-    });
-    offer({
-      id: "close",
-      group: "size",
-      label: DESK_COPY.close,
-      said: deskLine(DESK_COPY.paneClosed, { pane: title }),
-      action: { type: "close", cls, pane, layout: set.current },
+      label: `${TILE_COPY.zone.centre} ${titleOf(other)}`,
+      said: deskLine(DESK_COPY.paneTabbed, { pane: title, first: titleOf(other) }),
+      action: { type: "move", cls, pane, leafId: holder.id, zone: "centre", layout: set.current },
     });
   }
+  const own = rects?.leaves.find((rect) => rect.leafId === leaf.id);
+  offer({
+    id: "split",
+    group: "tab",
+    label: DESK_COPY.splitOff,
+    said: deskLine(DESK_COPY.paneSplit, { pane: title }),
+    action: {
+      type: "move",
+      cls,
+      pane,
+      leafId: leaf.id,
+      zone: own === undefined || own.w >= own.h ? "right" : "bottom",
+      layout: set.current,
+    },
+  });
+  const filled = arrangement.maximized === pane;
+  offer({
+    id: "maximize",
+    group: "size",
+    label: filled ? DESK_COPY.restore : DESK_COPY.maximize,
+    said: deskLine(filled ? DESK_COPY.paneRestored : DESK_COPY.paneMaximized, { pane: title }),
+    action: { type: "maximize", cls, pane, layout: set.current },
+  });
+  offer({
+    id: "close",
+    group: "size",
+    label: DESK_COPY.close,
+    said: deskLine(DESK_COPY.paneClosed, { pane: title }),
+    action: { type: "close", cls, pane, layout: set.current },
+  });
 
   // Another layout opens the pane in its arrangement for this class, placed on
-  // this workspace: a tiled class needs the size, the phone has one stack.
-  if (!tiled || workspace !== null) {
+  // this workspace, so it needs the size.
+  if (workspace !== null) {
     for (const meta of set.layouts) {
       if (meta.id === set.current || set.hidden.includes(meta.id)) continue;
       offer({
@@ -161,13 +160,9 @@ export function paneMenuItems(
         group: "send",
         label: deskLine(DESK_COPY.sendTo, { layout: meta.title }),
         said: deskLine(DESK_COPY.paneSent, { pane: title, layout: meta.title }),
-        action: { type: "sendPane", cls, pane, to: meta.id, workspace: tiled ? workspace : null, layout: set.current },
+        action: { type: "sendPane", cls, pane, to: meta.id, workspace, layout: set.current },
       });
     }
-  }
-
-  if (!tiled) {
-    items.push({ id: "arrange", group: "arrange", label: DESK_COPY.arrangePanesName, said: "", action: null });
   }
   return items;
 }
@@ -188,24 +183,31 @@ function typedAhead(labels: readonly string[], from: number, letter: string): nu
  * on none. `itemsFor` is asked when the menu opens, so what it offers is the
  * desk as it is then; `onPick` is handed the item and the button, which is
  * where the focus goes when the pane is still here to hold it.
+ *
+ * `desk` is the set on screen. The menu belongs to the set it was opened on:
+ * any other set (another tab's write merged in, the saved desk loading, Back
+ * or Forward) closes it, because leaf ids are minted again whenever a set is
+ * read, and nothing may act on ids held from before.
  */
 export function PaneMenu({
   paneId,
   title,
   target,
+  desk,
   itemsFor,
   onPick,
 }: {
   paneId: PaneId;
   title: string;
   target: ScreenClass | null;
+  desk: TileSet;
   itemsFor(cls: ScreenClass): PaneMenuItem[];
   onPick(cls: ScreenClass, item: PaneMenuItem, button: HTMLElement): void;
 }) {
-  // What was offered and for which class. A change of class closes it: the
-  // items were worked out for the class it was opened on.
-  const [menu, setMenu] = useState<{ cls: ScreenClass; items: PaneMenuItem[] } | null>(null);
-  const open = menu !== null && menu.cls === target;
+  // What was offered, for which class, on which set. Another class or another
+  // set closes it: the items were worked out on the ones it was opened on.
+  const [menu, setMenu] = useState<{ cls: ScreenClass; desk: TileSet; items: PaneMenuItem[] } | null>(null);
+  const open = menu !== null && menu.cls === target && menu.desk === desk;
   const wrap = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -219,7 +221,7 @@ export function PaneMenu({
   const show = (at: "first" | "last") => {
     if (target === null) return;
     const items = itemsFor(target);
-    flushSync(() => setMenu({ cls: target, items }));
+    flushSync(() => setMenu({ cls: target, desk, items }));
     list.current?.scrollIntoView?.({ block: "nearest" });
     const all = itemElements();
     (at === "first" ? all[0] : all[all.length - 1])?.focus();

@@ -28,6 +28,7 @@ import { flipChange } from "./flip";
 import { frameId, titleOf, type TiledClass } from "./pane-frame";
 import { paneMenuItems } from "./pane-menu";
 import { useSavedDesk } from "./persist";
+import { useDockDrag } from "./use-dock-drag";
 import { DESK_PATH, deskHref, deskKeep, layoutAsked, useTiles, type LayoutAction, type TilesAction } from "./use-tiles";
 import type { OnLayout } from "./layout-menu";
 import type { OnArrange } from "./pane-list";
@@ -115,22 +116,23 @@ function paneTarget(pane: PaneId, cls: ScreenClass): HTMLElement | null {
   return tab ?? frame.querySelector<HTMLElement>(".v2-pane-body");
 }
 
-/** A pane's menu button: where the focus follows a pane the pane menu moved. */
+/** A pane's menu button: where the focus follows a pane the pane menu or a drop moved. */
 function menuButtonOf(pane: PaneId): HTMLElement | null {
   const frame = document.getElementById(frameId(pane));
   return frame?.querySelector<HTMLElement>(":scope > header .v2-frame-menu-button") ?? null;
 }
 
 /**
- * The phone's list that orders, hides and shows the stack (pane-list.tsx),
- * opened from the pane menu rather than repeated in it, with the focus on its
- * button.
+ * Where the focus goes when the pane an action moved is not drawn here any
+ * more (closed, or moved to another layout): the menu button of the pane the
+ * engine focuses, else that pane's own target.
  */
-function openArrange(): void {
-  const toggle = document.querySelector<HTMLElement>(".v2-desk-bar .v2-desk-arrange-toggle");
-  if (toggle === null) return;
-  if (toggle.getAttribute("aria-expanded") !== "true") toggle.click();
-  toggle.focus();
+function engineFocusTarget(next: TileSet, on: ScreenClass): HTMLElement | null {
+  const arrangement = arrangementOf(next, next.current, on);
+  const focused = arrangement.focus ?? leavesOf(arrangement.tree)[0]?.active;
+  if (focused === undefined) return null;
+  const target = menuButtonOf(focused);
+  return reachable(target, on) ? target : paneTarget(focused, on);
 }
 
 /**
@@ -259,6 +261,21 @@ export function DeskClient({
     [dispatch, glide, date, week],
   );
 
+  // Drag to dock (use-dock-drag.ts): it reads the desk as last committed, and a
+  // drop is one `move` through `commit`, so it glides like a pick from the menu
+  // and the focus follows the pane to its menu button.
+  const dock = useDockDrag({
+    stage: stageRef,
+    layout,
+    cls,
+    now: () => ({ set: latest.current, cls: shownClass.current }),
+    onDrop: (target) => {
+      const on = target.action.cls;
+      const after = commit(target.action, menuButtonOf(target.action.pane), on, (next) => engineFocusTarget(next, on));
+      if (after !== null) say(target.said);
+    },
+  });
+
   const actions = useMemo<WorkspaceActions>(
     () => ({
       onTab: (on, pane, pressed) => {
@@ -275,31 +292,22 @@ export function DeskClient({
         const filled = arrangementOf(after, after.current, on).maximized === pane;
         say(deskLine(filled ? DESK_COPY.paneMaximized : DESK_COPY.paneRestored, { pane: titleOf(pane) }));
       },
-      // The pane menu: what it offers is worked out from the desk as it is
-      // when it opens, on the workspace the browser computed (none on the
-      // phone). A pick is one action; the focus follows the pane to its menu
+      // The pane menu (tiled classes only): what it offers is worked out from
+      // the desk as it is when it opens, on the workspace the browser
+      // computed. A pick is one action; the focus follows the pane to its menu
       // button, or goes to the one of the pane the engine focuses when the
       // pane has left (closed, or moved to another layout).
       menuItems: (on, pane) =>
-        paneMenuItems(latest.current, on, pane, isTiled(on) ? measureWorkspace(stageRef.current, on) : null),
+        isTiled(on) ? paneMenuItems(latest.current, on, pane, measureWorkspace(stageRef.current, on)) : [],
       onMenu: (on, _pane, item, button) => {
-        if (item.action === null) {
-          openArrange();
-          return;
-        }
-        const after = commit(item.action, button, on, (next) => {
-          const arrangement = arrangementOf(next, next.current, on);
-          const focused = arrangement.focus ?? leavesOf(arrangement.tree)[0]?.active;
-          if (focused === undefined) return null;
-          const target = menuButtonOf(focused);
-          return reachable(target, on) ? target : paneTarget(focused, on);
-        });
+        const after = commit(item.action, button, on, (next) => engineFocusTarget(next, on));
         if (after !== null) say(item.said);
       },
+      onDragStart: dock.start,
       onRatio: (on, splitId, ratio, size, layout) => dispatch({ type: "ratio", cls: on, splitId, ratio, size, layout }),
       onEqualize: (on, splitId, layout) => dispatch({ type: "equalize", cls: on, splitId, layout }),
     }),
-    [commit, dispatch, say],
+    [commit, dispatch, say, dock.start],
   );
 
   /**
