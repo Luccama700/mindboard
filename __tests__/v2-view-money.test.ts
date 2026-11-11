@@ -16,6 +16,7 @@ import { dayDiff, shiftDateKey, weekdayOf } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import type { Block, PlanInput } from "@/app/lib/v2/types";
 import type { MoneyDay, MoneyScreenData } from "@/app/lib/v2/view/desk-data";
+import { dayLabel } from "@/app/lib/v2/view/format";
 import {
   MONEY_COPY,
   STALE_AFTER_DAYS,
@@ -24,8 +25,10 @@ import {
   buildForecastView,
   buildHoursView,
   buildLedgerView,
+  forecastSpan,
   formatAmount,
   inDaysLabel,
+  ledgerRows,
   moneyAge,
 } from "@/app/lib/v2/view/money";
 
@@ -244,13 +247,50 @@ describe("the forecast is the source's own", () => {
     expect(buildComingView(holed, 14).items).toEqual([]);
   });
 
-  test("draws the days past the source's last row in range with no balance", () => {
+  // Fix round 1. A source whose forecast stops before the span does: the view
+  // hands over what is drawn, so the days past its last row are not a tail of
+  // empty weeks, and it says the day the forecast ends.
+  test("stops at the source's last row, with no tail of empty weeks, and says where", () => {
     const view = buildForecastView({ ...base(), forecast: series(TODAY, 10) }, 14);
-    expect(view.list).toHaveLength(14);
-    expect(view.list.slice(10).map((cell) => cell.balance)).toEqual([null, null, null, null]);
-    expect(view.list.slice(10).every((cell) => cell.inRange && !cell.low)).toBe(true);
+    // Ten rows, Wednesday 11 March to Friday 20 March.
+    expect(view.list.map((cell) => cell.date)).toEqual(
+      Array.from({ length: 10 }, (_, index) => shiftDateKey(TODAY, index)),
+    );
+    expect(view.list.every((cell) => cell.balance !== null)).toBe(true);
+    expect(view.endsOn).toBe("2026-03-20");
+    // The week of 9 March and the week of 16 March are drawn; the week of 23
+    // March, which the span reached and the source did not, is not.
+    expect(view.weeks.map((week) => week[0].date)).toEqual(["2026-03-09", "2026-03-16"]);
+    // The weekend after the last row is in the drawn week, in range, with no
+    // balance, never low and with nothing marked.
+    const after = view.weeks[1].filter((cell) => cell.inRange && cell.balance === null);
+    expect(after.map((cell) => cell.date)).toEqual(["2026-03-21", "2026-03-22"]);
+    for (const cell of after) expect(cell).toMatchObject({ low: false, negative: false, marks: [] });
     // The lowest is the last day that has a row, never a day without one.
     expect(view.lowest?.date).toBe("Friday 20 March");
+  });
+
+  test("has no end to say when the source covers the whole span", () => {
+    for (const span of [14, 30, 60] as const) {
+      const view = buildForecastView(base(), span);
+      expect(view.endsOn).toBeNull();
+      expect(view.list).toHaveLength(span);
+    }
+    expect(buildForecastView({ ...base(), forecast: [] }, 30).endsOn).toBeNull();
+  });
+
+  // Only the tail is trimmed: a week the source skipped in the middle is drawn,
+  // day by day, so the grid never silently jumps a week.
+  test("draws a whole week the source skipped in the middle", () => {
+    const skipped = ["2026-03-16", "2026-03-17", "2026-03-18", "2026-03-19", "2026-03-20", "2026-03-21", "2026-03-22"];
+    const view = buildForecastView(
+      { ...base(), forecast: base().forecast.filter((day) => !skipped.includes(day.date)) },
+      30,
+    );
+    expect(view.endsOn).toBeNull();
+    expect(view.list).toHaveLength(30);
+    const gap = view.weeks.find((week) => week[0].date === "2026-03-16");
+    expect(gap?.map((cell) => cell.balance)).toEqual([null, null, null, null, null, null, null]);
   });
 
   // The rule: rows are put in date order first, and of two rows for one day the
@@ -292,6 +332,44 @@ describe("the forecast is the source's own", () => {
     expect(view).toMatchObject({ empty: true, weeks: [], list: [], lowest: null });
     expect(view.estimate.length).toBeGreaterThan(0);
     expect(buildForecastView(base(), 30).empty).toBe(false);
+  });
+
+  // Fix round 1. A cell beside a 50px day number has room for a short month
+  // and no more, and only where the number alone would not say which month.
+  test("names the month, short, on the first day drawn and on each 1st, and nowhere else", () => {
+    const months = (view: ReturnType<typeof buildForecastView>) =>
+      view.weeks.flat().flatMap((cell) => (cell.month === null ? [] : [[cell.date, cell.month]]));
+    expect(months(buildForecastView(base(), 30))).toEqual([
+      ["2026-03-11", "Mar"],
+      ["2026-04-01", "Apr"],
+    ]);
+    // A 1st that only pads the last week is not drawn, so it names nothing.
+    const late = buildForecastView({ ...base(), forecast: series("2026-03-18", 20) }, 14);
+    const april = late.weeks.flat().find((cell) => cell.date === "2026-04-01");
+    expect(april).toMatchObject({ inRange: false, month: null });
+    expect(months(late)).toEqual([["2026-03-18", "Mar"]]);
+  });
+});
+
+// Fix round 1: the pane options are read here, beside the views they choose,
+// so a server module can import them without reaching a client file.
+describe("the options a pane is handed", () => {
+  test("takes a span of 14, 30 or 60 days, and 30 for anything else", () => {
+    expect(forecastSpan("14")).toBe(14);
+    expect(forecastSpan("30")).toBe(30);
+    expect(forecastSpan("60")).toBe(60);
+    for (const other of [undefined, "", "90", " 14", "14.0", "constructor", "toString"]) {
+      expect(forecastSpan(other), String(other)).toBe(30);
+    }
+  });
+
+  test("takes 10, 25 or 50 ledger lines, and 25 for anything else", () => {
+    expect(ledgerRows("10")).toBe(10);
+    expect(ledgerRows("25")).toBe(25);
+    expect(ledgerRows("50")).toBe(50);
+    for (const other of [undefined, "", "100", "10 ", "__proto__", "valueOf"]) {
+      expect(ledgerRows(other), String(other)).toBe(25);
+    }
   });
 });
 
@@ -399,7 +477,24 @@ describe("the lowest day", () => {
     const low = view.list.filter((cell) => cell.low);
     expect(low.map((cell) => cell.date)).toEqual(["2026-03-24"]);
     // The series falls by 30 a day from 5,000 two days before today.
-    expect(view.lowest).toEqual({ date: "Tuesday 24 March", balance: "4,550" });
+    expect(view.lowest).toEqual({ date: "Tuesday 24 March", dateKey: "2026-03-24", balance: "4,550" });
+  });
+
+  // Fix round 1. Every day under zero is low too, so a pane finds the one
+  // lowest day by this key, never by comparing words.
+  test("carries the key of the one day it names, which is a low day of the span", () => {
+    let data = base();
+    data = patchDay(data, "2026-03-16", { projected: -50 });
+    data = patchDay(data, "2026-03-18", { projected: -120.6 });
+    for (const source of [base(), data]) {
+      for (const span of [14, 30, 60] as const) {
+        const view = buildForecastView(source, span);
+        const named = view.list.filter((cell) => cell.date === view.lowest?.dateKey);
+        expect(named).toHaveLength(1);
+        expect(named[0].low).toBe(true);
+        expect(view.lowest?.date).toBe(dayLabel(named[0].date));
+      }
+    }
   });
 
   test("is the earliest of a tie", () => {
@@ -424,7 +519,7 @@ describe("the lowest day", () => {
       "2026-03-16",
       "2026-03-18",
     ]);
-    expect(view.lowest).toEqual({ date: "Wednesday 18 March", balance: "-121" });
+    expect(view.lowest).toEqual({ date: "Wednesday 18 March", dateKey: "2026-03-18", balance: "-121" });
   });
 });
 
@@ -601,17 +696,21 @@ describe("the ledger", () => {
   const withNote = (note: string) =>
     buildLedgerView({ ...base(), rows: [{ ...base().rows[0], note }] }, 10).rows[0].note;
 
-  test("cuts a note longer than 80 characters at a word boundary with three dots", () => {
-    expect(withNote(`${"word ".repeat(17)}end`)).toBe(`${"word ".repeat(15)}word...`);
+  // Fix round 1. A note cut here was whole on no surface: the pane printed the
+  // cut text and titled it with the same cut text, and a title is not
+  // reachable by touch anyway. The view hands over the whole note, and the
+  // pane's line clamp does the cutting where the eye needs it.
+  test("carries a long note whole, every character of it", () => {
+    const long = Array.from({ length: 60 }, (_, index) => `w${index}`).join(" ").padEnd(300, "z");
+    expect(long).toHaveLength(300);
+    expect(withNote(long)).toBe(long);
+    expect(withNote("x".repeat(300))).toBe("x".repeat(300));
   });
 
-  test("cuts one long word at 80 characters", () => {
-    expect(withNote("x".repeat(100))).toBe(`${"x".repeat(80)}...`);
-  });
-
-  test("changes nothing else in a note", () => {
+  test("collapses runs of white space and trims the ends, and changes nothing else", () => {
+    expect(withNote("  Two  spaces, ODD case  ")).toBe("Two spaces, ODD case");
+    expect(withNote("line one\n\tline two")).toBe("line one line two");
     expect(withNote("y".repeat(80))).toBe("y".repeat(80));
-    expect(withNote("  Two  spaces, ODD case  ")).toBe("  Two  spaces, ODD case  ");
   });
 
   test("is empty with no lines", () => {
@@ -671,7 +770,13 @@ describe("hours come from the planner's own numbers", () => {
   test("adds this day's income blocks that are not skipped to the week's own hours", () => {
     const view = buildHoursView(input(), blocks);
     // 4.1 elsewhere + 2 planned + 0.5 done = 6.6, to a quarter 6.5.
-    expect(view.target).toEqual({ hours: 10, done: 6.5, label: "6.5 of 10 hours" });
+    expect(view.target).toEqual({
+      hours: 10,
+      done: 6.5,
+      label: "6.5 of 10 hours",
+      share: 0.65,
+      valueNow: 6.5,
+    });
   });
 
   test("counts the day's capped fixed events and the same income blocks toward the cap", () => {
@@ -680,7 +785,14 @@ describe("hours come from the planner's own numbers", () => {
     expect(counted).toHaveLength(1);
     const view = buildHoursView(input(), blocks);
     // 12.1 elsewhere + 2.5 shift + 2.5 income = 17.1, to a quarter 17.
-    expect(view.cap).toEqual({ hours: 30, used: 17, label: "17 of 30 hours", over: false });
+    expect(view.cap).toEqual({
+      hours: 30,
+      used: 17,
+      label: "17 of 30 hours",
+      over: false,
+      share: 17 / 30,
+      valueNow: 17,
+    });
     expect(view.empty).toBe(false);
   });
 
@@ -689,7 +801,16 @@ describe("hours come from the planner's own numbers", () => {
       input({ week: { capHoursElsewhere: 28, incomeHoursElsewhere: 4, gymSessionsDone: 0 } }),
       blocks,
     );
-    expect(view.cap).toEqual({ hours: 30, used: 33, label: "33 of 30 hours", over: true });
+    // The bar is drawn full, never past its end, and the meter's value is held
+    // to its range; the true figure is the label.
+    expect(view.cap).toEqual({
+      hours: 30,
+      used: 33,
+      label: "33 of 30 hours",
+      over: true,
+      share: 1,
+      valueNow: 30,
+    });
   });
 
   // The cap is a wall in the planner, so a tenth past it is past it, even when
@@ -699,7 +820,32 @@ describe("hours come from the planner's own numbers", () => {
       input({ week: { capHoursElsewhere: 25.1, incomeHoursElsewhere: 4, gymSessionsDone: 0 } }),
       blocks,
     );
-    expect(view.cap).toEqual({ hours: 30, used: 30, label: "30 of 30 hours", over: true });
+    expect(view.cap).toEqual({
+      hours: 30,
+      used: 30,
+      label: "30 of 30 hours",
+      over: true,
+      share: 1,
+      valueNow: 30,
+    });
+  });
+
+  // Fix round 1: what the bar draws is the view's, never the pane's division.
+  test("gives each bar its share, held to 0..1, and none when there is no maximum", () => {
+    const quiet = { capHoursElsewhere: 0, incomeHoursElsewhere: 0, gymSessionsDone: 0 };
+    const none = buildHoursView(input({ week: quiet, fixed: [] }), []);
+    expect(none.target).toMatchObject({ done: 0, share: 0, valueNow: 0 });
+    expect(none.cap).toMatchObject({ used: 0, share: 0, valueNow: 0 });
+
+    const zero = buildHoursView(
+      input({}, { incomeTarget: { lane: "work", weeklyHours: 0, blockMinutes: 60 }, weeklyHourCap: 0 }),
+      blocks,
+    );
+    expect(zero.target).toMatchObject({ hours: 0, share: 0, valueNow: 0 });
+    expect(zero.cap).toMatchObject({ hours: 0, over: true, share: 0, valueNow: 0 });
+
+    const target = buildHoursView(input(), blocks).target;
+    expect(target?.share).toBe((target?.done ?? 0) / (target?.hours ?? 1));
   });
 
   test("has no cap in travel mode, where the planner lifts it", () => {

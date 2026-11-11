@@ -63,6 +63,12 @@ export interface MoneyCell {
   /** True on the lowest day of the span, and on any day under zero. */
   low: boolean;
   negative: boolean;
+  /**
+   * The month, short ("Apr"), on the first day of the window and on each 1st
+   * in range, where the day's number alone would not say which month; else
+   * null. A cell that only pads a week names no month.
+   */
+  month: string | null;
 }
 
 export interface MoneyForecastView {
@@ -70,12 +76,28 @@ export interface MoneyForecastView {
   span: MoneySpan;
   /** Monday first, short. */
   weekdays: string[];
-  /** Rows of seven, padded with cells that are not in range. */
+  /**
+   * Rows of seven, padded with cells that are not in range, up to the week of
+   * the last day the source has a row for: exactly the weeks a grid draws.
+   */
   weeks: MoneyCell[][];
-  /** The `span` calendar days of the window in order, for a narrow pane. */
+  /**
+   * The calendar days of the window in order, up to the last one the source
+   * has a row for: exactly the days a narrow pane lists. `span` days when the
+   * source covers the window.
+   */
   list: MoneyCell[];
-  /** "Tuesday 24 March", "4,550". Null when no day of the window has a balance. */
-  lowest: { date: string; balance: string } | null;
+  /**
+   * "Tuesday 24 March", its key, "4,550". Null when no day of the window has a
+   * balance. A pane finds the one lowest cell by `dateKey`: every day under
+   * zero is `low` too, so `low` alone cannot.
+   */
+  lowest: { date: string; dateKey: DateKey; balance: string } | null;
+  /**
+   * The last day the source has a row for, when the window runs past it, so a
+   * pane can say where the forecast ends; null when the source covers it.
+   */
+  endsOn: DateKey | null;
   /** The sentence about the estimate, always present: it is a guess and says so. */
   estimate: string;
   /** Nothing in range to draw: the source has no forecast rows from the desk's day on. */
@@ -122,6 +144,11 @@ export interface MoneyLedgerView {
     date: string;
     kind: "in" | "out";
     amount: string;
+    /**
+     * The whole note, its runs of white space made one space. Nothing is cut
+     * here: the pane prints all of it and its line clamp cuts where the eye
+     * needs, so a screen reader still has every word.
+     */
     note: string;
     account: string;
     category: string | null;
@@ -130,15 +157,26 @@ export interface MoneyLedgerView {
   empty: boolean;
 }
 
+/**
+ * What a bar draws, worked out here so a pane only prints it: `share` is the
+ * part of the bar filled, 0 to 1, never past its end and 0 when there is no
+ * maximum; `valueNow` is the figure held to the meter's own range, for
+ * `aria-valuenow`. The true figure is always the label.
+ */
+export interface MoneyMeter {
+  share: number;
+  valueNow: number;
+}
+
 export interface MoneyHoursView {
   /** Null when the rules set no weekly income target. */
-  target: { hours: number; done: number; label: string } | null;
+  target: ({ hours: number; done: number; label: string } & MoneyMeter) | null;
   /**
    * Null whenever the planner itself would not hold the day to a cap: none is
    * set, the planned day is in an exempt range, or the day is planned in travel
    * mode. `over` is judged on the hours themselves; the figures are rounded.
    */
-  cap: { hours: number; used: number; label: string; over: boolean } | null;
+  cap: ({ hours: number; used: number; label: string; over: boolean } & MoneyMeter) | null;
   /** Neither is set. */
   empty: boolean;
 }
@@ -206,9 +244,6 @@ export const MONEY_COPY = {
   },
 } as const;
 
-/** The cut a long ledger note gets, in characters. */
-const NOTE_LIMIT = 80;
-const ELLIPSIS = "...";
 const HOUR_MS = 3_600_000;
 /** A Monday, any Monday: the weekday names are read off its week. */
 const A_MONDAY = "2024-01-01";
@@ -234,6 +269,11 @@ function dayMonthLabel(date: DateKey): string {
   return dayLabel(date).split(" ").slice(1).join(" ");
 }
 
+/** "Mar", "Apr": a month cut to three letters, as the weekdays are below. */
+function shortMonth(date: DateKey): string {
+  return (dayLabel(date).split(" ")[2] ?? "").slice(0, 3);
+}
+
 /** "Mon", "Tue" and so on, Monday first. */
 function weekdayNames(): string[] {
   return Array.from({ length: 7 }, (_, index) =>
@@ -257,6 +297,28 @@ function quarterHours(hours: number): number {
 function hoursLabel(done: number, of: number): string {
   const { hours } = MONEY_COPY;
   return `${done} ${hours.of} ${of} ${of === 1 ? hours.hour : hours.hours}`;
+}
+
+// ---------------------------------------------------------------- options
+
+/**
+ * The forecast's `span` option: "14", "30" or "60" days, and 30 for anything
+ * else. Each choice is compared as a whole string, because the value comes
+ * from a URL or a saved layout and a lookup keyed by it could answer from a
+ * prototype. Here, beside the view it chooses, so a server module can read it
+ * without importing a client file.
+ */
+export function forecastSpan(value: string | undefined): MoneySpan {
+  if (value === "14") return 14;
+  if (value === "60") return 60;
+  return 30;
+}
+
+/** The ledger's `rows` option: "10", "25" or "50" lines, and 25 for anything else. */
+export function ledgerRows(value: string | undefined): 10 | 25 | 50 {
+  if (value === "10") return 10;
+  if (value === "50") return 50;
+  return 25;
 }
 
 // ---------------------------------------------------------------- the age
@@ -393,6 +455,7 @@ function padCell(date: DateKey, today: DateKey): MoneyCell {
     marks: [],
     low: false,
     negative: false,
+    month: null,
   };
 }
 
@@ -404,8 +467,30 @@ export function buildForecastView(data: MoneyScreenData, span: MoneySpan): Money
   const estimate = estimateSentence(data, rows);
 
   if (days.length === 0) {
-    return { age, span, weekdays, weeks: [], list: [], lowest: null, estimate, empty: true };
+    return {
+      age,
+      span,
+      weekdays,
+      weeks: [],
+      list: [],
+      lowest: null,
+      endsOn: null,
+      estimate,
+      empty: true,
+    };
   }
+
+  // WHERE THE SOURCE STOPS. Its forecast can end before the window does, and
+  // the days after its last row have no balance. A run of weeks with nothing
+  // in them would read as empty weeks rather than as weeks nobody can see, so
+  // what is handed over stops there: the list at the last day with a row, the
+  // grid at that day's week, and `endsOn` says the day. Only the tail: a gap in
+  // the middle is drawn day by day, so the grid never silently skips a week.
+  // The first day always has a row (`spanOf` starts the window at one).
+  let lastRow = 0;
+  days.forEach((entry, index) => {
+    if (entry.day !== null) lastRow = index;
+  });
 
   // The earliest of the lowest, over the days that have a balance to compare:
   // a strict comparison keeps the first on a tie, and a day with no row or a
@@ -416,23 +501,25 @@ export function buildForecastView(data: MoneyScreenData, span: MoneySpan): Money
     if (lowest === null || day.projected < lowest.projected) lowest = day;
   }
 
-  const cells = new Map<DateKey, MoneyCell>();
-  for (const { date, day, marks } of days) {
+  const inRange = days.map(({ date, day, marks }, index): MoneyCell => {
     const negative = day !== null && day.projected < 0;
-    cells.set(date, {
+    return {
       ...padCell(date, data.today),
       inRange: true,
       balance: day === null ? null : formatAmount(day.projected),
       marks: marks.map((mark) => ({ kind: mark.kind, label: `${mark.name} ${formatAmount(mark.amount)}` })),
       low: (lowest !== null && day === lowest) || negative,
       negative,
-    });
-  }
+      month: index === 0 || isFirstOfMonth(date) ? shortMonth(date) : null,
+    };
+  });
+  const cells = new Map(inRange.map((cell) => [cell.date, cell] as const));
 
   // The grid runs from the Monday of the window's first week to the Sunday of
-  // its last. A cell outside the window is padding: nothing is drawn in it.
+  // the week of the source's last row. A cell outside the window is padding:
+  // nothing is drawn in it.
   const first = weekStartKey(days[0].date);
-  const last = shiftDateKey(weekStartKey(days[days.length - 1].date), 6);
+  const last = shiftDateKey(weekStartKey(days[lastRow].date), 6);
   const weeks: MoneyCell[][] = [];
   for (let date = first; dayDiff(date, last) >= 0; date = shiftDateKey(date, 1)) {
     if (weeks.length === 0 || weeks[weeks.length - 1].length === 7) weeks.push([]);
@@ -444,12 +531,24 @@ export function buildForecastView(data: MoneyScreenData, span: MoneySpan): Money
     span,
     weekdays,
     weeks,
-    list: weeks.flat().filter((cell) => cell.inRange),
+    list: inRange.slice(0, lastRow + 1),
     lowest:
-      lowest === null ? null : { date: dayLabel(lowest.date), balance: formatAmount(lowest.projected) },
+      lowest === null
+        ? null
+        : {
+            date: dayLabel(lowest.date),
+            dateKey: lowest.date,
+            balance: formatAmount(lowest.projected),
+          },
+    endsOn: lastRow < days.length - 1 ? days[lastRow].date : null,
     estimate,
     empty: false,
   };
+}
+
+/** Is this the 1st of its month? Read off the key, as the day of the month is. */
+function isFirstOfMonth(date: DateKey): boolean {
+  return Number(date.slice(8, 10)) === 1;
 }
 
 // ---------------------------------------------------------------- accounts
@@ -507,23 +606,14 @@ export function buildComingView(data: MoneyScreenData, span: MoneySpan): MoneyCo
 // ---------------------------------------------------------------- ledger
 
 /**
- * A note longer than NOTE_LIMIT characters, cut at the last space within the
- * limit and given three dots; one long word is cut at the limit itself. Counted
- * in code points, so a cut never splits a character in two. Nothing else in the
- * note is touched.
+ * A note as one line of text: each run of white space (a line break, a tab,
+ * two spaces) made one space, and the ends trimmed. Nothing is cut. A cut made
+ * here left a long note whole on no surface, since the pane could only print
+ * the cut and a title is out of a finger's reach; the pane's line clamp does
+ * the cutting, where the eye needs it, and a screen reader keeps every word.
  */
-function cutNote(note: string): string {
-  const chars = Array.from(note);
-  if (chars.length <= NOTE_LIMIT) return note;
-  let at = -1;
-  for (let index = NOTE_LIMIT; index > 0; index -= 1) {
-    if (/\s/.test(chars[index])) {
-      at = index;
-      break;
-    }
-  }
-  const kept = at > 0 ? chars.slice(0, at).join("").trimEnd() : "";
-  return `${kept.length > 0 ? kept : chars.slice(0, NOTE_LIMIT).join("")}${ELLIPSIS}`;
+function wholeNote(note: string): string {
+  return note.replace(/\s+/g, " ").trim();
 }
 
 export function buildLedgerView(data: MoneyScreenData, rows: 10 | 25 | 50): MoneyLedgerView {
@@ -535,7 +625,7 @@ export function buildLedgerView(data: MoneyScreenData, rows: 10 | 25 | 50): Mone
       date: dayMonthLabel(line.on),
       kind: line.direction,
       amount: formatAmount(line.amount),
-      note: cutNote(line.note),
+      note: wholeNote(line.note),
       account: line.account,
       category: line.category,
     })),
@@ -574,6 +664,21 @@ function capInForce(input: PlanInput): boolean {
 }
 
 /**
+ * What a bar draws for `value` of `max`, from the figures its label prints, so
+ * the bar and its sentence agree: the filled part held to 0..1 (a bar is drawn
+ * full, never past its end), and the value held to 0..max for a meter, whose
+ * value outside its own range is not one a screen reader can say. No maximum
+ * draws nothing.
+ */
+function meterOf(value: number, max: number): MoneyMeter {
+  if (!(max > 0)) return { share: 0, valueNow: 0 };
+  return {
+    share: Math.min(1, Math.max(0, value / max)),
+    valueNow: Math.min(max, Math.max(0, value)),
+  };
+}
+
+/**
  * The week's paid hours against the target and the cap, from the planner's own
  * input. The week's other days are the planner's numbers (`input.week`); this
  * adds the planned day's income blocks that are not skipped, and for the cap the
@@ -597,7 +702,7 @@ export function buildHoursView(input: PlanInput, blocks: readonly Block[]): Mone
       : (() => {
           const hours = quarterHours(goal.weeklyHours);
           const done = quarterHours(week.incomeHoursElsewhere + incomeToday);
-          return { hours, done, label: hoursLabel(done, hours) };
+          return { hours, done, label: hoursLabel(done, hours), ...meterOf(done, hours) };
         })();
 
   const limit = rules.weeklyHourCap;
@@ -610,7 +715,13 @@ export function buildHoursView(input: PlanInput, blocks: readonly Block[]): Mone
           const usedHours = week.capHoursElsewhere + fixedToday + incomeToday;
           const hours = quarterHours(limit);
           const used = quarterHours(usedHours);
-          return { hours, used, label: hoursLabel(used, hours), over: usedHours > limit };
+          return {
+            hours,
+            used,
+            label: hoursLabel(used, hours),
+            over: usedHours > limit,
+            ...meterOf(used, hours),
+          };
         })();
 
   return { target, cap, empty: target === null && cap === null };

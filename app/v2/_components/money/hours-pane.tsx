@@ -1,52 +1,61 @@
 "use client";
 
-import { useMemo, type CSSProperties } from "react";
+import { useId, useMemo, type CSSProperties } from "react";
 
-import { MONEY_COPY, buildHoursView } from "@/app/lib/v2/view/money";
+import { MONEY_COPY, buildHoursView, type MoneyMeter } from "@/app/lib/v2/view/money";
 import { useDay } from "../day-provider";
 
 /**
  * One plain bar and its sentence. A meter, not a score: no percentage, no
- * colour for doing well, and the bar is drawn full rather than past its end.
+ * colour for doing well, and the bar drawn exactly as far as the view says.
  *
- * `aria-valuenow` is held to the bar's range, because a meter's value outside
- * its own bounds is not one a screen reader can say; the true figure is in
- * `aria-valuetext` and on the screen. "Over the cap" is printed from the
- * view's own `over`, never from the bar being full: the figures are rounded to
- * the quarter, so "30 of 30 hours" can be over.
+ * NOTHING IS WORKED OUT HERE. The view hands over the share of the bar to fill
+ * (already held to 0..1) and the value held to the meter's range for
+ * `aria-valuenow`; the true figure is the label, which is also the
+ * `aria-valuetext`. "Over the cap" is printed from the view's own `over`, never
+ * from the bar being full: the figures are rounded to the quarter, so "30 of 30
+ * hours" can be over.
+ *
+ * NAMED ONCE. The meter takes its name from the heading above it
+ * (`aria-labelledby`), so a screen reader does not say it twice.
  */
 function Meter({
   kind,
   name,
-  value,
   max,
   label,
   over,
+  meter,
 }: {
   kind: "target" | "cap";
   name: string;
-  value: number;
   max: number;
   label: string;
   over: boolean;
+  meter: MoneyMeter;
 }) {
-  const share = max > 0 ? Math.min(1, Math.max(0, value / max)) : value > 0 ? 1 : 0;
+  const nameId = useId();
   return (
     <li className="v2-money-meter" data-kind={kind} data-over={over ? "" : undefined}>
       <p className="v2-money-meter-head">
-        <span className="v2-money-meter-name">{name}</span>{" "}
+        <span className="v2-money-meter-name" id={nameId}>
+          {name}
+        </span>{" "}
         <span className="v2-money-meter-value">{label}</span>
       </p>
       <div
         className="v2-money-bar"
         role="meter"
-        aria-label={name}
+        aria-labelledby={nameId}
         aria-valuemin={0}
         aria-valuemax={max}
-        aria-valuenow={Math.max(0, Math.min(value, max))}
+        aria-valuenow={meter.valueNow}
         aria-valuetext={label}
       >
-        <span className="v2-money-bar-fill" style={{ "--v2-money-at": share } as CSSProperties} />
+        <span
+          className="v2-money-bar-fill"
+          style={{ "--v2-money-at": meter.share } as CSSProperties}
+        />
       </div>
       {over && <p className="v2-money-over">{MONEY_COPY.hours.over}</p>}
     </li>
@@ -80,20 +89,20 @@ export function HoursPane() {
             <Meter
               kind="target"
               name={MONEY_COPY.hours.target}
-              value={view.target.done}
               max={view.target.hours}
               label={view.target.label}
               over={false}
+              meter={view.target}
             />
           )}
           {view.cap !== null && (
             <Meter
               kind="cap"
               name={MONEY_COPY.hours.cap}
-              value={view.cap.used}
               max={view.cap.hours}
               label={view.cap.label}
               over={view.cap.over}
+              meter={view.cap}
             />
           )}
         </ul>

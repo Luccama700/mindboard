@@ -31,10 +31,11 @@
  * a ledger line is two lines under 420px and one from there. RANGE SYNTAX,
  * because a container's width can be fractional.
  *
- * QUIET AND READ ONLY. Nothing here is a control and nothing animates on load:
- * the one change is a ledger line's hover, at the quick duration. Reduced
- * motion is v2.css's one rule, which stops every transition under
- * [data-v2-root].
+ * QUIET AND READ ONLY. Nothing here is a control and nothing moves. Motion on
+ * this screen moves only transform and opacity, and nothing here needs either:
+ * a ledger line's hover surface appears at once, with no transition. Should
+ * one ever be added, reduced motion is v2.css's one rule, which stops every
+ * transition under [data-v2-root].
  */
 
 /* ------------------------------------------------------------------ the body */
@@ -623,9 +624,9 @@
   row-gap: 2px;
   padding: 8px 6px;
   border-bottom: 1px solid var(--v2-card-2);
-  transition: background-color var(--v2-quick) var(--v2-ease);
 }
 
+/* The hover surface appears at once: motion moves only transform and opacity. */
 [data-v2-root] .v2-money-tx:hover {
   background-color: var(--v2-card);
 }
@@ -687,7 +688,8 @@
    each line a subgrid of it, so the dates, accounts, categories and amounts
    line up down the pane whatever their lengths. The account and the category
    take what their words need, up to a limit, and the note takes the rest, cut
-   to one line; its whole text is its title. */
+   to one line here and to two under 420px. The cut is only drawn: the whole
+   note is in the document, so a screen reader has every word. */
 @container v2-pane (width >= 420px) {
   [data-v2-root] .v2-money-txs {
     display: grid;

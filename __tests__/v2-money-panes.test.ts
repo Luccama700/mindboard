@@ -233,6 +233,38 @@ describe("a stale pane leads with how old it is", () => {
     }
   });
 
+  // Fix round 1: a stale source with nothing of a pane's kind still leads with
+  // its age, then says it has nothing, and draws no figure.
+  const STALE_EMPTY: Array<
+    [string, (money: MoneyScreenData) => Partial<MoneyScreenData>, string]
+  > = [
+    ["forecast", () => ({ forecast: [] }), MONEY_COPY.empty.forecast],
+    ["accounts", () => ({ accounts: [] }), MONEY_COPY.empty.accounts],
+    [
+      "coming-up",
+      (money) => ({ forecast: money.forecast.map((day) => ({ ...day, inflow: 0, outflow: 0 })) }),
+      MONEY_COPY.empty.coming,
+    ],
+    ["ledger", () => ({ rows: [] }), MONEY_COPY.empty.ledger],
+  ];
+
+  test.each(STALE_EMPTY)("%s: stale and empty, the age line first and then the empty sentence", (id, patch, empty) => {
+    const base = stale();
+    const money = { ...moneyOf(base), ...patch(moneyOf(base)) };
+    const desk = { ...base, money };
+    const age = moneyAge(money);
+    expect(age.stale).toBe(true);
+    const root = drawPane(id, desk);
+    expect(root.hasAttribute("data-stale")).toBe(true);
+    const [line, sentence] = Array.from(root.children);
+    expect(line.className).toBe("v2-money-age");
+    expect(line.textContent).toBe(age.line);
+    expect(sentence.className).toBe("v2-money-empty");
+    expect(sentence.textContent).toBe(empty);
+    expect(root.querySelector(".v2-money-fig")).toBeNull();
+    expect(root.querySelector(".v2-money-tag")).toBeNull();
+  });
+
   test("hours has no age: it is not drawn from money data", () => {
     const root = drawPane("hours", stale());
     expect(root.querySelector(".v2-money-age")).toBeNull();
@@ -300,17 +332,11 @@ describe("the forecast", () => {
       expect(cells[index].querySelectorAll(".v2-money-fig wbr")).toHaveLength(commas);
       expect(days[index].querySelectorAll(".v2-money-fig wbr")).toHaveLength(0);
     });
-    // The month, cut to three letters, on the first day and on each 1st only.
-    const months = cells
-      .map((cell, index) => [index, cell.querySelector(".v2-money-month")?.textContent] as const)
-      .filter(([, month]) => month !== undefined);
-    expect(months).toEqual(
-      view.list.flatMap((cell, index) =>
-        index === 0 || cell.dayOfMonth === 1
-          ? [[index, dayLabel(cell.date).split(" ")[2].slice(0, 3)] as const]
-          : [],
-      ),
+    // The month word is the view's: drawn exactly where a cell carries one.
+    expect(cells.map((cell) => cell.querySelector(".v2-money-month")?.textContent ?? null)).toEqual(
+      view.list.map((cell) => cell.month),
     );
+    expect(view.list.filter((cell) => cell.month !== null).length).toBeGreaterThanOrEqual(2);
     // The sample's marks really are drawn: a bill and the pay.
     expect(texts(root, ".v2-money-grid .v2-money-mark")).toContain(
       `Phone 50 ${MONEY_COPY.sign.out}`,
@@ -405,22 +431,22 @@ describe("the forecast", () => {
     expect(root.querySelector(".v2-money-fig")).toBeNull();
   });
 
-  // The source's forecast can stop before the span does. A tail of weeks with
-  // nothing in them is not drawn, and one line says where the forecast ends.
-  test("draws no tail of empty weeks when the source stops short, and says where", () => {
+  // The source's forecast can stop before the span does. The view trims the
+  // tail and names the end (v2-view-money.test.ts); the pane draws exactly the
+  // weeks and the days it is handed, and words the end in one line.
+  test("draws what the view hands over when the source stops short, and says where", () => {
     const desk = withMoney((money) => ({ forecast: money.forecast.slice(0, 20) }));
     const view = buildForecastView(moneyOf(desk), 30);
-    const last = view.list.filter((cell) => cell.balance !== null).at(-1);
-    expect(last).toBeDefined();
-    let keptWeeks = 0;
-    view.weeks.forEach((week, index) => {
-      if (week.some((cell) => cell.inRange && cell.balance !== null)) keptWeeks = index + 1;
-    });
-    expect(keptWeeks).toBeLessThan(view.weeks.length);
+    expect(view.endsOn).not.toBeNull();
+    expect(view.list).toHaveLength(20);
 
     const root = drawPane("forecast", desk);
-    expect(cellsOf(root)).toHaveLength(keptWeeks * 7);
-    expect(daysOf(root)).toHaveLength(20);
+    expect(cellsOf(root).map((cell) => labelOf(cell) || null)).toEqual(
+      view.weeks.flat().map((cell) => (cell.inRange ? dayLabel(cell.date) : null)),
+    );
+    expect(texts(root, ".v2-money-days .v2-money-date")).toEqual(
+      view.list.map((cell) => dayLabel(cell.date)),
+    );
     // Days of a drawn week the source has no row for: there, with no figure.
     const blank = inRange(root).filter((cell) => cell.querySelector(".v2-money-fig") === null);
     expect(blank.length).toBeGreaterThan(0);
@@ -432,7 +458,7 @@ describe("the forecast", () => {
     expect(inRange(root).filter((cell) => cell.hasAttribute("data-blank"))).toHaveLength(blank.length);
 
     const ends = root.querySelector(".v2-money-ends") as HTMLElement;
-    expect(ends.textContent).toBe(MONEY_COPY.endsOn.replace("{date}", dayLabel(last?.date ?? "")));
+    expect(ends.textContent).toBe(MONEY_COPY.endsOn.replace("{date}", dayLabel(view.endsOn ?? "")));
     expect(follows(root.querySelector(".v2-money-days") as Node, ends)).toBe(true);
     expect(follows(ends, root.querySelector(".v2-money-estimate") as Node)).toBe(true);
   });
@@ -545,6 +571,19 @@ describe("hours", () => {
     Array.from(root.querySelectorAll<HTMLElement>('[role="meter"]'));
   const expected = (desk: DeskScreenData) =>
     buildHoursView(desk.today.input, planDay(desk.today.input).blocks);
+  /**
+   * A meter's accessible name, as a screen reader takes it: from the element
+   * its `aria-labelledby` names. It has no `aria-label` of its own, so the name
+   * is said once, not once as the heading and again as the label.
+   */
+  const nameOf = (meter: HTMLElement) => {
+    expect(meter.hasAttribute("aria-label")).toBe(false);
+    const ids = (meter.getAttribute("aria-labelledby") ?? "").split(" ").filter(Boolean);
+    expect(ids.length).toBeGreaterThan(0);
+    return ids.map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+  };
+  const shareOf = (meter: HTMLElement) =>
+    (meter.querySelector(".v2-money-bar-fill") as HTMLElement).style.getPropertyValue("--v2-money-at");
 
   test("two plain bars, the target and the cap, each with its three values", () => {
     const desk = fresh();
@@ -554,15 +593,17 @@ describe("hours", () => {
     const root = drawPane("hours", desk);
     const [target, cap] = metersOf(root);
 
-    expect(target.getAttribute("aria-label")).toBe(MONEY_COPY.hours.target);
+    expect(nameOf(target)).toBe(MONEY_COPY.hours.target);
     expect(target.getAttribute("aria-valuemin")).toBe("0");
     expect(target.getAttribute("aria-valuemax")).toBe(String(view.target?.hours));
-    expect(target.getAttribute("aria-valuenow")).toBe(String(view.target?.done));
+    expect(target.getAttribute("aria-valuenow")).toBe(String(view.target?.valueNow));
     expect(target.getAttribute("aria-valuetext")).toBe(view.target?.label);
+    expect(shareOf(target)).toBe(String(view.target?.share));
 
-    expect(cap.getAttribute("aria-label")).toBe(MONEY_COPY.hours.cap);
+    expect(nameOf(cap)).toBe(MONEY_COPY.hours.cap);
     expect(cap.getAttribute("aria-valuemax")).toBe(String(view.cap?.hours));
-    expect(cap.getAttribute("aria-valuenow")).toBe(String(view.cap?.used));
+    expect(cap.getAttribute("aria-valuenow")).toBe(String(view.cap?.valueNow));
+    expect(shareOf(cap)).toBe(String(view.cap?.share));
 
     expect(texts(root, ".v2-money-meter-value")).toEqual([view.target?.label, view.cap?.label]);
     expect(texts(root, ".v2-money-meter-name")).toEqual([
@@ -577,16 +618,12 @@ describe("hours", () => {
   test("draws no bar for what the rules do not set", () => {
     const noTarget = withInput((input) => ({ rules: { ...input.rules, incomeTarget: null } }));
     let root = drawPane("hours", noTarget);
-    expect(metersOf(root).map((meter) => meter.getAttribute("aria-label"))).toEqual([
-      MONEY_COPY.hours.cap,
-    ]);
+    expect(metersOf(root).map(nameOf)).toEqual([MONEY_COPY.hours.cap]);
     cleanup();
 
     const noCap = withInput((input) => ({ rules: { ...input.rules, weeklyHourCap: null } }));
     root = drawPane("hours", noCap);
-    expect(metersOf(root).map((meter) => meter.getAttribute("aria-label"))).toEqual([
-      MONEY_COPY.hours.target,
-    ]);
+    expect(metersOf(root).map(nameOf)).toEqual([MONEY_COPY.hours.target]);
   });
 
   test("one sentence and no bar when neither is set", () => {
@@ -603,13 +640,13 @@ describe("hours", () => {
     const view = expected(tight);
     expect(view.cap?.over).toBe(true);
     const root = drawPane("hours", tight);
-    const cap = metersOf(root).find(
-      (meter) => meter.getAttribute("aria-label") === MONEY_COPY.hours.cap,
-    ) as HTMLElement;
+    const cap = metersOf(root).find((meter) => nameOf(meter) === MONEY_COPY.hours.cap) as HTMLElement;
     const item = cap.closest(".v2-money-meter") as HTMLElement;
     expect(item.hasAttribute("data-over")).toBe(true);
     expect(item.querySelector(".v2-money-over")?.textContent).toBe(MONEY_COPY.hours.over);
-    expect(cap.getAttribute("aria-valuenow")).toBe("5");
+    expect(cap.getAttribute("aria-valuenow")).toBe(String(view.cap?.valueNow));
+    expect(view.cap?.valueNow).toBe(5);
+    expect(shareOf(cap)).toBe("1");
     expect(cap.getAttribute("aria-valuetext")).toBe(view.cap?.label);
     // The target's bar is never the danger one, whatever its value.
     expect(root.querySelectorAll("[data-over]")).toHaveLength(1);
@@ -678,6 +715,21 @@ describe("the ledger", () => {
     expect(root.querySelector(".v2-money-more")?.textContent).toBe(
       MONEY_COPY.more.replace("{count}", String(view.more)),
     );
+  });
+
+  // Fix round 1. The whole note is in the document, for a screen reader and
+  // for a line clamp to cut where the eye needs it; nothing hides behind a
+  // title, which a finger cannot reach.
+  test("puts every character of a long note in the document, and no title", () => {
+    const note = Array.from({ length: 60 }, (_, index) => `part${index}`).join(" ").slice(0, 300);
+    expect(note).toHaveLength(300);
+    const root = drawPane(
+      "ledger",
+      withMoney((money) => ({ rows: [{ ...money.rows[0], note }, ...money.rows.slice(1)] })),
+    );
+    const first = rowsOf(root)[0];
+    expect(first.querySelector(".v2-money-tx-note")?.textContent).toBe(note);
+    expect(root.querySelectorAll("[title]")).toHaveLength(0);
   });
 
   test("counts nothing when every line is shown", () => {
@@ -914,7 +966,7 @@ describe("money.css", () => {
     expect(own).toEqual([]);
   });
 
-  test("moves nothing on load, and changes only at the screen's own speeds", () => {
+  test("moves nothing on load", () => {
     const animations: string[] = [];
     sheet.walkDecls(/^animation/, (decl) => {
       animations.push(decl.value);
@@ -923,9 +975,46 @@ describe("money.css", () => {
       animations.push(at.params);
     });
     expect(animations).toEqual([]);
-    sheet.walkDecls(/^transition/, (decl) => {
-      expect(decl.value).toMatch(/var\(--v2-(quick|std|slow)\)/);
-      expect(decl.value).toMatch(/var\(--v2-ease\)/);
+  });
+
+  // Fix round 1. The plan's motion rule: motion moves only transform and
+  // opacity. A transition on anything else (a hover's background colour, say)
+  // is refused here; today the sheet has no transition at all.
+  test("transitions nothing but transform and opacity, at the screen's own speeds", () => {
+    /** The comma separated parts of a value, a comma inside parentheses kept. */
+    const parts = (value: string) => {
+      const out: string[] = [];
+      let depth = 0;
+      let current = "";
+      for (const char of value) {
+        if (char === "(") depth += 1;
+        if (char === ")") depth -= 1;
+        if (char === "," && depth === 0) {
+          out.push(current.trim());
+          current = "";
+        } else {
+          current += char;
+        }
+      }
+      out.push(current.trim());
+      return out;
+    };
+    const ALLOWED = new Set(["transform", "opacity", "none"]);
+    const offenders: string[] = [];
+    sheet.walkDecls(/^transition(-property)?$/, (decl) => {
+      for (const part of parts(decl.value)) {
+        const property = part.split(/\s+/)[0];
+        if (!ALLOWED.has(property)) offenders.push(`${decl.parent?.toString().split("{")[0].trim()}: ${decl}`);
+      }
+    });
+    expect(offenders).toEqual([]);
+    sheet.walkDecls(/^transition(-duration|-timing-function)?$/, (decl) => {
+      if (decl.prop !== "transition-timing-function" && decl.value !== "none") {
+        expect(decl.value).toMatch(/var\(--v2-(quick|std|slow)\)/);
+      }
+      if (decl.prop !== "transition-duration" && decl.value !== "none") {
+        expect(decl.value).toMatch(/var\(--v2-ease(-in)?\)/);
+      }
     });
   });
 
