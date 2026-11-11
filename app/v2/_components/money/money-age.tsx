@@ -5,9 +5,12 @@ import { MONEY_COPY, type MoneyAge } from "@/app/lib/v2/view/money";
 //
 // THE AGE LINE COMES FIRST. A balance is a ledger's sum, so a ledger that
 // stopped weeks ago gives a weeks old balance however recently it was read. The
-// view words the sentence once (`moneyAge`) and every pane draws it here, as the
-// first element of its root, set apart and in the full ink, so it is the
-// loudest text in the pane and nothing in the pane can be read before it.
+// view words it once (`moneyAge`: "Last known figures." and then how old) and
+// every pane draws it here, as the first element of its root, so nothing in the
+// pane can be read before it. Every pane says it, because a pane can stand
+// alone on a phone; so it is one quiet callout (money.css), not a box, and the
+// Money layout's four panes saying it side by side do not read as four alarms.
+// Plain text, never a live region.
 //
 // ONE SWITCH FOR THE REST. The pane's root carries `data-stale` (`staleMark`),
 // and money.css quiets every `.v2-money-fig` under it: no pane has to remember

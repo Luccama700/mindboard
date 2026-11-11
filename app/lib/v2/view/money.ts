@@ -187,10 +187,13 @@ export interface MoneyHoursView {
  */
 export const MONEY_COPY = {
   age: {
-    /** "No transaction since 20 January, 50 days ago." */
+    /**
+     * The label the stale sentence opens with, so it is the first thing read:
+     * "Last known figures. No transaction since 20 January, 50 days ago."
+     */
+    label: "Last known figures.",
     since: "No transaction since",
     daysAgo: "days ago",
-    lastKnown: "Everything here is what was last known.",
     none: "No transaction has been recorded at all, so nothing here can say how current it is.",
   },
   /** The plain word for money in that no fixed income accounts for. */
@@ -333,7 +336,7 @@ export function moneyAge(data: MoneyScreenData): MoneyAge {
   return {
     days,
     stale: true,
-    line: `${copy.since} ${dayMonthLabel(data.ledgerLastOn)}, ${days} ${copy.daysAgo}. ${copy.lastKnown}`,
+    line: `${copy.label} ${copy.since} ${dayMonthLabel(data.ledgerLastOn)}, ${days} ${copy.daysAgo}.`,
   };
 }
 

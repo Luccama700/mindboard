@@ -11,24 +11,28 @@
  * hex, an rgb() or an hsl() and must find none.
  *
  * IT ADMITS WHEN IT IS GUESSING. A pane whose numbers are old carries
- * `data-stale` on its root and leads with the age line: set apart in a hairline
- * box and in the full ink, so it is the loudest text in the pane. Every figure
- * under it drops to the quieter ink, the big total steps down so it cannot out
- * shout the sentence, and the danger mark loses its colour (the words stay): a
- * loud "Under zero" drawn from a ledger that stopped months ago would be the
- * confident claim this screen exists not to make.
+ * `data-stale` on its root and leads with the age line: one quiet callout, not
+ * a box (on the Money layout four panes say it side by side), with a bar in the
+ * attention colour on its leading edge and its words in the full ink. Every
+ * figure under it drops to the quieter ink, the big total steps down so it
+ * cannot out shout the sentence, and the danger marks lose their colour (the
+ * words stay): a loud "Under zero" drawn from a ledger that stopped months ago
+ * would be the confident claim this screen exists not to make. The age line's
+ * bar is the one place a stale pane keeps the attention colour.
  *
- * DANGER IS ONE ALIAS. v2.css has no danger token, so the panes read
- * --v2-money-danger, set once on their root to --v2-warn: the state colour the
- * feed dots use for "late", derived per scheme to clear 3:1 as a MARK on the
- * card (appearance.ts). It is only ever a mark (a ring, a bar, a dot) on the
- * page or a card, never the colour of a word: every danger mark has its word
- * beside it, in an ink. A real token later is a one line change here.
+ * ONE ATTENTION COLOUR, ONE ALIAS. v2.css has no danger token, so the panes
+ * read --v2-money-attention, set once on their root to --v2-warn: the state
+ * colour the feed dots use for "late", derived per scheme to clear 3:1 as a
+ * MARK on the card (appearance.ts). The danger marks read it through
+ * --v2-money-danger, which a stale pane turns grey. Either is only ever a mark
+ * (a ring, a bar, a dot) on the page or a card, never the colour of a word:
+ * every mark has its words beside it, in an ink. A real token later is a one
+ * line change here.
  *
  * SIZED BY THE PANE, NOT THE WINDOW. Each body sits in the desk's `v2-pane`
  * box, an inline-size container, and its two layouts are container queries on
  * it: the forecast is a list under 480px of pane and a month grid from there;
- * a ledger line is two lines under 420px and one from there. RANGE SYNTAX,
+ * a ledger line is two lines under 600px and one from there. RANGE SYNTAX,
  * because a container's width can be fractional.
  *
  * QUIET AND READ ONLY. Nothing here is a control and nothing moves. Motion on
@@ -42,25 +46,31 @@
 
 /* One column of blocks, with the side column's own spacing. */
 [data-v2-root] .v2-money {
-  --v2-money-danger: var(--v2-warn);
+  --v2-money-attention: var(--v2-warn);
+  --v2-money-danger: var(--v2-money-attention);
   display: flex;
   flex-direction: column;
   gap: 14px;
   min-width: 0;
 }
 
-/* The word stays, the alarm colour goes: see the head of this file. */
+/* The word stays, the marks' colour goes: see the head of this file. The
+   attention colour itself is left alone, for the age line's bar. */
 [data-v2-root] .v2-money[data-stale] {
   --v2-money-danger: var(--v2-ink-3);
 }
 
-/* How old the numbers are. First, set apart, in the full ink. */
+/* How old the numbers are: first, in words, as one quiet callout. A bar in the
+   attention colour and the full ink set it apart; no box, so four panes saying
+   it side by side do not read as four alarms. The display face, because it is
+   the one loaded at 600 (the text face has 400 and 700 only), at the size of
+   the pane's quiet lines. Two or three lines in a 240px pane, one from about
+   464px. */
 [data-v2-root] .v2-money-age {
-  padding: 10px 12px;
-  border: 1px solid var(--v2-edge);
-  border-radius: 12px;
+  padding-inline-start: 10px;
+  border-inline-start: 3px solid var(--v2-money-attention);
   color: var(--v2-ink);
-  font: 700 14px/1.45 var(--v2-text);
+  font: 600 13px/1.4 var(--v2-display);
   overflow-wrap: anywhere;
   text-wrap: pretty;
 }
@@ -613,9 +623,10 @@
   list-style: none;
 }
 
-/* UNDER 420PX, TWO LINES: the note and the amount, then the date, the account
-   and the category. The five parts stay in reading order in the document, and
-   only their places move, so a screen reader hears one sentence a line. */
+/* UNDER 600PX, TWO LINES: the note and the amount, then the date, the account
+   and the category. The note has the whole first line, which is what a person
+   scans for. The five parts stay in reading order in the document, and only
+   their places move, so a screen reader hears one sentence a line. */
 [data-v2-root] .v2-money-tx {
   display: grid;
   grid-template-columns: max-content minmax(0, max-content) minmax(0, 1fr) max-content;
@@ -684,17 +695,21 @@
   grid-column: 3 / -1;
 }
 
-/* FROM 420PX, ONE LINE, on columns every line shares: the list is the grid and
+/* FROM 600PX, ONE LINE, on columns every line shares: the list is the grid and
    each line a subgrid of it, so the dates, accounts, categories and amounts
-   line up down the pane whatever their lengths. The account and the category
-   take what their words need, up to a limit, and the note takes the rest, cut
-   to one line here and to two under 420px. The cut is only drawn: the whole
-   note is in the document, so a screen reader has every word. */
-@container v2-pane (width >= 420px) {
+   line up down the pane whatever their lengths.
+   THE NOTE TAKES THE ROOM FIRST. Its column is never narrower than about 24
+   characters, and it takes three shares of what is left to the account's one
+   and the category's one, so those two give way before it does (cut with an
+   ellipsis) and grow as the pane widens. Under 600px the 24 characters and the
+   date, the amount and the gaps would not leave the account and the category
+   a word between them, which is why the line breaks in two there. The cut is
+   only drawn: the whole note, account and category are in the document. */
+@container v2-pane (width >= 600px) {
   [data-v2-root] .v2-money-txs {
     display: grid;
     grid-template-columns:
-      max-content minmax(0, 1fr) fit-content(9em) fit-content(9em)
+      max-content minmax(24ch, 3fr) minmax(0, 1fr) minmax(0, 1fr)
       max-content;
     column-gap: 12px;
   }

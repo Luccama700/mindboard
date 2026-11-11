@@ -841,7 +841,7 @@ describe("money.css", () => {
   };
 
   const WIDE_FORECAST = "@container v2-pane (width >= 480px)";
-  const WIDE_LEDGER = "@container v2-pane (width >= 420px)";
+  const WIDE_LEDGER = "@container v2-pane (width >= 600px)";
 
   test("is loaded after the desk's sheet", () => {
     const layout = readFileSync(path.join(ROOT, "app/v2/layout.tsx"), "utf8");
@@ -863,9 +863,10 @@ describe("money.css", () => {
     }
   });
 
-  // Behaviour 7. Under 420px a line is two lines; from 420px it is one, on
-  // columns every line shares.
-  test("lays a ledger line on one line from 420px of pane, two under it", () => {
+  // Behaviour 7, moved in fix round 2. Under 600px a line is two lines (the
+  // note has the whole first line); from 600px it is one, on columns every
+  // line shares. Under 600 the note got about eight characters on one line.
+  test("lays a ledger line on one line from 600px of pane, two under it", () => {
     expect(valueOf("", ".v2-money-tx", "grid-template-columns")).toBeTruthy();
     expect(valueOf("", ".v2-money-tx-note", "grid-row")).toBe("1");
     expect(valueOf("", ".v2-money-tx-date", "grid-row")).toBe("2");
@@ -879,8 +880,13 @@ describe("money.css", () => {
   test("quiets every figure of a stale pane, and the age line is the loudest text", () => {
     expect(valueOf("", ".v2-money-fig", "color")).toBe("var(--v2-ink)");
     expect(valueOf("", ".v2-money[data-stale] .v2-money-fig", "color")).toBe("var(--v2-ink-2)");
+    // Fix round 2: one quiet callout, not a box. A bar in the attention colour
+    // on its leading edge, the normal ink, and no border around it.
     expect(valueOf("", ".v2-money-age", "color")).toBe("var(--v2-ink)");
-    expect(valueOf("", ".v2-money-age", "border")).toMatch(/1px solid var\(--v2-edge\)/);
+    expect(valueOf("", ".v2-money-age", "border")).toBeNull();
+    expect(valueOf("", ".v2-money-age", "border-inline-start")).toBe(
+      "3px solid var(--v2-money-attention)",
+    );
     // The big total and the lowest day's figure step down too, so neither out
     // shouts the age line by size.
     expect(valueOf("", ".v2-money[data-stale] .v2-money-big", "font-size")).toBeTruthy();
@@ -898,12 +904,19 @@ describe("money.css", () => {
   // their root, so a real token later is a one line change; it is a mark, so it
   // is never the colour of a word.
   test("marks danger through one alias, as a mark and never as text", () => {
-    expect(valueOf("", ".v2-money", "--v2-money-danger")).toBe("var(--v2-warn)");
-    // Under a stale ledger the word stays and the alarm colour goes.
+    // The one attention colour, set once; the danger marks read it.
+    expect(valueOf("", ".v2-money", "--v2-money-attention")).toBe("var(--v2-warn)");
+    expect(valueOf("", ".v2-money", "--v2-money-danger")).toBe("var(--v2-money-attention)");
+    // Under a stale ledger the word stays and the marks' colour goes. The age
+    // line's bar reads the attention colour itself, so it is the one place a
+    // stale pane keeps it.
     expect(valueOf("", ".v2-money[data-stale]", "--v2-money-danger")).toBe("var(--v2-ink-3)");
+    expect(valueOf("", ".v2-money[data-stale]", "--v2-money-attention")).toBeNull();
     const asText: string[] = [];
     sheet.walkDecls((decl) => {
-      if (decl.prop === "color" && decl.value.includes("--v2-money-danger")) asText.push(decl.toString());
+      if (decl.prop === "color" && /--v2-(money-danger|money-attention|warn)/.test(decl.value)) {
+        asText.push(decl.toString());
+      }
     });
     expect(asText).toEqual([]);
     const used: string[] = [];
@@ -1051,5 +1064,7 @@ describe("money.css", () => {
 // file can see what the panes lead with.
 test("the stale sample's age line is the one the panes lead with", () => {
   const desk = stale();
-  expect(moneyAge(moneyOf(desk)).line).toMatch(/^No transaction since \d{1,2} [A-Z][a-z]+, 80 days ago\./);
+  expect(moneyAge(moneyOf(desk)).line).toMatch(
+    /^Last known figures\. No transaction since \d{1,2} [A-Z][a-z]+, 80 days ago\.$/,
+  );
 });

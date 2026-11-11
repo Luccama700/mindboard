@@ -139,8 +139,9 @@ describe("it says how old it is first", () => {
     const age = moneyAge({ ...base(), ledgerLastOn: shiftDateKey(TODAY, -50) });
     expect(age.days).toBe(50);
     expect(age.stale).toBe(true);
+    // Fix round 2: the label first, then the fact, as two short sentences.
     expect(age.line).toBe(
-      "No transaction since 20 January, 50 days ago. Everything here is what was last known.",
+      "Last known figures. No transaction since 20 January, 50 days ago.",
     );
   });
 
