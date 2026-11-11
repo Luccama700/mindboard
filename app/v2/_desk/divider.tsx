@@ -123,22 +123,31 @@ function percent(share: number): number {
   return Math.round(share * 100);
 }
 
-/** What one key does to a divider, or null for a key it does not take. */
-function keyedShare(
-  key: string,
-  shift: boolean,
-  dir: Split["dir"],
-  geometry: SplitGeometry,
-): number | "equal" | null {
-  const step = shift ? 0.1 : 0.02;
-  const back = dir === "h" ? "ArrowLeft" : "ArrowUp";
-  const on = dir === "h" ? "ArrowRight" : "ArrowDown";
-  if (key === back) return geometry.now - step;
-  if (key === on) return geometry.now + step;
-  if (key === "Home") return geometry.low;
-  if (key === "End") return geometry.high;
+/** The moves a key makes on a divider. */
+type KeyMove = "back" | "on" | "home" | "end" | "equal";
+
+/**
+ * What one key does to a divider, or null for a key it does not take (a
+ * modifier on its own included). It is the one answer to "does this key do
+ * anything here", so it also decides whether a key may end a drag.
+ */
+export function keyMove(key: string, dir: Split["dir"]): KeyMove | null {
+  if (key === (dir === "h" ? "ArrowLeft" : "ArrowUp")) return "back";
+  if (key === (dir === "h" ? "ArrowRight" : "ArrowDown")) return "on";
+  if (key === "Home") return "home";
+  if (key === "End") return "end";
   if (key === "Enter") return "equal";
   return null;
+}
+
+/** The share a move asks for, from the share drawn now: 2 percent, 10 with Shift. */
+function keyedShare(move: KeyMove, shift: boolean, geometry: SplitGeometry): number | "equal" {
+  const step = shift ? 0.1 : 0.02;
+  if (move === "back") return geometry.now - step;
+  if (move === "on") return geometry.now + step;
+  if (move === "home") return geometry.low;
+  if (move === "end") return geometry.high;
+  return "equal";
 }
 
 interface Drag {
@@ -148,12 +157,17 @@ interface Drag {
   grab: number;
   raw: number | null;
   /**
-   * The arrangement the drag started on. Dividers are keyed by class and place
-   * and split ids are positional, so the same divider can find itself over
-   * another layout's split of the same id (Back, Forward, a layout opened from
-   * the keyboard mid drag): a release then commits nothing.
+   * What the drag belongs to: a layout on a class, and the split it started on.
+   * Dividers are keyed by class and place and split ids are positional, so the
+   * same divider can find itself over another layout's split of the same id
+   * (Back, Forward, a layout opened from the keyboard mid drag): the drag then
+   * ends, and a release commits nothing. Not the arrangement object: a write
+   * from another tab can bring in an equal arrangement as a new object, and a
+   * drag must not die under the hand for that.
    */
-  from: Arrangement;
+  layout: string | null;
+  cls: TiledClass;
+  splitId: string;
   /** The element that holds the pointer, so it can be let go from anywhere. */
   element: HTMLElement;
 }
@@ -204,6 +218,18 @@ export function Divider({
   };
 
   /**
+   * The layout on screen, as the desk last drew it: its root says so. Read off
+   * the page rather than handed down, so a divider needs nothing it did not
+   * already have; null when the divider is drawn outside a desk.
+   */
+  const layoutNow = (): string | null =>
+    stage.current?.closest(".v2-desk")?.getAttribute("data-layout") ?? null;
+
+  /** Whether a recorded drag still belongs to what is on screen: its layout, its class, its split. */
+  const belongs = (held: Drag): boolean =>
+    held.layout === layoutNow() && (cls === null || cls === held.cls) && held.splitId === divider.splitId;
+
+  /**
    * End the drag, committing nothing: the drag mark off the stage, the pointer
    * let go, and the ratio the engine holds for this split NOW written back
    * (React does not rewrite a style it believes unchanged). Answers the drag
@@ -220,11 +246,11 @@ export function Divider({
   };
 
   // A drag lives only as long as what it was started on. When the layout on
-  // screen or the class changes under it, it ends, and commits nothing.
+  // screen, the class or the split changes under it, it ends, and commits
+  // nothing.
   useEffect(() => {
     const held = drag.current;
-    if (held === null) return;
-    if (held.from !== arrangement || (cls !== null && cls !== divider.cls)) finish();
+    if (held !== null && !belongs(held)) finish();
   });
 
   // Unmounted mid drag: let the pointer and the stage go. No ratio is written:
@@ -258,7 +284,9 @@ export function Divider({
       geometry,
       grab: position - geometry.at,
       raw: null,
-      from: arrangement,
+      layout: layoutNow(),
+      cls: divider.cls,
+      splitId: divider.splitId,
       element,
     };
     stage.current.setAttribute("data-drag", divider.dir);
@@ -287,8 +315,8 @@ export function Divider({
     if (drag.current === null || event.pointerId !== drag.current.pointerId) return;
     const held = finish();
     if (held === null || held.raw === null) return;
-    // Started on another arrangement than the one on screen: nothing to commit.
-    if (held.from !== arrangement) return;
+    // Started on another layout, class or split than the one on screen: nothing to commit.
+    if (!belongs(held)) return;
     onRatio(divider.cls, divider.splitId, held.raw, held.geometry.size);
   };
 
@@ -305,12 +333,18 @@ export function Divider({
       finish();
       return;
     }
-    // A key while a drag is recorded ends the drag uncommitted, then does its own work.
-    if (drag.current !== null) finish();
+    // A key that does nothing here (a modifier on its own) leaves a drag alone,
+    // and so does a held key repeating. A key that does something ends a drag
+    // whose release was lost, uncommitted, and then does its own work.
+    const move = keyMove(event.key, divider.dir);
+    if (move === null) return;
+    if (drag.current !== null) {
+      if (event.repeat) return;
+      finish();
+    }
     const geometry = geometryNow();
     if (geometry === null) return;
-    const share = keyedShare(event.key, event.shiftKey, divider.dir, geometry);
-    if (share === null) return;
+    const share = keyedShare(move, event.shiftKey, geometry);
     event.preventDefault();
     if (share === "equal") onEqualize(divider.cls, divider.splitId);
     else onRatio(divider.cls, divider.splitId, share, geometry.size);

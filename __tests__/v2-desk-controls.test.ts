@@ -100,13 +100,18 @@ import {
   isChanged,
   layoutTree,
   leafOf,
+  moveLayout,
   moveTab,
   normalizeRatio,
   openPane,
   parseTileSet,
   ratioText,
+  removeLayout,
+  renameLayout,
+  resetLayout,
   serializeTileSet,
   setCurrent,
+  setHidden,
   setRatio,
   shareLimits,
   toggleMaximize,
@@ -129,6 +134,7 @@ import {
   cookieValue,
   deskCookie,
   mergeSaved,
+  mergeThree,
   saveStep,
   useSavedDesk,
 } from "@/app/v2/_desk/persist";
@@ -1998,6 +2004,267 @@ describe("a drag whose release was lost (fix round 1, item 4)", () => {
     });
     expect(stageOf(container).style.getPropertyValue("--v2-wide-r1")).toBe("0.52");
     expect(splitAt(arrangementOf(saved(), "today", "wide").tree, 1).ratio).toBe(0.52);
+  });
+});
+
+
+// ============================================================ fix round 2
+
+describe("only a key that does something ends a drag (fix round 2, item 1)", () => {
+  test("Shift alone during a live drag changes nothing, and the drag goes on to commit", () => {
+    stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const stage = stageOf(container);
+    const root = dividerOf(container, "wide", 1);
+    const arrangement = arrangementOf(EMPTY_TILE_SET, "today", "wide");
+    const { rect } = engineSplit(arrangement, "s1", WIDE);
+    pointer("pointerdown", root, { clientX: rect.x + 3, pointerId: 1 });
+    pointer("pointermove", root, { clientX: rect.x + 3 + 100, pointerId: 1 });
+    const during = stage.style.getPropertyValue("--v2-wide-r1");
+    act(() => {
+      fireEvent.keyDown(root, { key: "Shift", shiftKey: true });
+    });
+    expect(stage.getAttribute("data-drag")).toBe("h");
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).toBe(during);
+    pointer("pointermove", root, { clientX: rect.x + 3 + 140, pointerId: 1 });
+    pointer("pointerup", root, { clientX: rect.x + 3 + 140, pointerId: 1 });
+    const raw = (rect.x + 140 - rect.start) / (rect.size - 6);
+    const expected = (splitNode(setRatio(arrangement, "s1", raw, rect.size).tree, "s1") as Split).ratio;
+    expect(splitAt(arrangementOf(saved(), "today", "wide").tree, 1).ratio).toBe(expected);
+  });
+
+  test("a held key repeating does not end a drag either", () => {
+    stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const stage = stageOf(container);
+    const root = dividerOf(container, "wide", 1);
+    const { rect } = engineSplit(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "s1", WIDE);
+    pointer("pointerdown", root, { clientX: rect.x + 3, pointerId: 1 });
+    pointer("pointermove", root, { clientX: rect.x + 3 + 100, pointerId: 1 });
+    const during = stage.style.getPropertyValue("--v2-wide-r1");
+    act(() => {
+      fireEvent.keyDown(root, { key: "ArrowRight", repeat: true });
+    });
+    expect(stage.getAttribute("data-drag")).toBe("h");
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).toBe(during);
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("a drag belongs to a layout on a class (fix round 2, item 2)", () => {
+  test("a write from another tab that brings in an equal arrangement as a new object does not end it, and the release commits", () => {
+    stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const stage = stageOf(container);
+    const root = dividerOf(container, "wide", 1);
+    // A stored arrangement for Today on wide, so a merge has an object to replace.
+    act(() => {
+      fireEvent.keyDown(root, { key: "ArrowRight" });
+    });
+    const stored = saved();
+    const arrangement = arrangementOf(stored, "today", "wide");
+    const { rect } = engineSplit(arrangement, "s1", WIDE);
+    pointer("pointerdown", root, { clientX: rect.x + 3, pointerId: 2 });
+    pointer("pointermove", root, { clientX: rect.x + 3 + 60, pointerId: 2 });
+
+    // Another tab closes Status on Week's regular class, and nothing else.
+    // A real tab writes storage, and then the browser tells the others.
+    const theirs = withArrangement(stored, "week", "regular", closePane(arrangementOf(stored, "week", "regular"), "status"));
+    window.localStorage.setItem(DESK_STORAGE_KEY, serializeTileSet(theirs));
+    storageEventFor(serializeTileSet(theirs));
+    expect(stage.getAttribute("data-drag")).toBe("h");
+    expect(captured.get(root)).toBe(2);
+
+    pointer("pointermove", root, { clientX: rect.x + 3 + 90, pointerId: 2 });
+    pointer("pointerup", root, { clientX: rect.x + 3 + 90, pointerId: 2 });
+    const raw = (rect.x + 90 - rect.start) / (rect.size - 6);
+    const expected = (splitNode(setRatio(arrangement, "s1", raw, rect.size).tree, "s1") as Split).ratio;
+    const desk = saved();
+    expect(splitAt(arrangementOf(desk, "today", "wide").tree, 1).ratio).toBe(expected);
+    expect(leafOf(arrangementOf(desk, "week", "regular").tree, "status")).toBeNull();
+  });
+});
+
+describe("the three-way merge before a write (fix round 2, item 3)", () => {
+  /** A desk with two layouts of the user's own, open on Today. */
+  const twoOwn = () =>
+    setCurrent(addLayout(addLayout(EMPTY_TILE_SET, "One", "today", "regular"), "Two", "week", "regular"), "today");
+  const ids = (set: TileSet) => set.layouts.map((meta) => meta.id);
+  const titleIn = (set: TileSet, id: string) => set.layouts.find((meta) => meta.id === id)?.title;
+
+  test("this tab's rename is kept, and a name only the other tab changed is the other's", () => {
+    const base = twoOwn();
+    const merged = mergeThree(base, renameLayout(base, "u1", "Here"), renameLayout(base, "u2", "There"), ["regular"]);
+    expect(titleIn(merged, "u1")).toBe("Here");
+    expect(titleIn(merged, "u2")).toBe("There");
+  });
+
+  test("a layout this tab made is kept, with its arrangements, beside the other tab's change", () => {
+    const base = twoOwn();
+    const mine = withArrangement(
+      addLayout(base, "Made here", "today", "regular"),
+      "u3",
+      "wide",
+      closePane(arrangementOf(base, "today", "wide"), "status"),
+    );
+    const theirs = renameLayout(base, "u2", "There");
+    const merged = mergeThree(base, mine, theirs, ["regular"]);
+    expect(ids(merged)).toEqual(["today", "week", "quests", "money", "u1", "u2", "u3"]);
+    expect(titleIn(merged, "u3")).toBe("Made here");
+    expect(leafOf(arrangementOf(merged, "u3", "wide").tree, "status")).toBeNull();
+    expect(titleIn(merged, "u2")).toBe("There");
+  });
+
+  test("both tabs made a layout with one id: both are kept, this tab's renumbered by the engine", () => {
+    const mine = withArrangement(
+      addLayout(EMPTY_TILE_SET, `Here ${EMOJI}`, "today", "regular"),
+      "u1",
+      "wide",
+      closePane(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "calendar"),
+    );
+    const theirs = addLayout(EMPTY_TILE_SET, "There", "money", "regular");
+    const merged = mergeThree(EMPTY_TILE_SET, mine, theirs, ["regular"]);
+    // The engine's own next id on a desk that holds the other tab's u1.
+    const engineNext = addLayout(theirs, "", "today", "regular").layouts.at(-1)?.id;
+    expect(engineNext).toBe("u2");
+    expect(merged.layouts.map((meta) => [meta.id, meta.title, meta.base])).toEqual([
+      ["today", "Today", "today"],
+      ["week", "Week", "week"],
+      ["quests", "Quests", "quests"],
+      ["money", "Money", "money"],
+      ["u1", "There", "money"],
+      ["u2", `Here ${EMOJI}`, "today"],
+    ]);
+    expect(leafOf(arrangementOf(merged, "u2", "wide").tree, "calendar")).toBeNull();
+    // This tab had its new layout open: it stays open, under its new id.
+    expect(merged.current).toBe("u2");
+  });
+
+  test("a layout this tab deleted stays deleted, even renamed by the other tab", () => {
+    const base = twoOwn();
+    const merged = mergeThree(base, removeLayout(base, "u1"), renameLayout(base, "u1", "There"), ["regular"]);
+    expect(ids(merged)).not.toContain("u1");
+    expect(ids(merged)).toContain("u2");
+  });
+
+  test("a layout the other tab deleted is not brought back", () => {
+    const base = twoOwn();
+    const merged = mergeThree(base, base, removeLayout(base, "u1"), ["regular"]);
+    expect(ids(merged)).not.toContain("u1");
+  });
+
+  test("a layout this tab changed survives a deletion it never saw", () => {
+    const base = twoOwn();
+    const merged = mergeThree(base, renameLayout(base, "u1", "Still here"), removeLayout(base, "u1"), ["regular"]);
+    expect(titleIn(merged, "u1")).toBe("Still here");
+  });
+
+  test("this tab's move is kept, and a layout the other tab made goes after", () => {
+    const base = setCurrent(addLayout(EMPTY_TILE_SET, "One", "today", "regular"), "today");
+    const mine = moveLayout(base, "u1", 0);
+    const theirs = setCurrent(addLayout(base, "Two", "today", "regular"), "today");
+    expect(ids(mergeThree(base, mine, theirs, ["regular"]))).toEqual([
+      "u1",
+      "today",
+      "week",
+      "quests",
+      "money",
+      "u2",
+    ]);
+  });
+
+  test("this tab's hide is kept, beside the other tab's", () => {
+    const merged = mergeThree(
+      EMPTY_TILE_SET,
+      setHidden(EMPTY_TILE_SET, "week", true),
+      setHidden(EMPTY_TILE_SET, "quests", true),
+      ["regular"],
+    );
+    expect(merged.hidden).toEqual(["quests", "week"]);
+  });
+
+  test("a change on a class this tab does not show is kept, and the other tab's on another layout too", () => {
+    const mine = withArrangement(
+      EMPTY_TILE_SET,
+      "today",
+      "regular",
+      closePane(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "status"),
+    );
+    const theirs = withArrangement(
+      EMPTY_TILE_SET,
+      "money",
+      "wide",
+      closePane(arrangementOf(EMPTY_TILE_SET, "money", "wide"), "hours"),
+    );
+    const merged = mergeThree(EMPTY_TILE_SET, mine, theirs, ["wide"]);
+    expect(leafOf(arrangementOf(merged, "today", "regular").tree, "status")).toBeNull();
+    expect(leafOf(arrangementOf(merged, "money", "wide").tree, "hours")).toBeNull();
+  });
+
+  test("this tab's Reset is kept: the default wins over the arrangement the other tab still had", () => {
+    const base = withArrangement(
+      EMPTY_TILE_SET,
+      "today",
+      "regular",
+      closePane(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "status"),
+    );
+    const mine = resetLayout(base, "today", "regular");
+    const theirs = setHidden(base, "money", true);
+    const merged = mergeThree(base, mine, theirs, ["wide"]);
+    expect(isChanged(merged, "today", "regular")).toBe(false);
+    expect(merged.hidden).toEqual(["money"]);
+  });
+
+  test("where this tab changed nothing, the stored value", () => {
+    const theirs = withArrangement(
+      EMPTY_TILE_SET,
+      "today",
+      "regular",
+      closePane(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "status"),
+    );
+    const merged = mergeThree(EMPTY_TILE_SET, EMPTY_TILE_SET, theirs, ["wide"]);
+    expect(leafOf(arrangementOf(merged, "today", "regular").tree, "status")).toBeNull();
+  });
+
+  test("nothing on screen moves: the open layout stays open, and its arrangement on the class shown stays this tab's", () => {
+    const base = withArrangement(
+      EMPTY_TILE_SET,
+      "today",
+      "wide",
+      closePane(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "past-due"),
+    );
+    const theirs = setCurrent(
+      withArrangement(base, "today", "wide", closePane(arrangementOf(base, "today", "wide"), "calendar")),
+      "week",
+    );
+    const shownWide = mergeThree(base, base, theirs, ["wide"]);
+    expect(shownWide.current).toBe("today");
+    expect(leafOf(arrangementOf(shownWide, "today", "wide").tree, "calendar")).not.toBeNull();
+    // On a class not shown here, the other tab's change is taken.
+    const shownRegular = mergeThree(base, base, theirs, ["regular"]);
+    expect(leafOf(arrangementOf(shownRegular, "today", "wide").tree, "calendar")).toBeNull();
+    expect(shownRegular.current).toBe("today");
+  });
+
+  test("in the desk: a tab that missed another's write keeps its own new layout, and the other's", () => {
+    stubMedia(1366);
+    tabs.clear();
+    const first = openTab("first");
+    const second = openTab("second");
+    second.act({ type: "addLayout", title: "Made in the second", from: "today", cls: "regular" });
+    // The first tab never hears of it, and makes one of its own.
+    first.act({ type: "addLayout", title: "Made in the first", from: "week", cls: "regular" });
+    const stored = parseTileSet(window.localStorage.getItem(DESK_STORAGE_KEY));
+    expect(stored.layouts.slice(4).map((meta) => [meta.id, meta.title])).toEqual([
+      ["u1", "Made in the second"],
+      ["u2", "Made in the first"],
+    ]);
+    expect(stored.current).toBe("u2");
+    expect(first.set.current).toBe("u2");
+    expect(first.set.layouts.map((meta) => meta.id)).toEqual(["today", "week", "quests", "money", "u1", "u2"]);
   });
 });
 
