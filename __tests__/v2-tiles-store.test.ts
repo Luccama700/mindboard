@@ -728,29 +728,81 @@ describe("the user's own layouts", () => {
 // ------------------------------------------------------------------ cleanTitle
 
 describe("cleanTitle", () => {
-  const smile = String.fromCodePoint(0x1f600);
+  // Every character this block is about is built from its code point, so no
+  // invisible or direction changing character sits in this source file.
+  const at = (...points: number[]): string => String.fromCodePoint(...points);
+  const smile = at(0x1f600);
+  const NUL = at(0x0);
+  const DEL = at(0x7f);
+  const CSI = at(0x9b);
+  const NBSP = at(0xa0);
+  const EM_SPACE = at(0x2003);
+  const ZWSP = at(0x200b);
+  const ZWNJ = at(0x200c);
+  const ZWJ = at(0x200d);
+  const RLO = at(0x202e);
+  const LRI = at(0x2066);
+  const PDI = at(0x2069);
+  const BOM = at(0xfeff);
+  const VS16 = at(0xfe0f);
+  const HIGH = String.fromCharCode(0xd800);
+  const LOW = String.fromCharCode(0xdc00);
+  const MAN = at(0x1f468);
+  const family = at(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467);
+  const england = at(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
+
+  const isJoiner = (char: string): boolean => char === ZWJ || char === ZWNJ;
+  const isTag = (char: string): boolean => {
+    const point = char.codePointAt(0) ?? 0;
+    return point >= 0xe0020 && point <= 0xe007f;
+  };
+  const isSelector = (char: string): boolean => {
+    const point = char.codePointAt(0) ?? 0;
+    return (point >= 0xfe00 && point <= 0xfe0f) || (point >= 0xe0100 && point <= 0xe01ef);
+  };
+  const isSpace = (char: string): boolean => /^\s$/.test(char);
 
   test("trims, and collapses any run of whitespace to one space", () => {
     expect(cleanTitle("  Deep work  ")).toBe("Deep work");
     expect(cleanTitle("Deep \n\t  work")).toBe("Deep work");
-    expect(cleanTitle("Deep  work")).toBe("Deep work");
+    expect(cleanTitle(`Deep${NBSP}${EM_SPACE}work`)).toBe("Deep work");
   });
 
   test("drops control characters, and a half of a surrogate pair standing alone", () => {
-    expect(cleanTitle("Deep\u0000work\u007f\u009b")).toBe("Deepwork");
-    expect(cleanTitle("a \u0000 b")).toBe("a b");
-    expect(cleanTitle("a\ud800b\udc00c")).toBe("abc");
+    expect(cleanTitle(`Deep${NUL}work${DEL}${CSI}`)).toBe("Deepwork");
+    expect(cleanTitle(`a ${NUL} b`)).toBe("a b");
+    expect(cleanTitle(`a${HIGH}b${LOW}c`)).toBe("abc");
   });
 
-  test("drops format characters: zero width ones, joiners, direction overrides and isolates", () => {
-    expect(cleanTitle("​")).toBe("Layout");
-    expect(cleanTitle("​‍‮⁦ ⁩")).toBe("Layout");
-    expect(cleanTitle("Deep​work")).toBe("Deepwork");
-    expect(cleanTitle("a‍b")).toBe("ab");
-    expect(cleanTitle("‮evil")).toBe("evil");
-    expect(cleanTitle("left ⁦right⁩")).toBe("left right");
-    expect(cleanTitle("a ​ b")).toBe("a b");
-    expect(cleanTitle("﻿Mine")).toBe("Mine");
+  test("drops format characters: zero width spaces, direction overrides and isolates, a byte order mark", () => {
+    expect(cleanTitle(ZWSP)).toBe("Layout");
+    expect(cleanTitle(`Deep${ZWSP}work`)).toBe("Deepwork");
+    expect(cleanTitle(`${RLO}evil`)).toBe("evil");
+    expect(cleanTitle(`left ${LRI}right${PDI}`)).toBe("left right");
+    expect(cleanTitle(`a ${ZWSP} b`)).toBe("a b");
+    expect(cleanTitle(`${BOM}Mine`)).toBe("Mine");
+  });
+
+  test("keeps the joiners and the tags that emoji are made of", () => {
+    expect(cleanTitle(`${family} Home`)).toBe(`${family} Home`);
+    expect(cleanTitle(`${england} Away`)).toBe(`${england} Away`);
+    expect(cleanTitle(`a${ZWNJ}b`)).toBe(`a${ZWNJ}b`);
+    expect(cleanTitle(`${RLO}${family}${ZWSP}`)).toBe(family);
+  });
+
+  test("a title with nothing visible left in it is the fallback name", () => {
+    expect(cleanTitle(ZWJ)).toBe("Layout");
+    expect(cleanTitle(`${ZWSP}${ZWJ}${RLO}${LRI} ${PDI}`)).toBe("Layout");
+    expect(cleanTitle(`${ZWJ} ${ZWNJ} ${VS16}`)).toBe("Layout");
+    expect(cleanTitle(at(0xe0067, 0xe0062, 0xe007f))).toBe("Layout");
+  });
+
+  test("a cut inside a joined sequence leaves no joiner at the end", () => {
+    // Twenty two letters and the five code points of the family: the cut at
+    // twenty four lands just after the first joiner.
+    expect(cleanTitle(`${"a".repeat(22)}${family}`)).toBe(`${"a".repeat(22)}${MAN}`);
+    expect(cleanTitle(`${"a".repeat(23)}${ZWJ}${ZWJ}b`)).toBe("a".repeat(23));
+    expect(cleanTitle(`${"a".repeat(22)} ${ZWJ}b`)).toBe("a".repeat(22));
   });
 
   test("keeps at most 24 code points, never half a pair, and nothing trailing", () => {
@@ -763,13 +815,68 @@ describe("cleanTitle", () => {
   test("gives Layout for what is left empty", () => {
     expect(cleanTitle("")).toBe("Layout");
     expect(cleanTitle("   ")).toBe("Layout");
-    expect(cleanTitle("\u0000\u0001\t")).toBe("Layout");
+    expect(cleanTitle(`${NUL}${at(0x1)}\t`)).toBe("Layout");
     expect(cleanTitle(42 as unknown as string)).toBe("Layout");
   });
 
   test("leaves a clean title exactly as it is", () => {
-    for (const title of ["Today", "Deep work", `Plan ${smile}`]) {
+    for (const title of ["Today", "Deep work", `Plan ${smile}`, `${family} Home`, england]) {
       expect(cleanTitle(title)).toBe(title);
+    }
+  });
+
+  test("cleaning a cleaned title changes nothing, over generated titles", () => {
+    const random = seeded(0x7171e);
+    const pieces = [
+      "a",
+      "Z",
+      "e",
+      " ",
+      "  ",
+      "\t",
+      "\n",
+      NBSP,
+      ZWSP,
+      ZWNJ,
+      ZWJ,
+      RLO,
+      LRI,
+      PDI,
+      BOM,
+      VS16,
+      NUL,
+      HIGH,
+      LOW,
+      smile,
+      MAN,
+      family,
+      england,
+      at(0xe0067),
+      at(0xe007f),
+    ];
+    const unshown = new RegExp("^[\\p{Cc}\\p{Cf}\\p{Cs}]$", "u");
+    for (let round = 0; round < 400; round += 1) {
+      const length = Math.floor(random() * 40);
+      let raw = "";
+      for (let index = 0; index < length; index += 1) {
+        raw += pieces[Math.min(pieces.length - 1, Math.floor(random() * pieces.length))];
+      }
+      const label = JSON.stringify(raw);
+      const once = cleanTitle(raw);
+      expect(cleanTitle(once), label).toBe(once);
+      const points = Array.from(once);
+      expect(points.length, label).toBeLessThanOrEqual(24);
+      const unwanted = points.filter(
+        (char) => unshown.test(char) && !isJoiner(char) && !isTag(char),
+      );
+      expect(unwanted, label).toEqual([]);
+      expect(isSpace(points[0]), label).toBe(false);
+      const last = points[points.length - 1];
+      expect(isSpace(last) || isJoiner(last), label).toBe(false);
+      const draws = points.some(
+        (char) => !isSpace(char) && !isJoiner(char) && !isTag(char) && !isSelector(char),
+      );
+      expect(once === "Layout" || draws, label).toBe(true);
     }
   });
 });

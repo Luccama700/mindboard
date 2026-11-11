@@ -391,31 +391,97 @@ export function resetLayout(set: TileSet, layout: LayoutId, cls: ScreenClass | n
 // --------------------------------------------------------------- layouts
 
 /**
- * What a title may not hold: control characters (Unicode category Cc), format
- * characters (Cf: zero width characters, joiners, the direction overrides and
- * isolates that can reorder the text beside a title on the rail) and halves of
- * a surrogate pair standing alone (Cs, which only a lone half can match in a
- * Unicode pattern). The controls that are whitespace, tab to carriage return,
- * are left for the whitespace step to turn into a space.
+ * One character a title may not hold: a control character (Unicode category
+ * Cc), a format character (Cf: zero width spaces, the direction overrides and
+ * isolates that can reorder the text beside a title on the rail, a byte order
+ * mark) or half of a surrogate pair standing alone (Cs, which only a lone half
+ * can match in a Unicode pattern). `keepsInTitle` makes the exceptions.
  *
  * Built with the constructor because this project's compile target does not
  * promise a Unicode property pattern in a literal; every runtime the app ships
  * to understands one.
  */
-const UNSHOWN = new RegExp("(?![\\t-\\r])[\\p{Cc}\\p{Cf}\\p{Cs}]", "gu");
+const UNSHOWN = new RegExp("^[\\p{Cc}\\p{Cf}\\p{Cs}]$", "u");
+
+/** One whitespace character. Every one of them is in the basic plane. */
+const SPACE = /^\s$/;
+
+/** Tab to carriage return: the controls that are whitespace, which become a space. */
+const SPACE_CONTROL_FIRST = 0x09;
+const SPACE_CONTROL_LAST = 0x0d;
+
+/** Zero width non joiner and zero width joiner: the format characters joined emoji and some scripts are made of. */
+const NON_JOINER = 0x200c;
+const JOINER = 0x200d;
+
+/** The tag characters, which turn a black flag into the flag of a subdivision. */
+const TAG_FIRST = 0xe0020;
+const TAG_LAST = 0xe007f;
+
+/** Variation selectors: they change how the character before them is drawn and draw nothing themselves. */
+const SELECTORS: ReadonlyArray<readonly [number, number]> = [
+  [0xfe00, 0xfe0f],
+  [0xe0100, 0xe01ef],
+];
+
+function pointOf(char: string): number {
+  return char.codePointAt(0) ?? 0;
+}
+
+function isJoiner(char: string): boolean {
+  const point = pointOf(char);
+  return point === NON_JOINER || point === JOINER;
+}
+
+function isTag(char: string): boolean {
+  const point = pointOf(char);
+  return point >= TAG_FIRST && point <= TAG_LAST;
+}
 
 /**
- * A title as it is kept: control and format characters and halves of a
- * surrogate pair standing alone dropped, every run of whitespace one space,
- * trimmed, at most 24 code points (a pair is one code point and is never cut in
- * half), and "Layout" for whatever is left empty, a title of nothing but zero
- * width characters included.
+ * Whether a title keeps this character. Everything is kept except what
+ * `UNSHOWN` matches, and of that the whitespace controls (turned into a space
+ * next), the two joiners and the tags are kept too, so a family or a flag in a
+ * layout's name survives whole.
+ */
+function keepsInTitle(char: string): boolean {
+  const point = pointOf(char);
+  if (point >= SPACE_CONTROL_FIRST && point <= SPACE_CONTROL_LAST) return true;
+  if (isJoiner(char) || isTag(char)) return true;
+  return !UNSHOWN.test(char);
+}
+
+/** Whether this character draws anything: not whitespace, a joiner, a tag or a variation selector. */
+function draws(char: string): boolean {
+  if (SPACE.test(char) || isJoiner(char) || isTag(char)) return false;
+  const point = pointOf(char);
+  return !SELECTORS.some(([low, high]) => point >= low && point <= high);
+}
+
+/**
+ * A title as it is kept:
+ *
+ *   - control characters, format characters and halves of a surrogate pair
+ *     standing alone dropped, except the two joiners and the tags;
+ *   - every run of whitespace one space, and trimmed;
+ *   - at most 24 code points (a pair is one code point and is never cut in
+ *     half), with any joiner or space the cut leaves at the end dropped, so a
+ *     cut inside a joined emoji leaves no dangling joiner;
+ *   - "Layout" when nothing that draws is left, a title of nothing but
+ *     joiners, tags and variation selectors included.
+ *
+ * Cleaning a cleaned title changes nothing.
  */
 export function cleanTitle(raw: string): string {
   if (typeof raw !== "string") return UNTITLED;
-  const spaced = raw.replace(UNSHOWN, "").replace(/\s+/g, " ").trim();
-  const cut = Array.from(spaced).slice(0, TITLE_MAX_LENGTH).join("").trimEnd();
-  return cut.length === 0 ? UNTITLED : cut;
+  const kept = Array.from(raw).filter(keepsInTitle).join("");
+  const points = Array.from(kept.replace(/\s+/g, " ").trim()).slice(0, TITLE_MAX_LENGTH);
+  while (points.length > 0) {
+    const last = points[points.length - 1];
+    if (!SPACE.test(last) && !isJoiner(last)) break;
+    points.pop();
+  }
+  return points.some(draws) ? points.join("") : UNTITLED;
 }
 
 /**
@@ -646,6 +712,12 @@ function nothingOpen(): Arrangement {
  * NOT put a default in that tree's place, flatten for a class, or drop an
  * arrangement that is its layout's default: it knows no layout and no class.
  * The set's parser does those three, and calls this for every slot.
+ *
+ * The catch below is the reason it can promise never to throw. It is the
+ * boundary for text from a cookie and from storage, and a page must never fail
+ * to render because of what that text held. An internal error of the engine's
+ * own would land in the same catch and look like a value with nothing in it,
+ * so it is the repair tests on well formed input that would show one.
  */
 export function repairArrangement(value: unknown): Arrangement {
   try {
