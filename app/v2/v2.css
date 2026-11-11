@@ -1275,8 +1275,14 @@ body:has([data-v2-root]) {
   }
 
   /* A pill around six dots, not a control: it shrink wraps and it is not 44px
-     tall here, because nothing in it is pressable. */
-  [data-v2-root] .v2-side .v2-feeds {
+     tall here, because nothing in it is pressable.
+     IN THE SIDE COLUMN OR IN A PANE. These leaves are restyled for sitting
+     beside the day, and a pane of the desk is the same kind of place, so each
+     rule here and under "the side column's blocks" names both, through
+     :where() so the page's own specificity is what it was. Each still wins over
+     the rule it overrides: it ties it and comes later in the file, except the
+     row title's, whose weight is carried by its own class (see there). */
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-feeds {
     display: inline-flex;
     align-self: flex-start;
     min-height: 28px;
@@ -1284,7 +1290,7 @@ body:has([data-v2-root]) {
   }
 
   /* Small caps over every block is the look this screen is not. */
-  [data-v2-root] .v2-side .v2-allday-label {
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-allday-label {
     text-transform: none;
     letter-spacing: 0.01em;
     font-size: 12px;
@@ -1401,36 +1407,40 @@ body:has([data-v2-root]) {
 
   /* Each block is a block of information rather than a box: a quiet heading and
      its rows, separated by space. The one surface in here is the row itself. */
-  [data-v2-root] .v2-side .v2-energy,
-  [data-v2-root] .v2-side .v2-said {
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-energy,
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-said {
     padding: 0;
   }
 
-  [data-v2-root] .v2-side .v2-said {
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-said {
     min-height: 20px;
   }
 
-  [data-v2-root] .v2-side .v2-allday {
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-allday {
     padding: 0;
   }
 
-  [data-v2-root] .v2-side .v2-sub {
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-sub {
     padding: 0 0 6px;
     font-size: 13px;
     color: var(--v2-ink-3);
   }
 
-  [data-v2-root] .v2-side .v2-row {
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-row {
     margin: 4px 0 0;
     padding: 9px 12px;
     border-radius: 12px;
   }
 
-  [data-v2-root] .v2-side .v2-row b {
+  /* The title's own class carries the weight :where() took away. This rule
+     overrides `.v2-row .v2-row-title` (two classes after the root), and with
+     only `.v2-row b` after the :where() it would have lost to it: the side
+     column's titles went back to 15px. The title is the row's only <b>. */
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-row b.v2-row-title {
     font-size: 14px;
   }
 
-  [data-v2-root] .v2-side .v2-more {
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-more {
     margin: 8px 0 0;
     min-height: 36px;
   }
@@ -1539,6 +1549,51 @@ body:has([data-v2-root]) {
     scrollbar-width: thin;
     scrollbar-color: var(--v2-edge) transparent;
     scrollbar-gutter: stable;
+  }
+}
+
+/* ============================================================================
+ * INSIDE A PANE
+ *
+ * A pane of the desk (desk.css) is a size container named v2-pane. A leaf drawn
+ * in one answers to the pane's own width, never the window's: the same leaf is
+ * right in a 230px tab and in a 1300px half of the screen. The side column's
+ * own restyles reach a pane through :where(.v2-side, .v2-pane) in the desktop
+ * page above; these are the rest. Today's page has no .v2-pane, so none of this
+ * reaches it.
+ * ==========================================================================*/
+
+/* The two sizes that follow the phone's width follow the pane's instead.
+   Written on .v2-pane, so they also out-rank the desktop tier's 30px and 21px,
+   which are sizes for Today's own wide column: in a pane the date stops at
+   21px whatever the window. */
+[data-v2-root] .v2-pane .v2-top h1 {
+  font-size: clamp(18px, 5.4cqw, 21px);
+}
+
+[data-v2-root] .v2-pane .v2-lit h3 {
+  font-size: clamp(18px, 5.2cqw, 21px);
+}
+
+/* A list's rows by the pane's own width: one across, two from 600px, three
+   from 900px, and never more, so a row is never one long line of title with
+   its date a hand's width away. minmax(0, ...) so one long word in a title
+   cannot widen its track. */
+[data-v2-root] .v2-pane .v2-list-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+@container v2-pane (width >= 600px) {
+  [data-v2-root] .v2-pane .v2-list-rows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container v2-pane (width >= 900px) {
+  [data-v2-root] .v2-pane .v2-list-rows {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 

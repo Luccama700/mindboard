@@ -1,0 +1,120 @@
+/* The desk: the box a pane is drawn in, and the gallery that shows one pane
+ * alone at a fixed size.
+ *
+ * Loaded after v2.css and calendar.css (app/v2/layout.tsx), whose tokens it
+ * reads and whose leaves it holds, and scoped the same way: every selector
+ * starts at [data-v2-root], so nothing here can reach a page outside app/v2.
+ *
+ * NO COLOUR IS WRITTEN HERE. Every colour is a scheme token from v2.css.
+ * __tests__/v2-appearance.test.ts reads every stylesheet in this folder for a
+ * hex, an rgb() or an hsl() and must find none.
+ *
+ * A LEAF SIZES BY ITS PANE. The box is a size container named `v2-pane`, and a
+ * leaf that changes with its room asks that container, never the window: the
+ * same body is right in a 230px tab and in a 1300px half of the screen. The
+ * leaf rules that do so live beside the leaves, in v2.css ("INSIDE A PANE"),
+ * and the side column's own rules there are written for both places at once.
+ * What is here is the box itself and what a body is wrapped in.
+ *
+ * Nothing here animates. Reduced motion is v2.css's one rule, which stops
+ * every transition under [data-v2-root].
+ */
+
+/* ------------------------------------------------------------------- the box */
+
+/* Fills whatever holds it, and holds its body to its own size: a body that is
+   taller than the box scrolls inside it (below), never the page. */
+[data-v2-root] .v2-pane {
+  container-type: inline-size;
+  container-name: v2-pane;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The scroller every body shares. It is the column the side lists are on a
+   wide window: thin bar in the scheme's own colours, its gutter always kept so
+   pressing Show more does not shift a row, and inline padding so the focus
+   ring of a row or a button inside is not cut off at the edge. */
+[data-v2-root] .v2-pane-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 16px 10px 20px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--v2-edge) transparent;
+  scrollbar-gutter: stable;
+}
+
+/* The ring the lists have: inside the box, where the box's own edge cannot cut
+   it off. */
+[data-v2-root] .v2-pane-body:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The calendar has a scroller of its own (its grid, or its agenda), sized by
+   the pane it is in. Held to the box's height it is the only one: a scroller
+   inside another traps the wheel in the inner one. */
+[data-v2-root] .v2-pane-body > .v2-cal {
+  height: 100%;
+}
+
+/* ------------------------------------------------------------- what a body is */
+
+/* The day's own pane: its header, the energy answer and the line, as one column
+   of blocks. THE LINE NEVER GROWS WIDER THAN 640PX, as Today's own column does
+   not: a stop stretched across a 1300px pane is one long line of title with its
+   time a hand's width away. The cap is on the whole column rather than on the
+   line alone, so the energy control and the date stay with the line instead of
+   stretching to the far edge. */
+[data-v2-root] .v2-pane-day {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 640px;
+}
+
+/* Status: its blocks stacked with the side column's own spacing. */
+[data-v2-root] .v2-pane-status {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* One quiet sentence in place of a body: a pane that is not built yet. */
+[data-v2-root] .v2-pane-note {
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  text-wrap: pretty;
+}
+
+/* --------------------------------------------------------------- the gallery */
+
+/* One line, the live region (read, not seen), and the box at exactly the size
+   asked for. The page scrolls when the box is wider or taller than the window:
+   the box never gives way, because its size is the thing being looked at. */
+[data-v2-root] .v2-gallery {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px;
+}
+
+[data-v2-root] .v2-gallery-line {
+  color: var(--v2-ink-3);
+  font: 600 13px/1.2 var(--v2-display);
+  font-variant-numeric: tabular-nums;
+}
+
+/* An outline, not a border, so the edge of the box is visible without taking
+   a pixel of the size being looked at. */
+[data-v2-root] .v2-gallery > .v2-pane {
+  flex: none;
+  outline: 1px dashed var(--v2-edge);
+}

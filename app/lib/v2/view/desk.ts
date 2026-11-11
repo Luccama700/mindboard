@@ -1,0 +1,114 @@
+// The desk's words, and what the pane gallery is asked for.
+//
+// Pure: no DOM, no storage, no clock. The gallery page reads its search
+// parameters through `galleryRequest`, so what a URL can ask for is decided in
+// one place a test can reach without rendering a page.
+
+/** Every static string the desk prints. Later tasks add theirs. */
+export const DESK_COPY = {
+  heading: "Desk",
+  /** A pane id the desk has no body for yet, or one it does not know at all. */
+  notBuilt: "This pane is not built yet.",
+  /** A source that cannot speak about quests at all. */
+  noQuests: "No quests in this copy.",
+  /** A source that holds no money data. */
+  noMoney: "No money data in this copy.",
+  /** The gallery's one line over the box. `{pane}`, `{w}` and `{h}` are filled. */
+  gallery: "{pane}, {w} by {h} px",
+} as const;
+
+/** The gallery's one line: which pane, and the size of its box. */
+export function galleryLine(pane: string, width: number, height: number): string {
+  return DESK_COPY.gallery
+    .replace("{pane}", pane)
+    .replace("{w}", String(width))
+    .replace("{h}", String(height));
+}
+
+/** The gallery's box in px: the default, and the bounds each side is held to. */
+export const GALLERY_SIZE = { width: 464, height: 600, min: 160, max: 2400 } as const;
+
+/** The pane the gallery draws when the URL names none. */
+const DEFAULT_PANE = "today";
+
+/** Where a pane's options sit in the gallery's URL: `?o.<key>=<value>`. */
+const OPTION_PREFIX = "o.";
+
+type Search = Record<string, string | string[] | undefined>;
+
+/** What one request to the gallery asked for, read and held to its bounds. */
+export interface GalleryRequest {
+  /** As given: an id the registry does not know draws NotBuilt, and is named. */
+  paneId: string;
+  width: number;
+  height: number;
+  /** The pane's view options, key to value. The body judges each one. */
+  options: Record<string, string>;
+  /** `?stale=1`: the sample's money as it looks when the ledger is old. */
+  stale: boolean;
+  /** The day a snapshot is asked to plan, or null. The source judges it. */
+  date: string | null;
+  /** The week a calendar link asked for, or null. The source judges it. */
+  week: string | null;
+}
+
+/**
+ * One parameter, as a string. A repeated parameter arrives as a list, which is
+ * not any one value, so it is read as absent rather than as its first entry.
+ */
+function oneOf(value: string | string[] | undefined): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * One side of the box: a whole number of px, held to the bounds. Anything that
+ * is not plainly a whole number (empty, signed, a decimal, an exponent, a list)
+ * is the default, because a parameter is in a URL and a bad one must not cost
+ * the page.
+ */
+function side(value: string | string[] | undefined, fallback: number): number {
+  const text = oneOf(value);
+  if (text === null || !/^\d+$/.test(text)) return fallback;
+  return Math.min(GALLERY_SIZE.max, Math.max(GALLERY_SIZE.min, Number(text)));
+}
+
+export function galleryRequest(asked: Search): GalleryRequest {
+  const options: Record<string, string> = {};
+  for (const [name, value] of Object.entries(asked)) {
+    if (!name.startsWith(OPTION_PREFIX) || name.length === OPTION_PREFIX.length) continue;
+    const text = oneOf(value);
+    if (text !== null) options[name.slice(OPTION_PREFIX.length)] = text;
+  }
+  return {
+    paneId: oneOf(asked.pane) ?? DEFAULT_PANE,
+    width: side(asked.w, GALLERY_SIZE.width),
+    height: side(asked.h, GALLERY_SIZE.height),
+    options,
+    stale: oneOf(asked.stale) === "1",
+    date: oneOf(asked.date),
+    week: oneOf(asked.week),
+  };
+}
+
+/**
+ * What every link inside the gallery carries back besides its own parameter, so
+ * a calendar's week link redraws the same pane at the same size with the same
+ * options. The sizes are the ones the box was drawn at, not the raw ones.
+ *
+ * The `date` is carried only when it is the day that was planned, exactly as
+ * Today carries it: a date the source ignored changed nothing, and a link that
+ * dropped one it used would plan the clock's day instead.
+ */
+export function galleryKeep(request: GalleryRequest, plannedDate: string): Record<string, string> {
+  const keep: Record<string, string> = {
+    pane: request.paneId,
+    w: String(request.width),
+    h: String(request.height),
+  };
+  for (const [key, value] of Object.entries(request.options)) {
+    keep[`${OPTION_PREFIX}${key}`] = value;
+  }
+  if (request.stale) keep.stale = "1";
+  if (request.date !== null && request.date === plannedDate) keep.date = request.date;
+  return keep;
+}
