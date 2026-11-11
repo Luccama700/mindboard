@@ -388,6 +388,8 @@ export function DeskClient({
       <DeskDataProvider data={data} keep={keep}>
         <DayProvider key={data.today.input.date} data={data.today}>
           <div className="v2-desk" data-layout={layout}>
+            {/* The page's one h1, read and not seen: each frame's h2 sits under it. */}
+            <h1 className="v2-hidden">{deskLine(DESK_COPY.deskTitle, { layout: titleIn(set, layout) })}</h1>
             <DeskTopBar set={set} cls={cls} date={date} week={week} onOpen={openLayout} onLayout={onLayout} />
             <DeskRail
               set={set}

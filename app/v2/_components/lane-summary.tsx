@@ -25,15 +25,23 @@ import { useAppearance } from "./appearance-root";
  * its own and takes the neutral mark: in a real account half the open tasks
  * belong to no lane, and before that row they appeared nowhere on this screen.
  */
-export function LaneSummary({ lanes }: { lanes: TodayView["lanes"] }) {
+export function LaneSummary({
+  lanes,
+  headingLevel = 2,
+}: {
+  lanes: TodayView["lanes"];
+  /** The heading's level: 2 on Today, 3 inside a frame of the desk, whose title is the h2. */
+  headingLevel?: 2 | 3;
+}) {
   const { tokens } = useAppearance();
   if (lanes.length === 0) return null;
+  const Heading = headingLevel === 3 ? "h3" : "h2";
 
   return (
     <section className="v2-side-block v2-desk-only" aria-labelledby="v2-lanes">
-      <h2 className="v2-side-head" id="v2-lanes">
+      <Heading className="v2-side-head" id="v2-lanes">
         {TODAY_COPY.lanesHeading}
-      </h2>
+      </Heading>
       <ul className="v2-lanes">
         {lanes.map((lane) => (
           <li

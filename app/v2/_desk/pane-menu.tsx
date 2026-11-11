@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 import { flushSync } from "react-dom";
 
 import {
@@ -211,6 +211,8 @@ export function PaneMenu({
   const wrap = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  /** Whether the focus is in the menu, as its focus events last said. */
+  const focusInside = useRef(false);
   const menuId = `v2-frame-${paneId}-menu`;
   const buttonId = `v2-frame-${paneId}-menu-button`;
   const name = deskLine(DESK_COPY.paneMenu, { pane: title });
@@ -228,9 +230,25 @@ export function PaneMenu({
   };
 
   const close = (returnFocus: boolean) => {
+    focusInside.current = false;
     flushSync(() => setMenu(null));
     if (returnFocus) button.current?.focus();
   };
+
+  // CLOSED UNDER THE USER: the menu is still held but on another set or class
+  // (another tab's write, the saved desk loading, Back), so its items are gone
+  // from under the focus. When the focus was in it, it goes back to the button,
+  // not to the page. Whether it was in it is kept from the focus events: a
+  // focused item that is taken away leaves the focus nowhere, with no blur
+  // that says where it went.
+  const stale = menu !== null && !open;
+  useLayoutEffect(() => {
+    if (!stale || !focusInside.current) return;
+    focusInside.current = false;
+    const active = document.activeElement;
+    const lost = active === null || active === document.body || !active.isConnected;
+    if (lost || (list.current?.contains(active) ?? false)) button.current?.focus();
+  }, [stale]);
 
   // A press anywhere outside the button and its menu closes it, and the focus
   // stays where the press put it.
@@ -323,6 +341,15 @@ export function PaneMenu({
         aria-labelledby={buttonId}
         hidden={!open}
         onKeyDown={onMenuKey}
+        onFocus={() => {
+          focusInside.current = true;
+        }}
+        onBlur={(event) => {
+          // Only a move to somewhere known says it left; a blur to nowhere is
+          // an item taken away under it, or the window let go of.
+          const next = event.relatedTarget;
+          if (next instanceof Node && !event.currentTarget.contains(next)) focusInside.current = false;
+        }}
       >
         {items.flatMap((item, index) => [
           index > 0 && items[index - 1].group !== item.group ? (

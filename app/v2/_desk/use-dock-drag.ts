@@ -53,7 +53,7 @@ import {
 } from "@/app/lib/v2/tiles";
 import { DESK_COPY, deskLine } from "@/app/lib/v2/view/desk";
 import { measureWorkspace } from "./divider";
-import { mayMove, playOn, readTimes } from "./flip";
+import { playOn, readTimes, reducedMotion } from "./flip";
 import { tilesReducer, type TilesAction, type TilesState } from "./use-tiles";
 
 /**
@@ -194,20 +194,26 @@ export interface DockOptions {
 
 /**
  * The click a release makes after a drag that was up, swallowed before anything
- * hears it. Taken off at the next press, or after this task, so it can never
- * eat a later click.
+ * hears it, and the double click too: a click on a header just before the
+ * press that became the drag makes the release a double click, which would
+ * maximize the pane just dropped. Each is swallowed once. All of it comes off
+ * at the next press or after this task, so nothing stays deaf to a later one.
  */
 function swallowNextClick(): void {
-  const swallow = (event: Event) => {
-    event.stopPropagation();
-    event.preventDefault();
-    disarm();
+  const once = (type: "click" | "dblclick") => {
+    const swallow = (event: Event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      window.removeEventListener(type, swallow, true);
+    };
+    window.addEventListener(type, swallow, true);
+    return () => window.removeEventListener(type, swallow, true);
   };
+  const offs = [once("click"), once("dblclick")];
   const disarm = () => {
-    window.removeEventListener("click", swallow, true);
+    for (const off of offs) off();
     window.removeEventListener("pointerdown", disarm, true);
   };
-  window.addEventListener("click", swallow, true);
   window.addEventListener("pointerdown", disarm, true);
   window.setTimeout(disarm, 0);
 }
@@ -311,7 +317,9 @@ export function useDockDrag(options: DockOptions): {
     overlay.setAttribute("data-target", target.over);
     const words = overlay.querySelector(`.${DOCK_WORDS_CLASS}`);
     if (words !== null) words.textContent = target.words;
-    if (!mayMove(record.stage)) return;
+    // The overlay's own fade plays while the pane is up (mayMove holds the
+    // frames still then); only a divider drag or reduced motion stops it.
+    if (record.stage.hasAttribute("data-drag") || reducedMotion()) return;
     const times = readTimes(record.stage);
     record.fade = playOn(overlay, [{ opacity: 0 }, { opacity: 1 }], {
       duration: times.quick,
@@ -429,12 +437,21 @@ export function useDockDrag(options: DockOptions): {
         if (press !== record.start) finish();
       };
 
+      // The window let go of (another window, another tab, the page hidden)
+      // with the button still held: the release may never come here.
+      const onWindowBlur = () => finish();
+      const onVisibility = () => {
+        if (document.visibilityState === "hidden") finish();
+      };
+
       record.detach = () => {
         document.removeEventListener("pointermove", onMove);
         document.removeEventListener("pointerup", onUp);
         document.removeEventListener("pointercancel", onCancel);
         document.removeEventListener("pointerdown", onPress);
         document.removeEventListener("keydown", onKey, true);
+        document.removeEventListener("visibilitychange", onVisibility);
+        window.removeEventListener("blur", onWindowBlur);
         record.handle.removeEventListener("lostpointercapture", onLost);
       };
       document.addEventListener("pointermove", onMove);
@@ -442,6 +459,8 @@ export function useDockDrag(options: DockOptions): {
       document.addEventListener("pointercancel", onCancel);
       document.addEventListener("pointerdown", onPress);
       document.addEventListener("keydown", onKey, true);
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("blur", onWindowBlur);
       held.current = record;
     },
     [finish, aim],

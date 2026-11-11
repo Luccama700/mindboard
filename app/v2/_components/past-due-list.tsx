@@ -27,6 +27,7 @@ import { ListRow } from "./list-row";
 export function PastDueList({
   entries,
   tabStop = true,
+  headingLevel = 2,
 }: {
   entries: TodayView["pastDue"];
   /**
@@ -34,7 +35,10 @@ export function PastDueList({
    * desk, whose scroller is already the one stop that scrolls it.
    */
   tabStop?: boolean;
+  /** The heading's level: 2 on Today, 3 inside a frame of the desk, whose title is the h2. */
+  headingLevel?: 2 | 3;
 }) {
+  const Heading = headingLevel === 3 ? "h3" : "h2";
   const [all, setAll] = useState(false);
   if (entries.length === 0) return null;
 
@@ -50,9 +54,9 @@ export function PastDueList({
       aria-labelledby="v2-past-due"
       tabIndex={tabStop ? 0 : undefined}
     >
-      <h2 className="v2-sub" id="v2-past-due">
+      <Heading className="v2-sub" id="v2-past-due">
         {TODAY_COPY.pastDueHeading}
-      </h2>
+      </Heading>
       <p className="v2-side-line">{TODAY_COPY.pastDueLine}</p>
       {/* Its own element so a very wide column can lay the rows two across. */}
       <div className="v2-list-rows">

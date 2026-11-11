@@ -217,13 +217,20 @@ export function readTimes(stage: HTMLElement): FlipTimes {
   };
 }
 
-function reducedMotion(): boolean {
+/** Whether the person asked for reduced motion, asked now. */
+export function reducedMotion(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION).matches;
 }
 
-/** Whether anything may play on this stage now: no divider drag, and no wish for reduced motion. */
+/**
+ * Whether a glide may play on this stage now: no divider drag, no pane carried,
+ * and no wish for reduced motion. While a pane is up, a change made from the
+ * keyboard (Back, Delete on a tab) lands at once: the carried frame is dimmed,
+ * and its opacity would be read as a fade to go on from. The drop's own glide
+ * runs after the drag has taken its attribute off.
+ */
 export function mayMove(stage: HTMLElement): boolean {
-  return !stage.hasAttribute("data-drag") && !reducedMotion();
+  return !stage.hasAttribute("data-drag") && !stage.hasAttribute("data-dock") && !reducedMotion();
 }
 
 /** One animation through the runner; an easing the browser refuses falls back to v2.css's own curve. */

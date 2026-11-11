@@ -123,6 +123,9 @@ export const DESK_COPY = {
   paneDockedRight: "{pane} is now right of {first}.",
   paneDockedTop: "{pane} is now above {first}.",
   paneDockedBottom: "{pane} is now below {first}.",
+
+  /** The desk's one h1, read and not seen: the desk and the layout on screen. `{layout}` is filled. */
+  deskTitle: "Desk: {layout}",
 } as const;
 
 /**

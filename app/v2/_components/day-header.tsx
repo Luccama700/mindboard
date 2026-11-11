@@ -21,15 +21,19 @@ export function DayHeader({
   dateLabel,
   notice,
   feed,
+  headingLevel = 1,
 }: {
   dateLabel: string;
   notice: string | null;
   feed: TodayView["feed"];
+  /** The date's level: the page's h1 on Today, 3 inside a frame of the desk, whose title is the h2. */
+  headingLevel?: 1 | 3;
 }) {
+  const Heading = headingLevel === 3 ? "h3" : "h1";
   return (
     <header className="v2-top">
       <div className="v2-top-text">
-        <h1>{dateLabel}</h1>
+        <Heading>{dateLabel}</Heading>
         {notice !== null && <p className="v2-notice">{notice}</p>}
         <p className="v2-feedline">{feed.line}</p>
       </div>

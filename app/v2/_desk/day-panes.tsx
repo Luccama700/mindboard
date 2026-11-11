@@ -14,6 +14,7 @@ import { LaneSummary } from "../_components/lane-summary";
 import { NotTodayList } from "../_components/not-today-list";
 import { PastDueList } from "../_components/past-due-list";
 import { useDeskKeep, useDeskPath } from "./desk-data-provider";
+import { useInFrame } from "./in-frame";
 import type { PaneBody } from "./pane-body";
 
 // The five panes of the day. Each is a few lines over the day the DayProvider
@@ -25,6 +26,10 @@ import type { PaneBody } from "./pane-body";
 // `role="status"`; the status pane prints the same sentence as plain text.
 //
 // None takes an option yet, so each ignores its `options`.
+//
+// THE OUTLINE. In a frame of the desk the frame's h2 names the pane, so the
+// headings these leaves bring start at h3 there (in-frame.ts). Drawn alone (the
+// gallery), they keep the levels they have on Today and Week.
 
 /** The date, the notice, the energy answer and the line of the day. */
 function TodayPane() {
@@ -40,10 +45,16 @@ function TodayPane() {
     onSkip,
     onEnergy,
   } = useDay();
+  const framed = useInFrame();
 
   return (
     <div className="v2-pane-day">
-      <DayHeader dateLabel={view.dateLabel} notice={view.notice} feed={view.feed} />
+      <DayHeader
+        dateLabel={view.dateLabel}
+        notice={view.notice}
+        feed={view.feed}
+        headingLevel={framed ? 3 : undefined}
+      />
       <EnergyRow energy={view.energy} answered={energy} onPick={onEnergy} />
       <div className="v2-day">
         {view.empty ? (
@@ -60,6 +71,7 @@ function TodayPane() {
               onStart={onStart}
               onDone={onDone}
               onSkip={onSkip}
+              headingLevel={framed ? 3 : undefined}
             />
             {view.litStopId === null && <p className="v2-empty">{TODAY_COPY.dayOver}</p>}
           </>
@@ -72,12 +84,13 @@ function TodayPane() {
 /** What the last press did, the all day row, the feeds and the lanes. */
 function StatusPane() {
   const { view, said } = useDay();
+  const framed = useInFrame();
   return (
     <div className="v2-pane-status">
       <p className="v2-said">{said ?? view.energy.label}</p>
       <AllDayRow items={view.allDay} />
       <FeedStrip feed={view.feed} />
-      <LaneSummary lanes={view.lanes} />
+      <LaneSummary lanes={view.lanes} headingLevel={framed ? 3 : undefined} />
     </div>
   );
 }
@@ -89,14 +102,16 @@ function StatusPane() {
 
 function PastDuePane() {
   const { pastDue } = useDay().view;
+  const framed = useInFrame();
   if (pastDue.length === 0) return <p className="v2-pane-note">{DESK_COPY.nothingPastDue}</p>;
-  return <PastDueList entries={pastDue} tabStop={false} />;
+  return <PastDueList entries={pastDue} tabStop={false} headingLevel={framed ? 3 : undefined} />;
 }
 
 function NotTodayPane() {
   const { notToday } = useDay().view;
+  const framed = useInFrame();
   if (notToday.length === 0) return <p className="v2-pane-note">{DESK_COPY.allFitToday}</p>;
-  return <NotTodayList entries={notToday} tabStop={false} />;
+  return <NotTodayList entries={notToday} tabStop={false} headingLevel={framed ? 3 : undefined} />;
 }
 
 /**
@@ -108,8 +123,17 @@ function CalendarDayPane() {
   const { data, planned } = useDay();
   const keep = useDeskKeep();
   const basePath = useDeskPath();
+  const framed = useInFrame();
   if (data.calendar === null) return <p className="v2-empty">{CALENDAR_COPY.noCalendar}</p>;
-  return <CalendarPane data={data.calendar} planned={planned} basePath={basePath} keep={keep} />;
+  return (
+    <CalendarPane
+      data={data.calendar}
+      planned={planned}
+      basePath={basePath}
+      keep={keep}
+      headingLevel={framed ? 3 : undefined}
+    />
+  );
 }
 
 /** The day panes, by pane id. */

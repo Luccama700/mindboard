@@ -17,6 +17,7 @@ import {
   type TileSet,
 } from "@/app/lib/v2/tiles";
 import { DESK_COPY, deskLine } from "@/app/lib/v2/view/desk";
+import { InFrame } from "./in-frame";
 import { PaneBox } from "./pane-box";
 import { PaneMenu, type PaneMenuItem } from "./pane-menu";
 import { paneBody } from "./pane-registry";
@@ -359,7 +360,8 @@ export function PaneFrame({
         </span>
       </header>
       <PaneBox paneId={pane.id} labelledBy={titleId}>
-        {createElement(paneBody(pane.id), { options })}
+        {/* The body is in a frame: its headings start at h3, under this h2. */}
+        <InFrame.Provider value={true}>{createElement(paneBody(pane.id), { options })}</InFrame.Provider>
       </PaneBox>
     </section>
   );

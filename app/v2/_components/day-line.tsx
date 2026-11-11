@@ -50,6 +50,7 @@ export function DayLine({
   onStart,
   onDone,
   onSkip,
+  headingLevel = 2,
 }: {
   stops: TodayView["stops"];
   litStopId: string | null;
@@ -68,6 +69,8 @@ export function DayLine({
   onStart: (blockId: string) => void;
   onDone: (blockId: string) => void;
   onSkip: (blockId: string) => void;
+  /** The line's read, not seen heading: 2 on Today, 3 inside a frame of the desk, whose title is the h2. */
+  headingLevel?: 2 | 3;
 }) {
   const still = useReducedMotion() === true;
   const moves = still ? undefined : ("position" as const);
@@ -179,11 +182,12 @@ export function DayLine({
   // The section exists for its heading: the page is h1 (the day) and the stops
   // are h3, so without an h2 between them the heading order skips a level. It is
   // read, not seen.
+  const Heading = headingLevel === 3 ? "h3" : "h2";
   return (
     <section aria-labelledby="v2-line-heading">
-      <h2 className="v2-hidden" id="v2-line-heading">
+      <Heading className="v2-hidden" id="v2-line-heading">
         {TODAY_COPY.line}
-      </h2>
+      </Heading>
       <ol className="v2-line" ref={list}>
         {/* The default mode on purpose: a leaving stop keeps its space until it
             is gone, and the rows below it then slide up through their own layout

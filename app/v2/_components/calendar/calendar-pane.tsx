@@ -47,6 +47,7 @@ export function CalendarPane({
   planned,
   basePath,
   keep,
+  headingLevel = 2,
 }: {
   data: CalendarScreenData;
   /** Today's planned blocks, from the plan the screen is showing right now. */
@@ -55,7 +56,10 @@ export function CalendarPane({
   basePath: string;
   /** The page's other search parameters, carried on every week link after `week`. */
   keep?: Readonly<Record<string, string>>;
+  /** The title's level: 2 on Today and Week, 3 inside a frame of the desk, whose title is the h2. */
+  headingLevel?: 2 | 3;
 }) {
+  const Heading = headingLevel === 3 ? "h3" : "h2";
   const view = useMemo(() => buildCalendarView(data, planned), [data, planned]);
   const { tokens } = useAppearance();
   const headingId = useId();
@@ -69,7 +73,9 @@ export function CalendarPane({
 
   const link = (monday: DateKey | null, label: string, slot: string) =>
     monday === null ? null : (
-      <Link className={`v2-cal-link v2-cal-${slot}`} href={hrefOf(monday)} scroll={false}>
+      // No prefetch: on a still page these links were the only requests it
+      // made, one per week, every time it was drawn.
+      <Link className={`v2-cal-link v2-cal-${slot}`} href={hrefOf(monday)} scroll={false} prefetch={false}>
         {label}
       </Link>
     );
@@ -81,10 +87,10 @@ export function CalendarPane({
           {/* The two places the eye should land are this label and today's
               column. "Calendar" is the quiet word above it, and both are the
               heading, so the section is named by both. */}
-          <h2 id={headingId} className="v2-cal-title">
+          <Heading id={headingId} className="v2-cal-title">
             <span className="v2-cal-name">{CALENDAR_COPY.heading}</span>{" "}
             <span className="v2-cal-week">{view.weekLabel}</span>
-          </h2>
+          </Heading>
           {/* About the calendar only: planned blocks may still be drawn. */}
           {view.empty && <p className="v2-cal-nothing">{CALENDAR_COPY.nothing}</p>}
         </div>

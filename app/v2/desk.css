@@ -230,6 +230,10 @@
   min-height: 32px;
   padding: 0 8px 0 12px;
   background: var(--v2-card);
+  /* A handle that a double click maximizes: its visible title is a copy of the
+     h2 that is read, so nothing in it is ever selected. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* The title as it is seen. The h2 beside it is read, not seen, and is what the
@@ -647,6 +651,14 @@
 [data-v2-root] .v2-frame .v2-list > .v2-sub,
 [data-v2-root] .v2-frame .v2-cal-name {
   display: none;
+}
+
+/* On the desk the day's date is its pane's h3, under the frame's h2 (the
+   desk's own h1 is the page's): it keeps the face Today's h1 has, at the size
+   v2.css gives that h1 inside a pane. */
+[data-v2-root] .v2-desk .v2-pane .v2-top h3 {
+  font: 600 clamp(18px, 5.4cqw, 21px) / 1.15 var(--v2-display);
+  letter-spacing: 0.2px;
 }
 
 /* The day pane's own appearance dot: the desk has its own way in (the rail's
@@ -1263,6 +1275,11 @@
   [data-v2-root] .v2-desk-work {
     margin: 6px;
   }
+
+  /* As Today's h1 is from 1024px. */
+  [data-v2-root] .v2-desk .v2-pane .v2-top h3 {
+    letter-spacing: 0;
+  }
 }
 
 /* ---- compact: one slot, the front tab of the one leaf ---- */
@@ -1436,5 +1453,69 @@
 
   [data-v2-root] .v2-desk-pane[data-open~="wide"] .v2-desk-open {
     visibility: visible;
+  }
+}
+
+/* ---- a touch screen wide enough to be tiled ---- */
+
+/* A tablet on its side: the header's controls and the pane menu's items are a
+   finger's size, as on the phone, and the header grows to hold them, so the
+   menu opens under it a little lower. The glyphs keep their size inside the
+   larger boxes. Last in the sheet, so it also outweighs each class's glyph for
+   a maximized pane. */
+@media (hover: none) and (min-width: 1024px) {
+  [data-v2-root] .v2-frame-head {
+    min-height: 44px;
+  }
+
+  [data-v2-root] .v2-frame-menu-button,
+  [data-v2-root] .v2-frame-close,
+  [data-v2-root] .v2-frame-max {
+    width: 44px;
+    height: 44px;
+  }
+
+  [data-v2-root] .v2-frame-tab {
+    min-height: 44px;
+  }
+
+  [data-v2-root] .v2-frame-close::before,
+  [data-v2-root] .v2-frame-close::after {
+    left: 17px;
+    right: 17px;
+  }
+
+  [data-v2-root] .v2-frame-max::before {
+    inset: 17px;
+  }
+
+  [data-v2-root] .v2-frame-menu-list {
+    top: 48px;
+    max-height: min(calc(100% - 54px), calc(100dvh - 24px));
+  }
+
+  [data-v2-root] .v2-frame-menu-item {
+    min-height: 44px;
+  }
+}
+
+/* The maximized glyph is per class, as a pane can fill the desk on one class only. */
+@media (hover: none) and (1024px <= width < 1600px) {
+  [data-v2-root] .v2-frame-max[data-max~="regular"]::before {
+    inset: 19px 16px 16px 19px;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="regular"]::after {
+    inset: 16px 19px 19px 16px;
+  }
+}
+
+@media (hover: none) and (min-width: 1600px) {
+  [data-v2-root] .v2-frame-max[data-max~="wide"]::before {
+    inset: 19px 16px 16px 19px;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="wide"]::after {
+    inset: 16px 19px 19px 16px;
   }
 }
