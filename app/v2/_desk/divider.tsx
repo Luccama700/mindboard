@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useEffect,
   useRef,
   type CSSProperties,
   type KeyboardEvent,
@@ -145,8 +146,16 @@ interface Drag {
   geometry: SplitGeometry;
   /** Where in the divider the pointer took hold, so the gap does not jump to the pointer. */
   grab: number;
-  origin: number;
   raw: number | null;
+  /**
+   * The arrangement the drag started on. Dividers are keyed by class and place
+   * and split ids are positional, so the same divider can find itself over
+   * another layout's split of the same id (Back, Forward, a layout opened from
+   * the keyboard mid drag): a release then commits nothing.
+   */
+  from: Arrangement;
+  /** The element that holds the pointer, so it can be let go from anywhere. */
+  element: HTMLElement;
 }
 
 /** The front pane of a subtree's first leaf: what a divider is named after on that side. */
@@ -194,18 +203,48 @@ export function Divider({
     stage.current?.style.setProperty(divider.ratioVar, ratioText(share));
   };
 
-  const finish = (element: HTMLElement) => {
+  /**
+   * End the drag, committing nothing: the drag mark off the stage, the pointer
+   * let go, and the ratio the engine holds for this split NOW written back
+   * (React does not rewrite a style it believes unchanged). Answers the drag
+   * that ended, or null when there was none.
+   */
+  const finish = (): Drag | null => {
     const held = drag.current;
     drag.current = null;
     if (held === null) return null;
     stage.current?.removeAttribute("data-drag");
-    if (element.hasPointerCapture?.(held.pointerId)) element.releasePointerCapture(held.pointerId);
-    write(held.origin);
+    if (held.element.hasPointerCapture?.(held.pointerId)) held.element.releasePointerCapture(held.pointerId);
+    write(stored);
     return held;
   };
 
+  // A drag lives only as long as what it was started on. When the layout on
+  // screen or the class changes under it, it ends, and commits nothing.
+  useEffect(() => {
+    const held = drag.current;
+    if (held === null) return;
+    if (held.from !== arrangement || (cls !== null && cls !== divider.cls)) finish();
+  });
+
+  // Unmounted mid drag: let the pointer and the stage go. No ratio is written:
+  // the property this divider drove is no longer its own to restore.
+  useEffect(() => {
+    const node = stage.current;
+    return () => {
+      const held = drag.current;
+      drag.current = null;
+      if (held === null) return;
+      node?.removeAttribute("data-drag");
+      if (held.element.hasPointerCapture?.(held.pointerId)) held.element.releasePointerCapture(held.pointerId);
+    };
+  }, [stage]);
+
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !event.isPrimary || drag.current !== null) return;
+    if (event.button !== 0 || !event.isPrimary) return;
+    // A drag still recorded here lost its release (no pointerup, no lost
+    // capture): it ends, uncommitted, and this press starts afresh.
+    if (drag.current !== null) finish();
     const geometry = geometryNow();
     if (geometry === null || stage.current === null) return;
     event.preventDefault();
@@ -218,8 +257,9 @@ export function Divider({
       pointerId: event.pointerId,
       geometry,
       grab: position - geometry.at,
-      origin: geometry.split.ratio,
       raw: null,
+      from: arrangement,
+      element,
     };
     stage.current.setAttribute("data-drag", divider.dir);
   };
@@ -227,6 +267,11 @@ export function Divider({
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const held = drag.current;
     if (held === null || event.pointerId !== held.pointerId || stage.current === null) return;
+    // No button held: the release was lost. A hover never drags.
+    if (event.buttons === 0) {
+      finish();
+      return;
+    }
     const box = stage.current.getBoundingClientRect();
     const position = divider.dir === "h" ? event.clientX - box.left : event.clientY - box.top;
     const { geometry } = held;
@@ -240,14 +285,16 @@ export function Divider({
 
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
     if (drag.current === null || event.pointerId !== drag.current.pointerId) return;
-    const held = finish(event.currentTarget);
+    const held = finish();
     if (held === null || held.raw === null) return;
+    // Started on another arrangement than the one on screen: nothing to commit.
+    if (held.from !== arrangement) return;
     onRatio(divider.cls, divider.splitId, held.raw, held.geometry.size);
   };
 
   const cancel = (event: PointerEvent<HTMLDivElement>) => {
     if (drag.current === null || event.pointerId !== drag.current.pointerId) return;
-    finish(event.currentTarget);
+    finish();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -255,10 +302,11 @@ export function Divider({
     if (event.key === "Escape") {
       if (drag.current === null) return;
       event.preventDefault();
-      finish(event.currentTarget);
+      finish();
       return;
     }
-    if (drag.current !== null) return;
+    // A key while a drag is recorded ends the drag uncommitted, then does its own work.
+    if (drag.current !== null) finish();
     const geometry = geometryNow();
     if (geometry === null) return;
     const share = keyedShare(event.key, event.shiftKey, divider.dir, geometry);

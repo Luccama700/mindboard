@@ -185,7 +185,7 @@ export function DeskClient({
     notice.current = DESK_COPY.savedHereOnly;
     setSaid({ text: DESK_COPY.savedHereOnly });
   }, []);
-  useSavedDesk(set, dispatch, tooBig);
+  useSavedDesk(set, dispatch, tooBig, (sentence) => { notice.current = sentence; setSaid({ text: sentence }); });
 
   /**
    * One action, committed before anything else happens, so the focus can be

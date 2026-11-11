@@ -17,7 +17,7 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { Profiler, createElement, type ComponentType, type ReactElement } from "react";
+import { Profiler, createElement, useEffect, type ComponentType, type ReactElement } from "react";
 import type { Root } from "react-dom/client";
 
 import postcss, { type AtRule, type Container, type Declaration, type Rule } from "postcss";
@@ -130,8 +130,9 @@ import {
   deskCookie,
   mergeSaved,
   saveStep,
+  useSavedDesk,
 } from "@/app/v2/_desk/persist";
-import { deskHref, tilesReducer, type TilesState } from "@/app/v2/_desk/use-tiles";
+import { deskHref, tilesReducer, useTiles, type TilesState } from "@/app/v2/_desk/use-tiles";
 import DeskPage from "@/app/v2/desk/page";
 
 const ROOT = path.resolve(__dirname, "..");
@@ -274,7 +275,9 @@ afterEach(() => {
 });
 
 function pointer(type: string, element: Element, init: MouseEventInit & { pointerId?: number }) {
-  const event = new PointerStub(type, { bubbles: true, cancelable: true, button: 0, ...init });
+  // A move during a drag holds the primary button, as a real pointer's does.
+  const buttons = type === "pointermove" ? 1 : 0;
+  const event = new PointerStub(type, { bubbles: true, cancelable: true, button: 0, buttons, ...init });
   act(() => {
     element.dispatchEvent(event);
   });
@@ -1724,6 +1727,280 @@ describe("the phone's list of panes (behaviour 6)", () => {
   });
 });
 
+
+// ============================================================ fix round 1
+
+/** The desk's storage hook alone, in a tab of its own: what it holds is read through `tabs`. */
+const tabs = new Map<string, { set: TileSet; dispatch: (action: Parameters<typeof tilesReducer>[1]) => void }>();
+
+function Tab({ name, onNotSaved }: { name: string; onNotSaved?: (sentence: string) => void }) {
+  const { set, dispatch } = useTiles(EMPTY_TILE_SET);
+  useSavedDesk(set, dispatch, () => {}, onNotSaved);
+  useEffect(() => {
+    tabs.set(name, { set, dispatch });
+  });
+  return null;
+}
+
+function openTab(name: string, onNotSaved?: (sentence: string) => void) {
+  render(createElement(Tab, { name, onNotSaved }));
+  const tab = () => tabs.get(name) as { set: TileSet; dispatch: (action: Parameters<typeof tilesReducer>[1]) => void };
+  return {
+    get set() {
+      return tab().set;
+    },
+    act(action: Parameters<typeof tilesReducer>[1]) {
+      act(() => {
+        tab().dispatch(action);
+      });
+    },
+  };
+}
+
+/** What the browser tells every other tab when one writes. jsdom tells nobody, so the test does. */
+function storageEventFor(text: string) {
+  act(() => {
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: DESK_STORAGE_KEY,
+        newValue: text,
+        oldValue: null,
+        storageArea: window.localStorage,
+      }),
+    );
+  });
+}
+
+describe("two tabs of one desk (fix round 1, item 1)", () => {
+  test("a write from another tab arrives here, keeps this tab's layout, and is not written straight back", () => {
+    stubMedia(1366);
+    tabs.clear();
+    const first = openTab("first");
+    const second = openTab("second");
+    second.act({ type: "addLayout", title: `Second ${EMOJI}`, from: "today", cls: "regular" });
+    const written = window.localStorage.getItem(DESK_STORAGE_KEY) as string;
+    expect(parseTileSet(written).current).toBe("u1");
+
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    const cookies = vi.spyOn(document, "cookie", "set");
+    storageEventFor(written);
+    expect(first.set.layouts.map((meta) => meta.id)).toContain("u1");
+    expect(first.set.current).toBe("today");
+    expect(second.set.current).toBe("u1");
+    // Neither tab answers: no write back and forth.
+    expect(writes).not.toHaveBeenCalled();
+    expect(cookies).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBe(written);
+  });
+
+  test("a tab that missed another's write merges before it writes, and never drops what the other made", () => {
+    stubMedia(1366);
+    tabs.clear();
+    const first = openTab("first");
+    const second = openTab("second");
+    second.act({ type: "addLayout", title: "Made in the second", from: "today", cls: "regular" });
+    // No storage event reaches the first tab (it was asleep). Its next change:
+    first.act({ type: "layout", id: "week" });
+    const stored = parseTileSet(window.localStorage.getItem(DESK_STORAGE_KEY));
+    expect(stored.layouts.map((meta) => meta.id)).toEqual(["today", "week", "quests", "money", "u1"]);
+    expect(stored.layouts[4].title).toBe("Made in the second");
+    expect(stored.current).toBe("week");
+    expect(first.set.layouts.map((meta) => meta.id)).toContain("u1");
+    expect(cookieValue(document.cookie)).toBe(encodeTileCookie(stored));
+  });
+});
+
+describe("a save storage refuses (fix round 1, item 2)", () => {
+  test("is not recorded as done: said once, tried again on the next change, and the cookie left as it was", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const refused = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    });
+    const { container } = drawDesk();
+    act(() => {
+      fireEvent.click(frameOf(container, "today").querySelector('[data-close="status"]') as HTMLElement);
+    });
+    expect(spoken(container)).toBe(
+      `${deskLine(DESK_COPY.paneClosed, { pane: titleOf("status") })} ${DESK_COPY.notSavedHere}`,
+    );
+    expect(cookieValue(document.cookie)).toBeNull();
+    act(() => {
+      fireEvent.click(frameOf(container, "today").querySelector('[data-close="past-due"]') as HTMLElement);
+    });
+    // Once: the second refusal is not said again.
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.paneClosed, { pane: titleOf("past-due") }));
+    expect(refused).toHaveBeenCalledTimes(2);
+
+    refused.mockRestore();
+    act(() => {
+      fireEvent.click(frameOf(container, "today").querySelector('[data-close="not-today"]') as HTMLElement);
+    });
+    const arrangement = arrangementOf(saved(), "today", "regular");
+    for (const pane of ["status", "past-due", "not-today"]) expect(leafOf(arrangement.tree, pane), pane).toBeNull();
+    expect(cookieValue(document.cookie)).toBe(encodeTileCookie(saved()));
+  });
+
+  // The save that failed is retried even when the next change writes the same
+  // text: a move of focus. Had the failed text been recorded as written, that
+  // change would write nothing and storage would keep the older desk.
+  test("is tried again on the next change, even one that does not change the saved text", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const refused = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    });
+    const { container } = drawDesk();
+    act(() => {
+      fireEvent.click(frameOf(container, "today").querySelector('[data-close="status"]') as HTMLElement);
+    });
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+    refused.mockRestore();
+    // Calendar is open and in front on its own: pressing it on the rail moves the focus only.
+    act(() => {
+      fireEvent.click(railPane(container, "calendar"));
+    });
+    expect(leafOf(arrangementOf(saved(), "today", "regular").tree, "status")).toBeNull();
+  });
+
+  test("a read that throws is nothing stored, and the desk still saves", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Access is denied.", "SecurityError");
+    });
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    const { container } = drawDesk();
+    expect(writes).not.toHaveBeenCalled();
+    act(() => {
+      fireEvent.click(frameOf(container, "today").querySelector('[data-close="status"]') as HTMLElement);
+    });
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.paneClosed, { pane: titleOf("status") }));
+  });
+});
+
+describe("a drag that outlives what it was started on (fix round 1, item 3)", () => {
+  test("a layout opened mid drag ends the drag, writes that layout's own ratio back, and the release commits nothing", () => {
+    stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const stage = stageOf(container);
+    const root = dividerOf(container, "wide", 1);
+    const { rect } = engineSplit(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "s1", WIDE);
+    pointer("pointerdown", root, { clientX: rect.x + 2, pointerId: 5 });
+    pointer("pointermove", root, { clientX: rect.x + 150, pointerId: 5 });
+    act(() => {
+      fireEvent.click(within(railOf(container)).getByRole("link", { name: "Week" }));
+    });
+    // The same divider now sits over Week's first split, at Week's own share.
+    expect(dividerOf(container, "wide", 1)).toBe(root);
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).toBe("0.29");
+    expect(stage.hasAttribute("data-drag")).toBe(false);
+    expect(captured.has(root)).toBe(false);
+    pointer("pointerup", root, { clientX: rect.x + 150, pointerId: 5 });
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).toBe("0.29");
+    const desk = saved();
+    expect(isChanged(desk, "week", "wide")).toBe(false);
+    expect(isChanged(desk, "today", "wide")).toBe(false);
+  });
+
+  test("a change of class mid drag ends it at once, uncommitted", () => {
+    const media = stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const stage = stageOf(container);
+    const root = dividerOf(container, "wide", 1);
+    const { rect } = engineSplit(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "s1", WIDE);
+    pointer("pointerdown", root, { clientX: rect.x + 2, pointerId: 6 });
+    pointer("pointermove", root, { clientX: rect.x + 150, pointerId: 6 });
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).not.toBe("0.5");
+    media.resize(1366);
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).toBe("0.5");
+    expect(stage.hasAttribute("data-drag")).toBe(false);
+    expect(captured.has(root)).toBe(false);
+    pointer("pointerup", root, { clientX: rect.x + 150, pointerId: 6 });
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+  });
+
+  test("a divider unmounted mid drag lets the pointer and the stage go", () => {
+    stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const stage = stageOf(container);
+    const arrangement = arrangementOf(EMPTY_TILE_SET, "today", "wide");
+    // The split between Past their date and Did not fit.
+    const index = 4;
+    const split = splitAt(arrangement.tree, index);
+    expect(split.dir).toBe("v");
+    const divider = dividerOf(container, "wide", index);
+    const { rect } = engineSplit(arrangement, split.id, WIDE);
+    pointer("pointerdown", divider, { clientY: rect.y + 2, pointerId: 7 });
+    expect(stage.getAttribute("data-drag")).toBe("v");
+    act(() => {
+      fireEvent.click(frameOf(container, "past-due").querySelector(".v2-frame-solo") as HTMLElement);
+    });
+    expect(divider.isConnected).toBe(false);
+    expect(stage.hasAttribute("data-drag")).toBe(false);
+    expect(captured.has(divider)).toBe(false);
+    expect(arrangementOf(saved(), "today", "wide")).toEqual(closePane(arrangement, "past-due"));
+  });
+});
+
+describe("a drag whose release was lost (fix round 1, item 4)", () => {
+  function startDrag(container: HTMLElement, pointerId: number) {
+    const root = dividerOf(container, "wide", 1);
+    const { rect } = engineSplit(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "s1", WIDE);
+    pointer("pointerdown", root, { clientX: rect.x + 3, pointerId });
+    pointer("pointermove", root, { clientX: rect.x + 3 + 120, pointerId });
+    return { root, rect };
+  }
+
+  test("a new press ends it uncommitted and starts afresh", () => {
+    stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const stage = stageOf(container);
+    const { root, rect } = startDrag(container, 1);
+    // No pointerup and no lost capture ever came. A new press:
+    pointer("pointerdown", root, { clientX: rect.x + 3, pointerId: 2 });
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).toBe("0.5");
+    pointer("pointermove", root, { clientX: rect.x + 3 + 40, pointerId: 2 });
+    pointer("pointerup", root, { clientX: rect.x + 3 + 40, pointerId: 2 });
+    const raw = (rect.x + 40 - rect.start) / (rect.size - 6);
+    const expected = (splitNode(setRatio(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "s1", raw, rect.size).tree, "s1") as Split).ratio;
+    expect(splitAt(arrangementOf(saved(), "today", "wide").tree, 1).ratio).toBe(expected);
+  });
+
+  test("a move with no button held ends it uncommitted: a hover never drags", () => {
+    stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const stage = stageOf(container);
+    const { root, rect } = startDrag(container, 1);
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).not.toBe("0.5");
+    pointer("pointermove", root, { clientX: rect.x + 300, pointerId: 1, buttons: 0 });
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).toBe("0.5");
+    expect(stage.hasAttribute("data-drag")).toBe(false);
+    pointer("pointermove", root, { clientX: rect.x + 400, pointerId: 1, buttons: 0 });
+    expect(stage.style.getPropertyValue("--v2-wide-r1")).toBe("0.5");
+    pointer("pointerup", root, { clientX: rect.x + 400, pointerId: 1 });
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+  });
+
+  test("a key ends it uncommitted and then does its own work", () => {
+    stubMedia(2000);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const { root } = startDrag(container, 1);
+    act(() => {
+      fireEvent.keyDown(root, { key: "ArrowRight" });
+    });
+    expect(stageOf(container).style.getPropertyValue("--v2-wide-r1")).toBe("0.52");
+    expect(splitAt(arrangementOf(saved(), "today", "wide").tree, 1).ratio).toBe(0.52);
+  });
+});
+
 // ============================================================ the reducer
 
 describe("the reducer's new actions", () => {
@@ -1841,13 +2118,63 @@ describe("the rulings in the stylesheets", () => {
     expect(declsIn(SHEET, "[data-v2-root] .v2-frame-max", "(hover: none)").opacity).toBe("1");
   });
 
-  test("a row's foot wraps between its parts in a side column or a pane, from 1024px (ruling 7)", () => {
-    expect(declsIn(V2_CSS, "[data-v2-root] :where(.v2-side, .v2-pane) .v2-row-meta", "(min-width: 1024px)")).toEqual(
-      { "flex-wrap": "wrap", "row-gap": "2px" },
+  test("a row's foot wraps between its parts in a pane, at every width (ruling 7)", () => {
+    expect(declsIn(V2_CSS, "[data-v2-root] .v2-pane .v2-row-meta", null)).toEqual({
+      "flex-wrap": "wrap",
+      "row-gap": "2px",
+    });
+    expect(declsIn(V2_CSS, "[data-v2-root] .v2-pane .v2-row-meta > .v2-row-reason", null)).toEqual({
+      "margin-left": "auto",
+    });
+  });
+
+  // Today's side column is an existing screen: nothing this task added to
+  // v2.css may reach it (fix round 1, item 5).
+  test("no rule this task added to v2.css matches inside Today's side column", () => {
+    const added: Rule[] = [];
+    V2_CSS.walkRules((rule) => {
+      const wraps = rule.selector.includes(".v2-row-meta") && rule.some((node) => node.type === "decl" && node.prop === "flex-wrap");
+      const pushes =
+        rule.selector.includes(".v2-row-reason") &&
+        rule.some((node) => node.type === "decl" && node.prop === "margin-left");
+      if (wraps || pushes) added.push(rule);
+    });
+    expect(added.map((rule) => rule.selector)).toEqual([
+      "[data-v2-root] .v2-pane .v2-row-meta",
+      "[data-v2-root] .v2-pane .v2-row-meta > .v2-row-reason",
+    ]);
+    const { container } = render(
+      createElement(
+        "div",
+        { "data-v2-root": "" },
+        ...["v2-side", "v2-pane"].map((where) =>
+          createElement(
+            "div",
+            { key: where, className: where },
+            createElement(
+              "div",
+              { className: "v2-row" },
+              createElement(
+                "p",
+                { className: "v2-row-meta" },
+                createElement("span", { className: "v2-row-ident" }, "Group"),
+                createElement("span", { className: "v2-row-reason" }, "6 November"),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
-    expect(
-      declsIn(V2_CSS, "[data-v2-root] :where(.v2-side, .v2-pane) .v2-row-meta > .v2-row-reason", "(min-width: 1024px)"),
-    ).toEqual({ "margin-left": "auto" });
+    const [side, pane] = ["v2-side", "v2-pane"].map((where) => ({
+      meta: container.querySelector(`.${where} .v2-row-meta`) as HTMLElement,
+      reason: container.querySelector(`.${where} .v2-row-reason`) as HTMLElement,
+    }));
+    for (const rule of added) {
+      for (const selector of rule.selectors) {
+        expect(side.meta.matches(selector) || side.reason.matches(selector), selector).toBe(false);
+        expect(pane.meta.matches(selector) || pane.reason.matches(selector), selector).toBe(true);
+      }
+    }
   });
 
   test("the scroller of a named box is a group; the gallery's, with no name, has no role (ruling 5)", () => {

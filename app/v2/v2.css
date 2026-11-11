@@ -1447,20 +1447,6 @@ body:has([data-v2-root]) {
     font-size: 14px;
   }
 
-  /* A row's foot in a narrow column. Its two parts are placed whole: when the
-     group's name and the date do not fit on one line, the date goes onto the
-     next one, still at the right, instead of breaking in two ("6", then
-     "November") beside a name cut short. When they fit, nothing moves: the
-     auto margin takes exactly the space that space-between gave. */
-  [data-v2-root] :where(.v2-side, .v2-pane) .v2-row-meta {
-    flex-wrap: wrap;
-    row-gap: 2px;
-  }
-
-  [data-v2-root] :where(.v2-side, .v2-pane) .v2-row-meta > .v2-row-reason {
-    margin-left: auto;
-  }
-
   [data-v2-root] :where(.v2-side, .v2-pane) .v2-more {
     margin: 8px 0 0;
     min-height: 36px;
@@ -1616,6 +1602,21 @@ body:has([data-v2-root]) {
   [data-v2-root] .v2-pane .v2-list-rows {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+}
+
+/* A row's foot in a narrow pane. Its two parts are placed whole: when the
+   group's name and the date do not fit on one line, the date goes onto the
+   next one, still at the right, instead of breaking in two ("6", then
+   "November") beside a name cut short. When they fit, nothing moves: the auto
+   margin takes exactly the space that space-between gave. A pane only: Today's
+   own side column keeps its rows as they were. */
+[data-v2-root] .v2-pane .v2-row-meta {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+[data-v2-root] .v2-pane .v2-row-meta > .v2-row-reason {
+  margin-left: auto;
 }
 
 /* -------------------------------------------------------- reduced motion */

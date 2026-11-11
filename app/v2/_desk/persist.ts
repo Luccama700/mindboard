@@ -38,6 +38,7 @@ import {
   type ScreenClass,
   type TileSet,
 } from "@/app/lib/v2/tiles";
+import { DESK_COPY } from "@/app/lib/v2/view/desk";
 import { classNow, type TilesAction } from "./use-tiles";
 
 /** Where the whole desk is kept in this browser's storage. */
@@ -132,6 +133,7 @@ function storage(): Storage | null {
   }
 }
 
+/** What storage holds for the desk. A read that throws (a blocked or private window) is nothing stored. */
 function readStored(): string | null {
   try {
     return storage()?.getItem(DESK_STORAGE_KEY) ?? null;
@@ -140,11 +142,15 @@ function readStored(): string | null {
   }
 }
 
-function writeStored(text: string): void {
+/** Whether the text was stored. A full or refused storage answers false; nothing is swallowed. */
+function writeStored(text: string): boolean {
   try {
-    storage()?.setItem(DESK_STORAGE_KEY, text);
+    const area = storage();
+    if (area === null) return false;
+    area.setItem(DESK_STORAGE_KEY, text);
+    return true;
   } catch {
-    // Full, or refused: the cookie still holds the open layout.
+    return false;
   }
 }
 
@@ -163,37 +169,92 @@ function storedDesk(text: string | null): TileSet | null {
   return saved === EMPTY_TILE_SET ? null : saved;
 }
 
+/** The classes whose arrangement is on screen: the one the window is, or all three before it says. */
+function shownClasses(): readonly ScreenClass[] {
+  const cls = classNow();
+  return cls === null ? ["compact", "regular", "wide"] : [cls];
+}
+
 /**
- * Loading once, then saving every change of the saved text.
+ * Loading once, then saving every change of the saved text, with other tabs of
+ * the same desk in mind.
  *
- * The first effect after hydration reads the stored desk and hands the merge
- * to the reducer. What later saves compare with is what is really there: the
- * stored text and the cookie's value, or, with nothing stored, the desk on
- * screen, so a first visit writes nothing. While the set is still the server's
- * own picture and a merge is on its way, nothing is saved: an effect that ran
- * twice in development must not write that picture over the stored desk.
+ * THE LOAD. The first effect after hydration reads the stored desk and hands
+ * the merge to the reducer. What later saves compare with is what is really
+ * there: the stored text and the cookie's value, or, with nothing stored, the
+ * desk on screen, so a first visit writes nothing. While the set is still the
+ * server's own picture and a merge is on its way, nothing is saved: an effect
+ * that ran twice in development must not write that picture over the stored
+ * desk.
+ *
+ * ANOTHER TAB. Each tab holds the desk it loaded, and a save writes the whole
+ * set, so a tab that knew nothing of another's changes would write its old desk
+ * over them. Two guards, because the browser's `storage` event can come late or
+ * not at all (a tab asleep in the background):
+ *   - the event: another tab's desk is taken in at once (`mergeSaved`, so this
+ *     tab keeps its open layout and the arrangement on screen), and recorded as
+ *     what this tab last wrote, so it does not write it straight back (two tabs
+ *     on two layouts would otherwise answer each other forever);
+ *   - before every write, storage is read again; when it holds anything but the
+ *     text this tab last wrote or read, another tab got there first, and the
+ *     same merge is made before writing, so the old desk is never written.
+ *
+ * A WRITE THAT FAILS IS NOT DONE. When storage is full or refuses, what was
+ * last written stays as it was, so the next change tries again, the cookie is
+ * left as it was too (a cookie newer than storage would paint a desk the load
+ * then throws away), and `onNotSaved` is told once, until a write succeeds.
  */
 export function useSavedDesk(
   set: TileSet,
   dispatch: (action: TilesAction) => void,
   onTooBig: () => void,
+  onNotSaved?: (sentence: string) => void,
 ): void {
   const written = useRef<Written | null>(null);
   const painted = useRef<TileSet | null>(null);
+  /** The text this tab last wrote to storage or read from it. */
+  const seen = useRef<string | null>(null);
+  const latest = useRef(set);
+  const failing = useRef(false);
+  // Held, not depended on: the desk may hand a new function every render.
+  const notSaved = useRef(onNotSaved);
+
+  useEffect(() => {
+    latest.current = set;
+    notSaved.current = onNotSaved;
+  });
+
+  // Another tab wrote: take its desk in, and record it as written here.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== DESK_STORAGE_KEY || event.newValue === null) return;
+      if (event.storageArea !== null && event.storageArea !== storage()) return;
+      const before = written.current;
+      if (before === null || event.newValue === seen.current) return;
+      const theirs = storedDesk(event.newValue);
+      if (theirs === null) return;
+      const merged = mergeSaved(latest.current, theirs, shownClasses());
+      seen.current = event.newValue;
+      written.current = { text: serializeTileSet(merged), cookie: encodeTileCookie(merged) ?? before.cookie };
+      painted.current = null;
+      dispatch({ type: "replace", set: merged });
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [dispatch]);
 
   useEffect(() => {
     if (written.current === null) {
       const text = readStored();
       const saved = storedDesk(text);
       const cookie = cookieValue(document.cookie);
+      seen.current = text;
       if (saved === null) {
         written.current = { text: serializeTileSet(set), cookie: cookie ?? encodeTileCookie(set) };
       } else {
         written.current = { text, cookie };
-        const cls = classNow();
-        const shown: readonly ScreenClass[] = cls === null ? ["compact", "regular", "wide"] : [cls];
         painted.current = set;
-        dispatch({ type: "replace", set: mergeSaved(set, saved, shown) });
+        dispatch({ type: "replace", set: mergeSaved(set, saved, shownClasses()) });
         return;
       }
     }
@@ -201,10 +262,38 @@ export function useSavedDesk(
       if (set === painted.current) return;
       painted.current = null;
     }
-    const step = saveStep(set, written.current);
+
+    // Another tab may have written since this one last wrote or read.
+    let next = set;
+    let last = written.current;
+    const there = readStored();
+    if (there !== null && there !== seen.current) {
+      const theirs = storedDesk(there);
+      if (theirs !== null) {
+        next = mergeSaved(set, theirs, shownClasses());
+        seen.current = there;
+        last = { text: there, cookie: last.cookie };
+      }
+    }
+
+    const step = saveStep(next, last);
+    if (step.storage !== null) {
+      if (!writeStored(step.storage)) {
+        if (!failing.current) {
+          failing.current = true;
+          notSaved.current?.(DESK_COPY.notSavedHere);
+        }
+        // What another tab wrote is on screen here even so: this tab must not
+        // try again with the desk it had before.
+        if (next !== set) dispatch({ type: "replace", set: next });
+        return;
+      }
+      failing.current = false;
+      seen.current = step.storage;
+    }
     written.current = step.written;
-    if (step.storage !== null) writeStored(step.storage);
     if (step.cookie !== null) writeCookie(step.cookie);
     if (step.tooBig) onTooBig();
+    if (next !== set) dispatch({ type: "replace", set: next });
   }, [set, dispatch, onTooBig]);
 }
