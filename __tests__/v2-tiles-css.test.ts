@@ -5,25 +5,37 @@
 // wrote without knowing the window's size; the desk hit tests and moves focus
 // with the second, on the measured workspace. A pixel of disagreement is a
 // divider drawn in one place and dragged from another, so the two are held to
-// each other here box by box, to the pixel.
+// each other here box by box, to the pixel, at whole and fractional sizes.
 //
-// HOW, WITHOUT A BROWSER. The file carries a small evaluator for exactly the CSS
-// the module writes: + - * inside calc, clamp, min, max, round(nearest, x, 1px),
-// px, %, and var(). It is strict on purpose, because it is the only browser
-// this task has: arithmetic outside a math function, + or - without whitespace
-// on both sides, a unitless 0 added to a length, two lengths multiplied, an
-// exponent, a unit it does not know, a custom property whose value is a bare
-// sum, all of these throw rather than compute something a browser would not.
+// HOW, WITHOUT A BROWSER. The file carries a small model of what a browser does
+// with the module's output. The stage's properties are registered, from the
+// rules propertyRules itself writes, so each is computed once, in dependency
+// order, to one number, and a var() of it is that number: no text is ever
+// substituted. Container units resolve against the workspace, which is the
+// stage's container. A frame's box reads the stage's values and nothing else:
+// a percentage or a container unit in a box is refused, because it would
+// resolve against wherever the frame happens to sit.
 //
-// var() is evaluated once per property and axis and remembered. That is the
-// only way a deep chain finishes (each level names its parent's extent about
-// three times), and it is faithful to the browser's textual substitution only
-// because every custom property's value is one complete term. The evaluator
-// checks that too.
+// The reader is strict on purpose, because it is the only browser this task
+// has: arithmetic outside a math function, + or - without whitespace on both
+// sides, a unitless 0 added to a length, two lengths multiplied, an exponent, a
+// unit it does not know, an unregistered property, a registered one nobody set,
+// and a value of the wrong type for its registration all throw rather than
+// compute something a browser would not.
+
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { cssLayout, ratioVar } from "@/app/lib/v2/tiles/css";
+import { PANES } from "@/app/lib/v2/tiles/catalog";
+import {
+  MAX_SPLITS,
+  cssLayout,
+  hitTestWorkspace,
+  propertyRules,
+  ratioVar,
+} from "@/app/lib/v2/tiles/css";
 import type { CssBox, CssLayout } from "@/app/lib/v2/tiles/css";
 import { layoutTree, minSize, shareLimits } from "@/app/lib/v2/tiles/geometry";
 import { leavesOf } from "@/app/lib/v2/tiles/tree";
@@ -38,20 +50,23 @@ import type {
   Workspace,
 } from "@/app/lib/v2/tiles/types";
 
+const ROOT = path.resolve(__dirname, "..");
+
 // ------------------------------------------------------------ the evaluator
 
-type Axis = "x" | "y";
+type Kind = "number" | "length";
 
 interface Typed {
-  kind: "number" | "length";
+  kind: Kind;
   value: number;
 }
+
+type Unit = "px" | "cqw" | "cqh";
 
 type Token =
   | { t: "ws" }
   | { t: "number"; value: number }
-  | { t: "px"; value: number }
-  | { t: "percent"; value: number }
+  | { t: "dimension"; value: number; unit: Unit }
   | { t: "ident"; name: string }
   | { t: "function"; name: string }
   | { t: "open" }
@@ -63,6 +78,7 @@ const NUMBER_TOKEN = /^[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)/;
 const STARTS_NUMBER = /^[+-]?\.?[0-9]/;
 const NAME_TOKEN = /^(?:--|-?[A-Za-z_])[A-Za-z0-9_-]*/;
 const UNIT_TOKEN = /^-?[A-Za-z_][A-Za-z0-9_-]*/;
+const UNITS: readonly string[] = ["px", "cqw", "cqh"];
 
 /** Tokens do not depend on the workspace's size, so each string is read once. */
 const tokenCache = new Map<string, Token[]>();
@@ -97,15 +113,11 @@ function tokenize(text: string): Token[] {
       at += number[0].length;
       const value = Number(number[0]);
       const after = text.slice(at);
-      if (after.startsWith("%")) {
-        out.push({ t: "percent", value });
-        at += 1;
-        continue;
-      }
+      if (after.startsWith("%")) throw new Error(`a percentage in "${text}"`);
       const unit = UNIT_TOKEN.exec(after);
       if (unit !== null) {
-        if (unit[0] !== "px") throw new Error(`"${unit[0]}" after a number in "${text}"`);
-        out.push({ t: "px", value });
+        if (!UNITS.includes(unit[0])) throw new Error(`"${unit[0]}" after a number in "${text}"`);
+        out.push({ t: "dimension", value, unit: unit[0] as Unit });
         at += unit[0].length;
         continue;
       }
@@ -134,7 +146,19 @@ function tokenize(text: string): Token[] {
   return out;
 }
 
-function sameKind(values: Typed[], what: string): Typed["kind"] {
+/** The custom properties a value names, each through a var(). */
+function dependenciesOf(text: string): string[] {
+  const tokens = tokenize(text);
+  const out: string[] = [];
+  tokens.forEach((token, index) => {
+    if (token.t !== "function" || token.name !== "var") return;
+    const next = tokens.slice(index + 1).find((candidate) => candidate.t !== "ws");
+    if (next !== undefined && next.t === "ident") out.push(next.name);
+  });
+  return out;
+}
+
+function sameKind(values: Typed[], what: string): Kind {
   const kind = values[0].kind;
   if (values.some((value) => value.kind !== kind)) {
     throw new Error(`${what} mixes a number and a length`);
@@ -150,48 +174,12 @@ function roundNearest(value: number, step: number): number {
   return value - lower < upper - value ? lower : upper;
 }
 
-class Evaluator {
-  private readonly memo = new Map<string, Typed>();
-  private readonly busy = new Set<string>();
-
-  constructor(
-    private readonly vars: Record<string, string>,
-    private readonly width: number,
-    private readonly height: number,
-  ) {}
-
-  /** A box property: one term that is a length, or the bare `0` CSS allows for one. */
-  length(text: string, axis: Axis): number {
-    if (text === "0") return 0;
-    const value = this.term(text, axis);
-    if (value.kind !== "length") throw new Error(`"${text}" is not a length`);
-    return value.value;
-  }
-
-  /** One complete term, which is what a box string and a custom property's value must be. */
-  term(text: string, axis: Axis): Typed {
-    return new Reader(tokenize(text), this, axis).whole();
-  }
-
-  variable(name: string, axis: Axis): Typed {
-    const key = `${axis} ${name}`;
-    const known = this.memo.get(key);
-    if (known !== undefined) return known;
-    if (this.busy.has(key)) throw new Error(`${name} refers to itself`);
-    if (!Object.prototype.hasOwnProperty.call(this.vars, name)) {
-      throw new Error(`${name} is not defined`);
-    }
-    this.busy.add(key);
-    const value = this.term(this.vars[name], axis);
-    this.busy.delete(key);
-    this.memo.set(key, value);
-    return value;
-  }
-
-  /** A percentage of the workspace box: its width for left and width, its height for top and height. */
-  percent(value: number, axis: Axis): number {
-    return (value / 100) * (axis === "x" ? this.width : this.height);
-  }
+/** What a value may read where it is evaluated. */
+interface Context {
+  /** A var() of a registered property: the value computed on the stage. */
+  variable(name: string): Typed;
+  /** The query container's size, or null where a container unit is refused. */
+  container: Workspace | null;
 }
 
 class Reader {
@@ -199,8 +187,7 @@ class Reader {
 
   constructor(
     private readonly tokens: Token[],
-    private readonly css: Evaluator,
-    private readonly axis: Axis,
+    private readonly context: Context,
   ) {}
 
   whole(): Typed {
@@ -294,10 +281,8 @@ class Reader {
     switch (token.t) {
       case "number":
         return { kind: "number", value: token.value };
-      case "px":
-        return { kind: "length", value: token.value };
-      case "percent":
-        return { kind: "length", value: this.css.percent(token.value, this.axis) };
+      case "dimension":
+        return { kind: "length", value: this.dimension(token.value, token.unit) };
       case "open": {
         if (!insideMath) throw new Error("a bracket outside a math function");
         this.space();
@@ -311,6 +296,13 @@ class Reader {
       default:
         throw new Error(`unexpected ${token.t}`);
     }
+  }
+
+  private dimension(value: number, unit: Unit): number {
+    if (unit === "px") return value;
+    const container = this.context.container;
+    if (container === null) throw new Error("a container unit outside the stage");
+    return (value / 100) * (unit === "cqw" ? container.width : container.height);
   }
 
   /** Arguments up to the closing bracket, each a full sum. */
@@ -353,18 +345,22 @@ class Reader {
       case "round": {
         this.space();
         const strategy = this.take();
-        if (strategy.t !== "ident" || strategy.name !== "nearest") {
-          throw new Error("round() here is always round(nearest, value, step)");
+        if (strategy.t !== "ident" || (strategy.name !== "nearest" && strategy.name !== "down")) {
+          throw new Error("round() here is round(nearest or down, value, step)");
         }
         this.space();
         this.expect("comma");
         const args = this.list();
-        if (args.length !== 2) throw new Error("round(nearest, value, step) takes a value and a step");
+        if (args.length !== 2) throw new Error("round() takes a value and a step after the strategy");
         const [value, step] = args;
         if (value.kind !== "length" || step.kind !== "length" || !(step.value > 0)) {
           throw new Error("round() here rounds a length by a positive length");
         }
-        return { kind: "length", value: roundNearest(value.value, step.value) };
+        const rounded =
+          strategy.name === "down"
+            ? Math.floor(value.value / step.value) * step.value
+            : roundNearest(value.value, step.value);
+        return { kind: "length", value: rounded };
       }
       case "var": {
         this.space();
@@ -374,7 +370,7 @@ class Reader {
         }
         this.space();
         this.expect("close");
-        return this.css.variable(ident.name, this.axis);
+        return this.context.variable(ident.name);
       }
       default:
         throw new Error(`${name}() is outside this evaluator`);
@@ -382,12 +378,102 @@ class Reader {
   }
 }
 
-function evaluateBox(css: Evaluator, box: CssBox): Rect {
+const RULE =
+  /^@property (--[a-z0-9-]+) \{ syntax: "<(length|number)>"; inherits: true; initial-value: (?:0px|0\.5); \}$/;
+
+/** The registrations a block of rules makes, read strictly: a line it cannot read throws. */
+function registryOf(rules: string): Map<string, Kind> {
+  const registry = new Map<string, Kind>();
+  if (rules === "") return registry;
+  for (const line of rules.split("\n")) {
+    const match = RULE.exec(line);
+    if (match === null) throw new Error(`not a rule this file reads: ${line}`);
+    registry.set(match[1], match[2] === "length" ? "length" : "number");
+  }
+  return registry;
+}
+
+const registries = new Map<string, Map<string, Kind>>();
+
+function registryFor(scope: string): Map<string, Kind> {
+  const known = registries.get(scope);
+  if (known !== undefined) return known;
+  const registry = registryOf(propertyRules([scope]));
+  registries.set(scope, registry);
+  return registry;
+}
+
+/**
+ * The stage as a browser computes it: every property it sets is registered,
+ * computed once, after the properties it names, to one typed value, with
+ * container units against the workspace. Frames read those values.
+ */
+class Stage {
+  /** The order the properties were computed in: each once, after what it names. */
+  readonly order: string[] = [];
+  private readonly values = new Map<string, Typed>();
+
+  constructor(
+    private readonly registry: Map<string, Kind>,
+    private readonly declared: Record<string, string>,
+    private readonly container: Workspace,
+  ) {
+    for (const name of Object.keys(declared)) {
+      if (!registry.has(name)) {
+        throw new Error(`${name} is not registered, so a browser would substitute it as text`);
+      }
+    }
+    for (const name of Object.keys(declared)) this.compute(name, new Set());
+  }
+
+  private compute(name: string, path: Set<string>): Typed {
+    const known = this.values.get(name);
+    if (known !== undefined) return known;
+    const kind = this.registry.get(name);
+    if (kind === undefined) throw new Error(`${name} is not registered`);
+    if (!Object.prototype.hasOwnProperty.call(this.declared, name)) {
+      throw new Error(`${name} is registered but not set on the stage`);
+    }
+    if (path.has(name)) throw new Error(`${name} depends on itself`);
+    path.add(name);
+    const text = this.declared[name];
+    for (const dependency of dependenciesOf(text)) this.compute(dependency, path);
+    path.delete(name);
+    const value = new Reader(tokenize(text), {
+      variable: (dependency) => this.read(dependency),
+      container: this.container,
+    }).whole();
+    if (value.kind !== kind) throw new Error(`${name} is registered as a ${kind}, set to a ${value.kind}`);
+    this.values.set(name, value);
+    this.order.push(name);
+    return value;
+  }
+
+  private read(name: string): Typed {
+    if (!this.registry.has(name)) throw new Error(`${name} is not registered`);
+    const value = this.values.get(name);
+    if (value === undefined) throw new Error(`${name} is not set on the stage`);
+    return value;
+  }
+
+  /** A frame's box property: one term of lengths and the stage's values, or a bare `0`. */
+  length(text: string): number {
+    if (text === "0") return 0;
+    const value = new Reader(tokenize(text), {
+      variable: (name) => this.read(name),
+      container: null,
+    }).whole();
+    if (value.kind !== "length") throw new Error(`"${text}" is not a length`);
+    return value.value;
+  }
+}
+
+function evaluateBox(stage: Stage, box: CssBox): Rect {
   return {
-    x: css.length(box.left, "x"),
-    y: css.length(box.top, "y"),
-    w: css.length(box.width, "x"),
-    h: css.length(box.height, "y"),
+    x: stage.length(box.left),
+    y: stage.length(box.top),
+    w: stage.length(box.width),
+    h: stage.length(box.height),
   };
 }
 
@@ -409,22 +495,13 @@ function pick(rand: () => number, low: number, high: number): number {
   return low + Math.floor(rand() * (high - low + 1));
 }
 
-/**
- * The fields PaneSpec carries besides the three read here, on both sides of
- * the change Task 1 is making to it beside this file (`closable` goes; `short`,
- * `group` and `options` come). The cast goes through unknown so this file
- * compiles before and after; cssLayout and the engine's geometry only ever read
- * `id`, `minWidth` and `minHeight`.
- */
-const SPEC_EXTRAS = { short: "Pane", group: "day", options: [], closable: true };
-
+/** An invented pane spec. cssLayout and the engine's geometry read only the id and the minimums. */
 function paneSpec(id: PaneId, minWidth: number, minHeight: number): PaneSpec {
-  return { ...SPEC_EXTRAS, id, title: `Pane title ${id}`, minWidth, minHeight } as unknown as PaneSpec;
+  return { id, title: `Pane title ${id}`, short: "Pane", group: "day", options: [], minWidth, minHeight };
 }
 
-/** An arrangement for layoutTree, carrying Task 1's `options` the same way. */
 function arrangementFor(tree: TileNode | null, maximized: PaneId | null): Arrangement {
-  return { tree, maximized, focus: null, lastSpot: {}, options: {} } as unknown as Arrangement;
+  return { tree, maximized, focus: null, lastSpot: {}, options: {} };
 }
 
 function leafNode(id: string, ...tabs: PaneId[]): TileNode {
@@ -465,7 +542,7 @@ interface World {
 }
 
 /**
- * A tree of one to twelve leaves, each holding one to three panes. Pane ids
+ * A tree of one to fourteen leaves, each holding one to three panes. Pane ids
  * are unique across the whole tree because layoutTree finds the maximized leaf
  * as the first one holding the pane, and minSize takes the first spec with an
  * id. Node ids are `l<n>` and `s<n>` with gaps, so no id is guessable from its
@@ -505,33 +582,40 @@ function randomWorld(rand: () => number): World {
     const firstCount = pick(rand, 1, count - 1);
     return splitNode(id, dir, ratio, build(firstCount), build(count - firstCount));
   };
-  return { tree: build(pick(rand, 1, 12)), specs };
+  return { tree: build(pick(rand, 1, MAX_SPLITS + 1)), specs };
 }
 
 const LARGEST: Workspace = { width: 3840, height: 2160 };
 
 /**
- * Forty whole pixel sizes from the tree's minimum up to 3840 by 2160: the four
- * corners (the minimum itself is where every clamp binds), twelve just above
- * the minimum, and the rest anywhere in between. A tree whose minimum is past
- * the largest screen is checked at its minimum in that dimension.
+ * Forty sizes from the tree's minimum up to 3840 by 2160: the four whole pixel
+ * corners (the minimum itself is where every clamp binds), the minimum plus a
+ * fraction, eleven just above the minimum and twenty four anywhere, about half
+ * of them with a fraction of a pixel, as browser zoom makes them. A tree whose
+ * minimum is past the largest screen is checked from its minimum in that
+ * dimension.
  */
 function sizesFor(min: { w: number; h: number }, rand: () => number): Workspace[] {
   const top = { width: Math.max(min.w, LARGEST.width), height: Math.max(min.h, LARGEST.height) };
+  const fraction = (): number => (rand() < 0.5 ? 0 : rand());
   const sizes: Workspace[] = [
     { width: min.w, height: min.h },
     { width: top.width, height: top.height },
     { width: min.w, height: top.height },
     { width: top.width, height: min.h },
+    { width: min.w + 0.6, height: min.h + 0.999 },
   ];
   while (sizes.length < 16) {
     sizes.push({
-      width: Math.min(top.width, min.w + pick(rand, 0, 24)),
-      height: Math.min(top.height, min.h + pick(rand, 0, 24)),
+      width: Math.min(top.width, min.w + pick(rand, 0, 24)) + fraction(),
+      height: Math.min(top.height, min.h + pick(rand, 0, 24)) + fraction(),
     });
   }
   while (sizes.length < 40) {
-    sizes.push({ width: pick(rand, min.w, top.width), height: pick(rand, min.h, top.height) });
+    sizes.push({
+      width: pick(rand, min.w, top.width) + fraction(),
+      height: pick(rand, min.h, top.height) + fraction(),
+    });
   }
   return sizes;
 }
@@ -544,16 +628,27 @@ function sameRect(a: Rect, b: Rect): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
-/** Every box where the CSS and layoutTree differ at this size, in words. */
+/** A measurement handed to layoutTree as it came, without the floor hit testing must apply. */
+function unfloored(width: number, height: number): Workspace {
+  return { width, height };
+}
+
+/**
+ * Every box where the drawing and the hit test differ at this container size,
+ * in words. The CSS is evaluated on a stage whose container is `size`; the
+ * engine is given what hit testing measures, through `measure`.
+ */
 function disagreements(
   layout: CssLayout,
   tree: TileNode | null,
   maximizedPane: PaneId | null,
   specs: readonly PaneSpec[],
   size: Workspace,
+  scope: string,
+  measure: (width: number, height: number) => Workspace = hitTestWorkspace,
 ): string[] {
-  const rects = layoutTree(arrangementFor(tree, maximizedPane), size, specs);
-  const css = new Evaluator(layout.vars, size.width, size.height);
+  const rects = layoutTree(arrangementFor(tree, maximizedPane), measure(size.width, size.height), specs);
+  const stage = new Stage(registryFor(scope), layout.vars, size);
   const at = `${size.width}x${size.height}`;
   const out: string[] = [];
   if (layout.leaves.length !== rects.leaves.length) {
@@ -568,7 +663,7 @@ function disagreements(
       out.push(`${at}: leaf ${index} is ${box?.leafId} in the CSS, ${rect.leafId} in the engine`);
       return;
     }
-    const drawn = evaluateBox(css, box);
+    const drawn = evaluateBox(stage, box);
     if (!sameRect(drawn, rect)) {
       out.push(`${at}: leaf ${rect.leafId} css ${show(drawn)} engine ${show(rect)}`);
     }
@@ -579,7 +674,7 @@ function disagreements(
       out.push(`${at}: divider ${index} is ${box?.splitId} in the CSS, ${rect.splitId} in the engine`);
       return;
     }
-    const drawn = evaluateBox(css, box);
+    const drawn = evaluateBox(stage, box);
     if (!sameRect(drawn, rect)) {
       out.push(`${at}: divider ${rect.splitId} css ${show(drawn)} engine ${show(rect)}`);
     }
@@ -596,6 +691,11 @@ function maximizedIn(tree: TileNode, rand: () => number): { pane: PaneId; leafId
   return { pane, leafId: holding.id };
 }
 
+function splitsOf(node: TileNode): Split[] {
+  if (node.kind === "leaf") return [];
+  return [node, ...splitsOf(node.first), ...splitsOf(node.second)];
+}
+
 /**
  * How each split is drawn at this size: held at its first side's minimum, held
  * at its second side's, or where it was set. Read off the engine's own divider
@@ -607,14 +707,7 @@ function countShares(
   specs: readonly PaneSpec[],
   counts: { low: number; high: number; free: number },
 ): void {
-  const splits = new Map<string, Split>();
-  const collect = (node: TileNode): void => {
-    if (node.kind === "leaf") return;
-    splits.set(node.id, node);
-    collect(node.first);
-    collect(node.second);
-  };
-  collect(tree);
+  const splits = new Map(splitsOf(tree).map((split) => [split.id, split]));
   for (const divider of layoutTree(arrangementFor(tree, null), size, specs).dividers) {
     const split = splits.get(divider.splitId);
     if (split === undefined) continue;
@@ -630,27 +723,38 @@ function countShares(
 
 const CHAIN_MIN = { w: 230, h: 150 };
 
+type Side = "first" | "second" | "zigzag";
+type Axes = "h" | "v" | "alternate";
+
 /**
- * A chain of `depth` splits. `side` says which child the next split is;
- * `axes` whether every split runs the same way or they alternate.
+ * Small enough that a 13 split chain one way still fits well inside 3840 by
+ * 2160 (about 2433 by 1198), so its 40 sizes are 40 different extents along the
+ * chain and not its minimum forty times over.
+ */
+const ROOMY_CHAIN_MIN = { w: 120, h: 80 };
+
+/**
+ * A chain of `depth` splits. `side` says which child the next split is, and
+ * `axes` which way the splits run: all one way, or turning at every level.
  */
 function chain(
   depth: number,
-  side: "first" | "second" | "zigzag",
-  axes: "same" | "alternate",
+  side: Side,
+  axes: Axes,
   ratio: number,
+  minimum: { w: number; h: number } = CHAIN_MIN,
 ): World {
   const specs: PaneSpec[] = [];
   let leafNumber = 0;
   const leaf = (): TileNode => {
     leafNumber += 1;
     const pane = `pane${leafNumber}`;
-    specs.push(paneSpec(pane, CHAIN_MIN.w + (leafNumber % 3) * 45, CHAIN_MIN.h));
+    specs.push(paneSpec(pane, minimum.w + (leafNumber % 3) * 45, minimum.h));
     return leafNode(`l${leafNumber + 100}`, pane);
   };
   const build = (level: number): TileNode => {
     if (level === depth) return leaf();
-    const dir: SplitDir = axes === "same" || level % 2 === 0 ? "h" : "v";
+    const dir: SplitDir = axes === "alternate" ? (level % 2 === 0 ? "h" : "v") : axes;
     const deeperFirst = side === "first" || (side === "zigzag" && level % 2 === 0);
     const id = `s${level + 1}`;
     return deeperFirst
@@ -660,92 +764,122 @@ function chain(
   return { tree: build(0), specs };
 }
 
-function allStrings(layout: CssLayout): string[] {
+const CHAINS: ReadonlyArray<readonly [Side, Axes]> = [
+  ["second", "h"],
+  ["second", "v"],
+  ["first", "h"],
+  ["first", "v"],
+  ["zigzag", "h"],
+  ["second", "alternate"],
+  ["first", "alternate"],
+  ["zigzag", "alternate"],
+];
+
+/** Every string that reaches CSS: the stage's names and values, the boxes, the ratio names. */
+function cssStrings(layout: CssLayout): string[] {
   const out: string[] = [];
   for (const [name, value] of Object.entries(layout.vars)) out.push(name, value);
-  for (const box of [...layout.leaves, ...layout.dividers]) {
-    out.push(box.left, box.top, box.width, box.height);
+  for (const box of layout.leaves) out.push(box.left, box.top, box.width, box.height);
+  for (const box of layout.dividers) {
+    out.push(box.ratioVar, box.left, box.top, box.width, box.height);
   }
   return out;
+}
+
+/** Every string cssLayout returns, ids and directions included. */
+function allStrings(layout: CssLayout): string[] {
+  return [
+    ...cssStrings(layout),
+    ...layout.leaves.map((box) => box.leafId),
+    ...layout.dividers.flatMap((box) => [box.splitId, box.dir]),
+  ];
 }
 
 function totalLength(layout: CssLayout): number {
   return allStrings(layout).reduce((sum, text) => sum + text.length, 0);
 }
 
-/**
- * The longest box string once every var() in it is replaced by its value, as
- * a browser substitutes them, counted without building the text.
- */
-function substitutedLength(layout: CssLayout): number {
-  const memo = new Map<string, number>();
-  const lengthOf = (text: string): number => {
-    let total = text.length;
-    for (const match of text.matchAll(/var\((--[a-z0-9-]+)\)/g)) {
-      total += valueLength(match[1]) - match[0].length;
+function boxStrings(layout: CssLayout): string[] {
+  return [...layout.leaves, ...layout.dividers].flatMap((box) => [
+    box.left,
+    box.top,
+    box.width,
+    box.height,
+  ]);
+}
+
+/** Every custom property name in every stylesheet of the desk. */
+function stylesheetNames(): Set<string> {
+  const names = new Set<string>();
+  const walk = (folder: string): void => {
+    for (const entry of readdirSync(folder, { withFileTypes: true })) {
+      const full = path.join(folder, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".css")) {
+        for (const match of readFileSync(full, "utf8").matchAll(/--v2-[a-z0-9-]+/g)) names.add(match[0]);
+      }
     }
-    return total;
   };
-  const valueLength = (name: string): number => {
-    const known = memo.get(name);
-    if (known !== undefined) return known;
-    const length = lengthOf(layout.vars[name]);
-    memo.set(name, length);
-    return length;
-  };
-  let longest = 0;
-  for (const box of [...layout.leaves, ...layout.dividers]) {
-    for (const text of [box.left, box.top, box.width, box.height]) {
-      longest = Math.max(longest, lengthOf(text));
-    }
-  }
-  return longest;
+  walk(path.join(ROOT, "app/v2"));
+  return names;
 }
 
 // ------------------------------------------------------------------- tests
 
-describe("the evaluator this file proves with", () => {
-  const css = new Evaluator(
-    {
-      "--a": "calc(100% - 6px)",
-      "--r": "0.25",
-      "--sum": "100% - 6px",
-      "--zero": "0",
-      "--loop": "var(--loop)",
-      "--b": "var(--a)",
-    },
-    1000,
-    500,
-  );
+describe("the browser this file proves with", () => {
+  const T = registryFor("t");
+  const DECLARED: Record<string, string> = {
+    // Written out of order on purpose: the stage computes what each one names first.
+    "--v2-t-a1":
+      "round(nearest, clamp(300px, (var(--v2-t-w) - 6px) * var(--v2-t-r1), var(--v2-t-w) - 6px - 100px), 1px)",
+    "--v2-t-a2":
+      "round(nearest, clamp(100px, (var(--v2-t-h) - 6px) * var(--v2-t-r1), var(--v2-t-h) - 6px - 100px), 1px)",
+    "--v2-t-r1": "0.25",
+    "--v2-t-w": "round(down, 100cqw, 1px)",
+    "--v2-t-h": "round(down, 100cqh, 1px)",
+  };
+  const CONTAINER: Workspace = { width: 1000.6, height: 500.4 };
+  const stage = new Stage(T, DECLARED, CONTAINER);
 
-  test("reads the CSS the module writes, with each percentage taken where it is used", () => {
-    expect(css.length("calc(100% - 6px)", "x")).toBe(994);
-    expect(css.length("calc(100% - 6px)", "y")).toBe(494);
-    expect(css.length("var(--b)", "y")).toBe(494);
-    expect(css.length("var(--b)", "x")).toBe(994);
-    expect(
-      css.length("round(nearest, clamp(300px, var(--a) * var(--r), var(--a) - 100px), 1px)", "x"),
-    ).toBe(300);
-    expect(
-      css.length("round(nearest, clamp(100px, var(--a) * var(--r), var(--a) - 100px), 1px)", "x"),
-    ).toBe(249);
-    expect(css.length("clamp(300px, 10px, 200px)", "x")).toBe(300);
-    expect(css.length("min(1px, 2px, calc(3px - 4px))", "x")).toBe(-1);
-    expect(css.length("max(1px, 2px)", "x")).toBe(2);
-    expect(css.length("calc(2px + 3px * 2)", "x")).toBe(8);
-    expect(css.length("calc((2px + 3px) * 2)", "x")).toBe(10);
-    expect(css.length("calc(0.5 * 10px)", "x")).toBe(5);
-    expect(css.length("0", "x")).toBe(0);
+  test("computes every registered property once, after the ones it names", () => {
+    expect([...stage.order].sort()).toEqual(Object.keys(DECLARED).sort());
+    const at = (name: string): number => stage.order.indexOf(name);
+    expect(at("--v2-t-w")).toBeLessThan(at("--v2-t-a1"));
+    expect(at("--v2-t-r1")).toBeLessThan(at("--v2-t-a1"));
+    expect(at("--v2-t-h")).toBeLessThan(at("--v2-t-a2"));
   });
 
-  test("rounds a half toward positive infinity, as Math.round does", () => {
-    expect(css.length("round(nearest, 2.5px, 1px)", "x")).toBe(3);
-    expect(css.length("round(nearest, 2.4999px, 1px)", "x")).toBe(2);
-    expect(css.length("round(nearest, -2.5px, 1px)", "x")).toBe(-2);
-    expect(css.length("round(nearest, 0.49999999999999994px, 1px)", "x")).toBe(
+  test("floors the container, and reads each var() as one computed value", () => {
+    expect(stage.length("var(--v2-t-w)")).toBe(1000);
+    expect(stage.length("var(--v2-t-h)")).toBe(500);
+    // 994 * 0.25 is 248.5, under the first side's 300.
+    expect(stage.length("var(--v2-t-a1)")).toBe(300);
+    // 494 * 0.25 is 123.5, a tie, which goes up.
+    expect(stage.length("var(--v2-t-a2)")).toBe(124);
+    expect(stage.length("calc(var(--v2-t-w) - var(--v2-t-a1) - 6px)")).toBe(694);
+    expect(stage.length("0")).toBe(0);
+  });
+
+  test("does the arithmetic CSS does", () => {
+    expect(stage.length("clamp(300px, 10px, 200px)")).toBe(300);
+    expect(stage.length("min(1px, 2px, calc(3px - 4px))")).toBe(-1);
+    expect(stage.length("max(1px, 2px)")).toBe(2);
+    expect(stage.length("calc(2px + 3px * 2)")).toBe(8);
+    expect(stage.length("calc((2px + 3px) * 2)")).toBe(10);
+    expect(stage.length("calc(0.5 * 10px)")).toBe(5);
+  });
+
+  test("rounds a half toward positive infinity as Math.round does, and down as Math.floor does", () => {
+    expect(stage.length("round(nearest, 2.5px, 1px)")).toBe(3);
+    expect(stage.length("round(nearest, 2.4999px, 1px)")).toBe(2);
+    expect(stage.length("round(nearest, -2.5px, 1px)")).toBe(-2);
+    expect(stage.length("round(nearest, 0.49999999999999994px, 1px)")).toBe(
       Math.round(0.49999999999999994),
     );
-    expect(css.length("round(nearest, 7px, 1px)", "x")).toBe(7);
+    expect(stage.length("round(nearest, 7px, 1px)")).toBe(7);
+    expect(stage.length("round(down, 2.9px, 1px)")).toBe(2);
+    expect(stage.length("round(down, -2.1px, 1px)")).toBe(-3);
+    expect(stage.length("round(down, 7px, 1px)")).toBe(7);
   });
 
   test.each([
@@ -755,19 +889,22 @@ describe("the evaluator this file proves with", () => {
     "calc(0 + 6px)",
     "calc(1px * 2px)",
     "calc(1px / 2)",
-    "100% - 6px",
+    "var(--v2-t-w) - 6px",
     "6px 6px",
     "(1px)",
     "0.5",
     "calc(1e3px)",
     "1.5e-7px",
     "2em",
-    "calc(var(--sum) * 2)",
-    "var(--zero)",
-    "calc(var(--zero) + 1px)",
-    "var(--loop)",
-    "var(--missing)",
-    "var(--a, 1px)",
+    "100%",
+    "calc(100% - 6px)",
+    "100cqw",
+    "calc(var(--v2-t-w) - 1cqh)",
+    "var(--v2-t-r1)",
+    "calc(var(--v2-t-r1) + 1px)",
+    "var(--v2-t-x1)",
+    "var(--v2-t-a9)",
+    "var(--v2-t-w, 1px)",
     "round(1px, 1px)",
     "round(up, 1px, 1px)",
     "round(nearest, 1px, 0px)",
@@ -775,29 +912,47 @@ describe("the evaluator this file proves with", () => {
     "clamp(1px, 2, 3px)",
     "min(1px, 2)",
     "abs(1px)",
-  ])("refuses %s", (text) => {
-    expect(() => css.length(text, "x")).toThrow();
+  ])("refuses %s in a box", (text) => {
+    expect(() => stage.length(text)).toThrow();
+  });
+
+  test.each([
+    ["a bare sum", { "--v2-t-a1": "var(--v2-t-w) - 6px" }],
+    ["a number for a length", { "--v2-t-a1": "0.5" }],
+    ["a length for a number", { "--v2-t-r1": "6px" }],
+    ["a percentage", { "--v2-t-w": "100%" }],
+    ["an exponent", { "--v2-t-r1": "1e-7" }],
+    ["an unregistered property", { "--v2-t-x1": "1px" }],
+    ["two properties naming each other", { "--v2-t-a1": "var(--v2-t-a3)", "--v2-t-a3": "var(--v2-t-a1)" }],
+    ["a registered property nobody set", { "--v2-t-a1": "var(--v2-t-a4)" }],
+    ["round(down) with no step", { "--v2-t-w": "round(down, 100cqw)" }],
+  ] as const)("refuses a stage with %s", (_name, overrides) => {
+    expect(() => new Stage(T, { ...DECLARED, ...overrides }, CONTAINER)).toThrow();
   });
 });
 
 describe("behaviour 1 and 2: the same formula, proven against layoutTree", () => {
-  test("200 seeded trees of up to 12 leaves, each at 40 sizes from its minimum to 3840 by 2160", () => {
+  test("200 seeded trees of up to 14 leaves, each at 40 sizes, whole and fractional, from its minimum to 3840 by 2160", () => {
     const rand = seeded(0x7ce55);
     const problems: string[] = [];
     const shares = { low: 0, high: 0, free: 0 };
     let compared = 0;
+    let fractional = 0;
     let maximizedTrees = 0;
     let splitTrees = 0;
+    let fullTrees = 0;
     for (let index = 0; index < 200; index += 1) {
       const { tree, specs } = randomWorld(rand);
       const maximized = rand() < 0.3 ? maximizedIn(tree, rand) : null;
       if (maximized !== null) maximizedTrees += 1;
       if (tree.kind === "split") splitTrees += 1;
+      if (splitsOf(tree).length >= 11) fullTrees += 1;
       const layout = cssLayout(tree, maximized?.leafId ?? null, specs, "wide");
       expect(layout.min).toEqual(minSize(tree, specs));
       for (const size of sizesFor(layout.min, rand)) {
-        problems.push(...disagreements(layout, tree, maximized?.pane ?? null, specs, size));
-        countShares(tree, size, specs, shares);
+        problems.push(...disagreements(layout, tree, maximized?.pane ?? null, specs, size, "wide"));
+        countShares(tree, hitTestWorkspace(size.width, size.height), specs, shares);
+        if (!Number.isInteger(size.width) || !Number.isInteger(size.height)) fractional += 1;
         compared += 1;
       }
     }
@@ -806,49 +961,57 @@ describe("behaviour 1 and 2: the same formula, proven against layoutTree", () =>
       first: [],
     });
     expect(compared).toBe(8000);
-    // Not vacuous: the run reached maximized leaves, real splits, and shares
-    // held at each limit as well as shares drawn where they were set.
+    // Not vacuous: the run reached maximized leaves, real splits, trees near
+    // the pool's limit, fractional sizes, and shares held at each limit as
+    // well as shares drawn where they were set.
     expect(maximizedTrees).toBeGreaterThan(30);
     expect(splitTrees).toBeGreaterThan(150);
+    expect(fullTrees).toBeGreaterThan(20);
+    expect(fractional).toBeGreaterThan(2500);
     expect(shares.low).toBeGreaterThan(500);
     expect(shares.high).toBeGreaterThan(500);
     expect(shares.free).toBeGreaterThan(500);
   });
 
-  test.each([
-    ["the second child, one axis", "second", "same"],
-    ["the first child, one axis", "first", "same"],
-    ["the second child, alternating axes", "second", "alternate"],
-    ["alternating children, one axis", "zigzag", "same"],
-  ] as const)("a 12 deep chain down %s agrees at 40 sizes", (_name, side, axes) => {
-    const rand = seeded(12);
-    const { tree, specs } = chain(12, side, axes, 0.6180339887498949);
+  test.each(CHAINS)("a 13 split chain down %s children along %s agrees at 40 sizes", (side, axes) => {
+    const rand = seeded(13);
+    // The deeper side takes the larger share, or twelve more splits never fit
+    // in what is left and every share is held at every size.
+    const ratio = side === "second" ? 0.3 : 0.6180339887498949;
+    const { tree, specs } = chain(MAX_SPLITS, side, axes, ratio, ROOMY_CHAIN_MIN);
     const layout = cssLayout(tree, null, specs, "regular");
-    const problems = sizesFor(layout.min, rand).flatMap((size) =>
-      disagreements(layout, tree, null, specs, size),
-    );
+    expect(layout.min.w).toBeLessThan(LARGEST.width - 1000);
+    expect(layout.min.h).toBeLessThan(LARGEST.height - 900);
+    const shares = { low: 0, high: 0, free: 0 };
+    const problems = sizesFor(layout.min, rand).flatMap((size) => {
+      countShares(tree, hitTestWorkspace(size.width, size.height), specs, shares);
+      return disagreements(layout, tree, null, specs, size, "regular");
+    });
     expect(problems.slice(0, 8)).toEqual([]);
+    // Not vacuous: across the sizes some splits are drawn where they were set
+    // and some are held at a limit.
+    expect(shares.free).toBeGreaterThan(0);
+    expect(shares.low + shares.high).toBeGreaterThan(0);
   });
 
   test("below the minimum the engine shares evenly and the CSS keeps the first side's minimum", () => {
     // The header's boundary, made executable: at the tree's minimum the two
-    // forms agree, one pixel under it they part.
+    // forms agree, one pixel under it they part. a1 is clamp(300px, ..., 99px)
+    // there, whose lower bound wins.
     const tree = splitNode("s1", "h", 0.5, leafNode("l2", "pane1"), leafNode("l3", "pane2"));
     const specs = [paneSpec("pane1", 300, 100), paneSpec("pane2", 100, 100)];
     const layout = cssLayout(tree, null, specs, "wide");
     expect(layout.min).toEqual({ w: 406, h: 100 });
-    expect(disagreements(layout, tree, null, specs, { width: 406, height: 100 })).toEqual([]);
-    expect(disagreements(layout, tree, null, specs, { width: 405, height: 100 })).not.toEqual([]);
+    expect(disagreements(layout, tree, null, specs, { width: 406, height: 100 }, "wide")).toEqual([]);
+    expect(disagreements(layout, tree, null, specs, { width: 406.9, height: 100 }, "wide")).toEqual([]);
+    expect(disagreements(layout, tree, null, specs, { width: 405, height: 100 }, "wide")).not.toEqual([]);
   });
 
-  test("a workspace that is not a whole number of pixels can part them above the minimum", () => {
-    // The header's second limit. The root's share is held at its upper limit,
-    // so its first child should leave the second exactly 300. At 700.6 the
-    // first child rounds from 394.6 up to 395 and the engine's second child gets
-    // 299.6, which no longer fits the 200 and 94 inside it, so the engine shares
-    // that split evenly. The CSS builds that split from the second child's
-    // minimum, 300, and gives its first side 200. At whole pixels either side of
-    // it the two agree.
+  test("a fractional workspace is drawn and hit tested at its whole pixel floor", () => {
+    // The first pass's counterexample. The root's share is held at its upper
+    // limit; at 700.6 the engine on the raw size gave its second child 299.6,
+    // under the 300 the split inside needs, and shared that split evenly where
+    // the CSS did not. Floored on both sides, the two agree.
     const tree = splitNode(
       "s1",
       "h",
@@ -859,11 +1022,14 @@ describe("behaviour 1 and 2: the same formula, proven against layoutTree", () =>
     const specs = [paneSpec("pane1", 300, 100), paneSpec("pane2", 200, 100), paneSpec("pane3", 94, 100)];
     const layout = cssLayout(tree, null, specs, "wide");
     expect(layout.min).toEqual({ w: 606, h: 100 });
-    expect(disagreements(layout, tree, null, specs, { width: 700, height: 400 })).toEqual([]);
-    expect(disagreements(layout, tree, null, specs, { width: 701, height: 400 })).toEqual([]);
-    expect(disagreements(layout, tree, null, specs, { width: 700.6, height: 400 })).toContain(
-      "700.6x400: leaf l4 css 401,0 200x400 engine 401,0 147x400",
-    );
+    for (const width of [700, 700.6, 700.999, 701]) {
+      expect(disagreements(layout, tree, null, specs, { width, height: 400.5 }, "wide")).toEqual([]);
+    }
+    // Handed the raw measurement, layoutTree parts from the drawing. That is
+    // why hit testing measures through hitTestWorkspace.
+    expect(
+      disagreements(layout, tree, null, specs, { width: 700.6, height: 400 }, "wide", unfloored),
+    ).toContain("700.6x400: leaf l4 css 400,0 200x400 engine 401,0 147x400");
   });
 });
 
@@ -882,11 +1048,16 @@ describe("behaviour 3: a maximized leaf, and no tree", () => {
     paneSpec("pane4", 260, 180),
   ];
 
-  test("the maximized leaf gets the whole box and every other box is unchanged", () => {
+  test("the maximized leaf gets the whole workspace and every other box is unchanged", () => {
     const plain = cssLayout(tree, null, specs, "wide");
     const maximized = cssLayout(tree, "l4", specs, "wide");
-    const whole = { left: "0", top: "0", width: "100%", height: "100%" };
-    expect(maximized.leaves.find((box) => box.leafId === "l4")).toEqual({ leafId: "l4", ...whole });
+    expect(maximized.leaves.find((box) => box.leafId === "l4")).toEqual({
+      leafId: "l4",
+      left: "0",
+      top: "0",
+      width: "var(--v2-wide-w)",
+      height: "var(--v2-wide-h)",
+    });
     expect(maximized.leaves.filter((box) => box.leafId !== "l4")).toEqual(
       plain.leaves.filter((box) => box.leafId !== "l4"),
     );
@@ -910,72 +1081,68 @@ describe("behaviour 3: a maximized leaf, and no tree", () => {
     });
   });
 
-  test("a tree of one leaf fills the box, with nothing else to write", () => {
+  test("a tree of one leaf fills the workspace, with only the workspace's two properties", () => {
     expect(cssLayout(leafNode("l1", "pane1"), null, specs, "wide")).toEqual({
-      leaves: [{ leafId: "l1", left: "0", top: "0", width: "100%", height: "100%" }],
+      leaves: [
+        { leafId: "l1", left: "0", top: "0", width: "var(--v2-wide-w)", height: "var(--v2-wide-h)" },
+      ],
       dividers: [],
-      vars: {},
+      vars: { "--v2-wide-w": "round(down, 100cqw, 1px)", "--v2-wide-h": "round(down, 100cqh, 1px)" },
       min: { w: 300, h: 200 },
     });
   });
 });
 
-describe("behaviour 4: linear, not exponential", () => {
-  const SHAPES = [
-    ["second", "same"],
-    ["first", "same"],
-    ["second", "alternate"],
-    ["zigzag", "alternate"],
-  ] as const;
+describe("behaviour 4: linear, and the pool is the only thing named", () => {
+  test.each(CHAINS)(
+    "a 13 split chain down %s children along %s: under 24 KB, only the pool, no definition inside another",
+    (side, axes) => {
+      const { tree, specs } = chain(MAX_SPLITS, side, axes, 1 / 3);
+      const layout = cssLayout(tree, null, specs, "regular");
+      const pool = registryFor("regular");
+      expect(totalLength(layout)).toBeLessThan(24 * 1024);
+      for (const name of Object.keys(layout.vars)) expect(pool.has(name)).toBe(true);
+      for (const text of cssStrings(layout)) {
+        for (const match of text.matchAll(/var\((--[a-z0-9-]+)\)/g)) expect(pool.has(match[1])).toBe(true);
+      }
+      const firsts = Object.entries(layout.vars).filter(([name]) => /-a[0-9]+$/.test(name));
+      expect(firsts).toHaveLength(MAX_SPLITS);
+      for (const [name, text] of firsts) {
+        for (const [other, otherText] of firsts) {
+          if (other !== name) expect(text.includes(otherText)).toBe(false);
+        }
+      }
+    },
+  );
 
-  test.each(SHAPES)("a 12 deep chain down %s children, %s axes, stays under 8 KB", (side, axes) => {
-    // A ratio at full precision is the longest a ratio can be written.
-    const { tree, specs } = chain(12, side, axes, 1 / 3);
-    expect(totalLength(cssLayout(tree, null, specs, "regular"))).toBeLessThan(8 * 1024);
+  test.each(CHAINS)("each string down %s children along %s grows by a bounded length per split", (side, axes) => {
+    const longest: number[] = [];
+    for (let depth = 0; depth <= MAX_SPLITS; depth += 1) {
+      const { tree, specs } = chain(depth, side, axes, 1 / 3);
+      longest.push(Math.max(...cssStrings(cssLayout(tree, null, specs, "regular")).map((text) => text.length)));
+    }
+    // Past the first split, a level adds at most one term to each side of the
+    // longest a<k>: its extent less the next a<k>, written twice.
+    const term = " - var(--v2-regular-a13)".length;
+    const steps = longest.slice(2).map((length, index) => length - longest[index + 1]);
+    expect(Math.max(...steps)).toBeLessThanOrEqual(2 * term);
   });
 
-  test.each(SHAPES)("each split down %s children, %s axes, adds a bounded length", (side, axes) => {
-    const lengths: number[] = [];
-    for (let depth = 0; depth <= 40; depth += 1) {
-      const { tree, specs } = chain(depth, side, axes, 1 / 3);
-      lengths.push(totalLength(cssLayout(tree, null, specs, "regular")));
-    }
-    const steps = lengths.slice(1).map((length, index) => length - lengths[index]);
-    expect(Math.min(...steps)).toBeGreaterThan(0);
-    expect(Math.max(...steps)).toBeLessThan(720);
-    // The step stops growing once the shape repeats: past depth 20 it is no
-    // longer than it was between 10 and 20, give or take an id's extra digit.
-    // Anything worse than linear would keep climbing.
-    const settled = Math.max(...steps.slice(10, 20));
-    expect(Math.max(...steps.slice(20))).toBeLessThanOrEqual(settled + 4);
+  test("the catalog's panes, one leaf each, fit the pool", () => {
+    expect(PANES.length - 1).toBeLessThanOrEqual(MAX_SPLITS);
   });
 
-  // Not the brief's measure but the browser's: var() is substituted as text,
-  // so this is how long a box string really is once a browser has read it, and
-  // browsers cap that length. Each split names its parent's extent twice on the
-  // way to either child, so the substituted length doubles per level of splits
-  // that run the same way. Naming it three times (the inner extent less the
-  // first child, for a split inside the second) made it about 27 MB at depth 12.
-  test.each(SHAPES)("what a browser substitutes, down %s children, %s axes, doubles per level", (side, axes) => {
-    const lengths: number[] = [];
-    for (let depth = 0; depth <= 12; depth += 1) {
-      const { tree, specs } = chain(depth, side, axes, 1 / 3);
-      lengths.push(substitutedLength(cssLayout(tree, null, specs, "regular")));
-    }
-    // Two levels is the most any default tree nests one way.
-    expect(lengths[2]).toBeLessThan(1024);
-    // Twelve levels is as deep as the store keeps a tree.
-    expect(lengths[12]).toBeLessThan(1024 * 1024);
-    // From depth 6 to 12 there are six levels of one axis, or three when the
-    // axes alternate: about two to the power of that, and nothing like three.
-    const levels = axes === "same" ? 6 : 3;
-    expect(lengths[12] / lengths[6]).toBeLessThan(2 ** levels * 1.5);
+  test("a tree with more splits than the pool holds throws", () => {
+    const fits = chain(MAX_SPLITS, "second", "h", 0.5);
+    const over = chain(MAX_SPLITS + 1, "second", "h", 0.5);
+    expect(() => cssLayout(fits.tree, null, fits.specs, "wide")).not.toThrow();
+    expect(() => cssLayout(over.tree, null, over.specs, "wide")).toThrow();
   });
 });
 
 describe("behaviour 5: only what the module wrote", () => {
-  const ALLOWED = /^[a-z0-9.%(),*+ -]+$/;
-  const VAR_NAME = /^--v2-[rifo]-wide-s[0-9]+$/;
+  const ALLOWED = /^[a-z0-9.(),*+ -]+$/;
+  const POOL_NAME = /^--v2-wide-(w|h|a([1-9]|1[0-3])|r([1-9]|1[0-3]))$/;
 
   // Pane ids and titles shaped like the catalog's, so a leak would look like one.
   const tree = splitNode(
@@ -1001,40 +1168,68 @@ describe("behaviour 5: only what the module wrote", () => {
   const layout = cssLayout(tree, null, specs, "wide");
 
   test("every string is made of the module's own characters, with no exponent and no non-number", () => {
-    for (const text of allStrings(layout)) {
+    for (const text of cssStrings(layout)) {
       expect(text).toMatch(ALLOWED);
       expect(text).not.toMatch(/[0-9.]e|nan|infinity/i);
     }
-    for (const name of Object.keys(layout.vars)) expect(name).toMatch(VAR_NAME);
+    for (const name of Object.keys(layout.vars)) expect(name).toMatch(POOL_NAME);
+  });
+
+  test("container units appear only in the workspace's two properties, and a box names only the stage", () => {
+    for (const [name, value] of Object.entries(layout.vars)) {
+      expect(value.includes("cq")).toBe(/-(w|h)$/.test(name));
+    }
+    for (const text of boxStrings(layout)) expect(text).not.toMatch(/cq|%/);
   });
 
   test("numbers String() would write with an exponent are written out in full", () => {
     const values = Object.values(layout.vars).join(" ");
-    expect(layout.vars[ratioVar("wide", "s7")]).toBe("0.0000001");
+    expect(layout.vars[ratioVar("wide", 1)]).toBe("0.0000001");
     expect(values).toContain("clamp(320px, ");
     expect(values).toContain(" - 1000000000000000000000px)");
     expect(values).toContain("clamp(0.0000005px, ");
   });
 
   test("a share that is no number is drawn even, and one outside 0 to 1 is held to it", () => {
-    expect(layout.vars[ratioVar("wide", "s30")]).toBe("0.5");
-    expect(layout.vars[ratioVar("wide", "s4")]).toBe("1");
+    expect(layout.vars[ratioVar("wide", 2)]).toBe("0.5");
+    expect(layout.vars[ratioVar("wide", 3)]).toBe("1");
   });
 
-  test("no pane id and no title reaches a string", () => {
-    const text = allStrings(layout).join("\n").toLowerCase();
+  test("no pane id, no title and no node id reaches a string", () => {
+    const text = cssStrings(layout).join("\n").toLowerCase();
     for (const spec of specs) {
       expect(text).not.toContain(spec.id.toLowerCase());
       expect(text).not.toContain(spec.title.toLowerCase());
     }
     expect(text).not.toContain("pane");
+    expect(text).not.toMatch(/(^|[^a-z])[ls][0-9]+/);
   });
 
-  test("every split's ratio is under ratioVar's name", () => {
-    expect(ratioVar("wide", "s3")).toBe("--v2-r-wide-s3");
-    expect(Object.keys(layout.vars)).toEqual(
-      expect.arrayContaining(["s7", "s30", "s4"].map((id) => ratioVar("wide", id))),
+  test("a divider carries its split's pre-order index and the property its ratio is in", () => {
+    // layoutTree lists dividers in order, s2 before s1; the index is pre-order.
+    const shape = splitNode(
+      "s1",
+      "h",
+      0.4,
+      splitNode("s2", "v", 0.3, leafNode("l3", "today"), leafNode("l4", "status")),
+      splitNode("s5", "v", 0.7, leafNode("l6", "ledger"), leafNode("l7", "calendar")),
     );
+    const drawn = cssLayout(shape, null, specs, "wide");
+    expect(drawn.dividers.map((box) => [box.splitId, box.index, box.ratioVar])).toEqual([
+      ["s2", 2, "--v2-wide-r2"],
+      ["s1", 1, "--v2-wide-r1"],
+      ["s5", 3, "--v2-wide-r3"],
+    ]);
+    expect(drawn.dividers.map((box) => drawn.vars[box.ratioVar])).toEqual(["0.3", "0.4", "0.7"]);
+    for (const box of drawn.dividers) expect(box.ratioVar).toBe(ratioVar("wide", box.index));
+  });
+
+  test("ratioVar takes a pre-order index inside the pool and nothing else", () => {
+    expect(ratioVar("wide", 3)).toBe("--v2-wide-r3");
+    expect(ratioVar("regular", MAX_SPLITS)).toBe("--v2-regular-r13");
+    for (const index of [0, MAX_SPLITS + 1, 1.5, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => ratioVar("wide", index)).toThrow();
+    }
   });
 
   test.each(["", "Wide", "wide1", "wide-x", "wide ", "wíde", "__proto__"])(
@@ -1042,7 +1237,8 @@ describe("behaviour 5: only what the module wrote", () => {
     (scope) => {
       expect(() => cssLayout(tree, null, specs, scope)).toThrow();
       expect(() => cssLayout(null, null, specs, scope)).toThrow();
-      expect(() => ratioVar(scope, "s1")).toThrow();
+      expect(() => ratioVar(scope, 1)).toThrow();
+      expect(() => propertyRules(["wide", scope])).toThrow();
     },
   );
 
@@ -1053,20 +1249,50 @@ describe("behaviour 5: only what the module wrote", () => {
       expect(() =>
         cssLayout(splitNode(id, "h", 0.5, leafNode("l1", "today"), leafNode("l2", "status")), null, specs, "wide"),
       ).toThrow();
-      expect(() => ratioVar("wide", id)).toThrow();
     },
   );
 
-  test("an id used twice throws, because two splits would share one set of names", () => {
-    const twice = splitNode(
-      "s1",
-      "h",
-      0.5,
-      splitNode("s2", "v", 0.5, leafNode("l3", "today"), leafNode("l4", "status")),
-      splitNode("s2", "v", 0.5, leafNode("l5", "calendar"), leafNode("l6", "ledger")),
-    );
-    expect(() => cssLayout(twice, null, specs, "wide")).toThrow();
-    const leafTwice = splitNode("s1", "h", 0.5, leafNode("l3", "today"), leafNode("l3", "status"));
-    expect(() => cssLayout(leafTwice, null, specs, "wide")).toThrow();
+  test("an id used twice is not refused: ids are checked, never written", () => {
+    const twice = splitNode("s1", "h", 0.5, leafNode("l3", "today"), leafNode("l3", "status"));
+    expect(() => cssLayout(twice, null, specs, "wide")).not.toThrow();
+  });
+});
+
+describe("propertyRules: the pool, registered", () => {
+  test("every name a layout can write, once per scope, as a length or a number", () => {
+    const rules = propertyRules(["regular", "wide"]);
+    const registry = registryOf(rules);
+    const perScope = 2 + 2 * MAX_SPLITS;
+    expect(rules.split("\n")).toHaveLength(2 * perScope);
+    expect(registry.size).toBe(2 * perScope);
+    expect(registry.get("--v2-wide-w")).toBe("length");
+    expect(registry.get("--v2-wide-h")).toBe("length");
+    expect(registry.get("--v2-regular-a13")).toBe("length");
+    expect(registry.get("--v2-wide-r1")).toBe("number");
+    expect(registry.has("--v2-wide-a14")).toBe(false);
+    expect(registry.has("--v2-wide-a0")).toBe(false);
+  });
+
+  test("a scope named twice is registered once, and no scope registers nothing", () => {
+    expect(propertyRules(["wide", "wide"])).toBe(propertyRules(["wide"]));
+    expect(propertyRules([])).toBe("");
+  });
+
+  test("the pool of the desk's two scopes is clear of every name in the desk's stylesheets", () => {
+    const taken = stylesheetNames();
+    // The walk found the desk's tokens, so an empty walk cannot pass this.
+    expect(taken.size).toBeGreaterThan(20);
+    for (const name of registryOf(propertyRules(["regular", "wide"])).keys()) {
+      expect(taken.has(name)).toBe(false);
+    }
+  });
+});
+
+describe("hitTestWorkspace: what hit testing hands layoutTree", () => {
+  test("floors to whole pixels as the CSS does, and reads nothing usable as zero", () => {
+    expect(hitTestWorkspace(700.6, 400.999)).toEqual({ width: 700, height: 400 });
+    expect(hitTestWorkspace(1366, 768)).toEqual({ width: 1366, height: 768 });
+    expect(hitTestWorkspace(0.4, -3)).toEqual({ width: 0, height: 0 });
+    expect(hitTestWorkspace(Number.NaN, Number.POSITIVE_INFINITY)).toEqual({ width: 0, height: 0 });
   });
 });
