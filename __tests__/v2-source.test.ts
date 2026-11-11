@@ -1205,6 +1205,7 @@ describe("the modules that can reach a loader", () => {
   test("is only the pages that read, in the tree as it stands", () => {
     expect([...DATA_MODULES]).toContain("app/v2/today/page");
     expect([...DATA_MODULES]).toContain("app/v2/panes/page");
+    expect([...DATA_MODULES]).toContain("app/v2/desk/page");
     expect([...DATA_MODULES]).not.toContain(GATE_MODULE);
   });
 

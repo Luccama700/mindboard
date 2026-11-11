@@ -16,19 +16,24 @@ import type { CSSProperties, ReactNode } from "react";
  *
  * `style` is how the holder sizes the box (the gallery's fixed width and
  * height); the box itself never measures anything.
+ *
+ * `labelledBy` names the scroller after whatever holds the box: on the desk,
+ * the frame's title, so a keyboard that lands on it hears which pane it is in.
  */
 export function PaneBox({
   paneId,
   children,
   style,
+  labelledBy,
 }: {
   paneId: string;
   children: ReactNode;
   style?: CSSProperties;
+  labelledBy?: string;
 }) {
   return (
     <div className="v2-pane" data-pane={paneId} style={style}>
-      <div className="v2-pane-body" tabIndex={0}>
+      <div className="v2-pane-body" tabIndex={0} aria-labelledby={labelledBy}>
         {children}
       </div>
     </div>

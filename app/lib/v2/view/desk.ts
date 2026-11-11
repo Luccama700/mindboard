@@ -19,6 +19,22 @@ export const DESK_COPY = {
   allFitToday: "Everything fit today.",
   /** The gallery's one line over the box. `{pane}`, `{w}` and `{h}` are filled. */
   gallery: "{pane}, {w} by {h} px",
+  /** The rail, as a landmark. */
+  rail: "Desk",
+  /** The layouts, on the rail and in the phone's list. */
+  layouts: "Layouts",
+  /** The pane list on the rail. */
+  panes: "Panes",
+  /** The pane list's three groups, by the catalog's group. */
+  groupDay: "Day",
+  groupQuests: "Quests",
+  groupMoney: "Money",
+  /** Read after a pane that is open in the layout on screen. */
+  open: "open",
+  /** The phone's bottom bar: the panes of the layout on screen. */
+  bar: "Panes in this layout",
+  /** Read before the layout's name on the phone's top bar button. */
+  layoutButton: "Layout",
 } as const;
 
 /**

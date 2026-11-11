@@ -1,5 +1,5 @@
-/* The desk: the box a pane is drawn in, and the gallery that shows one pane
- * alone at a fixed size.
+/* The desk: the box a pane is drawn in, the gallery that shows one pane alone
+ * at a fixed size, and the desk itself (/v2/desk) at the foot of this file.
  *
  * Loaded after v2.css and calendar.css (app/v2/layout.tsx), whose tokens it
  * reads and whose leaves it holds, and scoped the same way: every selector
@@ -38,8 +38,13 @@
 /* The scroller every body shares. It is the column the side lists are on a
    wide window: thin bar in the scheme's own colours, its gutter always kept so
    pressing Show more does not shift a row, and inline padding so the focus
-   ring of a row or a button inside is not cut off at the edge. */
+   ring of a row or a button inside is not cut off at the edge.
+   POSITIONED, so it is the containing block of what a body positions
+   absolutely (the read, not seen text of .v2-hidden): otherwise such text in a
+   body taller than its pane is placed against something outside the pane, and
+   the page scrolls instead of the pane. */
 [data-v2-root] .v2-pane-body {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -117,4 +122,555 @@
 [data-v2-root] .v2-gallery > .v2-pane {
   flex: none;
   outline: 1px dashed var(--v2-edge);
+}
+
+/* ============================================================================
+ * THE DESK
+ *
+ * /v2/desk: one page, every layout. From 1024px a rail and a workspace of tiled
+ * frames; under it a top bar, one slot and a bottom bar.
+ *
+ * THE PAGE CARRIES EVERY CLASS AT ONCE, because the server cannot know the
+ * window: each frame holds its box for both tiled classes and says which
+ * classes it is shown in (data-shown), the workspace holds both classes'
+ * minimums, and the media queries below pick. They are the queries useTiles
+ * reads, at the engine's 1024 and 1600:
+ *
+ *   under 1024px        compact: the phone's one leaf, its front tab
+ *   1024px to 1599px    regular: --v2-frame-regular-*, --v2-desk-regular-min-*
+ *   from 1600px         wide:    --v2-frame-wide-*, --v2-desk-wide-min-*
+ *
+ * The three ranges do not overlap, so each thing that changes with the class is
+ * shown by exactly one rule, and nothing has to be undone at a wider width.
+ *
+ * THE GEOMETRY'S CONTRACT (app/lib/v2/tiles/css.ts). The workspace is the size
+ * container, with no padding and no border, never smaller than the tree's
+ * minimum for the class shown (the page scrolls instead, because below it the
+ * CSS and the engine draw differently). The stage, its one child, covers it and
+ * carries both classes' registered properties inline. Every frame and divider
+ * is a child of the stage, absolutely positioned against it, and nothing
+ * between them is a size container. A frame's box is the frame's OWN
+ * properties, --v2-frame-<class>-<side>; the stage's properties are the whole
+ * workspace and its splits, and are never read here.
+ *
+ * Quiet chrome, loud content: a frame is the card's surface with a hairline,
+ * its header one short line in the quiet ink, and the 6px between frames is the
+ * page, where the dividers will be. Nothing here animates.
+ * ==========================================================================*/
+
+[data-v2-root] .v2-desk {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+/* Between a phone and a laptop, v2.css frames Today as a device with room
+   above and below it. The desk fills the window instead. */
+@media (min-width: 520px) and (max-width: 1023.98px) {
+  [data-v2-root]:has(> .v2-desk) {
+    padding: 0;
+  }
+}
+
+/* ---- the workspace and its stage ---- */
+
+[data-v2-root] .v2-desk-work {
+  container-type: size;
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+[data-v2-root] .v2-desk-stage {
+  position: absolute;
+  inset: 0;
+}
+
+/* ---- a frame ---- */
+
+/* Not displayed until a class shows it (below). Its border is inside its box,
+   so the frame is exactly the rectangle the engine gives its leaf. */
+[data-v2-root] .v2-frame {
+  position: absolute;
+  display: none;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--v2-card);
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+}
+
+/* The box takes what the header leaves. */
+[data-v2-root] .v2-frame > .v2-pane {
+  flex: 1 1 0;
+  height: auto;
+}
+
+[data-v2-root] .v2-frame-head {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+/* The title as it is seen. The h2 beside it is read, not seen, and is what the
+   frame and its scroller are labelled by. */
+[data-v2-root] .v2-frame-name {
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--v2-ink-3);
+  font: 600 12px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+/* A leaf's tabs, in place of the title on a class where the pane shares its
+   leaf. Not a control yet. */
+[data-v2-root] .v2-frame-tabs {
+  display: none;
+  gap: 16px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+[data-v2-root] .v2-frame-tab {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  white-space: nowrap;
+  color: var(--v2-ink-3);
+  font: 600 12px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+[data-v2-root] .v2-frame-tab[aria-selected="true"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-frame-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--v2-accent);
+}
+
+/* The gap a divider will be dragged in. Nothing to see: the page shows
+   through it. */
+[data-v2-root] .v2-divider {
+  position: absolute;
+  display: none;
+  left: var(--v2-divider-left);
+  top: var(--v2-divider-top);
+  width: var(--v2-divider-width);
+  height: var(--v2-divider-height);
+}
+
+/* The day's notice is the desk's to say, once, on the rail or under the top
+   bar: the day pane's own copy of it would say it twice. */
+[data-v2-root] .v2-desk .v2-pane .v2-notice {
+  display: none;
+}
+
+/* ---- the notes: the notice, and what the source could not read ---- */
+
+[data-v2-root] .v2-desk-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--v2-ink-2);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+[data-v2-root] .v2-desk-notes-compact {
+  flex: none;
+  padding: 10px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--v2-edge);
+}
+
+[data-v2-root] .v2-desk-notes-rail {
+  margin-top: 22px;
+  padding: 0 8px;
+}
+
+/* ---- the phone's top bar ---- */
+
+[data-v2-root] .v2-desk-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: calc(52px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) 10px 0;
+  background: var(--v2-card);
+  border-bottom: 1px solid var(--v2-edge);
+}
+
+[data-v2-root] .v2-desk-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  color: var(--v2-ink);
+  font: 600 17px/1 var(--v2-display);
+}
+
+/* A chevron drawn in the text's own colour. */
+[data-v2-root] .v2-desk-chev {
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+[data-v2-root] .v2-desk-switch[aria-expanded="true"] .v2-desk-chev {
+  transform: translateY(2px) rotate(225deg);
+}
+
+/* The list of layouts, over the slot. */
+[data-v2-root] .v2-desk-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--v2-card);
+  border: 1px solid var(--v2-edge);
+  border-radius: 14px;
+}
+
+[data-v2-root] .v2-desk-menu[hidden] {
+  display: none;
+}
+
+[data-v2-root] .v2-desk-menu a {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  color: var(--v2-ink-2);
+  font: 600 15px/1 var(--v2-display);
+  text-decoration: none;
+}
+
+[data-v2-root] .v2-desk-menu a[aria-current="page"] {
+  color: var(--v2-signal);
+  background: var(--v2-card-2);
+}
+
+/* ---- the phone's bottom bar: the layout's tabs ---- */
+
+[data-v2-root] .v2-desk-bar {
+  flex: none;
+  padding: 0 10px calc(8px + env(safe-area-inset-bottom));
+  background: var(--v2-card);
+  border-top: 1px solid var(--v2-edge);
+}
+
+[data-v2-root] .v2-desk-bar-tabs {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+[data-v2-root] .v2-desk-bar-tabs button {
+  position: relative;
+  flex: 1 0 auto;
+  min-width: 44px;
+  min-height: 52px;
+  padding: 0 12px;
+  white-space: nowrap;
+  color: var(--v2-ink-3);
+  font: 600 15px/1 var(--v2-display);
+}
+
+[data-v2-root] .v2-desk-bar-tabs button[aria-selected="true"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-desk-bar-tabs button[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 3px;
+  border-radius: 0 0 2px 2px;
+  background: var(--v2-accent);
+}
+
+/* The strip scrolls, so it clips: the ring goes inside the tab. */
+[data-v2-root] .v2-desk-bar-tabs button:focus-visible {
+  outline-offset: -3px;
+}
+
+/* ---- the rail ---- */
+
+[data-v2-root] .v2-desk-rail {
+  display: none;
+}
+
+[data-v2-root] .v2-desk-rail-head {
+  margin: 0 8px 6px;
+  color: var(--v2-ink-3);
+  font: 600 11px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+[data-v2-root] .v2-desk-panes-head {
+  margin-top: 26px;
+}
+
+[data-v2-root] .v2-desk-layouts,
+[data-v2-root] .v2-desk-group ul {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-desk-layouts {
+  gap: 2px;
+}
+
+/* The existing rail's items: the same size, face and ink. */
+[data-v2-root] .v2-desk-layouts a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--v2-ink-2);
+  font: 600 14px/1.15 var(--v2-display);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-desk-layouts a:not([aria-current="page"]):hover {
+  color: var(--v2-ink);
+}
+
+/* The one bright thing on the rail. */
+[data-v2-root] .v2-desk-layouts a[aria-current="page"] {
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-desk-layouts a[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--v2-accent);
+}
+
+[data-v2-root] .v2-desk-group h3 {
+  margin: 12px 8px 2px;
+  color: var(--v2-ink-3);
+  font: 600 11px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+/* A pane, quiet, and a little less quiet with a mark when it is open in the
+   layout on screen. The mark keeps its place when it is not drawn, so the
+   names stay in one column. */
+[data-v2-root] .v2-desk-pane {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 3px 8px;
+  color: var(--v2-ink-3);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+[data-v2-root] .v2-desk-pane-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-desk-open {
+  order: -1;
+  display: inline-flex;
+  flex: none;
+  width: 5px;
+  margin-top: 5px;
+  visibility: hidden;
+}
+
+[data-v2-root] .v2-desk-open-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--v2-ink-2);
+}
+
+/* ---- from 1024px: the rail and the tiled workspace ---- */
+
+@media (min-width: 1024px) {
+  [data-v2-root] .v2-desk {
+    flex-direction: row;
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  [data-v2-root] .v2-desk-top,
+  [data-v2-root] .v2-desk-notes-compact,
+  [data-v2-root] .v2-desk-bar {
+    display: none;
+  }
+
+  /* The existing rail's width and tone: the page's own colour, a hairline on
+     its right, and its own scroll when the window is short. */
+  [data-v2-root] .v2-desk-rail {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    width: var(--v2-rail-w);
+    height: 100dvh;
+    padding: 30px 14px 24px;
+    overflow-y: auto;
+    border-right: 1px solid var(--v2-edge);
+    scrollbar-width: thin;
+    scrollbar-color: var(--v2-edge) transparent;
+  }
+
+  /* The same 6px from the window's edges as between two frames. A margin, so
+     the workspace itself still has no padding and no border. */
+  [data-v2-root] .v2-desk-work {
+    margin: 6px;
+  }
+}
+
+/* ---- compact: one slot, the front tab of the one leaf ---- */
+
+@media (width < 1024px) {
+  [data-v2-root] .v2-frame[data-shown~="compact"] {
+    display: flex;
+    inset: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  /* The bars name the pane here; the title is still read. */
+  [data-v2-root] .v2-frame-head {
+    min-height: 0;
+    padding: 0;
+  }
+
+  [data-v2-root] .v2-frame-name {
+    display: none;
+  }
+}
+
+/* ---- regular ---- */
+
+@media (1024px <= width < 1600px) {
+  [data-v2-root] .v2-desk-work {
+    min-width: var(--v2-desk-regular-min-w);
+    min-height: var(--v2-desk-regular-min-h);
+  }
+
+  [data-v2-root] .v2-frame[data-shown~="regular"] {
+    display: flex;
+    left: var(--v2-frame-regular-left);
+    top: var(--v2-frame-regular-top);
+    width: var(--v2-frame-regular-width);
+    height: var(--v2-frame-regular-height);
+  }
+
+  [data-v2-root] .v2-frame-name[data-strip~="regular"] {
+    display: none;
+  }
+
+  [data-v2-root] .v2-frame-tabs[data-in~="regular"] {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-divider[data-shown~="regular"] {
+    display: block;
+  }
+
+  [data-v2-root] .v2-desk-pane[data-open~="regular"] {
+    color: var(--v2-ink-2);
+  }
+
+  [data-v2-root] .v2-desk-pane[data-open~="regular"] .v2-desk-open {
+    visibility: visible;
+  }
+}
+
+/* ---- wide ---- */
+
+@media (min-width: 1600px) {
+  [data-v2-root] .v2-desk-work {
+    min-width: var(--v2-desk-wide-min-w);
+    min-height: var(--v2-desk-wide-min-h);
+  }
+
+  [data-v2-root] .v2-frame[data-shown~="wide"] {
+    display: flex;
+    left: var(--v2-frame-wide-left);
+    top: var(--v2-frame-wide-top);
+    width: var(--v2-frame-wide-width);
+    height: var(--v2-frame-wide-height);
+  }
+
+  [data-v2-root] .v2-frame-name[data-strip~="wide"] {
+    display: none;
+  }
+
+  [data-v2-root] .v2-frame-tabs[data-in~="wide"] {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-divider[data-shown~="wide"] {
+    display: block;
+  }
+
+  [data-v2-root] .v2-desk-pane[data-open~="wide"] {
+    color: var(--v2-ink-2);
+  }
+
+  [data-v2-root] .v2-desk-pane[data-open~="wide"] .v2-desk-open {
+    visibility: visible;
+  }
 }
