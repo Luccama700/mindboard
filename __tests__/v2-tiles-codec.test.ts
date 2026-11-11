@@ -576,12 +576,44 @@ describe("reading any string", () => {
     }
   });
 
-  test("the reader stops at the engine's depth: the limit is read and one past it is not", () => {
+  test("the reader stops at the engine's depth: the limit is read, and a tree past it is one nothing survives from", () => {
+    const nothingOpen: Arrangement = { tree: null, maximized: null, focus: null, lastSpot: {}, options: {} };
     expect(depthOf(check(deepText(MAX_TREE_DEPTH))?.tree ?? null)).toBe(MAX_TREE_DEPTH);
-    expect(decodeArrangement(deepText(MAX_TREE_DEPTH + 1))).toBeNull();
+    expect(decodeArrangement(deepText(MAX_TREE_DEPTH + 1))).toEqual(nothingOpen);
+    // The reader stops at the cap and reads nothing after it: not the rest of
+    // the tree, and not a maximize or an option behind it.
+    expect(readArrangement(`${deepText(MAX_TREE_DEPTH + 1)}_m.today_o.calendar.days.7`)).toEqual({
+      tree: null,
+      maximized: null,
+      lastSpot: {},
+      options: {},
+    });
+    expect(decodeArrangement(`${"h5000".repeat(MAX_TREE_DEPTH)}`)).toEqual(nothingOpen);
+    expect(decodeArrangement(`${"h5000".repeat(MAX_TREE_DEPTH)}not a tree at all`)).toEqual(nothingOpen);
+    // One level short of the cap, the same text is read, and is not in the grammar.
+    expect(decodeArrangement(`${"h5000".repeat(MAX_TREE_DEPTH - 1)}not a tree at all`)).toBeNull();
     const nested = `${"h5000".repeat(200_000)}(today*)`;
     expect(() => decodeArrangement(nested)).not.toThrow();
-    expect(decodeArrangement(nested)).toBeNull();
+    expect(decodeArrangement(nested)).toEqual(nothingOpen);
+  });
+
+  test("a pane id of 5,000 characters is read once and dropped, as any pane the catalog does not know", () => {
+    const long = "a".repeat(5000);
+    expect(check(`(${long}*)`)?.tree).toBeNull();
+    expect(check(`h5000(${long}*)(today*)`)?.tree).toEqual({ kind: "leaf", id: "l1", tabs: ["today"], active: "today" });
+    expect(check(`(today*)_m.${long}_o.${long}.${long}.${long}`)).toEqual({
+      tree: { kind: "leaf", id: "l1", tabs: ["today"], active: "today" },
+      maximized: null,
+      focus: "today",
+      lastSpot: {},
+      options: {},
+    });
+  });
+
+  test("a run of 10,000 opening parentheses is not in the grammar", () => {
+    expect(decodeArrangement("(".repeat(10_000))).toBeNull();
+    expect(decodeArrangement(`(today*)${"(".repeat(10_000)}`)).toBeNull();
+    expect(decodeArrangement(`h5000${"(".repeat(10_000)}`)).toBeNull();
   });
 
   test("a pane the catalog does not know is dropped, as the parser drops it", () => {
@@ -815,10 +847,38 @@ describe("the worst case fits", () => {
     const text = encodeTileCookie(set);
     expect(text).not.toBeNull();
     const value = text as string;
-    // The measured size, pinned so a change to the encoding shows up here.
-    expect(value.length).toBe(3489);
-    expect(value.length).toBeLessThan(TILE_COOKIE_MAX);
+    // Not pinned: the size moves whenever the catalog gains a pane or a choice.
+    expect(value.length, `the worst case measures ${value.length}`).toBeLessThan(TILE_COOKIE_MAX);
+    // The longest value there is, and the most escaped, held to the same
+    // characters as every other.
+    expect(value).toMatch(COOKIE_TEXT);
+    expect(encodeURIComponent(value)).toBe(value);
     expect(decodeTileCookie(value)).toEqual(asCookieDecoded(set));
+  });
+
+  test("a value of exactly TILE_COOKIE_MAX is written and read, and one more is neither", () => {
+    // A layout title is the only thing that grows one character at a time, so
+    // one is padded until the whole value lands on the edge.
+    const desk = (title: string): TileSet => ({
+      ...EMPTY_TILE_SET,
+      layouts: [...EMPTY_TILE_SET.layouts, { id: "u1", title, base: "today" }],
+    });
+    const frame = encodeTileCookie(desk("")) as string;
+    const fill = TILE_COOKIE_MAX - frame.length;
+    expect(fill).toBeGreaterThan(0);
+
+    const atEdge = encodeTileCookie(desk("a".repeat(fill)));
+    expect(atEdge).not.toBeNull();
+    expect((atEdge as string).length).toBe(TILE_COOKIE_MAX);
+    const back = decodeTileCookie(atEdge as string);
+    expect(back).not.toBe(EMPTY_TILE_SET);
+    expect(back.layouts.map((meta) => meta.id)).toEqual(["today", "week", "quests", "money", "u1"]);
+    expect(back.layouts[4].title).toBe(cleanTitle("a".repeat(fill)));
+
+    expect(encodeTileCookie(desk("a".repeat(fill + 1)))).toBeNull();
+    const pastEdge = frame.replace("u1.today.", `u1.today.${"a".repeat(fill + 1)}`);
+    expect(pastEdge.length).toBe(TILE_COOKIE_MAX + 1);
+    expect(decodeTileCookie(pastEdge)).toBe(EMPTY_TILE_SET);
   });
 
   test("a desk that would not fit answers null", () => {
@@ -848,6 +908,8 @@ describe("reading the cookie is the engine's parser", () => {
     const random = seeded(0xdec0de);
     let withSlots = 0;
     let withUsers = 0;
+    let withHidden = 0;
+    let openUserChanged = 0;
     for (let index = 0; index < 400; index += 1) {
       const set = engineSet(random);
       const text = encodeTileCookie(set) as string;
@@ -861,9 +923,36 @@ describe("reading the cookie is the engine's parser", () => {
       expect(decodeTileCookie(encodeTileCookie(back) as string), text).toEqual(back);
       if (Object.keys(back.slots).length > 0) withSlots += 1;
       if (set.layouts.length > BUILT_IN_LAYOUTS.length) withUsers += 1;
+      if (set.hidden.length > 0) withHidden += 1;
+      const openIsUsers = !BASES.includes(set.current as BuiltInLayoutId);
+      if (openIsUsers && CLASSES.some((cls) => isChanged(set, set.current, cls))) openUserChanged += 1;
     }
     expect(withSlots).toBeGreaterThan(50);
     expect(withUsers).toBeGreaterThan(50);
+    expect(withHidden).toBeGreaterThan(0);
+    expect(openUserChanged).toBeGreaterThan(0);
+  });
+
+  test("a class whose tree is nested past the cap falls back to its default, and the rest of the desk is kept", () => {
+    let set = addLayout(EMPTY_TILE_SET, "Deep work", "quests", "regular");
+    set = withArrangement(set, "u1", "regular", closePane(arrangementOf(set, "u1", "regular"), "past-due"));
+    set = setHidden(set, "week", true);
+    const fields = (encodeTileCookie(set) as string).split("!");
+    expect(fields[4]).toBe("");
+    expect(fields[5]).not.toBe("");
+    // The compact field written by hand, one level past what the engine can build.
+    fields[4] = deepText(MAX_TREE_DEPTH + 1);
+    const back = decodeTileCookie(fields.join("!"));
+
+    expect(back).not.toBe(EMPTY_TILE_SET);
+    expect(back.layouts).toEqual(set.layouts);
+    expect(back.hidden).toEqual(["week"]);
+    expect(back.current).toBe("u1");
+    expect(isChanged(back, "u1", "regular")).toBe(true);
+    expect(signature(arrangementOf(back, "u1", "regular").tree)).toBe(signature(arrangementOf(set, "u1", "regular").tree));
+    expect(isChanged(back, "u1", "compact")).toBe(false);
+    expect(arrangementOf(back, "u1", "compact")).toBe(defaultArrangement("compact", "quests"));
+    expect(back).toEqual(asCookieDecoded(set));
   });
 
   test("a title comes back as the parser cleans it", () => {

@@ -33,9 +33,11 @@
 // same plain value a stored slot is, and the engine's own repair decides what
 // survives: unknown panes, a pane twice, ratios out of range, a maximize on a
 // pane behind another, options the catalog does not have. Text that is not in
-// the grammar at all is null. A tree nested past the depth the engine can
-// build is not in the grammar either: the reader stops there rather than
-// descend into a value that may be nothing but splits.
+// the grammar at all is null. A tree nested past the depth the engine can build
+// is a tree nothing survives from, as the parser treats one: the reader stops
+// at the cap without reading on, so its work is bounded whatever follows, and
+// the answer is an arrangement with nothing open. In a cookie that leaves one
+// class at its default and keeps the rest of the desk.
 //
 // Pure. No DOM, no storage, no clock, no randomness.
 
@@ -102,7 +104,10 @@ function writeNode(node: TileNode | null, depth: number): string {
   return `${dir}${writeRatio(node.ratio)}${writeNode(node.first, depth + 1)}${writeNode(node.second, depth + 1)}`;
 }
 
-/** One arrangement in the grammar above. Never throws; ids, focus and closed panes' places are not written. */
+/**
+ * One arrangement in the grammar above. Never throws for a value the engine
+ * can make; ids, focus and closed panes' places are not written.
+ */
 export function encodeArrangement(arr: Arrangement): string {
   let text = writeNode(arr.tree, 1);
   if (isToken(arr.maximized)) text += `${MAXIMIZED}${arr.maximized}`;
@@ -128,6 +133,11 @@ interface Cursor {
 
 /** What a node is when the text is not in the grammar. */
 const UNREADABLE = Symbol("unreadable");
+
+/** What a node is when it sits past MAX_TREE_DEPTH: the reader stopped there and read no further. */
+const TOO_DEEP = Symbol("too deep");
+
+type ReadNode = Record<string, unknown> | typeof UNREADABLE | typeof TOO_DEEP;
 
 function readToken(cursor: Cursor): string {
   const start = cursor.at;
@@ -160,9 +170,13 @@ function readLeaf(cursor: Cursor): Record<string, unknown> | typeof UNREADABLE {
   return active === null ? { kind: "leaf", tabs } : { kind: "leaf", tabs, active };
 }
 
-/** The root is level one, as the engine's parser counts, and nothing past MAX_TREE_DEPTH is descended into. */
-function readNode(cursor: Cursor, depth: number): Record<string, unknown> | typeof UNREADABLE {
-  if (depth > MAX_TREE_DEPTH) return UNREADABLE;
+/**
+ * The root is level one, as the engine's parser counts. A node past
+ * MAX_TREE_DEPTH is not looked at: the reader stops there, and the answer
+ * travels up without the rest of the text being read.
+ */
+function readNode(cursor: Cursor, depth: number): ReadNode {
+  if (depth > MAX_TREE_DEPTH) return TOO_DEEP;
   const head = cursor.text[cursor.at];
   if (head === OPEN) return readLeaf(cursor);
   if (head !== "h" && head !== "v") return UNREADABLE;
@@ -175,9 +189,9 @@ function readNode(cursor: Cursor, depth: number): Record<string, unknown> | type
     cursor.at += 1;
   }
   const first = readNode(cursor, depth + 1);
-  if (first === UNREADABLE) return UNREADABLE;
+  if (typeof first === "symbol") return first;
   const second = readNode(cursor, depth + 1);
-  if (second === UNREADABLE) return UNREADABLE;
+  if (typeof second === "symbol") return second;
   return { kind: "split", dir: head, ratio: parts / RATIO_SCALE, first, second };
 }
 
@@ -187,12 +201,17 @@ function readNode(cursor: Cursor, depth: number): Record<string, unknown> | type
  * the text is not in the grammar. It is what the engine's repair, or the
  * parser of a whole desk, is handed; it is not an arrangement anything should
  * draw. An option given twice keeps its first value.
+ *
+ * A tree nested past MAX_TREE_DEPTH is a value with no tree and nothing else:
+ * the reader stops at the cap and reads none of what follows, neither the rest
+ * of the tree nor any maximize or option after it.
  */
 export function readArrangement(text: string): Record<string, unknown> | null {
   if (typeof text !== "string") return null;
   const cursor: Cursor = { text, at: 0 };
   const tree = readNode(cursor, 1);
   if (tree === UNREADABLE) return null;
+  if (tree === TOO_DEEP) return { tree: null, maximized: null, lastSpot: {}, options: {} };
 
   let maximized: string | null = null;
   // Map keys, so that no word read from the text is ever looked up on an object.
@@ -235,8 +254,8 @@ export function readArrangement(text: string): Record<string, unknown> | null {
  * The arrangement the text describes, after the engine's own repair has seen
  * it, or null when the text is not in the grammar. Never throws. Ids are minted
  * again down the tree; the focus is the maximized pane or the tab the first
- * leaf shows; `()`, or a tree of nothing but panes the catalog does not know,
- * is an arrangement with nothing open.
+ * leaf shows; `()`, a tree of nothing but panes the catalog does not know, or
+ * a tree nested past MAX_TREE_DEPTH is an arrangement with nothing open.
  */
 export function decodeArrangement(text: string): Arrangement | null {
   const read = readArrangement(text);
