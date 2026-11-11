@@ -5,6 +5,10 @@
 // no floating window and no free grid: the panes always cover the workspace,
 // which is what makes a layout describable by a tree at all.
 //
+// A LAYOUT is a named workspace (Today, Week, Quests, Money, or one the user
+// made), and it has one arrangement per screen class. The phone is a class too:
+// its arrangement is always a single leaf, whose tab strip is the phone's bar.
+//
 // Nothing here has behaviour. Every function that reads or writes these values
 // lives in tree.ts, geometry.ts, catalog.ts or store.ts, and every one of them is
 // pure: no DOM, no storage, no clock, no randomness.
@@ -20,8 +24,32 @@ export type Zone = "left" | "right" | "top" | "bottom" | "centre";
 /** Which way a keyboard move or a focus jump goes. */
 export type Direction = "left" | "right" | "up" | "down";
 
-/** The phone has no tiles, so there is no class for it. */
-export type ScreenClass = "regular" | "wide";
+/**
+ * compact: under 1024 pixels, always one leaf. regular: 1024 to 1599. wide:
+ * 1600 and up.
+ */
+export type ScreenClass = "compact" | "regular" | "wide";
+
+/** A built in layout's id, or one of the user's: `u1`, `u2`, and so on. */
+export type LayoutId = string;
+
+/** The four layouts every desk has. */
+export type BuiltInLayoutId = "today" | "week" | "quests" | "money";
+
+/** Where a pane is listed in the pane list. */
+export type PaneGroup = "day" | "quests" | "money";
+
+/**
+ * One view setting a pane offers, with its choices fixed in the catalog.
+ * `key` matches [a-z][a-z0-9-]*, every choice's `value` matches [a-z0-9-]+,
+ * and `fallback` is one of the values.
+ */
+export interface PaneOption {
+  key: string;
+  label: string;
+  choices: ReadonlyArray<{ value: string; label: string }>;
+  fallback: string;
+}
 
 export interface Leaf {
   kind: "leaf";
@@ -34,7 +62,7 @@ export interface Split {
   kind: "split";
   id: string;
   dir: SplitDir;
-  /** The share of the first child, 0.05 to 0.95. */
+  /** The share of the first child, 0.05 to 0.95, held to four decimals. */
   ratio: number;
   first: TileNode;
   second: TileNode;
@@ -44,10 +72,14 @@ export type TileNode = Leaf | Split;
 
 export interface PaneSpec {
   id: PaneId;
+  /** The title on a pane's frame. */
   title: string;
+  /** The label on a tab and on the phone's bar. */
+  short: string;
+  group: PaneGroup;
   minWidth: number;
   minHeight: number;
-  closable: boolean;
+  options: readonly PaneOption[];
 }
 
 /** Where a closed pane was, so it can come back there. */
@@ -63,6 +95,15 @@ export interface Arrangement {
   maximized: PaneId | null;
   focus: PaneId | null;
   lastSpot: Record<PaneId, Spot>;
+  /** Pane, then option key, then value: only values that differ from the fallback. */
+  options: Record<PaneId, Record<string, string>>;
+}
+
+/** A layout on the rail. `base` is the built in layout it starts from. */
+export interface LayoutMeta {
+  id: LayoutId;
+  title: string;
+  base: BuiltInLayoutId;
 }
 
 export interface Rect {

@@ -13,8 +13,13 @@
 // laid out on a phone sized workspace and then on the real one comes back with
 // the rectangles it started with.
 //
+// Every `specs` parameter defaults to the catalog's panes. A caller passes its
+// own only to measure panes the catalog does not have, which is what the tests
+// of this module and of css.ts do.
+//
 // Pure. It does not import the tree module, so the one dependency runs the
-// other way (tree.ts needs shareLimits for a drag) and there is no cycle.
+// other way (tree.ts needs shareLimits for a drag and layoutTree to open a
+// pane) and there is no cycle. The catalog imports nothing but the types.
 //
 // THIS FILE IS NOT CALLED layout.ts, and must not be. Next reads any layout
 // file anywhere under app/ as a route layout, folder depth and route segments
@@ -22,6 +27,7 @@
 // production build fails on a module that exports functions instead. The guard
 // is __tests__/v2-reserved-filenames.test.ts.
 
+import { PANES } from "./catalog";
 import type {
   Arrangement,
   Direction,
@@ -77,7 +83,7 @@ function clamp(value: number, low: number, high: number): number {
  */
 export function minSize(
   node: TileNode,
-  specs: readonly PaneSpec[],
+  specs: readonly PaneSpec[] = PANES,
 ): { w: number; h: number } {
   if (node.kind === "leaf") {
     let w = 0;
@@ -110,7 +116,7 @@ export function minSize(
 export function shareLimits(
   split: Split,
   size: number,
-  specs: readonly PaneSpec[],
+  specs: readonly PaneSpec[] = PANES,
 ): [number, number] {
   const free = extent(size) - GAP;
   const firstMin = along(split.dir, minSize(split.first, specs));
@@ -123,7 +129,7 @@ export function shareLimits(
 export function drawnShare(
   split: Split,
   size: number,
-  specs: readonly PaneSpec[],
+  specs: readonly PaneSpec[] = PANES,
 ): number {
   const [low, high] = shareLimits(split, size, specs);
   const wanted = Number.isFinite(split.ratio) ? split.ratio : EVEN_SHARE;
@@ -151,7 +157,7 @@ function leafIdHolding(node: TileNode, pane: PaneId): string | null {
 export function layoutTree(
   arrangement: Arrangement,
   workspace: Workspace,
-  specs: readonly PaneSpec[],
+  specs: readonly PaneSpec[] = PANES,
 ): TileRects {
   const width = extent(workspace.width);
   const height = extent(workspace.height);

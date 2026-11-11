@@ -20,18 +20,28 @@
 // `normalize` allows, because a value `normalize` would change could not
 // survive a save and a load.
 //
+// A RATIO IS HELD TO FOUR DECIMALS, by `setRatio`, `normalize` and every place
+// a remembered ratio comes back. A saved form written in any encoding, JSON or
+// a fixed point number, then holds exactly what the engine holds, and a load
+// never hands back a ratio a hair away from the one that was saved.
+//
+// Every `specs` parameter defaults to the catalog's panes.
+//
 // Pure. No DOM, no storage, no clock, no randomness.
 
-import { shareLimits } from "./geometry";
+import { PANES } from "./catalog";
+import { layoutTree, shareLimits } from "./geometry";
 import type {
   Arrangement,
   Leaf,
   PaneId,
+  PaneOption,
   PaneSpec,
   Spot,
   Split,
   TileNode,
   TileRects,
+  Workspace,
   Zone,
 } from "./types";
 
@@ -47,6 +57,9 @@ export const RATIO_MAX = 0.95;
 /** What a fresh split takes, and what `equalize` sets. */
 export const EVEN_RATIO = 0.5;
 
+/** Four decimals: the finest a share is held to. */
+const RATIO_PRECISION = 10_000;
+
 /**
  * How much wider than tall the largest leaf has to be before a pane with no
  * remembered place opens beside it rather than under it.
@@ -55,8 +68,8 @@ const WIDE_ENOUGH_FOR_BESIDE = 1.2;
 
 /**
  * How finely a signature records a ratio: whole percents. Two layouts that
- * differ only by a rounding error are the same layout, and `isEdited` would
- * otherwise tell the user they had changed an arrangement they had not touched.
+ * differ only by a rounding error are the same layout, and the store would
+ * otherwise keep a layout the user had not visibly changed as if they had.
  */
 const SIGNATURE_PRECISION = 100;
 
@@ -64,9 +77,18 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
 }
 
-/** A share held inside the range a split may store. */
+function own(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+/**
+ * A share held inside the range a split may store, to four decimals. Rounding
+ * after clamping cannot leave the range, because both ends are four decimal
+ * numbers already, and rounding a rounded value gives the same value back.
+ */
 export function normalizeRatio(value: number): number {
-  return Number.isFinite(value) ? clamp(value, RATIO_MIN, RATIO_MAX) : EVEN_RATIO;
+  if (!Number.isFinite(value)) return EVEN_RATIO;
+  return Math.round(clamp(value, RATIO_MIN, RATIO_MAX) * RATIO_PRECISION) / RATIO_PRECISION;
 }
 
 // ------------------------------------------------------------------ reading
@@ -117,7 +139,9 @@ function parentOf(tree: TileNode, childId: string): Split | null {
 /**
  * The shape of the tree as one string, ratios rounded to whole percents. It
  * says nothing about ids or about which tab is in front, because neither is
- * part of the arrangement a user saved: moving a tab forward is not an edit.
+ * part of how a layout is arranged: bringing a tab forward is not a change to
+ * the layout, and the store does not keep a layout that differs from its
+ * default by nothing else.
  */
 export function signature(node: TileNode | null): string {
   if (node === null) return "-";
@@ -157,9 +181,9 @@ function idNumber(id: string): number | null {
 
 function highestIdNumber(node: TileNode | null): number {
   if (node === null) return 0;
-  const own = idNumber(node.id) ?? 0;
-  if (node.kind === "leaf") return own;
-  return Math.max(own, highestIdNumber(node.first), highestIdNumber(node.second));
+  const mine = idNumber(node.id) ?? 0;
+  if (node.kind === "leaf") return mine;
+  return Math.max(mine, highestIdNumber(node.first), highestIdNumber(node.second));
 }
 
 /** One more than the largest number any id in this tree uses. */
@@ -226,8 +250,8 @@ export function withCanonicalIds(node: TileNode): TileNode {
 /**
  * The tree with the four things that can never be true of a drawn layout fixed:
  * a leaf with no tabs is gone, a split with one child left is that child, a
- * ratio is inside the range, and the tab in front is one of the tabs. An empty
- * tree is null.
+ * ratio is inside the range and held to four decimals, and the tab in front is
+ * one of the tabs. An empty tree is null.
  *
  * Returns the same object when there was nothing to fix, so every operation can
  * finish with a normalize and still report "nothing changed" honestly.
@@ -303,7 +327,7 @@ function settled(next: Arrangement): Arrangement {
   const tree = next.tree;
   if (tree === null) {
     if (next.maximized === null && next.focus === null) return next;
-    return { tree: null, maximized: null, focus: null, lastSpot: next.lastSpot };
+    return { ...next, maximized: null, focus: null };
   }
   const held = next.focus;
   if (held === null) {
@@ -318,10 +342,10 @@ function settled(next: Arrangement): Arrangement {
   const inFront = leaf.active === focus;
   if (inFront && focus === next.focus && maximized === next.maximized) return next;
   return {
+    ...next,
     tree: inFront ? tree : withActiveTab(tree, leaf.id, focus),
     maximized,
     focus,
-    lastSpot: next.lastSpot,
   };
 }
 
@@ -330,7 +354,8 @@ function sameArrangement(a: Arrangement, b: Arrangement): boolean {
     a.tree === b.tree &&
     a.maximized === b.maximized &&
     a.focus === b.focus &&
-    a.lastSpot === b.lastSpot
+    a.lastSpot === b.lastSpot &&
+    a.options === b.options
   );
 }
 
@@ -425,10 +450,10 @@ export function movePane(
   });
 
   return result(arrangement, {
+    ...arrangement,
     tree: normalize(docked),
     maximized: null,
     focus: pane,
-    lastSpot: arrangement.lastSpot,
   });
 }
 
@@ -456,22 +481,16 @@ function spotFor(tree: TileNode, leaf: Leaf, pane: PaneId): Spot | null {
 /**
  * Close a pane, remembering where it was.
  *
- * Refused for a pane its spec says cannot be closed, and for the last pane
- * open: a workspace with nothing in it is not a state the user can get out of.
- * A pane with no spec at all is allowed to close, because nothing says it is
- * protected.
+ * Every pane can be closed. The one refusal is the last pane open: a layout
+ * with nothing in it is not a state the user can get out of, and keeping one
+ * protected pane in every layout instead would force the day's line into the
+ * Money layout.
  */
-export function closePane(
-  arrangement: Arrangement,
-  pane: PaneId,
-  specs: readonly PaneSpec[],
-): Arrangement {
+export function closePane(arrangement: Arrangement, pane: PaneId): Arrangement {
   const tree = arrangement.tree;
   if (tree === null) return arrangement;
   const leaf = leafOf(tree, pane);
   if (leaf === null) return arrangement;
-  const spec = specs.find((candidate) => candidate.id === pane);
-  if (spec !== undefined && !spec.closable) return arrangement;
   if (openPanes(tree).length < 2) return arrangement;
 
   const spot = spotFor(tree, leaf, pane);
@@ -481,6 +500,7 @@ export function closePane(
   const next = normalize(trimmed);
   const first = leavesOf(next)[0];
   return result(arrangement, {
+    ...arrangement,
     tree: next,
     maximized: arrangement.maximized === pane ? null : arrangement.maximized,
     focus:
@@ -494,7 +514,7 @@ export function closePane(
 }
 
 function ownSpot(spots: Record<PaneId, Spot>, pane: PaneId): Spot | null {
-  if (!Object.prototype.hasOwnProperty.call(spots, pane)) return null;
+  if (!own(spots, pane)) return null;
   const spot = spots[pane];
   return spot === undefined || spot === null ? null : spot;
 }
@@ -526,23 +546,27 @@ function dockTarget(tree: TileNode, rects: TileRects | null): { leafId: string; 
  * open, and otherwise beside the largest leaf there is: to the right of a leaf
  * that is clearly wider than tall, under one that is not.
  *
- * `rects` is the layout as it is drawn right now, which is the only place the
- * sizes exist. With none, the first leaf is used, so the engine still answers
- * before anything has been measured.
+ * The engine works the leaves' sizes out itself from the workspace's size, so
+ * no caller measures one pane to place another. It measures the layout WITHOUT
+ * any maximize, because opening a pane clears the maximize: the pane belongs
+ * beside the largest leaf of the layout the user is about to see. With no
+ * workspace the first leaf is used, so the engine still answers before
+ * anything has been measured.
  */
 export function openPane(
   arrangement: Arrangement,
   pane: PaneId,
-  rects: TileRects | null,
+  workspace: Workspace | null,
+  specs: readonly PaneSpec[] = PANES,
 ): Arrangement {
   const tree = arrangement.tree;
   if (tree !== null && leafOf(tree, pane) !== null) return arrangement;
   if (tree === null) {
     return result(arrangement, {
+      ...arrangement,
       tree: { kind: "leaf", id: `l${nextIdNumber(null)}`, tabs: [pane], active: pane },
       maximized: null,
       focus: pane,
-      lastSpot: arrangement.lastSpot,
     });
   }
 
@@ -563,6 +587,8 @@ export function openPane(
     });
   }
 
+  const rects =
+    workspace === null ? null : layoutTree({ ...arrangement, maximized: null }, workspace, specs);
   const target = dockTarget(tree, rects);
   return movePane(arrangement, pane, target.leafId, target.zone);
 }
@@ -572,8 +598,8 @@ export function openPane(
 /**
  * Store the share the user dragged a divider to, at the size they dragged it.
  * It is clamped so neither side goes under its minimum at that size, and then
- * into the range `normalize` allows, because a value a save and a load would
- * change is a value the user did not get to keep.
+ * into the range `normalize` allows, to four decimals, because a value a save
+ * and a load would change is a value the user did not get to keep.
  *
  * Nothing else ever writes a ratio: the layout clamps only what it draws.
  */
@@ -582,7 +608,7 @@ export function setRatio(
   splitId: string,
   ratio: number,
   size: number,
-  specs: readonly PaneSpec[],
+  specs: readonly PaneSpec[] = PANES,
 ): Arrangement {
   const tree = arrangement.tree;
   if (tree === null || !Number.isFinite(ratio)) return arrangement;
@@ -675,6 +701,28 @@ export function cycleTab(arrangement: Arrangement, step: 1 | -1): Arrangement {
 }
 
 /**
+ * Move a tab to another place in its own stack. `toIndex` is where it ends up,
+ * clamped to the stack, a fraction read as the place before it. The tab in
+ * front stays in front and the focus stays where it was: reordering the strip
+ * is not choosing a tab.
+ */
+export function moveTab(arrangement: Arrangement, pane: PaneId, toIndex: number): Arrangement {
+  const tree = arrangement.tree;
+  if (tree === null || !Number.isFinite(toIndex)) return arrangement;
+  const leaf = leafOf(tree, pane);
+  if (leaf === null) return arrangement;
+  const from = leaf.tabs.indexOf(pane);
+  const to = clamp(Math.trunc(toIndex), 0, leaf.tabs.length - 1);
+  if (to === from) return arrangement;
+  const tabs = leaf.tabs.filter((tab) => tab !== pane);
+  tabs.splice(to, 0, pane);
+  return result(arrangement, {
+    ...arrangement,
+    tree: mapNode(tree, leaf.id, () => ({ kind: "leaf", id: leaf.id, tabs, active: leaf.active })),
+  });
+}
+
+/**
  * Give one pane the whole workspace, or give it back. A pane that is not open
  * cannot be maximized; naming a pane while a different one is maximized moves
  * the maximize to it rather than only clearing it, so one call can always
@@ -691,4 +739,111 @@ export function toggleMaximize(arrangement: Arrangement, pane: PaneId): Arrangem
     return result(arrangement, { ...arrangement, maximized: null });
   }
   return result(arrangement, { ...arrangement, maximized: pane, focus: pane });
+}
+
+/**
+ * The same panes as ONE leaf: every tab of every leaf in leaf order, with the
+ * focus in front (or the first pane, when nothing is focused), and nothing
+ * maximized. This is the phone's arrangement, whose bar is that leaf's strip.
+ *
+ * A tree that is already one leaf keeps its own tab in front: flattening it
+ * again changes nothing, which is what lets the store flatten every phone
+ * arrangement it is handed and still hand back the same object.
+ */
+export function flatten(arrangement: Arrangement): Arrangement {
+  const leaves = leavesOf(arrangement.tree);
+  if (leaves.length < 2) return result(arrangement, { ...arrangement, maximized: null });
+  const tabs: PaneId[] = [];
+  for (const found of leaves) tabs.push(...found.tabs);
+  const focus = arrangement.focus;
+  const active = focus !== null && tabs.includes(focus) ? focus : tabs[0];
+  return result(arrangement, {
+    ...arrangement,
+    tree: { kind: "leaf", id: leaves[0].id, tabs, active },
+    maximized: null,
+  });
+}
+
+// --------------------------------------------------------------- options
+
+function specFor(specs: readonly PaneSpec[], pane: PaneId): PaneSpec | null {
+  return specs.find((candidate) => candidate.id === pane) ?? null;
+}
+
+function optionFor(specs: readonly PaneSpec[], pane: PaneId, key: string): PaneOption | null {
+  const spec = specFor(specs, pane);
+  if (spec === null) return null;
+  return spec.options.find((candidate) => candidate.key === key) ?? null;
+}
+
+function offers(option: PaneOption, value: unknown): value is string {
+  return typeof value === "string" && option.choices.some((candidate) => candidate.value === value);
+}
+
+/** What is stored for one pane, or null. Read as an own property only. */
+function heldOptions(
+  options: Record<PaneId, Record<string, string>>,
+  pane: PaneId,
+): Record<string, string> | null {
+  if (!own(options, pane)) return null;
+  const held = options[pane];
+  return held !== null && typeof held === "object" ? held : null;
+}
+
+function without<T>(record: Record<string, T>, key: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
+}
+
+/**
+ * Every view setting a pane declares, as the user has it: the stored value
+ * when there is one the catalog still offers, and the fallback otherwise. A
+ * pane with no spec has none.
+ */
+export function optionsOf(
+  arrangement: Arrangement,
+  pane: PaneId,
+  specs: readonly PaneSpec[] = PANES,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const spec = specFor(specs, pane);
+  if (spec === null) return out;
+  const held = heldOptions(arrangement.options, pane);
+  for (const option of spec.options) {
+    const value = held !== null && own(held, option.key) ? held[option.key] : undefined;
+    out[option.key] = offers(option, value) ? value : option.fallback;
+  }
+  return out;
+}
+
+/**
+ * Set one of a pane's view settings. Stored only when the pane's spec has that
+ * key and that choice. Only what differs from the fallback is kept, so setting
+ * the fallback removes the entry, and the pane's own entry with its last one:
+ * an arrangement nobody has set an option on holds no options at all.
+ */
+export function setOption(
+  arrangement: Arrangement,
+  pane: PaneId,
+  key: string,
+  value: string,
+  specs: readonly PaneSpec[] = PANES,
+): Arrangement {
+  const option = optionFor(specs, pane, key);
+  if (option === null || !offers(option, value)) return arrangement;
+  const held = heldOptions(arrangement.options, pane);
+  const current = held !== null && own(held, key) ? held[key] : undefined;
+  if (value === option.fallback) {
+    if (current === undefined || held === null) return arrangement;
+    const rest = without(held, key);
+    const options =
+      Object.keys(rest).length === 0
+        ? without(arrangement.options, pane)
+        : { ...arrangement.options, [pane]: rest };
+    return result(arrangement, { ...arrangement, options });
+  }
+  if (current === value) return arrangement;
+  return result(arrangement, {
+    ...arrangement,
+    options: { ...arrangement.options, [pane]: { ...(held ?? {}), [key]: value } },
+  });
 }

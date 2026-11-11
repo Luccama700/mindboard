@@ -1,4 +1,6 @@
-// Task 3, the layout and the catalog.
+// Task 3, the layout and the catalog. Amended by PLAN-DESK.md Task 1: the
+// catalog now holds fourteen panes in three groups, four built in layouts, and
+// twelve default trees, one per layout and screen class, the phone included.
 //
 // THE PROPERTY THIS FILE EXISTS FOR. A tiled workspace is only tiled if the
 // panes and the dividers between them cover it exactly: no overlap, no gap, and
@@ -15,9 +17,12 @@
 import { describe, expect, test } from "vitest";
 
 import {
-  ARRANGEMENTS,
+  BUILT_IN_LAYOUTS,
+  MAX_LAYOUTS,
   PANES,
+  TILES_MIN_WIDTH,
   TILE_COPY,
+  WIDE_MIN_WIDTH,
   defaultArrangement,
   defaultTree,
   screenClassFor,
@@ -35,6 +40,7 @@ import {
 import { leavesOf, openPanes, signature } from "@/app/lib/v2/tiles/tree";
 import type {
   Arrangement,
+  BuiltInLayoutId,
   Leaf,
   PaneId,
   Rect,
@@ -46,11 +52,15 @@ import type {
   Zone,
 } from "@/app/lib/v2/tiles/types";
 
-/** The workspace each class's defaults are designed to fit. */
-const REFERENCE: Record<ScreenClass, Workspace> = {
+/** The workspace each tiled class's defaults are designed to fit. */
+const REFERENCE: Record<"regular" | "wide", Workspace> = {
   regular: { width: 896, height: 600 },
   wide: { width: 1472, height: 700 },
 };
+
+const CLASSES: ScreenClass[] = ["compact", "regular", "wide"];
+const TILED: Array<"regular" | "wide"> = ["regular", "wide"];
+const BASES: BuiltInLayoutId[] = ["today", "week", "quests", "money"];
 
 // Built from their code points rather than typed in, so this file does not
 // itself contain the characters it is looking for.
@@ -72,7 +82,7 @@ function split(
 }
 
 function arrangement(tree: TileNode): Arrangement {
-  return { tree, maximized: null, focus: openPanes(tree)[0], lastSpot: {} };
+  return { tree, maximized: null, focus: openPanes(tree)[0], lastSpot: {}, options: {} };
 }
 
 function splitById(node: TileNode, id: string): Split | null {
@@ -81,7 +91,26 @@ function splitById(node: TileNode, id: string): Split | null {
   return splitById(node.first, id) ?? splitById(node.second, id);
 }
 
-/** All five panes side by side: the widest shape five panes can make. */
+function isDeepFrozen(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return true;
+  if (!Object.isFrozen(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(isDeepFrozen);
+}
+
+/** Every pane in a line along one direction: the widest or tallest shape they can make. */
+function line(dir: SplitDir, panes: readonly PaneId[]): TileNode {
+  let next = 1;
+  const build = (rest: readonly PaneId[]): TileNode => {
+    const number = next;
+    next += 1;
+    if (rest.length === 1) return leaf(`l${number}`, rest[0]);
+    const ratio = 1 / rest.length;
+    return split(`s${number}`, dir, ratio, leaf(`l${number + 100}`, rest[0]), build(rest.slice(1)));
+  };
+  return build(panes);
+}
+
+/** All five day panes side by side: the widest shape the stage 1 panes can make. */
 function row(): TileNode {
   return split(
     "s1",
@@ -181,6 +210,7 @@ describe("minSize", () => {
     expect(minSize(leaf("l1", "status"), PANES)).toEqual({ w: 230, h: 150 });
     expect(minSize(leaf("l1", "status", "today"), PANES)).toEqual({ w: 320, h: 320 });
     expect(minSize(leaf("l1", "calendar", "status"), PANES)).toEqual({ w: 320, h: 300 });
+    expect(minSize(leaf("l1", "steps", "ledger"), PANES)).toEqual({ w: 260, h: 200 });
   });
 
   test("a split adds along its direction and takes the larger across it", () => {
@@ -190,9 +220,21 @@ describe("minSize", () => {
     expect(minSize(over, PANES)).toEqual({ w: 320, h: 320 + 150 + GAP });
   });
 
-  test("five panes cannot need more than one row or one column of them", () => {
+  test("five day panes need one row or one column of them", () => {
     expect(minSize(row(), PANES)).toEqual({ w: 1354, h: 320 });
     expect(minSize(column(), PANES)).toEqual({ w: 320, h: 1094 });
+  });
+
+  test("all fourteen panes need no more than one row or one column of them", () => {
+    const ids = PANES.map((pane) => pane.id);
+    expect(minSize(line("h", ids), PANES)).toEqual({ w: 3648, h: 320 });
+    expect(minSize(line("v", ids), PANES)).toEqual({ w: 320, h: 2728 });
+  });
+
+  test("the catalog is the specs when none are given", () => {
+    const side = split("s1", "h", 0.5, leaf("l2", "forecast"), leaf("l3", "ledger"));
+    expect(minSize(side)).toEqual(minSize(side, PANES));
+    expect(minSize(side)).toEqual({ w: 320 + 260 + GAP, h: 280 });
   });
 });
 
@@ -218,6 +260,11 @@ describe("shareLimits", () => {
     expect(low).toBeCloseTo(high, 12);
     expect(drawnShare(side, tight, PANES) * (tight - GAP)).toBeCloseTo(320, 6);
   });
+
+  test("the catalog is the specs when none are given", () => {
+    expect(shareLimits(side, 1000)).toEqual(shareLimits(side, 1000, PANES));
+    expect(drawnShare(side, 700)).toBe(drawnShare(side, 700, PANES));
+  });
 });
 
 // ---------------------------------------------------------------- the draw
@@ -241,9 +288,14 @@ describe("layoutTree", () => {
     expect(calendar).toEqual({ leafId: "l9", x: 739, y: 0, w: 733, h: 700 });
   });
 
+  test("the catalog is the specs when none are given", () => {
+    const start = defaultArrangement("wide", "money");
+    expect(layoutTree(start, REFERENCE.wide)).toEqual(layoutTree(start, REFERENCE.wide, PANES));
+  });
+
   test("an empty tree has no rectangles at all", () => {
     const rects = layoutTree(
-      { tree: null, maximized: null, focus: null, lastSpot: {} },
+      { tree: null, maximized: null, focus: null, lastSpot: {}, options: {} },
       REFERENCE.wide,
       PANES,
     );
@@ -297,21 +349,24 @@ describe("layoutTree", () => {
   });
 
   test("laying a tree out on a workspace it does not fit writes nothing back", () => {
-    const start = defaultArrangement("wide", "backlog");
+    const start = defaultArrangement("wide", "money");
     const before = layoutTree(start, REFERENCE.wide, PANES);
     layoutTree(start, { width: 300, height: 200 }, PANES);
     layoutTree(start, { width: 0, height: 0 }, PANES);
     expect(layoutTree(start, REFERENCE.wide, PANES)).toEqual(before);
-    expect(start.tree).toEqual(defaultTree("wide", "backlog"));
+    expect(start.tree).toEqual(defaultTree("wide", "money"));
   });
 });
 
 describe("the tiling property", () => {
+  const ids = PANES.map((pane) => pane.id);
   const shapes: Array<[string, TileNode]> = [
     ["one leaf", leaf("l1", "today")],
-    ["one stack", leaf("l1", "today", "status", "past-due", "not-today", "calendar")],
+    ["one stack", leaf("l1", ...ids)],
     ["five in a row", row()],
     ["five in a column", column()],
+    ["fourteen in a row", line("h", ids)],
+    ["fourteen in a column", line("v", ids)],
     [
       "mixed",
       split(
@@ -324,12 +379,9 @@ describe("the tiling property", () => {
     ],
   ];
 
-  for (const [cls, names] of [
-    ["regular", ARRANGEMENTS.map((entry) => entry.name)],
-    ["wide", ARRANGEMENTS.map((entry) => entry.name)],
-  ] as Array<[ScreenClass, string[]]>) {
-    for (const name of names) {
-      shapes.push([`${cls} ${name}`, defaultTree(cls, name)]);
+  for (const cls of CLASSES) {
+    for (const base of BASES) {
+      shapes.push([`${cls} ${base}`, defaultTree(cls, base)]);
     }
   }
 
@@ -341,8 +393,8 @@ describe("the tiling property", () => {
         { width: min.w, height: min.h },
         { width: min.w + 1, height: min.h + 1 },
         { width: min.w + 211, height: min.h + 97 },
-        { width: 1600, height: 1200 },
-        { width: 3840, height: 2160 },
+        { width: Math.max(min.w, 1600), height: Math.max(min.h, 1200) },
+        { width: Math.max(min.w, 3840), height: Math.max(min.h, 2160) },
       ]) {
         expectTiling(start, workspace, `${label} at ${workspace.width}x${workspace.height}`);
       }
@@ -448,36 +500,107 @@ describe("zoneAt and zoneRect", () => {
 // ------------------------------------------------------------- the catalog
 
 describe("the catalog", () => {
-  test("names the five panes, and only today cannot be closed", () => {
+  test("names the fourteen panes in the order of the plan's table", () => {
     expect(PANES.map((pane) => pane.id)).toEqual([
       "today",
-      "calendar",
       "status",
       "past-due",
       "not-today",
+      "calendar",
+      "lanes",
+      "steps",
+      "side-quests",
+      "done",
+      "forecast",
+      "accounts",
+      "coming-up",
+      "hours",
+      "ledger",
     ]);
-    expect(PANES.filter((pane) => !pane.closable).map((pane) => pane.id)).toEqual(["today"]);
   });
 
-  test("the minimum sizes are the ones the defaults were measured against", () => {
-    const sizes = Object.fromEntries(
-      PANES.map((pane) => [pane.id, [pane.minWidth, pane.minHeight]]),
+  test("each pane has its title, its short label, its group and its minimum size", () => {
+    const table = Object.fromEntries(
+      PANES.map((pane) => [
+        pane.id,
+        [pane.title, pane.short, pane.group, pane.minWidth, pane.minHeight],
+      ]),
     );
-    expect(sizes).toEqual({
-      today: [320, 320],
-      calendar: [320, 300],
-      status: [230, 150],
-      "past-due": [230, 150],
-      "not-today": [230, 150],
+    expect(table).toEqual({
+      today: ["The day", "Day", "day", 320, 320],
+      status: ["Status", "Status", "day", 230, 150],
+      "past-due": ["Past their date", "Past", "day", 230, 150],
+      "not-today": ["Did not fit today", "Did not fit", "day", 230, 150],
+      calendar: ["Calendar", "Calendar", "day", 320, 300],
+      lanes: ["Lanes", "Lanes", "quests", 240, 160],
+      steps: ["Steps", "Steps", "quests", 260, 200],
+      "side-quests": ["Side quests", "Side", "quests", 240, 160],
+      done: ["Done lately", "Done", "quests", 230, 150],
+      forecast: ["Forecast", "Forecast", "money", 320, 280],
+      accounts: ["Accounts", "Accounts", "money", 230, 150],
+      "coming-up": ["Coming up", "Coming up", "money", 230, 150],
+      hours: ["Hours", "Hours", "money", 230, 150],
+      ledger: ["Transactions", "Recent", "money", 260, 180],
     });
   });
 
-  test("lists the three arrangements in order", () => {
-    expect(ARRANGEMENTS.map((entry) => [entry.name, entry.title])).toEqual([
-      ["today", "Today"],
-      ["plan", "Plan the week"],
-      ["backlog", "Clear the backlog"],
+  test("the panes have no closable flag any more: every pane can be closed", () => {
+    for (const pane of PANES) expect(Object.keys(pane)).not.toContain("closable");
+  });
+
+  test("offers exactly the six options of the plan, and nothing on any other pane", () => {
+    const offered = Object.fromEntries(
+      PANES.filter((pane) => pane.options.length > 0).map((pane) => [
+        pane.id,
+        pane.options.map((option) => [
+          option.key,
+          option.choices.map((choice) => choice.value),
+          option.fallback,
+        ]),
+      ]),
+    );
+    expect(offered).toEqual({
+      calendar: [["days", ["auto", "1", "3", "7"], "auto"]],
+      steps: [["group", ["none", "group"], "none"]],
+      "side-quests": [["sort", ["clock", "added"], "clock"]],
+      done: [["span", ["7", "14", "28"], "14"]],
+      forecast: [["span", ["14", "30", "60"], "30"]],
+      ledger: [["rows", ["10", "25", "50"], "25"]],
+    });
+  });
+
+  test("every option is well formed: its key, its values, its fallback, its words", () => {
+    for (const pane of PANES) {
+      const keys = pane.options.map((option) => option.key);
+      expect(new Set(keys).size, pane.id).toBe(keys.length);
+      for (const option of pane.options) {
+        const label = `${pane.id} ${option.key}`;
+        expect(/^[a-z][a-z0-9-]*$/.test(option.key), label).toBe(true);
+        expect(option.label.trim().length, label).toBeGreaterThan(0);
+        const values = option.choices.map((choice) => choice.value);
+        expect(new Set(values).size, label).toBe(values.length);
+        expect(values, label).toContain(option.fallback);
+        for (const choice of option.choices) {
+          expect(/^[a-z0-9-]+$/.test(choice.value), `${label} ${choice.value}`).toBe(true);
+          expect(choice.label.trim().length, `${label} ${choice.value}`).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+
+  test("lists the four built in layouts in order, each its own base", () => {
+    expect(BUILT_IN_LAYOUTS.map((meta) => [meta.id, meta.title, meta.base])).toEqual([
+      ["today", "Today", "today"],
+      ["week", "Week", "week"],
+      ["quests", "Quests", "quests"],
+      ["money", "Money", "money"],
     ]);
+  });
+
+  test("holds at most twelve layouts, and the widths the classes change at", () => {
+    expect(MAX_LAYOUTS).toBe(12);
+    expect(TILES_MIN_WIDTH).toBe(1024);
+    expect(WIDE_MIN_WIDTH).toBe(1600);
   });
 
   test("has a word for every drop zone", () => {
@@ -490,119 +613,157 @@ describe("the catalog", () => {
     });
   });
 
-  test("screenClassFor has no tiles under 1024 and goes wide at 1600", () => {
-    expect(screenClassFor(0)).toBeNull();
-    expect(screenClassFor(390)).toBeNull();
-    expect(screenClassFor(1023)).toBeNull();
+  test("screenClassFor is compact under 1024, regular to 1599 and wide from 1600", () => {
+    expect(screenClassFor(0)).toBe("compact");
+    expect(screenClassFor(390)).toBe("compact");
+    expect(screenClassFor(1023)).toBe("compact");
+    expect(screenClassFor(1023.9)).toBe("compact");
     expect(screenClassFor(1024)).toBe("regular");
     expect(screenClassFor(1599)).toBe("regular");
     expect(screenClassFor(1600)).toBe("wide");
     expect(screenClassFor(3840)).toBe("wide");
-    expect(screenClassFor(Number.NaN)).toBeNull();
-    expect(screenClassFor(-1)).toBeNull();
+  });
+
+  test("screenClassFor answers compact for anything that is not a usable width", () => {
+    expect(screenClassFor(Number.NaN)).toBe("compact");
+    expect(screenClassFor(-1)).toBe("compact");
+    expect(screenClassFor(-5000)).toBe("compact");
+    expect(screenClassFor(Number.POSITIVE_INFINITY)).toBe("compact");
+    expect(screenClassFor(Number.NEGATIVE_INFINITY)).toBe("compact");
   });
 });
 
-describe("the six default arrangements", () => {
-  const expected: Record<ScreenClass, Record<string, string>> = {
+describe("the twelve default arrangements", () => {
+  const expected: Record<ScreenClass, Record<BuiltInLayoutId, string>> = {
     wide: {
       today: "h50(h50(v67([today]|[status])|v50([past-due]|[not-today]))|[calendar])",
-      plan: "h29(v56([not-today,past-due]|[today,status])|[calendar])",
-      backlog: "h25(v65([today]|[status])|h80(h50([past-due]|[not-today])|[calendar]))",
+      week: "h29(v56([not-today,past-due]|[today,status])|[calendar])",
+      quests: "h30(v50([lanes]|[done])|h55([steps]|v50([side-quests]|[past-due])))",
+      money: "h52([forecast]|h50(v50([accounts]|[hours])|v55([coming-up]|[ledger])))",
     },
     regular: {
       today: "h50([today,status,past-due,not-today]|[calendar])",
-      plan: "h30([not-today,past-due,today,status]|[calendar])",
-      backlog: "h72(h50([past-due]|[not-today])|[calendar,today,status])",
+      week: "h30([not-today,past-due,today,status]|[calendar])",
+      quests: "h36([lanes]|h50([steps]|[side-quests,past-due,done]))",
+      money: "h58([forecast]|v50([accounts,hours]|[coming-up,ledger]))",
+    },
+    compact: {
+      today: "[today,status,past-due,not-today,calendar]",
+      week: "[calendar,not-today,past-due]",
+      quests: "[lanes,steps,side-quests,past-due,done]",
+      money: "[forecast,accounts,coming-up,hours,ledger]",
     },
   };
 
-  test("are the six trees the shell was designed around", () => {
-    for (const cls of ["regular", "wide"] as ScreenClass[]) {
-      for (const entry of ARRANGEMENTS) {
-        expect(signature(defaultTree(cls, entry.name)), `${cls} ${entry.name}`).toBe(
-          expected[cls][entry.name],
-        );
+  test("are the twelve trees of the plan's table", () => {
+    for (const cls of CLASSES) {
+      for (const base of BASES) {
+        expect(signature(defaultTree(cls, base)), `${cls} ${base}`).toBe(expected[cls][base]);
       }
     }
   });
 
-  test("each opens every pane exactly once", () => {
-    for (const cls of ["regular", "wide"] as ScreenClass[]) {
-      for (const entry of ARRANGEMENTS) {
-        const open = openPanes(defaultTree(cls, entry.name));
-        expect(open.slice().sort(), `${cls} ${entry.name}`).toEqual(
-          PANES.map((pane) => pane.id).slice().sort(),
-        );
+  test("the ratios are the table's own, not rounded to the signature's percent", () => {
+    const ratios = (node: TileNode): number[] =>
+      node.kind === "leaf" ? [] : [node.ratio, ...ratios(node.first), ...ratios(node.second)];
+    expect(ratios(defaultTree("wide", "today"))).toEqual([0.5, 0.5, 0.67, 0.5]);
+    expect(ratios(defaultTree("wide", "money"))).toEqual([0.52, 0.5, 0.5, 0.55]);
+    expect(ratios(defaultTree("regular", "quests"))).toEqual([0.36, 0.5]);
+  });
+
+  test("each opens only catalog panes, each at most once", () => {
+    const known = PANES.map((pane) => pane.id);
+    for (const cls of CLASSES) {
+      for (const base of BASES) {
+        const open = openPanes(defaultTree(cls, base));
+        expect(new Set(open).size, `${cls} ${base}`).toBe(open.length);
+        for (const pane of open) expect(known, `${cls} ${base}`).toContain(pane);
       }
     }
   });
 
-  test("each fits its class's reference workspace at the catalog's minimums", () => {
-    for (const cls of ["regular", "wide"] as ScreenClass[]) {
-      for (const entry of ARRANGEMENTS) {
-        const tree = defaultTree(cls, entry.name);
+  test("every compact default is one leaf", () => {
+    for (const base of BASES) {
+      const tree = defaultTree("compact", base);
+      expect(tree.kind, base).toBe("leaf");
+      expect(leavesOf(tree)).toHaveLength(1);
+    }
+  });
+
+  test("each tiled default fits its class's reference workspace at the catalog's minimums", () => {
+    for (const cls of TILED) {
+      for (const base of BASES) {
+        const tree = defaultTree(cls, base);
         const min = minSize(tree, PANES);
         const workspace = REFERENCE[cls];
-        expect(min.w, `${cls} ${entry.name} width`).toBeLessThanOrEqual(workspace.width);
-        expect(min.h, `${cls} ${entry.name} height`).toBeLessThanOrEqual(workspace.height);
-        expectTiling(arrangement(tree), workspace, `${cls} ${entry.name}`);
+        expect(min.w, `${cls} ${base} width`).toBeLessThanOrEqual(workspace.width);
+        expect(min.h, `${cls} ${base} height`).toBeLessThanOrEqual(workspace.height);
+        expectTiling(arrangement(tree), workspace, `${cls} ${base}`);
       }
     }
   });
 
-  test("ids are numbered down the tree, so two builds give the same tree", () => {
-    expect(defaultTree("wide", "plan")).toEqual(defaultTree("wide", "plan"));
-    const root = defaultTree("wide", "plan") as Split;
+  test("ids are numbered down the tree", () => {
+    const root = defaultTree("wide", "week") as Split;
     expect(root.id).toBe("s1");
     expect((root.first as Split).id).toBe("s2");
     expect(leavesOf(root).map((found) => found.id)).toEqual(["l3", "l4", "l5"]);
+    expect(defaultTree("compact", "money").id).toBe("l1");
   });
 
   // Fitting is not the same as drawing as written. A default's stored ratio is
   // what the owner chose; at a given workspace the drawn share is that ratio
   // clamped so neither side goes under its minimum, and at these reference
-  // sizes four of the six defaults have one split that lands on a limit. That
-  // is correct behaviour and it is also the first thing that will look wrong to
-  // whoever compares the shell against the mock, so it is written down here.
-  test("four of the six draw one split at a limit at the reference size", () => {
+  // sizes the Week layout has one split on each tiled class that lands on a
+  // limit. That is correct behaviour and it is also the first thing that will
+  // look wrong to whoever compares the desk against the mock, so it is pinned.
+  test("two of the eight tiled defaults draw one split at a limit at the reference size", () => {
     const clamped: string[] = [];
-    for (const cls of ["regular", "wide"] as ScreenClass[]) {
-      for (const entry of ARRANGEMENTS) {
-        const rects = layoutTree(
-          defaultArrangement(cls, entry.name),
-          REFERENCE[cls],
-          PANES,
-        );
+    for (const cls of TILED) {
+      for (const base of BASES) {
+        const tree = defaultTree(cls, base);
+        const rects = layoutTree(defaultArrangement(cls, base), REFERENCE[cls], PANES);
         for (const divider of rects.dividers) {
-          const node = splitById(defaultTree(cls, entry.name), divider.splitId);
+          const node = splitById(tree, divider.splitId);
           if (node === null) continue;
           if (drawnShare(node, divider.size, PANES) !== node.ratio) {
-            clamped.push(`${cls} ${entry.name} ${divider.splitId}`);
+            clamped.push(`${cls} ${base} ${divider.splitId}`);
           }
         }
       }
     }
-    expect(clamped).toEqual([
-      "regular plan s1",
-      "regular backlog s1",
-      "wide plan s2",
-      "wide backlog s5",
-    ]);
+    expect(clamped).toEqual(["regular week s1", "wide week s2"]);
   });
 
-  test("a name the catalog does not list falls back to the first arrangement", () => {
-    expect(signature(defaultTree("wide", "nothing"))).toBe(expected.wide.today);
-    expect(signature(defaultTree("regular", "__proto__"))).toBe(expected.regular.today);
+  test("a base the catalog does not list falls back to the first layout", () => {
+    expect(signature(defaultTree("wide", "nothing" as BuiltInLayoutId))).toBe(expected.wide.today);
+    expect(signature(defaultTree("regular", "__proto__" as BuiltInLayoutId))).toBe(
+      expected.regular.today,
+    );
+    expect(defaultArrangement("compact", "constructor" as BuiltInLayoutId)).toBe(
+      defaultArrangement("compact", "today"),
+    );
   });
 
-  test("defaultArrangement opens nothing maximized and focuses a pane that is open", () => {
-    for (const cls of ["regular", "wide"] as ScreenClass[]) {
-      for (const entry of ARRANGEMENTS) {
-        const start = defaultArrangement(cls, entry.name);
+  test("defaultArrangement is the same frozen object every call", () => {
+    for (const cls of CLASSES) {
+      for (const base of BASES) {
+        const start = defaultArrangement(cls, base);
+        expect(defaultArrangement(cls, base), `${cls} ${base}`).toBe(start);
+        expect(isDeepFrozen(start), `${cls} ${base}`).toBe(true);
+        expect(defaultTree(cls, base)).toBe(start.tree);
+      }
+    }
+  });
+
+  test("defaultArrangement opens nothing maximized and focuses the front tab of the first leaf", () => {
+    for (const cls of CLASSES) {
+      for (const base of BASES) {
+        const start = defaultArrangement(cls, base);
         expect(start.maximized).toBeNull();
         expect(start.lastSpot).toEqual({});
-        expect(openPanes(start.tree)).toContain(start.focus);
+        expect(start.options).toEqual({});
+        expect(start.focus, `${cls} ${base}`).toBe(leavesOf(start.tree)[0].active);
       }
     }
   });
@@ -612,18 +773,27 @@ describe("the copy", () => {
   test("has no em dash and no en dash in anything a user reads", () => {
     const strings: string[] = [
       ...PANES.map((pane) => pane.title),
+      ...PANES.map((pane) => pane.short),
       ...PANES.map((pane) => pane.id),
-      ...ARRANGEMENTS.map((entry) => entry.title),
+      ...PANES.flatMap((pane) => pane.options.map((option) => option.label)),
+      ...PANES.flatMap((pane) =>
+        pane.options.flatMap((option) => option.choices.map((choice) => choice.label)),
+      ),
+      ...BUILT_IN_LAYOUTS.map((meta) => meta.title),
       ...Object.values(TILE_COPY.zone),
     ];
+    expect(strings.length).toBeGreaterThan(60);
     for (const text of strings) {
       expect(text.includes(EM_DASH), text).toBe(false);
       expect(text.includes(EN_DASH), text).toBe(false);
     }
   });
 
-  test("every pane has a title and every zone has a word", () => {
-    for (const pane of PANES) expect(pane.title.length).toBeGreaterThan(0);
+  test("every pane has a title and a short label, and every zone has a word", () => {
+    for (const pane of PANES) {
+      expect(pane.title.length).toBeGreaterThan(0);
+      expect(pane.short.length).toBeGreaterThan(0);
+    }
     const zones: Zone[] = ["left", "right", "top", "bottom", "centre"];
     for (const zone of zones) expect(TILE_COPY.zone[zone].length).toBeGreaterThan(0);
   });
