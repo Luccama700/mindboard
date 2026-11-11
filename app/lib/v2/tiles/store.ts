@@ -12,13 +12,21 @@
 // its OWN default, never to another class's arrangement. A laptop that borrowed
 // the desktop's layout was the defect that made this rule explicit.
 //
-// A LAYOUT NOBODY CHANGED IS NOT STORED (amendment A). A slot exists only while
-// its arrangement differs from the layout's default: another shape, something
-// maximized, an option set, or a closed pane remembered. `arrangementOf` answers
-// the catalog's own frozen default for everything else, so a default improved
-// in a later release reaches every desk that never rearranged that layout.
+// IN MEMORY A DESK HOLDS EXACTLY WHAT IT WAS GIVEN. `withArrangement` keeps the
+// arrangement it is handed, so a focus move, a tab press and a drag of a few
+// pixels are all there the next time `arrangementOf` is asked, on a layout
+// nobody had touched as much as on one that was rearranged.
 //
-// THE FOCUS IS NOT STORED (amendment B). It is where the keyboard is, not part
+// A LAYOUT NOBODY CHANGED IS NOT WRITTEN (amendment A, applied to the saved
+// form). `isDefault` is the one definition of "nobody changed it", compared
+// exactly: the same tree, panes, tab order, tab in front and ratios to four
+// decimals, nothing maximized, no option, no spot for an open pane. Focus is
+// never compared. A slot that is the default is left out of the text and
+// dropped by the parser, so a default improved in a later release reaches
+// every desk that never rearranged that layout; `isChanged` is "a slot exists
+// and it is not the default".
+//
+// THE FOCUS IS NOT WRITTEN (amendment B). It is where the keyboard is, not part
 // of how the desk is arranged. On a load it is the maximized pane, or the tab
 // the first leaf is showing.
 //
@@ -43,7 +51,7 @@
 //   maximized not open, or not in front dropped
 //   an option the catalog does not have dropped, and so is a fallback
 //   a phone slot with several leaves    flattened to one
-//   a slot equal to its default         not kept (amendment A)
+//   a slot that is its default          not kept (amendment A)
 //
 // It never clamps a ratio to a workspace, because it has no workspace: the
 // layout does that, for drawing, and writes nothing back.
@@ -65,7 +73,6 @@ import {
   leavesOf,
   normalize,
   normalizeRatio,
-  signature,
   withCanonicalIds,
 } from "./tree";
 import type {
@@ -80,13 +87,21 @@ import type {
   Zone,
 } from "./types";
 
+/**
+ * The desk. The arrays are read only: every change goes through an operation
+ * below, which builds a new set (and `EMPTY_TILE_SET`'s own arrays are frozen).
+ */
 export interface TileSet {
   version: 1;
   /** The rail's order. Always holds the four built in layouts. */
-  layouts: LayoutMeta[];
-  hidden: LayoutId[];
+  layouts: readonly LayoutMeta[];
+  hidden: readonly LayoutId[];
   current: LayoutId;
-  /** Layout, then class, then the arrangement: ONLY while it differs from that layout's default. */
+  /**
+   * Layout, then class, then the arrangement the desk was last given. In
+   * memory a slot may be its layout's default (a focus move on an untouched
+   * layout is one); the saved form never holds one.
+   */
   slots: Record<LayoutId, Partial<Record<ScreenClass, Arrangement>>>;
 }
 
@@ -119,13 +134,15 @@ const USER_LAYOUT_SHAPE = /^u[1-9][0-9]*$/;
 const MAX_LAYOUT_NUMBER = 1_000_000_000;
 
 /**
- * How deep a stored tree may be. Fourteen panes make at most fourteen leaves,
- * and a tree of fourteen leaves is at most fourteen levels deep (all of them in
- * a chain), so this is exactly the deepest tree the engine can build: a saved
- * layout is never thrown away for being deep. Anything deeper is a hand written
- * value, or one that points at itself, and is not descended any further.
+ * How deep a stored tree may be: the number of panes in the catalog, because a
+ * tree cannot be deeper than it has panes. Every leaf holds at least one pane
+ * and no pane is in two leaves, so a tree has at most that many leaves, and a
+ * tree of n leaves is at most n levels deep (all of them in a chain). This is
+ * exactly the deepest tree the engine can build, so a saved layout is never
+ * thrown away for being deep. Anything deeper is a hand written value, or one
+ * that points at itself, and is not descended any further.
  */
-const MAX_TREE_DEPTH = KNOWN_PANES.length;
+export const MAX_TREE_DEPTH = PANES.length;
 
 /** The most code points a layout's title keeps. */
 const TITLE_MAX_LENGTH = 24;
@@ -140,8 +157,8 @@ const UNTITLED = "Layout";
 
 export const EMPTY_TILE_SET: TileSet = Object.freeze({
   version: TILE_SET_VERSION,
-  layouts: Object.freeze([...BUILT_IN_LAYOUTS]) as LayoutMeta[],
-  hidden: Object.freeze<LayoutId[]>([]) as LayoutId[],
+  layouts: Object.freeze([...BUILT_IN_LAYOUTS]),
+  hidden: Object.freeze([]),
   current: FIRST_LAYOUT,
   slots: Object.freeze({}),
 });
@@ -231,18 +248,48 @@ function slotOf(set: TileSet, layout: LayoutId, cls: ScreenClass): Arrangement |
   return classes[cls] ?? null;
 }
 
-/**
- * Whether an arrangement is its layout's default, and so is not to be stored:
- * the same shape (by signature, so neither the tab in front nor the focus
- * counts), nothing maximized, no option set and no closed pane remembered.
- */
-function isDefault(arrangement: Arrangement, fallback: Arrangement): boolean {
+/** The same tree to the eye: shape, panes, tab order, tab in front, ratios to four decimals. Ids are not compared. */
+function sameArranged(a: TileNode | null, b: TileNode | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.kind === "leaf") {
+    return (
+      b.kind === "leaf" &&
+      a.active === b.active &&
+      a.tabs.length === b.tabs.length &&
+      a.tabs.every((tab, index) => tab === b.tabs[index])
+    );
+  }
   return (
-    arrangement.maximized === null &&
-    Object.keys(arrangement.options).length === 0 &&
-    Object.keys(arrangement.lastSpot).length === 0 &&
-    signature(arrangement.tree) === signature(fallback.tree)
+    b.kind === "split" &&
+    a.dir === b.dir &&
+    normalizeRatio(a.ratio) === normalizeRatio(b.ratio) &&
+    sameArranged(a.first, b.first) &&
+    sameArranged(a.second, b.second)
   );
+}
+
+/**
+ * Whether an arrangement is its layout's default on that class, which is what
+ * the saved form leaves out and what `isChanged` answers the opposite of. It is
+ * compared exactly, and does not go through `signature`: the same shape, the
+ * same panes in the same order in each leaf, the same tab in front of each
+ * leaf, the same ratios to four decimals, nothing maximized, no option stored,
+ * and no remembered spot for a pane that is open. The focus is never compared,
+ * and neither are ids, which the engine mints afresh when a pane comes back.
+ *
+ * A spot for a pane that is CLOSED does not count: a default shaped tree holds
+ * every pane of the default, so such a spot is for a pane from elsewhere that
+ * was opened and closed again, and losing it changes nothing on screen.
+ */
+export function isDefault(arrangement: Arrangement, cls: ScreenClass, base: BuiltInLayoutId): boolean {
+  if (arrangement.maximized !== null) return false;
+  for (const held of Object.values(arrangement.options)) {
+    if (held !== null && typeof held === "object" && Object.keys(held).length > 0) return false;
+  }
+  for (const pane of Object.keys(arrangement.lastSpot)) {
+    if (leafOf(arrangement.tree, pane) !== null) return false;
+  }
+  return sameArranged(arrangement.tree, defaultTree(cls, base));
 }
 
 /**
@@ -297,14 +344,19 @@ export function arrangementOf(set: TileSet, layout: LayoutId, cls: ScreenClass):
 }
 
 /**
- * Keep an arrangement for one layout on one class. Every other slot comes back
- * as the same object, and so does the set when nothing changes.
+ * Keep an arrangement for one layout on one class, exactly as given: a focus
+ * move or a tab press on an untouched layout is kept like any other change,
+ * and whether it is worth writing down is the saved form's question, not this
+ * one's. On the phone the arrangement is flattened first, because the phone has
+ * one stack. Every other slot comes back as the same object, and the set itself
+ * when the arrangement is the very object `arrangementOf` already answers.
  *
- * An arrangement equal to the layout's default removes the slot instead of
- * storing it (amendment A). On the phone the arrangement is flattened first,
- * because the phone has one stack. An arrangement with nothing open is the
- * layout's default tree, keeping its options and remembered spots: a layout
- * cannot be emptied. A layout the desk does not have is refused.
+ * Refused (the same set) for a layout the desk does not have, and for an
+ * arrangement with nothing open: a layout cannot be emptied.
+ *
+ * It accepts arrangements the engine produced, and stores them as they are.
+ * Everything from outside the engine enters through `parseTileSet` (or
+ * `repairArrangement`), which is where a value is checked and repaired.
  */
 export function withArrangement(
   set: TileSet,
@@ -312,23 +364,20 @@ export function withArrangement(
   cls: ScreenClass,
   arrangement: Arrangement,
 ): TileSet {
-  const meta = metaOf(set, layout);
-  if (meta === null || !SCREEN_CLASSES.includes(cls)) return set;
-  const fallback = defaultArrangement(cls, meta.base);
-  let next =
-    arrangement.tree === null
-      ? { ...arrangement, tree: fallback.tree, maximized: null, focus: fallback.focus }
-      : arrangement;
-  if (cls === "compact") next = flatten(next);
-  const stored = slotOf(set, layout, cls);
-  if (isDefault(next, fallback)) return stored === null ? set : withSlot(set, layout, cls, null);
-  if (stored === next) return set;
+  if (arrangement.tree === null) return set;
+  if (metaOf(set, layout) === null || !SCREEN_CLASSES.includes(cls)) return set;
+  const next = cls === "compact" ? flatten(arrangement) : arrangement;
+  if (next === arrangementOf(set, layout, cls)) return set;
   return withSlot(set, layout, cls, next);
 }
 
-/** Whether a layout is stored on that class at all, which is what "changed" means. */
+/**
+ * Whether a layout on that class differs from its default: a slot exists and
+ * it is not the default. A focus move alone is not a change.
+ */
 export function isChanged(set: TileSet, layout: LayoutId, cls: ScreenClass): boolean {
-  return slotOf(set, layout, cls) !== null;
+  const stored = slotOf(set, layout, cls);
+  return stored !== null && !isDefault(stored, cls, baseOf(set, layout));
 }
 
 /** Forget one class of a layout, or every class for null, so it is its default again. */
@@ -342,35 +391,29 @@ export function resetLayout(set: TileSet, layout: LayoutId, cls: ScreenClass | n
 // --------------------------------------------------------------- layouts
 
 /**
- * A title as it is kept: control characters and halves of a surrogate pair
- * standing alone dropped, every run of whitespace one space, trimmed, at most
- * 24 code points (a pair is one code point and is never cut in half), and
- * "Layout" for whatever is left empty.
+ * What a title may not hold: control characters (Unicode category Cc), format
+ * characters (Cf: zero width characters, joiners, the direction overrides and
+ * isolates that can reorder the text beside a title on the rail) and halves of
+ * a surrogate pair standing alone (Cs, which only a lone half can match in a
+ * Unicode pattern). The controls that are whitespace, tab to carriage return,
+ * are left for the whitespace step to turn into a space.
  *
- * Walked one code unit at a time rather than with a Unicode property pattern,
- * which this project's compile target does not promise.
+ * Built with the constructor because this project's compile target does not
+ * promise a Unicode property pattern in a literal; every runtime the app ships
+ * to understands one.
+ */
+const UNSHOWN = new RegExp("(?![\\t-\\r])[\\p{Cc}\\p{Cf}\\p{Cs}]", "gu");
+
+/**
+ * A title as it is kept: control and format characters and halves of a
+ * surrogate pair standing alone dropped, every run of whitespace one space,
+ * trimmed, at most 24 code points (a pair is one code point and is never cut in
+ * half), and "Layout" for whatever is left empty, a title of nothing but zero
+ * width characters included.
  */
 export function cleanTitle(raw: string): string {
   if (typeof raw !== "string") return UNTITLED;
-  let kept = "";
-  for (let at = 0; at < raw.length; at += 1) {
-    const unit = raw.charCodeAt(at);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = raw.charCodeAt(at + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        kept += raw.slice(at, at + 2);
-        at += 1;
-      }
-      continue;
-    }
-    if (unit >= 0xdc00 && unit <= 0xdfff) continue;
-    // C0 and C1 controls and DEL, except the ones that are whitespace (tab to
-    // carriage return), which the next step turns into a space.
-    const control = unit <= 0x1f || (unit >= 0x7f && unit <= 0x9f);
-    if (control && !(unit >= 0x09 && unit <= 0x0d)) continue;
-    kept += raw[at];
-  }
-  const spaced = kept.replace(/\s+/g, " ").trim();
+  const spaced = raw.replace(UNSHOWN, "").replace(/\s+/g, " ").trim();
   const cut = Array.from(spaced).slice(0, TITLE_MAX_LENGTH).join("").trimEnd();
   return cut.length === 0 ? UNTITLED : cut;
 }
@@ -586,37 +629,70 @@ function parseOptions(value: unknown): Record<PaneId, Record<string, string>> {
   return out;
 }
 
+function nothingOpen(): Arrangement {
+  return { tree: null, maximized: null, focus: null, lastSpot: {}, options: {} };
+}
+
 /**
- * One stored slot, repaired, or null when there is nothing to keep: a value
- * that is not an object, or one that comes out equal to the layout's default.
+ * One arrangement from outside the engine, made safe: unknown panes dropped, a
+ * pane listed twice kept in its first place, a tree nested past
+ * `MAX_TREE_DEPTH` refused whole, the tree normalized (ratios to four
+ * decimals), ids it could not have minted numbered again, options and spots
+ * limited to what the catalog declares, a maximize kept only on a pane that is
+ * open and in front of its leaf, and the focus set as amendment B sets it.
+ *
+ * It never throws, and it answers an arrangement whose tree is null when
+ * nothing usable survives (a value that is not an object included). It does
+ * NOT put a default in that tree's place, flatten for a class, or drop an
+ * arrangement that is its layout's default: it knows no layout and no class.
+ * The set's parser does those three, and calls this for every slot.
+ */
+export function repairArrangement(value: unknown): Arrangement {
+  try {
+    const stored = plain(value);
+    if (stored === null) return nothingOpen();
+    const tree = repairedTree(stored.tree);
+    // Behaviour 18 and amendment B. A maximize survives only on a pane that is
+    // open AND in front of its leaf, because the focus is that pane and the
+    // focus must be visible. The tree is not rewritten to suit it: which tab is
+    // in front is part of what the user arranged.
+    const storedMaximized = stored.maximized;
+    const maximizedLeaf =
+      typeof storedMaximized === "string" ? leafOf(tree, storedMaximized) : null;
+    const maximized =
+      maximizedLeaf !== null && maximizedLeaf.active === storedMaximized ? storedMaximized : null;
+    return {
+      tree,
+      maximized,
+      focus: maximized ?? leavesOf(tree)[0]?.active ?? null,
+      lastSpot: parseLastSpot(stored.lastSpot),
+      options: parseOptions(stored.options),
+    };
+  } catch {
+    // Only a value built to throw on being read can get here (a JSON value
+    // cannot): it is treated as nothing at all.
+    return nothingOpen();
+  }
+}
+
+/**
+ * One stored slot as the set keeps it, or null when there is nothing to keep:
+ * repaired, the layout's default tree where nothing survived, flattened on the
+ * phone, and dropped when it comes out as the layout's default.
  */
 function parseArrangement(
   value: unknown,
   cls: ScreenClass,
   base: BuiltInLayoutId,
 ): Arrangement | null {
-  const stored = plain(value);
-  if (stored === null) return null;
-  const tree = repairedTree(stored.tree) ?? defaultTree(cls, base);
-  // Behaviour 18 and amendment B. A maximize survives only on a pane that is
-  // open AND in front of its leaf, because the focus is that pane and the
-  // focus must be visible. The tree is not rewritten to suit it: which tab is
-  // in front is part of what the user arranged.
-  const storedMaximized = stored.maximized;
-  const maximizedLeaf =
-    typeof storedMaximized === "string" ? leafOf(tree, storedMaximized) : null;
-  const maximized =
-    maximizedLeaf !== null && maximizedLeaf.active === storedMaximized ? storedMaximized : null;
-  const focus = maximized ?? leavesOf(tree)[0]?.active ?? null;
-  let arrangement: Arrangement = {
-    tree,
-    maximized,
-    focus,
-    lastSpot: parseLastSpot(stored.lastSpot),
-    options: parseOptions(stored.options),
-  };
+  const repaired = repairArrangement(value);
+  let arrangement: Arrangement = repaired;
+  if (repaired.tree === null) {
+    const fallback = defaultArrangement(cls, base);
+    arrangement = { ...repaired, tree: fallback.tree, maximized: null, focus: fallback.focus };
+  }
   if (cls === "compact") arrangement = flatten(arrangement);
-  return isDefault(arrangement, defaultArrangement(cls, base)) ? null : arrangement;
+  return isDefault(arrangement, cls, base) ? null : arrangement;
 }
 
 function parseLayouts(listed: readonly unknown[]): LayoutMeta[] {
@@ -749,8 +825,9 @@ function plainArrangement(arrangement: Arrangement): unknown {
  * their keys happened to be written in. That is what lets a caller compare the
  * stored text instead of the state.
  *
- * The focus is left out (amendment B), so a change of focus alone does not
- * change the text; a change of the tab in front does, through the tree.
+ * A slot that is its layout's default is left out (amendment A), and so is
+ * every focus (amendment B): a change of focus alone does not change the text,
+ * and a change of the tab in front does, through the tree.
  */
 export function serializeTileSet(set: TileSet): string {
   const slots: Record<string, unknown> = {};
@@ -761,7 +838,8 @@ export function serializeTileSet(set: TileSet): string {
     for (const cls of SCREEN_CLASSES) {
       if (!own(held, cls)) continue;
       const arrangement = held[cls];
-      if (arrangement !== undefined) classes[cls] = plainArrangement(arrangement);
+      if (arrangement === undefined || isDefault(arrangement, cls, meta.base)) continue;
+      classes[cls] = plainArrangement(arrangement);
     }
     if (Object.keys(classes).length > 0) slots[meta.id] = classes;
   }

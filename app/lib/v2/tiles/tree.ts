@@ -395,7 +395,8 @@ function withoutTab(leaf: Leaf, pane: PaneId): Leaf {
  * already in, or off a leaf where it is the only tab.
  *
  * A pane that is closed can be moved in. That is how a pane opens at a place
- * the user chose rather than where the engine would have put it.
+ * the user chose rather than where the engine would have put it. Its
+ * remembered spot is dropped as it comes in, like every way a pane opens.
  */
 export function movePane(
   arrangement: Arrangement,
@@ -454,7 +455,20 @@ export function movePane(
     tree: normalize(docked),
     maximized: null,
     focus: pane,
+    lastSpot: source === null ? forgetSpot(arrangement.lastSpot, pane) : arrangement.lastSpot,
   });
+}
+
+/**
+ * The spots without this pane's, or the same object when it had none. A spot
+ * says where a CLOSED pane was, so it goes the moment the pane is open again.
+ * Nothing is lost by that: `closePane` writes it afresh. Keeping it would leave
+ * a layout that was closed and reopened back to its default looking changed
+ * for good, with nothing on screen to show for it.
+ */
+function forgetSpot(spots: Record<PaneId, Spot>, pane: PaneId): Record<PaneId, Spot> {
+  if (!own(spots, pane)) return spots;
+  return Object.fromEntries(Object.entries(spots).filter(([name]) => name !== pane));
 }
 
 /**
@@ -544,7 +558,8 @@ function dockTarget(tree: TileNode, rects: TileRects | null): { leafId: string; 
 /**
  * Open a pane. It goes back where it was if the pane it sat beside is still
  * open, and otherwise beside the largest leaf there is: to the right of a leaf
- * that is clearly wider than tall, under one that is not.
+ * that is clearly wider than tall, under one that is not. Either way its
+ * remembered spot is dropped once it is open.
  *
  * The engine works the leaves' sizes out itself from the workspace's size, so
  * no caller measures one pane to place another. It measures the layout WITHOUT
@@ -567,6 +582,7 @@ export function openPane(
       tree: { kind: "leaf", id: `l${nextIdNumber(null)}`, tabs: [pane], active: pane },
       maximized: null,
       focus: pane,
+      lastSpot: forgetSpot(arrangement.lastSpot, pane),
     });
   }
 

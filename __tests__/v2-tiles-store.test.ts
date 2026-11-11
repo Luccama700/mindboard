@@ -3,9 +3,11 @@
 // up to eight of the user's), each with one arrangement per screen class, the
 // phone included, and three amendments to what is stored:
 //
-//   A. A layout nobody changed is not stored at all, so a default that changes
-//      in a later release reaches everyone who never rearranged it.
-//   B. The focus is not stored. It comes back as the maximized pane, or the
+//   A. A layout nobody changed is not written, so a default that changes in a
+//      later release reaches everyone who never rearranged it. In memory a desk
+//      holds exactly what it was given (a focus move, a tab press, a small
+//      drag), and `isDefault` decides only what the saved form leaves out.
+//   B. The focus is not written. It comes back as the maximized pane, or the
 //      tab the first leaf is showing.
 //   C. Every pane in a stored tree is a catalog pane; anything else is dropped.
 //
@@ -38,14 +40,17 @@ import {
 import { layoutTree, minSize } from "@/app/lib/v2/tiles/geometry";
 import {
   EMPTY_TILE_SET,
+  MAX_TREE_DEPTH,
   addLayout,
   arrangementOf,
   cleanTitle,
   isChanged,
+  isDefault,
   moveLayout,
   parseTileSet,
   removeLayout,
   renameLayout,
+  repairArrangement,
   resetLayout,
   serializeTileSet,
   setCurrent,
@@ -58,6 +63,7 @@ import {
   closePane,
   cycleTab,
   equalize,
+  flatten,
   leafOf,
   leavesOf,
   movePane,
@@ -170,20 +176,64 @@ function own(value: object, key: string): boolean {
 }
 
 /**
- * The set as `parseTileSet` hands it back: the same in every way, with each
- * slot's focus set as amendment B sets it, because the focus is not stored.
+ * "Nobody changed it", written here from the words of the ruling and NOT by
+ * calling the engine's `isDefault`, so that the two can disagree and a test can
+ * say so: the same tree shape, the same panes in the same order in each leaf,
+ * the same tab in front of each leaf, ratios equal to four decimals, nothing
+ * maximized, no stored option, and no remembered spot for a pane that is open.
+ * The focus and the ids are not looked at.
+ */
+function nobodyChanged(arranged: Arrangement, cls: ScreenClass, base: BuiltInLayoutId): boolean {
+  const looksTheSame = (a: TileNode | null, b: TileNode | null): boolean => {
+    if (a === null || b === null) return a === b;
+    if (a.kind === "leaf" || b.kind === "leaf") {
+      return (
+        a.kind === "leaf" &&
+        b.kind === "leaf" &&
+        a.active === b.active &&
+        a.tabs.join("|") === b.tabs.join("|")
+      );
+    }
+    return (
+      a.dir === b.dir &&
+      Math.round(a.ratio * 10_000) === Math.round(b.ratio * 10_000) &&
+      looksTheSame(a.first, b.first) &&
+      looksTheSame(a.second, b.second)
+    );
+  };
+  const open = openPanes(arranged.tree);
+  return (
+    arranged.maximized === null &&
+    Object.values(arranged.options).every((held) => Object.keys(held).length === 0) &&
+    Object.keys(arranged.lastSpot).every((pane) => !open.includes(pane)) &&
+    looksTheSame(arranged.tree, defaultTree(cls, base))
+  );
+}
+
+function baseIn(set: TileSet, layout: string): BuiltInLayoutId {
+  const meta = set.layouts.find((candidate) => candidate.id === layout);
+  if (meta === undefined) throw new Error(`no layout ${layout}`);
+  return meta.base;
+}
+
+/**
+ * The set as `parseTileSet(serializeTileSet(set))` must hand it back (ruling
+ * D): the same in every way, with every slot nobody changed dropped (and a
+ * layout left with none dropped from `slots`), and each slot's focus set as
+ * amendment B sets it, because neither is written.
  */
 function asParsed(set: TileSet): TileSet {
   const slots: TileSet["slots"] = {};
   for (const [layout, classes] of Object.entries(set.slots)) {
     const out: Partial<Record<ScreenClass, Arrangement>> = {};
     for (const [cls, arrangement] of Object.entries(classes) as Array<[ScreenClass, Arrangement]>) {
+      if (nobodyChanged(arrangement, cls, baseIn(set, layout))) continue;
       out[cls] = {
         ...arrangement,
         focus: arrangement.maximized ?? leavesOf(arrangement.tree)[0]?.active ?? null,
       };
     }
-    slots[layout] = out;
+    if (Object.keys(out).length > 0) slots[layout] = out;
   }
   return { ...set, slots };
 }
@@ -240,9 +290,9 @@ describe("the empty desk", () => {
   });
 });
 
-// --------------------------------------------- amendment A: defaults are not stored
+// ------------------------------------- amendment A: defaults are kept, not written
 
-describe("a layout nobody changed is not stored", () => {
+describe("a layout nobody changed is kept in memory and never written", () => {
   test("arrangementOf answers the catalog's own default object when nothing is stored", () => {
     for (const base of BASES) {
       for (const cls of CLASSES) {
@@ -280,77 +330,124 @@ describe("a layout nobody changed is not stored", () => {
     expect(more.current).toBe(set.current);
   });
 
-  test("an arrangement equal to its default is not stored, and a stored one that returns to it is removed", () => {
+  test("withArrangement keeps exactly what it is given, a return to the default included", () => {
     const wide = arrangementOf(EMPTY_TILE_SET, "today", "wide");
     const moved = setRatio(wide, "s1", 0.4, 1472);
     const set = withArrangement(EMPTY_TILE_SET, "today", "wide", moved);
     expect(isChanged(set, "today", "wide")).toBe(true);
 
-    const back = withArrangement(set, "today", "wide", setRatio(moved, "s1", 0.5, 1472));
-    expect(isChanged(back, "today", "wide")).toBe(false);
-    expect(back.slots).toEqual({});
-    expect(arrangementOf(back, "today", "wide")).toBe(defaultArrangement("wide", "today"));
-  });
-
-  test("the same shape is the default whatever is focused or in front", () => {
-    const regular = arrangementOf(EMPTY_TILE_SET, "today", "regular");
-    const tabbed = activateTab(regular, "past-due");
-    expect(tabbed.tree).not.toBe(regular.tree);
-    expect(withArrangement(EMPTY_TILE_SET, "today", "regular", tabbed)).toBe(EMPTY_TILE_SET);
-    const focused = activateTab(regular, "calendar");
-    expect(focused.focus).toBe("calendar");
-    expect(withArrangement(EMPTY_TILE_SET, "today", "regular", focused)).toBe(EMPTY_TILE_SET);
-  });
-
-  test("a maximize, an option or a remembered spot is a change even on the default shape", () => {
-    const start = arrangementOf(EMPTY_TILE_SET, "week", "wide");
-    const maxed = toggleMaximize(start, "calendar");
-    expect(isChanged(withArrangement(EMPTY_TILE_SET, "week", "wide", maxed), "week", "wide")).toBe(
-      true,
+    const back = setRatio(moved, "s1", 0.5, 1472);
+    const returned = withArrangement(set, "today", "wide", back);
+    expect(arrangementOf(returned, "today", "wide")).toBe(back);
+    expect(isChanged(returned, "today", "wide")).toBe(false);
+    // In memory the slot is there; in the saved form it is not, so a load
+    // answers the catalog's own default again.
+    expect(JSON.parse(serializeTileSet(returned)).slots).toEqual({});
+    expect(arrangementOf(parseTileSet(serializeTileSet(returned)), "today", "wide")).toBe(
+      defaultArrangement("wide", "today"),
     );
-
-    const opted = setOption(start, "calendar", "days", "7");
-    expect(isChanged(withArrangement(EMPTY_TILE_SET, "week", "wide", opted), "week", "wide")).toBe(
-      true,
-    );
-    const unset = setOption(opted, "calendar", "days", "auto");
-    expect(withArrangement(EMPTY_TILE_SET, "week", "wide", unset)).toBe(EMPTY_TILE_SET);
-
-    const reopened = openPane(closePane(start, "status"), "status", null);
-    expect(signature(reopened.tree)).toBe(signature(start.tree));
-    expect(Object.keys(reopened.lastSpot)).toEqual(["status"]);
-    expect(
-      isChanged(withArrangement(EMPTY_TILE_SET, "week", "wide", reopened), "week", "wide"),
-    ).toBe(true);
   });
 
-  test("withArrangement returns the same set when nothing changes, and refuses a layout it does not have", () => {
-    const changed = closePane(arrangementOf(EMPTY_TILE_SET, "quests", "regular"), "done");
+  test("withArrangement returns the same set only for the very object arrangementOf answers", () => {
+    const start = arrangementOf(EMPTY_TILE_SET, "quests", "regular");
+    expect(withArrangement(EMPTY_TILE_SET, "quests", "regular", start)).toBe(EMPTY_TILE_SET);
+    const changed = closePane(start, "done");
     const set = withArrangement(EMPTY_TILE_SET, "quests", "regular", changed);
     expect(withArrangement(set, "quests", "regular", changed)).toBe(set);
+
+    const twin: Arrangement = { ...changed };
+    const again = withArrangement(set, "quests", "regular", twin);
+    expect(again).not.toBe(set);
+    expect(arrangementOf(again, "quests", "regular")).toBe(twin);
+
+    const copy: Arrangement = { ...start };
+    const kept = withArrangement(EMPTY_TILE_SET, "quests", "regular", copy);
+    expect(arrangementOf(kept, "quests", "regular")).toBe(copy);
+    expect(isChanged(kept, "quests", "regular")).toBe(false);
+  });
+
+  test("withArrangement refuses a layout the desk does not have, and an arrangement with nothing open", () => {
+    const changed = closePane(arrangementOf(EMPTY_TILE_SET, "quests", "regular"), "done");
+    const set = withArrangement(EMPTY_TILE_SET, "quests", "regular", changed);
     expect(withArrangement(EMPTY_TILE_SET, "u1", "regular", changed)).toBe(EMPTY_TILE_SET);
     expect(withArrangement(EMPTY_TILE_SET, "__proto__", "regular", changed)).toBe(EMPTY_TILE_SET);
     expect(withArrangement(set, "constructor", "regular", changed)).toBe(set);
     expect(({} as Record<string, unknown>).regular).toBeUndefined();
-  });
 
-  test("an arrangement with nothing open is stored as the layout's own default tree", () => {
-    const empty: Arrangement = { tree: null, maximized: null, focus: null, lastSpot: {}, options: {} };
-    expect(withArrangement(EMPTY_TILE_SET, "money", "regular", empty)).toBe(EMPTY_TILE_SET);
-    const set = withArrangement(EMPTY_TILE_SET, "money", "regular", {
-      ...empty,
+    const empty: Arrangement = {
+      tree: null,
+      maximized: null,
+      focus: null,
+      lastSpot: {},
       options: { ledger: { rows: "50" } },
-    });
-    const kept = arrangementOf(set, "money", "regular");
-    expect(kept.tree).toBe(defaultTree("regular", "money"));
-    expect(kept.options).toEqual({ ledger: { rows: "50" } });
-    expect(kept.focus).toBe("forecast");
+    };
+    expect(withArrangement(EMPTY_TILE_SET, "money", "regular", empty)).toBe(EMPTY_TILE_SET);
+    expect(withArrangement(set, "quests", "regular", empty)).toBe(set);
+    expect(withArrangement(set, "quests", "compact", empty)).toBe(set);
   });
 
-  test("isChanged is whether a slot is stored, and nothing else", () => {
+  test("isDefault holds for every default, compares the arrangement exactly, and never the focus", () => {
+    for (const base of BASES) {
+      for (const cls of CLASSES) {
+        expect(isDefault(defaultArrangement(cls, base), cls, base), `${base} ${cls}`).toBe(true);
+      }
+    }
+    const start = defaultArrangement("regular", "today");
+    const root = start.tree as Split;
+    const ledgerSpot = { ledger: { beside: "today", zone: "right" as const, ratio: 0.4 } };
+    const statusSpot = { status: { beside: "today", zone: "centre" as const, ratio: null } };
+    const cases: Array<[string, Arrangement, boolean]> = [
+      ["a focus move", activateTab(start, "calendar"), true],
+      ["a ratio equal to four decimals", { ...start, tree: { ...root, ratio: 0.50001 } }, true],
+      ["other ids", { ...start, tree: { ...root, id: "s7", second: { ...(root.second as Leaf), id: "l9" } } }, true],
+      ["a spot for a pane that is closed", { ...start, lastSpot: ledgerSpot }, true],
+      ["an option back at its fallback", setOption(setOption(start, "calendar", "days", "7"), "calendar", "days", "auto"), true],
+      ["another tab in front", activateTab(start, "past-due"), false],
+      ["another tab order", moveTab(start, "status", 0), false],
+      ["a ratio four decimals away", { ...start, tree: { ...root, ratio: 0.5001 } }, false],
+      ["something maximized", toggleMaximize(start, "calendar"), false],
+      ["an option set", setOption(start, "calendar", "days", "7"), false],
+      ["a spot for a pane that is open", { ...start, lastSpot: statusSpot }, false],
+      ["a pane closed", closePane(start, "status"), false],
+      ["nothing open", { ...start, tree: null, focus: null }, false],
+    ];
+    for (const [label, arranged, expected] of cases) {
+      expect(isDefault(arranged, "regular", "today"), label).toBe(expected);
+    }
+    expect(isDefault(defaultArrangement("wide", "today"), "regular", "today")).toBe(false);
+    expect(isDefault(defaultArrangement("regular", "week"), "regular", "today")).toBe(false);
+  });
+
+  test("what isDefault calls a change is kept in memory and written", () => {
+    const start = arrangementOf(EMPTY_TILE_SET, "week", "wide");
+    for (const changed of [
+      toggleMaximize(start, "calendar"),
+      setOption(start, "calendar", "days", "7"),
+      activateTab(start, "past-due"),
+      moveTab(start, "past-due", 0),
+    ]) {
+      const set = withArrangement(EMPTY_TILE_SET, "week", "wide", changed);
+      expect(arrangementOf(set, "week", "wide")).toBe(changed);
+      expect(isChanged(set, "week", "wide")).toBe(true);
+      expect(Object.keys(JSON.parse(serializeTileSet(set)).slots)).toEqual(["week"]);
+    }
+  });
+
+  test("isChanged is a slot that exists and is not the default", () => {
     expect(isChanged(EMPTY_TILE_SET, "today", "wide")).toBe(false);
     expect(isChanged(EMPTY_TILE_SET, "u1", "wide")).toBe(false);
     expect(isChanged(EMPTY_TILE_SET, "constructor", "wide")).toBe(false);
+    const changed = withArrangement(
+      EMPTY_TILE_SET,
+      "today",
+      "wide",
+      closePane(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "status"),
+    );
+    // The default object itself, stored over a change, is a slot that is not a change.
+    const restored = withArrangement(changed, "today", "wide", defaultArrangement("wide", "today"));
+    expect(arrangementOf(restored, "today", "wide")).toBe(defaultArrangement("wide", "today"));
+    expect(isChanged(changed, "today", "wide")).toBe(true);
+    expect(isChanged(restored, "today", "wide")).toBe(false);
   });
 
   test("a default changed in a later release reaches a desk that never rearranged that layout", () => {
@@ -394,6 +491,43 @@ describe("a layout nobody changed is not stored", () => {
   });
 });
 
+// ------------------------------------------- what the desk keeps while it is open
+
+describe("an untouched layout keeps every change while the desk is open", () => {
+  test("a focus move is kept in memory and writes no slot", () => {
+    const start = arrangementOf(EMPTY_TILE_SET, "today", "regular");
+    expect(start.focus).toBe("today");
+    const moved = activateTab(start, "calendar");
+    const set = withArrangement(EMPTY_TILE_SET, "today", "regular", moved);
+    expect(arrangementOf(set, "today", "regular")).toBe(moved);
+    expect(arrangementOf(set, "today", "regular").focus).toBe("calendar");
+    expect(isChanged(set, "today", "regular")).toBe(false);
+    expect(JSON.parse(serializeTileSet(set)).slots).toEqual({});
+  });
+
+  test("closing and reopening a pane on an untouched layout writes no slot", () => {
+    const start = arrangementOf(EMPTY_TILE_SET, "today", "wide");
+    const closed = closePane(start, "not-today");
+    expect(closed.lastSpot["not-today"]).toEqual({ beside: "past-due", zone: "bottom", ratio: 0.5 });
+    const reopened = openPane(closed, "not-today", null);
+    const set = withArrangement(EMPTY_TILE_SET, "today", "wide", reopened);
+    expect(arrangementOf(set, "today", "wide")).toBe(reopened);
+    expect(isChanged(set, "today", "wide")).toBe(false);
+    expect(JSON.parse(serializeTileSet(set)).slots).toEqual({});
+  });
+
+  test("a drag of 0.004 on an untouched layout survives in memory and in the saved form", () => {
+    const start = arrangementOf(EMPTY_TILE_SET, "today", "wide");
+    const dragged = setRatio(start, "s1", 0.504, 1472);
+    expect((dragged.tree as Split).ratio).toBe(0.504);
+    const set = withArrangement(EMPTY_TILE_SET, "today", "wide", dragged);
+    expect((arrangementOf(set, "today", "wide").tree as Split).ratio).toBe(0.504);
+    expect(isChanged(set, "today", "wide")).toBe(true);
+    const back = parseTileSet(serializeTileSet(set));
+    expect((arrangementOf(back, "today", "wide").tree as Split).ratio).toBe(0.504);
+  });
+});
+
 // ------------------------------------------------------------------ the phone
 
 describe("the phone is one leaf", () => {
@@ -422,11 +556,15 @@ describe("the phone is one leaf", () => {
     expect(arrangementOf(set, "money", "compact").focus).toBe("ledger");
   });
 
-  test("a phone arrangement that only differs from its default by what is in front is not stored", () => {
+  test("the tab the phone was left on is kept, and written", () => {
     const phone = arrangementOf(EMPTY_TILE_SET, "quests", "compact");
-    expect(withArrangement(EMPTY_TILE_SET, "quests", "compact", activateTab(phone, "done"))).toBe(
-      EMPTY_TILE_SET,
-    );
+    const left = activateTab(phone, "done");
+    const set = withArrangement(EMPTY_TILE_SET, "quests", "compact", left);
+    expect(arrangementOf(set, "quests", "compact")).toBe(left);
+    expect(isChanged(set, "quests", "compact")).toBe(true);
+    const back = arrangementOf(parseTileSet(serializeTileSet(set)), "quests", "compact");
+    expect((back.tree as Leaf).active).toBe("done");
+    expect(back.focus).toBe("done");
   });
 });
 
@@ -602,6 +740,17 @@ describe("cleanTitle", () => {
     expect(cleanTitle("Deep\u0000work\u007f\u009b")).toBe("Deepwork");
     expect(cleanTitle("a \u0000 b")).toBe("a b");
     expect(cleanTitle("a\ud800b\udc00c")).toBe("abc");
+  });
+
+  test("drops format characters: zero width ones, joiners, direction overrides and isolates", () => {
+    expect(cleanTitle("​")).toBe("Layout");
+    expect(cleanTitle("​‍‮⁦ ⁩")).toBe("Layout");
+    expect(cleanTitle("Deep​work")).toBe("Deepwork");
+    expect(cleanTitle("a‍b")).toBe("ab");
+    expect(cleanTitle("‮evil")).toBe("evil");
+    expect(cleanTitle("left ⁦right⁩")).toBe("left right");
+    expect(cleanTitle("a ​ b")).toBe("a b");
+    expect(cleanTitle("﻿Mine")).toBe("Mine");
   });
 
   test("keeps at most 24 code points, never half a pair, and nothing trailing", () => {
@@ -885,18 +1034,29 @@ describe("parseTileSet cannot return a broken desk", () => {
     }
   });
 
-  test("a slot that is its default once repaired is dropped", () => {
+  test("a slot that is its default once repaired is dropped, whatever its ids or focus", () => {
     const raw = JSON.parse(JSON.stringify(defaultTree("regular", "today"))) as {
-      first: { active: string };
+      id: string;
+      first: { id: string; active: string };
     };
-    raw.first.active = "status";
+    raw.id = "s5";
+    raw.first.id = "l8";
     const set = parseTileSet(stored({ slots: { today: { regular: slot(raw, { focus: "calendar" }) } } }));
     expect(set.slots).toEqual({});
     expect(arrangementOf(set, "today", "regular")).toBe(defaultArrangement("regular", "today"));
+
     const maxed = parseTileSet(
       stored({ slots: { today: { regular: slot(raw, { maximized: "calendar" }) } } }),
     );
     expect(isChanged(maxed, "today", "regular")).toBe(true);
+
+    // The tab in front is part of the arrangement: a stored one is kept.
+    raw.first.active = "status";
+    const fronted = parseTileSet(stored({ slots: { today: { regular: slot(raw) } } }));
+    expect(isChanged(fronted, "today", "regular")).toBe(true);
+    expect(((arrangementOf(fronted, "today", "regular").tree as Split).first as Leaf).active).toBe(
+      "status",
+    );
   });
 
   test("a phone slot is flattened, and nothing on it is maximized", () => {
@@ -1105,9 +1265,124 @@ describe("parseTileSet cannot return a broken desk", () => {
   });
 });
 
+// ----------------------------------------------------- one arrangement at a time
+
+describe("repairArrangement, for one arrangement from outside the engine", () => {
+  test("never throws, and answers nothing open when nothing usable is there", () => {
+    const cyclic: Record<string, unknown> = { kind: "split", id: "s1", dir: "h", ratio: 0.5 };
+    cyclic.first = cyclic;
+    cyclic.second = cyclic;
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("read");
+        },
+      },
+    );
+    const values: unknown[] = [undefined, null, 5, "text", [], {}, { tree: cyclic }, { tree: "x" }, hostile];
+    values.forEach((value, index) => {
+      const out = repairArrangement(value);
+      expect(out.tree, `value ${index}`).toBeNull();
+      expect(out.maximized, `value ${index}`).toBeNull();
+      expect(out.focus, `value ${index}`).toBeNull();
+    });
+  });
+
+  test("repairs as the parser does: panes, ids, ratios, the maximize and the focus", () => {
+    const out = repairArrangement({
+      tree: {
+        kind: "split",
+        id: "x",
+        dir: "v",
+        ratio: 0.123456,
+        first: { kind: "leaf", id: "x", tabs: ["today", "ghost", "status"], active: "status" },
+        second: { kind: "leaf", id: "l2", tabs: ["today", "calendar"], active: "today" },
+      },
+      maximized: "today",
+      focus: "calendar",
+      lastSpot: { ledger: { beside: "today", zone: "left", ratio: 0.9 }, ghost: {} },
+      options: { calendar: { days: "3", rows: "10" }, ledger: { rows: "25" } },
+    });
+    expect(out.tree).toEqual({
+      kind: "split",
+      id: "s1",
+      dir: "v",
+      ratio: 0.1235,
+      first: { kind: "leaf", id: "l2", tabs: ["today", "status"], active: "status" },
+      second: { kind: "leaf", id: "l3", tabs: ["calendar"], active: "calendar" },
+    });
+    // `today` is open but behind another tab, so it cannot be the maximized pane.
+    expect(out.maximized).toBeNull();
+    expect(out.focus).toBe("status");
+    expect(out.lastSpot).toEqual({ ledger: { beside: "today", zone: "left", ratio: 0.9 } });
+    expect(out.options).toEqual({ calendar: { days: "3" } });
+  });
+
+  test("puts no default in, flattens nothing and drops nothing: it knows no layout or class", () => {
+    const def = JSON.parse(JSON.stringify(defaultArrangement("regular", "today"))) as unknown;
+    const same = repairArrangement(def);
+    expect(same.tree).toEqual(defaultTree("regular", "today"));
+    expect(isDefault(same, "regular", "today")).toBe(true);
+    const split = repairArrangement(JSON.parse(JSON.stringify(defaultArrangement("wide", "money"))));
+    expect(leavesOf(split.tree)).toHaveLength(5);
+    const empty = repairArrangement({ tree: null, options: { ledger: { rows: "50" } } });
+    expect(empty.tree).toBeNull();
+    expect(empty.options).toEqual({ ledger: { rows: "50" } });
+  });
+
+  test("MAX_TREE_DEPTH is the number of panes, and a tree that deep is read", () => {
+    expect(MAX_TREE_DEPTH).toBe(PANES.length);
+    expect(MAX_TREE_DEPTH).toBe(14);
+    let node: unknown = { kind: "leaf", id: "l1", tabs: [PANE_IDS[0]], active: PANE_IDS[0] };
+    for (let level = 1; level < MAX_TREE_DEPTH; level += 1) {
+      const pane = PANE_IDS[level];
+      node = {
+        kind: "split",
+        id: `s${level + 100}`,
+        dir: "h",
+        ratio: 0.5,
+        first: node,
+        second: { kind: "leaf", id: `l${level + 1}`, tabs: [pane], active: pane },
+      };
+    }
+    expect(depthOf(repairArrangement({ tree: node }).tree)).toBe(MAX_TREE_DEPTH);
+    // One more level is refused whole, even though it adds no pane.
+    const deeper = { kind: "split", id: "s999", dir: "h", ratio: 0.5, first: node, second: null };
+    expect(repairArrangement({ tree: deeper }).tree).toBeNull();
+  });
+});
+
 // ------------------------------------------------------------ the round trip
 
 describe("saving and loading", () => {
+  test("a desk holding slots nobody changed saves without them (ruling D)", () => {
+    let set: TileSet = withArrangement(
+      EMPTY_TILE_SET,
+      "today",
+      "regular",
+      activateTab(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "calendar"),
+    );
+    set = withArrangement(
+      set,
+      "money",
+      "wide",
+      closePane(arrangementOf(set, "money", "wide"), "ledger"),
+    );
+    const phone = arrangementOf(set, "money", "compact");
+    set = withArrangement(
+      set,
+      "money",
+      "compact",
+      activateTab(activateTab(phone, "ledger"), "forecast"),
+    );
+    expect(Object.keys(set.slots).slice().sort()).toEqual(["money", "today"]);
+    const back = parseTileSet(serializeTileSet(set));
+    expect(back).toEqual(asParsed(set));
+    expect(Object.keys(back.slots)).toEqual(["money"]);
+    expect(Object.keys(back.slots.money)).toEqual(["wide"]);
+  });
+
   test("the focus is not in the saved form", () => {
     const set = withArrangement(
       EMPTY_TILE_SET,
@@ -1352,6 +1627,8 @@ function arrangementProblems(arranged: Arrangement, cls: ScreenClass, label: str
   for (const [pane, spot] of Object.entries(arranged.lastSpot)) {
     if (!PANE_IDS.includes(pane) || !PANE_IDS.includes(spot.beside)) say(`a spot for ${pane} is not a catalog pane`);
     if (!ZONES.includes(spot.zone)) say(`a spot for ${pane} has no zone`);
+    // Ruling C: a spot says where a CLOSED pane was.
+    if (open.includes(pane)) say(`a spot is kept for ${pane}, which is open`);
   }
 
   const min = minSize(tree);
@@ -1363,16 +1640,6 @@ function arrangementProblems(arranged: Arrangement, cls: ScreenClass, label: str
     problems.push(...tilingProblems(arranged, workspace, label));
   }
   return problems;
-}
-
-/** Whether a stored slot is one amendment A says should not be stored. */
-function equalsDefault(arranged: Arrangement, base: BuiltInLayoutId, cls: ScreenClass): boolean {
-  return (
-    arranged.maximized === null &&
-    signature(arranged.tree) === signature(defaultTree(cls, base)) &&
-    Object.keys(arranged.options).length === 0 &&
-    Object.keys(arranged.lastSpot).length === 0
-  );
 }
 
 /**
@@ -1417,15 +1684,43 @@ function deskProblems(
   for (const meta of set.layouts) {
     for (const cls of CLASSES) {
       const arranged = arrangementOf(set, meta.id, cls);
+      // Checked on every step, because it depends on the set and not only on
+      // the arrangement: changed means a slot exists and nobody changed it is
+      // false, by the test's own reading of the definition.
+      const stored = own(set.slots, meta.id) && own(set.slots[meta.id], cls);
+      const changed = stored && !nobodyChanged(arranged, cls, meta.base);
+      if (isChanged(set, meta.id, cls) !== changed) say(`isChanged is wrong for ${meta.id} ${cls}`);
       const context = `${meta.base} ${cls}`;
       const seen = checked.get(arranged) ?? new Set<string>();
       if (seen.has(context)) continue;
       problems.push(...arrangementProblems(arranged, cls, `${label} ${meta.id} ${cls}`));
-      if (isChanged(set, meta.id, cls) && equalsDefault(arranged, meta.base, cls)) {
-        say(`${meta.id} ${cls} is stored and equals its default`);
-      }
       seen.add(context);
       checked.set(arranged, seen);
+    }
+  }
+  return problems;
+}
+
+/**
+ * Ruling E on the saved form, by the test's own reading of "nobody changed
+ * it": no slot that comes back from a save and a load is one nobody changed,
+ * and every slot that was changed is still there.
+ */
+function savedFormProblems(before: TileSet, after: TileSet, label: string): string[] {
+  const problems: string[] = [];
+  for (const [layout, classes] of Object.entries(after.slots)) {
+    for (const [cls, arranged] of Object.entries(classes) as Array<[ScreenClass, Arrangement]>) {
+      if (nobodyChanged(arranged, cls, baseIn(after, layout))) {
+        problems.push(`${label}: ${layout} ${cls} came back although nobody changed it`);
+      }
+    }
+  }
+  for (const [layout, classes] of Object.entries(before.slots)) {
+    for (const [cls, arranged] of Object.entries(classes) as Array<[ScreenClass, Arrangement]>) {
+      if (nobodyChanged(arranged, cls, baseIn(before, layout))) continue;
+      if (!own(after.slots, layout) || !own(after.slots[layout], cls)) {
+        problems.push(`${label}: ${layout} ${cls} was changed and did not come back`);
+      }
     }
   }
   return problems;
@@ -1475,6 +1770,9 @@ describe("four hundred operations from every layout on every screen class", () =
           switched: 0,
           reset: 0,
           classChanged: 0,
+          // Slots held in memory that nobody changed (a focus move, a return
+          // to the default): the ones the saved form has to leave out.
+          untouchedKept: 0,
         };
         const zoneMoves: Record<Zone, number> = { left: 0, right: 0, top: 0, bottom: 0, centre: 0 };
         expect(deskProblems(set, checked, `${startClass} ${base} step 0`)).toEqual([]);
@@ -1525,9 +1823,16 @@ describe("four hundred operations from every layout on every screen class", () =
             case 7:
               next = splits.length === 0 ? working : equalize(working, pick(splits));
               break;
-            case 8:
-              next = activateTab(working, pick(open));
+            case 8: {
+              // A tab press, or a press and a press back: the second leaves an
+              // untouched layout untouched in a new object, which the saved
+              // form then has to leave out.
+              const pane = pick(open);
+              const front = (leafOf(working.tree, pane) as Leaf).active;
+              next = activateTab(working, pane);
+              if (random() < 0.4) next = activateTab(next, front);
               break;
+            }
             case 9:
               next = cycleTab(working, random() < 0.5 ? 1 : -1);
               break;
@@ -1599,21 +1904,34 @@ describe("four hundred operations from every layout on every screen class", () =
           if (next !== null) {
             nextSet = withArrangement(set, layout, cls, next);
             if (nextSet !== set) reached.arranged += 1;
+            // Ruling E: nothing an operation did is lost on the way in. The
+            // desk answers exactly what it was given, or on the phone exactly
+            // its flattening (the very object, when flattening changes nothing).
+            const kept = arrangementOf(nextSet, layout, cls);
+            const flat = cls === "compact" ? flatten(next) : next;
+            if (flat === next) {
+              expect(kept, `${label}: the desk answers what it was given`).toBe(next);
+            } else {
+              expect(kept, `${label}: the phone answers the flattening`).toEqual(flat);
+            }
           }
           set = deepFreeze(nextSet);
           expect(deskProblems(set, checked, label)).toEqual([]);
 
-          for (const classes of Object.values(set.slots)) {
-            for (const arranged of Object.values(classes)) {
-              if (arranged === undefined) continue;
+          for (const [owner, classes] of Object.entries(set.slots)) {
+            for (const [slotClass, arranged] of Object.entries(classes) as Array<
+              [ScreenClass, Arrangement]
+            >) {
               deepest = Math.max(deepest, depthOf(arranged.tree));
               if (arranged.maximized !== null) reached.maximized += 1;
+              if (nobodyChanged(arranged, slotClass, baseIn(set, owner))) reached.untouchedKept += 1;
             }
           }
 
           if (step % SAVE_EVERY === 0) {
             const text = serializeTileSet(set);
             const back = parseTileSet(text);
+            expect(savedFormProblems(set, back, label)).toEqual([]);
             expect(back, `${label}: survives a save and a load`).toEqual(asParsed(set));
             expect(serializeTileSet(back), `${label}: the same text again`).toBe(text);
             set = deepFreeze(back);
@@ -1664,11 +1982,16 @@ describe("the engine is pure", () => {
     expect(engine.optionsOf(start, "calendar")).toEqual({ days: "auto" });
     expect(engine.closePane(engine.defaultArrangement("compact", "week"), "calendar").tree).not.toBeNull();
     expect(engine.cleanTitle("  Mine ")).toBe("Mine");
+    expect(engine.MAX_TREE_DEPTH).toBe(14);
+    expect(engine.isDefault(start, "regular", "today")).toBe(true);
+    expect(engine.repairArrangement(null).tree).toBeNull();
     for (const name of [
       "moveTab",
       "setOption",
       "withArrangement",
       "isChanged",
+      "isDefault",
+      "repairArrangement",
       "resetLayout",
       "addLayout",
       "renameLayout",

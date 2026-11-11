@@ -477,6 +477,47 @@ describe("openPane", () => {
     expect((leafOf(back.tree, "not-today") as Leaf).active).toBe("not-today");
   });
 
+  test("a pane's remembered spot is dropped once it is open, and closing writes it again", () => {
+    const start = arrangement(fourWay(), {
+      lastSpot: { calendar: { beside: "today", zone: "right", ratio: 0.3 } },
+    });
+    const closed = closePane(start, "not-today");
+    expect(Object.keys(closed.lastSpot).slice().sort()).toEqual(["calendar", "not-today"]);
+    const back = openPane(closed, "not-today", null, SPECS);
+    expect(back.lastSpot).toEqual({ calendar: { beside: "today", zone: "right", ratio: 0.3 } });
+    const again = closePane(back, "not-today");
+    expect(again.lastSpot["not-today"]).toEqual(closed.lastSpot["not-today"]);
+
+    // With no spot of its own to come back to, beside the largest leaf: the
+    // spot it never had is not there to drop, and the others stay by reference.
+    const fresh = openPane(start, "past-due-not-open", null, SPECS);
+    expect(fresh.lastSpot).toBe(start.lastSpot);
+    const landed = openPane(start, "calendar", { width: 1000, height: 600 }, SPECS);
+    expect(landed.lastSpot).toEqual({});
+  });
+
+  test("a closed pane moved in drops its spot; an open pane moved keeps every spot by reference", () => {
+    const start = arrangement(fourWay(), {
+      lastSpot: { calendar: { beside: "today", zone: "right", ratio: 0.3 } },
+    });
+    const movedIn = movePane(start, "calendar", "l4", "bottom");
+    expect(movedIn.lastSpot).toEqual({});
+    const movedAround = movePane(start, "today", "l7", "centre");
+    expect(movedAround.lastSpot).toBe(start.lastSpot);
+  });
+
+  test("opening into an empty tree drops the pane's spot too", () => {
+    const start = arrangement(null, {
+      lastSpot: {
+        today: { beside: "status", zone: "left", ratio: 0.4 },
+        ledger: { beside: "status", zone: "left", ratio: 0.4 },
+      },
+    });
+    expect(openPane(start, "today", null, SPECS).lastSpot).toEqual({
+      ledger: { beside: "status", zone: "left", ratio: 0.4 },
+    });
+  });
+
   test("falls back to the largest leaf of the workspace when the remembered neighbour is gone", () => {
     // At 2000 by 800 the left leaf is 399 wide and the top right one 1595 by 556,
     // the largest by far, and wide enough to open beside.

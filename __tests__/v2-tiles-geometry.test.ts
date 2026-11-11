@@ -544,6 +544,13 @@ describe("the catalog", () => {
     });
   });
 
+  test("the panes are frozen all the way down, options and choices included", () => {
+    expect(isDeepFrozen(PANES)).toBe(true);
+    expect(isDeepFrozen(BUILT_IN_LAYOUTS)).toBe(true);
+    const calendar = PANES.find((pane) => pane.id === "calendar");
+    expect(Object.isFrozen(calendar?.options[0].choices[0])).toBe(true);
+  });
+
   test("the panes have no closable flag any more: every pane can be closed", () => {
     for (const pane of PANES) expect(Object.keys(pane)).not.toContain("closable");
   });

@@ -129,8 +129,12 @@ function pane(
  * The panes, in the order the pane list shows them. Every one of them can be
  * closed: a layout is kept from being emptied by refusing to close the LAST
  * pane open, whichever it is, not by protecting one pane in every layout.
+ *
+ * Frozen all the way down, options and choices included, like the defaults:
+ * every `specs` parameter in the engine defaults to this, so a caller that
+ * wrote to it would change the engine for everyone.
  */
-export const PANES: readonly PaneSpec[] = [
+export const PANES: readonly PaneSpec[] = deepFreeze([
   pane("today", "The day", "Day", "day", DAY_MIN_WIDTH, DAY_MIN_HEIGHT),
   pane("status", "Status", "Status", "day", SIDE_MIN_WIDTH, SIDE_MIN_HEIGHT),
   pane("past-due", "Past their date", "Past", "day", SIDE_MIN_WIDTH, SIDE_MIN_HEIGHT),
@@ -153,7 +157,7 @@ export const PANES: readonly PaneSpec[] = [
   pane("ledger", "Transactions", "Recent", "money", LEDGER_MIN_WIDTH, LEDGER_MIN_HEIGHT, [
     LEDGER_ROWS,
   ]),
-];
+]);
 
 // ------------------------------------------------------------ the layouts
 
