@@ -1000,6 +1000,13 @@ body:has([data-v2-root]) {
   color: var(--v2-ink);
 }
 
+/* The desk's own item is the rail's fifth. The phone bar keeps four columns. */
+@media (max-width: 1023.98px) {
+  [data-v2-root] .v2-nav a.v2-nav-desktop {
+    display: none;
+  }
+}
+
 [data-v2-root] .v2-nav button[aria-current="page"],
 [data-v2-root] .v2-nav a[aria-current="page"] {
   color: var(--v2-ink);

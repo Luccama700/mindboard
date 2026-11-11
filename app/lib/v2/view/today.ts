@@ -321,12 +321,13 @@ export const STOP_STATUS_COPY: Record<Stop["state"], string> = {
   later: "",
 };
 
-/** The four destinations, by name, so nothing has to find one by its place in a list. */
+/** The rail's destinations, by name, so nothing has to find one by its place in a list. */
 const NAV = {
   today: "Today",
   week: "Week",
   quests: "Quests",
   money: "Money",
+  desk: "Desk",
 } as const;
 
 /** Every static string on the Today screen. */

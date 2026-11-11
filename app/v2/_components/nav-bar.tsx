@@ -10,19 +10,29 @@ import { AppearanceTrigger } from "./appearance-root";
 export type NavPath = "/v2/today" | "/v2/week";
 
 /**
- * The rail's four destinations, in the order it shows them, each with the page
+ * The rail's five destinations, in the order it shows them, each with the page
  * it opens, or null for one that does not exist yet. Named, so a label and its
  * page cannot drift apart by their places in two lists.
+ *
+ * The fifth, the desk, is the rail's only item that is never the current page
+ * (the desk has a rail of its own) and the only one the phone's bottom bar does
+ * not show: the bar keeps its four columns, and the marker's width and place are
+ * worked out from four. `desktopOnly` is what the stylesheet hides it by.
  */
-const DESTINATIONS: ReadonlyArray<{ label: string; href: NavPath | null }> = [
+const DESTINATIONS: ReadonlyArray<{
+  label: string;
+  href: NavPath | "/v2/desk" | null;
+  desktopOnly?: true;
+}> = [
   { label: TODAY_COPY.nav.today, href: "/v2/today" },
   { label: TODAY_COPY.nav.week, href: "/v2/week" },
   { label: TODAY_COPY.nav.quests, href: null },
   { label: TODAY_COPY.nav.money, href: null },
+  { label: TODAY_COPY.nav.desk, href: "/v2/desk", desktopOnly: true },
 ];
 
 /**
- * The four destinations, and the control that opens the appearance panel.
+ * The destinations, and the control that opens the appearance panel.
  *
  * ONE ELEMENT, TWO SHAPES. Below 1024px it is the phone's bottom bar, pinned to
  * the viewport, exactly as before. From 1024px up it is the slim rail down the
@@ -44,13 +54,18 @@ export function NavBar({ current }: { current: NavPath }) {
     <nav className="v2-nav" aria-label={TODAY_COPY.navLabel}>
       <div className="v2-ind" style={marker} />
       <div className="v2-nav-items">
-        {DESTINATIONS.map(({ label, href }) =>
+        {DESTINATIONS.map(({ label, href, desktopOnly }) =>
           href === null ? (
             <button key={label} type="button" disabled>
               {label}
             </button>
           ) : (
-            <Link key={label} href={href} aria-current={href === current ? "page" : undefined}>
+            <Link
+              key={label}
+              href={href}
+              className={desktopOnly ? "v2-nav-desktop" : undefined}
+              aria-current={href === current ? "page" : undefined}
+            >
               {label}
             </Link>
           ),

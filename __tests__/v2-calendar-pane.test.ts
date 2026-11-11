@@ -767,13 +767,61 @@ describe("the rail", () => {
       { text: "Week", tag: "A", href: "/v2/week", current: null, disabled: false },
       { text: "Quests", tag: "BUTTON", href: null, current: null, disabled: true },
       { text: "Money", tag: "BUTTON", href: null, current: null, disabled: true },
+      { text: "Desk", tag: "A", href: "/v2/desk", current: null, disabled: false },
     ]);
     expect(TODAY_COPY.nav).toEqual({
       today: "Today",
       week: "Week",
       quests: "Quests",
       money: "Money",
+      desk: "Desk",
     });
+  });
+
+  test("lists the Desk last, as a link to the desk that is never the current page", () => {
+    for (const current of ["/v2/today", "/v2/week"] as const) {
+      cleanup();
+      render(createElement(NavBar, { current }));
+      const last = items().at(-1);
+      expect(last).toMatchObject({ text: TODAY_COPY.nav.desk, tag: "A", href: "/v2/desk" });
+      expect(last?.current).toBeNull();
+    }
+  });
+
+  // Five on a big screen, four on a phone: the bar's grid and its marker are
+  // worked out from four columns, so the fifth is hidden under 1024px and nothing
+  // about the four changes.
+  test("shows five destinations from 1024px and keeps the phone's four", () => {
+    const sheet = postcss.parse(readFileSync(path.join(ROOT, "app/v2/v2.css"), "utf8"));
+    let hiddenUnder: string | null = null;
+    sheet.walkAtRules("media", (media) => {
+      media.walkRules((rule) => {
+        if (!rule.selectors.some((one) => one.includes(".v2-nav") && one.includes("a.v2-nav-desktop"))) return;
+        rule.walkDecls("display", (decl) => {
+          if (decl.value === "none") hiddenUnder = media.params;
+        });
+      });
+    });
+    expect(hiddenUnder).toBe("(max-width: 1023.98px)");
+
+    let columns: string | null = null;
+    let width: string | null = null;
+    sheet.walkRules((rule) => {
+      if (rule.parent?.type !== "root") return;
+      const selectors = rule.selectors.map((one) => one.trim());
+      if (selectors.includes("[data-v2-root] .v2-nav-items")) {
+        rule.walkDecls("grid-template-columns", (decl) => {
+          columns = decl.value;
+        });
+      }
+      if (selectors.includes("[data-v2-root] .v2-ind")) {
+        rule.walkDecls("width", (decl) => {
+          width = decl.value;
+        });
+      }
+    });
+    expect(columns).toBe("repeat(4, 1fr)");
+    expect(width).toBe("calc((100% - 20px) / 4)");
   });
 
   test("marks Week when it is on the Week page", () => {
@@ -782,9 +830,9 @@ describe("the rail", () => {
     expect(current.map((item) => item.text)).toEqual(["Week"]);
   });
 
-  // The rail and the Week page's heading read the four by name, so the two
+  // The rail and the Week page's heading read the five by name, so the two
   // cannot drift.
-  test("names its four destinations, and lists them in the rail's order", () => {
+  test("names its five destinations, and lists them in the rail's order", () => {
     const { nav } = TODAY_COPY;
     render(createElement(NavBar, { current: "/v2/today" }));
     expect(items().map((item) => item.text)).toEqual([
@@ -792,6 +840,7 @@ describe("the rail", () => {
       nav.week,
       nav.quests,
       nav.money,
+      nav.desk,
     ]);
   });
 
