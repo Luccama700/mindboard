@@ -20,7 +20,17 @@ import { ListRow } from "./list-row";
  * because the view model's job is to say what did not fit; how much of that to
  * put on the screen at once is a question about the screen.
  */
-export function NotTodayList({ entries }: { entries: TodayView["notToday"] }) {
+export function NotTodayList({
+  entries,
+  tabStop = true,
+}: {
+  entries: TodayView["notToday"];
+  /**
+   * Whether the section is a tab stop of its own. False inside a pane of the
+   * desk, whose scroller is already the one stop that scrolls it.
+   */
+  tabStop?: boolean;
+}) {
   const [all, setAll] = useState(false);
   if (entries.length === 0) return null;
 
@@ -31,7 +41,11 @@ export function NotTodayList({ entries }: { entries: TodayView["notToday"] }) {
     // Focusable, because on a wide window this section is a column that scrolls
     // on its own and nothing on a row presses: until Show more exists there is
     // no stop inside it, and a keyboard could not reach it to scroll it.
-    <section className="v2-side-block v2-list" aria-labelledby="v2-not-today" tabIndex={0}>
+    <section
+      className="v2-side-block v2-list"
+      aria-labelledby="v2-not-today"
+      tabIndex={tabStop ? 0 : undefined}
+    >
       <h2 className="v2-sub" id="v2-not-today">
         {TODAY_COPY.notTodayHeading}
       </h2>

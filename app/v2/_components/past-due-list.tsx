@@ -24,7 +24,17 @@ import { ListRow } from "./list-row";
  * Each row names the group or lane it belongs to, unlike a stop on the line: in
  * a flat list there is no dot on a rail to say which lane this is.
  */
-export function PastDueList({ entries }: { entries: TodayView["pastDue"] }) {
+export function PastDueList({
+  entries,
+  tabStop = true,
+}: {
+  entries: TodayView["pastDue"];
+  /**
+   * Whether the section is a tab stop of its own. False inside a pane of the
+   * desk, whose scroller is already the one stop that scrolls it.
+   */
+  tabStop?: boolean;
+}) {
   const [all, setAll] = useState(false);
   if (entries.length === 0) return null;
 
@@ -35,7 +45,11 @@ export function PastDueList({ entries }: { entries: TodayView["pastDue"] }) {
     // Focusable, because on a wide window this section is a column that scrolls
     // on its own and nothing on a row presses: with no stop inside it, a
     // keyboard could not reach it to scroll it. Its heading names it.
-    <section className="v2-side-block v2-list" aria-labelledby="v2-past-due" tabIndex={0}>
+    <section
+      className="v2-side-block v2-list"
+      aria-labelledby="v2-past-due"
+      tabIndex={tabStop ? 0 : undefined}
+    >
       <h2 className="v2-sub" id="v2-past-due">
         {TODAY_COPY.pastDueHeading}
       </h2>

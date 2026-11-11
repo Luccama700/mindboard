@@ -49,6 +49,8 @@ import {
   galleryKeep,
   galleryLine,
   galleryRequest,
+  paneOptions,
+  type PaneOptionPairs,
 } from "@/app/lib/v2/view/desk";
 import { NOT_TODAY_VISIBLE, TODAY_COPY } from "@/app/lib/v2/view/today";
 import { DayProvider } from "@/app/v2/_components/day-provider";
@@ -152,6 +154,29 @@ function drawPanes(
 const boxOf = (container: HTMLElement, id: string) =>
   container.querySelector(`.v2-pane[data-pane="${id}"]`) as HTMLElement;
 
+/**
+ * The sample desk with a day that has nothing on it: no tasks, no events, and
+ * rules that ask for no income block and no gym session, which the sample's
+ * rules otherwise place on their own.
+ */
+function emptyDesk(): DeskScreenData {
+  const desk = sampleDesk(null);
+  const { input } = desk.today;
+  return {
+    ...desk,
+    today: {
+      ...desk.today,
+      input: {
+        ...input,
+        candidates: [],
+        fixed: [],
+        existing: [],
+        rules: { ...input.rules, incomeTarget: null, gym: null },
+      },
+    },
+  };
+}
+
 // ---------------------------------------------------------------- behaviour 5
 
 describe("the registry", () => {
@@ -241,25 +266,16 @@ describe("the five day panes, each in a box", () => {
   });
 
   test("today: the empty sentence when nothing is planned", () => {
-    const desk = sampleDesk(null);
-    const quiet: DeskScreenData = {
-      ...desk,
-      today: {
-        ...desk.today,
-        input: { ...desk.today.input, candidates: [], fixed: [], rules: desk.today.input.rules },
-      },
-    };
-    const plan = planDay(quiet.today.input);
-    // The sentence is for a day with nothing on it at all; the sample's rules
-    // may still place a block of their own, and then the line is drawn.
+    // Built empty on purpose, and checked to be empty before anything is drawn:
+    // the sample's rules place an income block and a gym session of their own
+    // even with no tasks, so only a day without those plans nothing at all.
+    const quiet = emptyDesk();
+    expect(planDay(quiet.today.input).blocks).toEqual([]);
+
     const { container } = drawPanes(["today"], quiet);
     const box = boxOf(container, "today");
-    if (plan.blocks.length === 0) {
-      expect(box.querySelector(".v2-empty")?.textContent).toBe(TODAY_COPY.empty);
-      expect(box.querySelector(".v2-line")).toBeNull();
-    } else {
-      expect(box.querySelector(".v2-line")).not.toBeNull();
-    }
+    expect(box.querySelector(".v2-empty")?.textContent).toBe(TODAY_COPY.empty);
+    expect(box.querySelector(".v2-line")).toBeNull();
   });
 
   test("status: the said sentence with no role, the all day row, the feeds and the lanes", () => {
@@ -291,6 +307,31 @@ describe("the five day panes, each in a box", () => {
     expect(drops.querySelector("#v2-not-today")?.textContent).toBe(TODAY_COPY.notTodayHeading);
     expect(drops.querySelectorAll(".v2-row").length).toBeGreaterThan(0);
     expect(drops.querySelectorAll(".v2-row").length).toBeLessThanOrEqual(NOT_TODAY_VISIBLE);
+  });
+
+  // On Today a list section is its own tab stop, because there it is a column
+  // that scrolls. In a pane the pane's scroller is that column, so it is the
+  // one stop: the section inside it takes none.
+  test("past-due and not-today: the pane's scroller is the list's one tab stop", () => {
+    const { container } = drawPanes(["past-due", "not-today"]);
+    for (const id of ["past-due", "not-today"]) {
+      const box = boxOf(container, id);
+      const scroller = box.querySelector(".v2-pane-body") as HTMLElement;
+      const stops = Array.from(box.querySelectorAll<HTMLElement>("[tabindex]"));
+      expect(stops, id).toEqual([scroller]);
+      expect(box.querySelector(".v2-list")?.hasAttribute("tabindex"), id).toBe(false);
+    }
+  });
+
+  test("past-due and not-today: one sentence each when there is nothing in them", () => {
+    const quiet = emptyDesk();
+    expect(quiet.today.input.candidates).toEqual([]);
+    const { container } = drawPanes(["past-due", "not-today"], quiet);
+    const past = boxOf(container, "past-due");
+    const drops = boxOf(container, "not-today");
+    expect(past.textContent).toBe(DESK_COPY.nothingPastDue);
+    expect(drops.textContent).toBe(DESK_COPY.allFitToday);
+    expect(container.querySelector(".v2-list")).toBeNull();
   });
 
   test("calendar: the day's planned blocks, links to the desk carrying what it keeps", () => {
@@ -364,7 +405,7 @@ describe("what the gallery is asked for", () => {
       paneId: "today",
       width: 464,
       height: 600,
-      options: {},
+      options: [],
       stale: false,
       date: null,
       week: null,
@@ -395,7 +436,31 @@ describe("what the gallery is asked for", () => {
       other: "x",
     });
     expect(asked.paneId).toBe("forecast");
-    expect(asked.options).toEqual({ view: "chart", span: "30" });
+    expect(asked.options).toEqual([
+      ["view", "chart"],
+      ["span", "30"],
+    ]);
+  });
+
+  // The keys are the URL's. In a plain object `hasOwnProperty` would shadow the
+  // method a body might call, and `constructor` would read as an option nobody
+  // set; with no prototype every key is data and nothing else is there.
+  test("hands a body its options in an object with no prototype", () => {
+    const asked = galleryRequest({
+      "o.hasOwnProperty": "1",
+      "o.__proto__": "x",
+      "o.view": "grid",
+    });
+    const options = paneOptions(asked.options);
+    expect(Object.getPrototypeOf(options)).toBeNull();
+    expect(Object.isFrozen(options)).toBe(true);
+    expect(options.view).toBe("grid");
+    expect(options.hasOwnProperty).toBe("1");
+    expect(options.__proto__).toBe("x");
+    expect(options.constructor).toBeUndefined();
+    expect(options.toString).toBeUndefined();
+    expect(Object.keys(options).sort()).toEqual(["__proto__", "hasOwnProperty", "view"]);
+    expect(paneOptions([])).toEqual({});
   });
 
   test("takes stale only as exactly 1, and the date and the week as strings", () => {
@@ -441,6 +506,13 @@ describe("what the gallery is asked for", () => {
 
   test("names the pane and the size in one line", () => {
     expect(galleryLine("past-due", 230, 600)).toBe("past-due, 230 by 600 px");
+  });
+
+  // The id is the URL's, so it goes in as plain text: no `$&` expansion, and a
+  // slot written inside the id is not filled with the real size.
+  test("prints the pane id exactly as it was given", () => {
+    expect(galleryLine("$&{w}$1$$", 230, 600)).toBe("$&{w}$1$$, 230 by 600 px");
+    expect(galleryLine("{h}{pane}", 160, 2400)).toBe("{h}{pane}, 160 by 2400 px");
   });
 
   // No other copy walk reads the desk's words yet, so this one does. Built from
@@ -511,7 +583,7 @@ interface GalleryProps {
   paneId: string;
   width: number;
   height: number;
-  options: Record<string, string>;
+  options: PaneOptionPairs;
   keep: Record<string, string>;
 }
 
@@ -558,11 +630,26 @@ describe("the gallery page", () => {
     expect(container.textContent).toContain(galleryLine("past-due", 230, 300));
   });
 
-  test("passes the week asked for to the desk, and the options to the body", async () => {
+  // The options cross from the server to the browser as pairs: React refuses an
+  // object with no prototype as a client component's prop, so the client builds
+  // that object itself (paneOptions), and what crosses is plain arrays.
+  test("passes the week asked for to the desk, and the options across as plain pairs", async () => {
     sample();
     const inner = await page({ pane: "calendar", week: "2026-04-20", "o.view": "grid" });
     expect(inner.props.data.today.calendar).toEqual(sampleWeek("2026-04-20"));
-    expect(inner.props.options).toEqual({ view: "grid" });
+    expect(inner.props.options).toEqual([["view", "grid"]]);
+    expect(Object.getPrototypeOf(inner.props.options)).toBe(Array.prototype);
+    for (const pair of inner.props.options) {
+      expect(Object.getPrototypeOf(pair)).toBe(Array.prototype);
+    }
+  });
+
+  test("draws a pane whose options name a prototype method, without harm", async () => {
+    sample();
+    const inner = await page({ pane: "past-due", "o.hasOwnProperty": "1", "o.toString": "x" });
+    const { container } = render(inner);
+    expect(container.querySelector('.v2-pane[data-pane="past-due"] #v2-past-due')).not.toBeNull();
+    expect(inner.props.keep).toMatchObject({ "o.hasOwnProperty": "1", "o.toString": "x" });
   });
 
   test("draws NotBuilt for an id it does not know, and names it", async () => {
@@ -680,13 +767,20 @@ describe("a leaf sizes by its pane", () => {
     return found;
   };
 
+  const calendar = postcss.parse(readFileSync(path.join(ROOT, "app/v2/calendar.css"), "utf8"));
+
   /**
    * Specificity as (classes and attributes and pseudo classes, elements), for
    * the plain selectors these sheets use. `:where()` counts nothing, which is
-   * the point of it.
+   * the point of it. `:not()`, `:is()` and `:has()` count only what is inside
+   * them, which is their weight when they hold one selector, as every one in
+   * these sheets does.
    */
   const specificity = (selector: string): [number, number] => {
-    const bare = selector.replace(/:where\([^)]*\)/g, " ");
+    const bare = selector
+      .replace(/:where\([^)]*\)/g, " ")
+      .replace(/:(not|is|has)\(/g, " ")
+      .replace(/\)/g, " ");
     const classes = (bare.match(/\.[\w-]+|\[[^\]]+\]|:(?!:)[\w-]+/g) ?? []).length;
     const elements = (bare.match(/(^|[\s>+~])[a-z][\w-]*/g) ?? []).length;
     return [classes, elements];
@@ -699,22 +793,92 @@ describe("a leaf sizes by its pane", () => {
   const BOTH = "[data-v2-root] :where(.v2-side, .v2-pane)";
 
   /**
-   * The nine leaf rules that restyled a leaf for sitting in the side column,
-   * each with the rule it used to override. The title's own rule is the one
-   * that needed its weight put back: `:where()` took the side column's class
-   * out of the count, and `.v2-row .v2-row-title` would have won.
+   * The nine leaf rules that restyled a leaf for sitting in the side column:
+   * each as it is written now, as it was written before the desk (`old`), the
+   * base rule it overrides, and how to tell that a selector's last part is
+   * aimed at the same leaf. The title's own rule is the one that needed its
+   * weight put back: `:where()` took the side column's class out of the count,
+   * and `.v2-row .v2-row-title` would have won.
    */
-  const LEAVES: Array<{ selector: string; base: string }> = [
-    { selector: `${BOTH} .v2-feeds`, base: "[data-v2-root] .v2-feeds" },
-    { selector: `${BOTH} .v2-allday-label`, base: "[data-v2-root] .v2-allday-label" },
-    { selector: `${BOTH} .v2-energy`, base: "[data-v2-root] .v2-energy" },
-    { selector: `${BOTH} .v2-said`, base: "[data-v2-root] .v2-said" },
-    { selector: `${BOTH} .v2-allday`, base: "[data-v2-root] .v2-allday" },
-    { selector: `${BOTH} .v2-sub`, base: "[data-v2-root] .v2-sub" },
-    { selector: `${BOTH} .v2-row`, base: "[data-v2-root] .v2-row" },
-    { selector: `${BOTH} .v2-row b.v2-row-title`, base: "[data-v2-root] .v2-row .v2-row-title" },
-    { selector: `${BOTH} .v2-more`, base: "[data-v2-root] .v2-more" },
+  const LEAVES: Array<{ selector: string; old: string; base: string; leaf: RegExp }> = [
+    ["v2-feeds"],
+    ["v2-allday-label"],
+    ["v2-energy"],
+    ["v2-said"],
+    ["v2-allday"],
+    ["v2-sub"],
+    ["v2-row"],
+    ["v2-more"],
+  ]
+    .map(([leaf]) => ({
+      selector: `${BOTH} .${leaf}`,
+      old: `[data-v2-root] .v2-side .${leaf}`,
+      base: `[data-v2-root] .${leaf}`,
+      leaf: new RegExp(`\\.${leaf}(?![\\w-])`),
+    }))
+    .concat({
+      selector: `${BOTH} .v2-row b.v2-row-title`,
+      old: "[data-v2-root] .v2-side .v2-row b",
+      base: "[data-v2-root] .v2-row .v2-row-title",
+      leaf: /^b(?![\w-])|\.v2-row-title(?![\w-])/,
+    });
+
+  /** The three sheets, in the order the layout loads them. */
+  const SHEETS: ReadonlyArray<readonly [string, postcss.Root]> = [
+    ["v2.css", v2],
+    ["calendar.css", calendar],
+    ["desk.css", desk],
   ];
+
+  /** Where a rule sits in the cascade: its sheet's place in the load order, then its line. */
+  type Place = { sheet: number; line: number };
+  const after = (a: Place, b: Place) => a.sheet > b.sheet || (a.sheet === b.sheet && a.line > b.line);
+
+  /** Does a rule at `mine` beat one at `theirs`, by specificity and then by order? */
+  const wins = (mine: [number, number], at: Place, theirs: [number, number], them: Place) =>
+    beats(mine, theirs) || (ties(mine, theirs) && after(at, them));
+
+  /** Properties that set the same thing, so a shorthand meets its longhands. */
+  const family = (prop: string) =>
+    prop.startsWith("padding")
+      ? "padding"
+      : prop.startsWith("margin")
+        ? "margin"
+        : prop === "font" || prop.startsWith("font-") || prop === "line-height"
+          ? "font"
+          : prop.includes("radius")
+            ? "border-radius"
+            : prop;
+
+  /** The last compound of a selector: the part that names the element itself. */
+  const lastPart = (selector: string) =>
+    selector.replace(/:where\([^)]*\)/g, " ").trim().split(/\s*[\s>+~]\s*/).at(-1) ?? "";
+
+  /**
+   * Every other rule, in all three sheets, aimed at the same leaf as one of the
+   * nine and setting something it sets: by the last part of its selector, a
+   * pseudo element left out (it is another box).
+   */
+  const competitorsOf = (entry: (typeof LEAVES)[number], families: Set<string>) => {
+    const found: Array<{ selector: string; spec: [number, number]; place: Place }> = [];
+    SHEETS.forEach(([, sheet], index) => {
+      sheet.walkRules((rule) => {
+        for (const selector of rule.selectors.map((one) => one.trim())) {
+          if (selector.includes(":where(.v2-side, .v2-pane)")) continue;
+          const part = lastPart(selector);
+          if (part.includes("::") || !entry.leaf.test(part)) continue;
+          let shares = false;
+          rule.walkDecls((decl) => {
+            if (families.has(family(decl.prop))) shares = true;
+          });
+          if (!shares) continue;
+          const place = { sheet: index, line: rule.source?.start?.line ?? 0 };
+          found.push({ selector, spec: specificity(selector), place });
+        }
+      });
+    });
+    return found;
+  };
 
   test("restyles each side column leaf inside a pane too, from the desktop tier", () => {
     for (const { selector } of LEAVES) {
@@ -732,27 +896,61 @@ describe("a leaf sizes by its pane", () => {
     expect(stale).toEqual([]);
   });
 
-  // The existing page keeps every pixel: each rewritten rule still out-ranks
-  // the rule it overrode, or ties it and comes after it in the file.
-  test("still wins over the rule each one overrode", () => {
-    const line = (selector: string, where: string | null) => {
-      const entry = rulesOf(v2).find(
+  // The existing page keeps every pixel. For each of the nine, every rule in
+  // any of the three sheets that aims at the same leaf and sets something it
+  // sets is checked: whatever the side column's old rule beat (by specificity,
+  // then by its place in the cascade), the rewritten rule still beats. A rule
+  // that beat the old one beats the new one too, and changes nothing.
+  test("still wins everything the side column's own rule won, in all three sheets", () => {
+    for (const entry of LEAVES) {
+      const own = rulesOf(v2).find(
         (one) =>
-          (where === null || one.where === where) &&
-          one.rule.selectors.map((s) => s.trim()).includes(selector),
+          one.where === DESKTOP && one.rule.selectors.map((s) => s.trim()).includes(entry.selector),
       );
-      return entry?.rule.source?.start?.line ?? Number.NaN;
-    };
-    for (const { selector, base } of LEAVES) {
-      const mine = specificity(selector);
-      const theirs = specificity(base);
-      const wins =
-        beats(mine, theirs) || (ties(mine, theirs) && line(selector, DESKTOP) > line(base, ""));
-      expect(wins, `${selector} over ${base}`).toBe(true);
+      expect(own, entry.selector).toBeDefined();
+      const rule = (own as { rule: Rule }).rule;
+      const at = { sheet: 0, line: rule.source?.start?.line ?? 0 };
+      const families = new Set<string>();
+      rule.walkDecls((decl) => {
+        families.add(family(decl.prop));
+      });
+
+      const competitors = competitorsOf(entry, families);
+      // The walk sees at least the base rule, or it is checking nothing.
+      expect(
+        competitors.map((one) => one.selector),
+        entry.selector,
+      ).toContain(entry.base);
+
+      for (const other of competitors) {
+        if (!wins(specificity(entry.old), at, other.spec, other.place)) continue;
+        expect(
+          wins(specificity(entry.selector), at, other.spec, other.place),
+          `${entry.selector} over ${other.selector}`,
+        ).toBe(true);
+      }
     }
-    // The one that would have flipped: the title's size in the side column.
+    // The one that would have flipped, and the check that it would have: the
+    // title's size in the side column, against `.v2-row .v2-row-title`.
     expect(valueOf(v2, DESKTOP, `${BOTH} .v2-row b.v2-row-title`, "font-size")).toBe("14px");
-    expect(beats(specificity(`${BOTH} .v2-row b.v2-row-title`), [3, 0])).toBe(true);
+    const title = { sheet: 0, line: 0 };
+    const rowTitle = specificity("[data-v2-root] .v2-row .v2-row-title");
+    expect(wins(specificity(`${BOTH} .v2-row b`), title, rowTitle, { sheet: 0, line: 1 })).toBe(
+      false,
+    );
+    expect(
+      wins(specificity(`${BOTH} .v2-row b.v2-row-title`), title, rowTitle, { sheet: 0, line: 1 }),
+    ).toBe(true);
+  });
+
+  test("counts specificity as the cascade does, for the shapes these sheets use", () => {
+    expect(specificity("[data-v2-root] .v2-side .v2-row b")).toEqual([3, 1]);
+    expect(specificity(`${BOTH} .v2-row b`)).toEqual([2, 1]);
+    // :not() and :has() weigh what they hold: the root, the shell, the
+    // calendar inside them, and the list.
+    expect(specificity("[data-v2-root] .v2-shell:not(:has(> .v2-cal)) .v2-list")).toEqual([4, 0]);
+    expect(specificity("[data-v2-root] .v2-stop[data-state=\"done\"] h3")).toEqual([3, 1]);
+    expect(specificity("[data-v2-root] .v2-list:focus-visible")).toEqual([3, 0]);
   });
 
   // The rewritten rules now tie their base at two classes, and both later

@@ -4,12 +4,14 @@
 // WHAT IS PINNED HERE. That the provider is the planner Today already ran (the
 // view, the planned chips, the clock and the status sentence come out exactly
 // as the screen made them), that it is seeded once per planned day and keeps
-// every press through new data for the same day, and that `doneIds` follows
+// every press through new data for the same day, and that `workedIds` follows
 // the plan in the very render that carries the press. That Today itself still
 // draws what it drew is pinned by the existing suites, which pass unedited.
 //
 // JSX would need a .tsx file, hence createElement, as in the other v2 tests.
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
   createElement,
   type Attributes,
@@ -28,9 +30,17 @@ import { planDay } from "@/app/lib/v2/plan/planner";
 import type { Block, Energy, PlanOutput } from "@/app/lib/v2/types";
 import { clockLabel } from "@/app/lib/v2/view/format";
 import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
-import { TODAY_COPY, actionLine, buildTodayView, type TodayView } from "@/app/lib/v2/view/today";
+import {
+  TODAY_COPY,
+  actionLine,
+  buildTodayView,
+  workedTaskIds,
+  type TodayView,
+} from "@/app/lib/v2/view/today";
 import { DayProvider, useDay, type DayValue } from "@/app/v2/_components/day-provider";
 import { TodayClient } from "@/app/v2/today/today-client";
+
+const ROOT = path.resolve(__dirname, "..");
 
 afterEach(() => {
   cleanup();
@@ -245,36 +255,35 @@ describe("the day is seeded once per planned day", () => {
   });
 });
 
-describe("doneIds", () => {
-  /** What doneIds must be for one plan, by the definition in the brief. */
-  const doneOf = (plan: PlanOutput) =>
-    plan.blocks
-      .filter((block) => block.state === "done" && block.taskId !== null)
-      .map((block) => block.taskId)
-      .sort();
+// A block in state "done" served its task for the day. A touch block ("open it
+// and read it") or one session of a long task says nothing about whether the
+// task itself is over, so the set is the tasks WORKED, and it is the view
+// module's own definition, the one the Quests panes read too.
+describe("workedIds", () => {
+  const sorted = (ids: ReadonlySet<string>) => [...ids].sort();
 
   test("is empty before anything is done", () => {
     const { now } = mount(sampleDay());
-    expect(doneOf(now().plan)).toEqual([]);
-    expect([...now().doneIds]).toEqual([]);
+    expect(sorted(now().workedIds)).toEqual([]);
+    expect(sorted(now().workedIds)).toEqual(sorted(workedTaskIds(now().plan)));
   });
 
-  test("holds a finished task's id in the very render that carries the press", async () => {
+  test("holds a done touch block's task, in the very render that carries the press", async () => {
     const data = sampleDay();
     const mounted = mount(data);
-    const plan = mounted.now().plan;
-    const task = plan.blocks.find(
-      (block) => block.taskId !== null && block.state === "planned",
+    const touch = mounted.now().plan.blocks.find(
+      (block) => block.kind === "touch" && block.taskId !== null,
     ) as Block;
-    expect(task).toBeDefined();
+    // The sample's day has one; without it this test would say nothing.
+    expect(touch).toBeDefined();
 
-    await press(() => mounted.now().onDone(task.id));
+    await press(() => mounted.now().onDone(touch.id));
 
-    expect([...mounted.now().doneIds]).toEqual([task.taskId]);
-    // Every render's set agrees with that render's own plan: none of them
-    // carried a plan with the block done and a set without it.
+    expect(sorted(mounted.now().workedIds)).toEqual([touch.taskId]);
+    // Every render's set is the definition applied to that render's own plan:
+    // none carried a plan with the block done and a set without its task.
     for (const day of mounted.seen) {
-      expect([...day.doneIds].sort()).toEqual(doneOf(day.plan));
+      expect(sorted(day.workedIds)).toEqual(sorted(workedTaskIds(day.plan)));
     }
   });
 
@@ -288,10 +297,36 @@ describe("doneIds", () => {
     expect(tasked.length).toBeGreaterThan(1);
 
     await press(() => mounted.now().onDone((taskless as Block).id));
-    expect([...mounted.now().doneIds]).toEqual([]);
+    expect(sorted(mounted.now().workedIds)).toEqual([]);
 
     await press(() => mounted.now().onSkip(tasked[0].id));
-    expect([...mounted.now().doneIds]).toEqual(doneOf(mounted.now().plan));
-    expect(mounted.now().doneIds.has(tasked[0].taskId as string)).toBe(false);
+    expect(sorted(mounted.now().workedIds)).toEqual([]);
+    expect(mounted.now().workedIds.has(tasked[0].taskId as string)).toBe(false);
+  });
+
+  // Nothing in the provider calls a task finished: not a field, not a word.
+  test("names no task finished", () => {
+    const { now } = mount(sampleDay());
+    expect(Object.keys(now()).sort()).toEqual(
+      [
+        "data",
+        "view",
+        "clock",
+        "energy",
+        "said",
+        "revision",
+        "focusToken",
+        "movedIds",
+        "planned",
+        "plan",
+        "workedIds",
+        "onStart",
+        "onDone",
+        "onSkip",
+        "onEnergy",
+      ].sort(),
+    );
+    const source = readFileSync(path.join(ROOT, "app/v2/_components/day-provider.tsx"), "utf8");
+    expect(source).not.toMatch(/finish|doneIds|completed/i);
   });
 });

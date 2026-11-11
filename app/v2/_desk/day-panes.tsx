@@ -1,6 +1,7 @@
 "use client";
 
 import { CALENDAR_COPY } from "@/app/lib/v2/view/calendar";
+import { DESK_COPY } from "@/app/lib/v2/view/desk";
 import { TODAY_COPY } from "@/app/lib/v2/view/today";
 import { AllDayRow } from "../_components/all-day-row";
 import { CalendarPane } from "../_components/calendar/calendar-pane";
@@ -81,12 +82,21 @@ function StatusPane() {
   );
 }
 
+// The two lists. On Today an empty list is simply not there, because its column
+// goes with it; a pane stays on the desk, and a blank box reads as broken, so a
+// list with nothing in it says so in one sentence. Inside a pane the pane's own
+// scroller is the one tab stop, so the list's section takes none of its own.
+
 function PastDuePane() {
-  return <PastDueList entries={useDay().view.pastDue} />;
+  const { pastDue } = useDay().view;
+  if (pastDue.length === 0) return <p className="v2-pane-note">{DESK_COPY.nothingPastDue}</p>;
+  return <PastDueList entries={pastDue} tabStop={false} />;
 }
 
 function NotTodayPane() {
-  return <NotTodayList entries={useDay().view.notToday} />;
+  const { notToday } = useDay().view;
+  if (notToday.length === 0) return <p className="v2-pane-note">{DESK_COPY.allFitToday}</p>;
+  return <NotTodayList entries={notToday} tabStop={false} />;
 }
 
 /**

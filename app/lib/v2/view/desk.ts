@@ -13,16 +13,25 @@ export const DESK_COPY = {
   noQuests: "No quests in this copy.",
   /** A source that holds no money data. */
   noMoney: "No money data in this copy.",
+  /** The past-due pane when nothing is past its date. */
+  nothingPastDue: "Nothing is past its date.",
+  /** The not-today pane when everything the planner wanted fit. */
+  allFitToday: "Everything fit today.",
   /** The gallery's one line over the box. `{pane}`, `{w}` and `{h}` are filled. */
   gallery: "{pane}, {w} by {h} px",
 } as const;
 
-/** The gallery's one line: which pane, and the size of its box. */
+/**
+ * The gallery's one line: which pane, and the size of its box.
+ *
+ * ONE PASS, WITH A FUNCTION. The pane id is whatever the URL said, so it is
+ * filled in as plain text: a replacement string would expand `$&` and its kin,
+ * and filling the slots one after another would fill a `{w}` written inside the
+ * id with the real width.
+ */
 export function galleryLine(pane: string, width: number, height: number): string {
-  return DESK_COPY.gallery
-    .replace("{pane}", pane)
-    .replace("{w}", String(width))
-    .replace("{h}", String(height));
+  const slots: Record<string, string> = { pane, w: String(width), h: String(height) };
+  return DESK_COPY.gallery.replace(/\{(pane|w|h)\}/g, (_slot, name: string) => slots[name]);
 }
 
 /** The gallery's box in px: the default, and the bounds each side is held to. */
@@ -36,14 +45,37 @@ const OPTION_PREFIX = "o.";
 
 type Search = Record<string, string | string[] | undefined>;
 
+/** A pane's view options as a URL or a stored layout gave them: key and value, in order. */
+export type PaneOptionPairs = ReadonlyArray<readonly [string, string]>;
+
+/**
+ * The options a body is handed: key to value, in an object with NO PROTOTYPE,
+ * frozen.
+ *
+ * The keys come from a URL or a stored layout. In a plain object a key such as
+ * `hasOwnProperty` would shadow the method a body might call, and an inherited
+ * name such as `constructor` would read as an option nobody set. Here every key
+ * is data and nothing else is there. A body reads one only as `options[key]`,
+ * compared against its own list of choices.
+ *
+ * Built where it is used, in the browser: a server component cannot hand a
+ * client component an object with no prototype (React refuses it), so the page
+ * hands the pairs across and the client builds this from them.
+ */
+export function paneOptions(pairs: PaneOptionPairs): Readonly<Record<string, string>> {
+  const options = Object.create(null) as Record<string, string>;
+  for (const [key, value] of pairs) options[key] = value;
+  return Object.freeze(options);
+}
+
 /** What one request to the gallery asked for, read and held to its bounds. */
 export interface GalleryRequest {
   /** As given: an id the registry does not know draws NotBuilt, and is named. */
   paneId: string;
   width: number;
   height: number;
-  /** The pane's view options, key to value. The body judges each one. */
-  options: Record<string, string>;
+  /** The pane's view options, as pairs (see `paneOptions`). The body judges each one. */
+  options: PaneOptionPairs;
   /** `?stale=1`: the sample's money as it looks when the ledger is old. */
   stale: boolean;
   /** The day a snapshot is asked to plan, or null. The source judges it. */
@@ -73,11 +105,11 @@ function side(value: string | string[] | undefined, fallback: number): number {
 }
 
 export function galleryRequest(asked: Search): GalleryRequest {
-  const options: Record<string, string> = {};
+  const options: Array<readonly [string, string]> = [];
   for (const [name, value] of Object.entries(asked)) {
     if (!name.startsWith(OPTION_PREFIX) || name.length === OPTION_PREFIX.length) continue;
     const text = oneOf(value);
-    if (text !== null) options[name.slice(OPTION_PREFIX.length)] = text;
+    if (text !== null) options.push([name.slice(OPTION_PREFIX.length), text]);
   }
   return {
     paneId: oneOf(asked.pane) ?? DEFAULT_PANE,
@@ -105,9 +137,7 @@ export function galleryKeep(request: GalleryRequest, plannedDate: string): Recor
     w: String(request.width),
     h: String(request.height),
   };
-  for (const [key, value] of Object.entries(request.options)) {
-    keep[`${OPTION_PREFIX}${key}`] = value;
-  }
+  for (const [key, value] of request.options) keep[`${OPTION_PREFIX}${key}`] = value;
   if (request.stale) keep.stale = "1";
   if (request.date !== null && request.date === plannedDate) keep.date = request.date;
   return keep;

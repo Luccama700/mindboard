@@ -1,11 +1,11 @@
 "use client";
 
-import { createElement } from "react";
+import { createElement, useMemo } from "react";
 
 // Type only, so no source and no loader reaches the browser through here: the
 // page loads the desk and hands the plain shape down.
 import type { DeskScreenData } from "@/app/lib/v2/view/desk-data";
-import { galleryLine } from "@/app/lib/v2/view/desk";
+import { galleryLine, paneOptions, type PaneOptionPairs } from "@/app/lib/v2/view/desk";
 import { DayProvider, useDay } from "../_components/day-provider";
 import { DeskDataProvider } from "../_desk/desk-data-provider";
 import { PaneBox } from "../_desk/pane-box";
@@ -39,9 +39,11 @@ export function GalleryClient({
   paneId: string;
   width: number;
   height: number;
-  options: Readonly<Record<string, string>>;
+  /** The pane's options as the URL gave them; the body gets them with no prototype. */
+  options: PaneOptionPairs;
   keep: Readonly<Record<string, string>>;
 }) {
+  const bodyOptions = useMemo(() => paneOptions(options), [options]);
   return (
     <DeskDataProvider data={data} keep={keep} basePath={GALLERY_PATH}>
       <DayProvider key={data.today.input.date} data={data.today}>
@@ -54,7 +56,7 @@ export function GalleryClient({
                 at module scope (the same function for the same id, which the
                 gallery's test pins), so a tag would read to it as a component
                 made during render. Nothing is: the body keeps its state. */}
-            {createElement(paneBody(paneId), { options })}
+            {createElement(paneBody(paneId), { options: bodyOptions })}
           </PaneBox>
         </main>
       </DayProvider>

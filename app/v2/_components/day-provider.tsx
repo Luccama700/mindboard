@@ -6,7 +6,12 @@ import { planReference } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import type { PlannedBlock } from "@/app/lib/v2/view/calendar";
 import { clockLabel } from "@/app/lib/v2/view/format";
-import { actionLine, buildTodayView, type TodayView } from "@/app/lib/v2/view/today";
+import {
+  actionLine,
+  buildTodayView,
+  workedTaskIds,
+  type TodayView,
+} from "@/app/lib/v2/view/today";
 // Type only, so none of the source that built this day (and none of the schema
 // it parsed its rules with) reaches the browser bundle: the server builds the
 // data and hands the plain shape down.
@@ -52,8 +57,13 @@ export interface DayValue {
   planned: readonly PlannedBlock[];
   /** The plan on screen, for panes that read the planner's own numbers. */
   plan: PlanOutput;
-  /** Tasks finished in this session: a block of the plan in state "done" that carries a task. */
-  doneIds: ReadonlySet<string>;
+  /**
+   * The tasks WORKED on the day on screen: every task that has a block of any
+   * kind in state "done" in this plan (`workedTaskIds`). A done block served its
+   * task for the day; a done touch block ("open it and read it") or a session
+   * says nothing about whether the task itself is over, so nothing here says so.
+   */
+  workedIds: ReadonlySet<string>;
   onStart(blockId: string): void;
   onDone(blockId: string): void;
   onSkip(blockId: string): void;
@@ -202,14 +212,9 @@ export function DayProvider({ data, children }: { data: TodayScreenData; childre
   );
 
   // Derived from the plan in the render, never kept beside it, so the set
-  // changes in the same render as the press that finished the task.
-  const doneIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const block of state.plan.blocks) {
-      if (block.state === "done" && block.taskId !== null) ids.add(block.taskId);
-    }
-    return ids;
-  }, [state.plan.blocks]);
+  // changes in the same render as the press on Done. The one definition lives
+  // in the view module, where the Quests panes read the same set from.
+  const workedIds = useMemo(() => workedTaskIds(state.plan), [state.plan]);
 
   const view = useMemo(
     () => viewFor(state.energy, state.plan),
@@ -253,13 +258,13 @@ export function DayProvider({ data, children }: { data: TodayScreenData; childre
       movedIds,
       planned,
       plan: state.plan,
-      doneIds,
+      workedIds,
       onStart,
       onDone,
       onSkip,
       onEnergy,
     }),
-    [data, view, clock, state, movedIds, planned, doneIds, onStart, onDone, onSkip, onEnergy],
+    [data, view, clock, state, movedIds, planned, workedIds, onStart, onDone, onSkip, onEnergy],
   );
 
   return <DayContext.Provider value={value}>{children}</DayContext.Provider>;
