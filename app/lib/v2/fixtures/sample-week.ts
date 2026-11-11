@@ -17,12 +17,12 @@
 // repeats, a calendar the account may only read, and a second week of data after
 // this one so Next does something and Previous is correctly dead.
 //
-// WHY THIS IMPORTS THE DAY IT IS ALSO IMPORTED BY. `sampleDay()` hands the
-// screen this week, and this week is built from the day's own fixed events and
-// rules. That is a cycle, and it is safe only because NOTHING IN THIS FILE RUNS
-// AT IMPORT TIME: every value below is built inside a function, so neither
-// module can reach into the other while one is still being evaluated. Do not
-// hoist any of these lists to the top level.
+// WHERE ITS CONSTANTS COME FROM. The day it is, the clock it runs on, the rules
+// it is planned by and the events already on it all come from ./sample-base.ts,
+// a leaf both this file and ./sample-day.ts are built from. This file does not
+// import the day, and the day does not import anything but this: the two used to
+// import each other, and that cycle was held up by a comment asking nobody to
+// write a top-level const here.
 
 import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import { weekOf } from "@/app/lib/v2/calendar/grid";
@@ -33,7 +33,7 @@ import {
   sampleFixed,
   sampleInstant,
   sampleRules,
-} from "@/app/lib/v2/fixtures/sample-day";
+} from "@/app/lib/v2/fixtures/sample-base";
 import { instantMs, shiftDateKey } from "@/app/lib/v2/plan/day";
 import type { FixedEvent } from "@/app/lib/v2/types";
 import { calendarScreenData } from "@/app/lib/v2/view/calendar";

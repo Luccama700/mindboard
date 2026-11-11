@@ -18,33 +18,26 @@
 
 import { energyAsk } from "@/app/lib/v2/asks/builders";
 import { openAsk } from "@/app/lib/v2/asks/lifecycle";
+import {
+  SAMPLE_DATE,
+  SAMPLE_NOW,
+  sampleFixed,
+  sampleInstant,
+  sampleRules,
+} from "@/app/lib/v2/fixtures/sample-base";
 import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
-import { parseRules } from "@/app/lib/v2/rules";
 import type { ScreenLane, TodayScreenData } from "@/app/lib/v2/view/screen-data";
-import type {
-  Candidate,
-  FeedStatus,
-  FixedEvent,
-  PlanInput,
-  PlannerRules,
-} from "@/app/lib/v2/types";
-
-/** A Wednesday, invented. The zone has no daylight saving, so offsets are stable. */
-const DATE = "2026-04-15";
-const ZONE = "America/Phoenix";
-const OFFSET = "-07:00";
-/** Mid morning: the seminar is behind you and the day still has most of itself left. */
-const NOW = `${DATE}T10:20:00${OFFSET}`;
+import type { Candidate, FeedStatus, PlanInput } from "@/app/lib/v2/types";
 
 const SAMPLE_USER = "sample-day";
-const CAMPUS = "campus-sample";
 
-const at = (clock: string, date: string = DATE) => `${date}T${clock}:00${OFFSET}`;
-
-// The sample week (./sample-week.ts) is built from the four values below rather
-// than from a second copy of them, so the day and the calendar beside it cannot
-// disagree about which Wednesday this is or what is already on it.
-export { DATE as SAMPLE_DATE, NOW as SAMPLE_NOW, at as sampleInstant };
+// The day it is, the clock it runs on, its rules and what is already on it all
+// live in ./sample-base.ts, which the week of calendar beside this day is built
+// from as well: one set of invented constants, so the two halves of the screen
+// cannot disagree about which Wednesday this is.
+const DATE = SAMPLE_DATE;
+const NOW = SAMPLE_NOW;
+const at = sampleInstant;
 
 /**
  * The six lanes. Lane names and colours are DATA, never engine code, so they
@@ -60,83 +53,6 @@ const LANES: ScreenLane[] = [
   { key: "craft", label: "Craft", color: "#C58BFF" },
   { key: "body", label: "Body", color: "#B8F15A" },
 ];
-
-export function sampleRules(): PlannerRules {
-  return parseRules({
-    timeZone: ZONE,
-    wakeByWeekday: ["07:30", "07:30", "07:30", "07:30", "07:30", "07:30", "07:30"],
-    lightsOut: "23:30",
-    noFocusBefore: "08:30",
-    bufferMinutes: 10,
-    capacity: {
-      low: { blocks: 0, small: 1, gym: false, social: false },
-      ok: { blocks: 3, small: 1, gym: false, social: false },
-      good: { blocks: 4, small: 2, gym: true, social: true },
-    },
-    maxBlocksPerLanePerDay: 1,
-    weeklyHourCap: 30,
-    incomeTarget: { lane: "work", weeklyHours: 10, blockMinutes: 120 },
-    travel: [
-      {
-        calendarId: CAMPUS,
-        locationIncludes: null,
-        minutesBefore: 25,
-        minutesAfter: 10,
-      },
-    ],
-    gym: { perWeek: 2, minutes: 45, notBefore: "16:00" },
-    earlyTouch: { daysBefore: 3, minutes: 25 },
-  });
-}
-
-export function sampleFixed(): FixedEvent[] {
-  return [
-    {
-      id: "fx-notice",
-      title: "Library closed for repairs",
-      start: at("00:00"),
-      end: at("00:00", "2026-04-16"),
-      allDay: true,
-      calendarId: CAMPUS,
-      location: null,
-      countsTowardCap: false,
-      source: "google",
-    },
-    {
-      id: "fx-seminar",
-      title: "Morning seminar",
-      start: at("09:00"),
-      end: at("10:15"),
-      allDay: false,
-      calendarId: CAMPUS,
-      location: "Hall B",
-      countsTowardCap: false,
-      source: "google",
-    },
-    {
-      id: "fx-workshop",
-      title: "Ceramics workshop",
-      start: at("13:00"),
-      end: at("15:00"),
-      allDay: false,
-      calendarId: CAMPUS,
-      location: "Studio 4",
-      countsTowardCap: false,
-      source: "google",
-    },
-    {
-      id: "fx-shift",
-      title: "Print shop shift",
-      start: at("18:30"),
-      end: at("21:00"),
-      allDay: false,
-      calendarId: "shift-sample",
-      location: "Front counter",
-      countsTowardCap: true,
-      source: "google",
-    },
-  ];
-}
 
 function candidates(): Candidate[] {
   return [

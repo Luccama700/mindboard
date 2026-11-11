@@ -26,6 +26,7 @@ import { timeRangeLabel, weekLabel } from "@/app/lib/v2/view/format";
 import {
   CALENDAR_COPY,
   buildCalendarView,
+  eventDays,
   type CalendarDayView,
   type PlannedBlock,
 } from "@/app/lib/v2/view/calendar";
@@ -135,7 +136,8 @@ const SHIFT = timed("ev-shift", SHOP, at("14:00"), at("16:00"), {
 });
 
 /** A quiet week: nothing in it widens the window the rules asked for. */
-const quiet = () => data({ events: [SEMINAR, WORKSHOP, SHIFT] });
+const quiet = (over: Partial<CalendarScreenData> = {}) =>
+  data({ events: [SEMINAR, WORKSHOP, SHIFT], ...over });
 
 /** The awkward week, with one of every edge on it. */
 const awkward = () =>
@@ -225,6 +227,67 @@ describe("timeRangeLabel", () => {
   test("reads the instants in that zone and not the process clock", () => {
     expect(timeRangeLabel(at("13:00"), at("14:00"), "UTC")).toBe("20:00 to 21:00");
     expect(timeRangeLabel(at("13:00"), at("14:00"), "Asia/Tokyo")).toBe("05:00 to 06:00");
+  });
+});
+
+// Which days an event is ON, which is what decides how far a snapshot's derived
+// range reaches. Both ends of an event are exclusive in the same way, and the
+// day the END falls on is not always a day the event is on: counting it put a
+// Friday night shift on the Saturday, and a day covered with nothing on it draws
+// as a free day the source never spoke for.
+describe("eventDays", () => {
+  test("keeps an event that ends at exactly midnight on the day it ran", () => {
+    expect(
+      eventDays(timed("ev", CAMPUS, at("22:00", "2026-04-17"), at("00:00", "2026-04-18")), ZONE),
+    ).toEqual(["2026-04-17", "2026-04-17"]);
+  });
+
+  test("gives both days to one that really runs into the second", () => {
+    expect(
+      eventDays(timed("ev", CAMPUS, at("22:00", "2026-04-17"), at("01:30", "2026-04-18")), ZONE),
+    ).toEqual(["2026-04-17", "2026-04-18"]);
+  });
+
+  test("gives its one day to an event with no length, or an inverted pair", () => {
+    expect(eventDays(timed("ev", CAMPUS, at("09:00"), at("09:00")), ZONE)).toEqual([
+      WEDNESDAY,
+      WEDNESDAY,
+    ]);
+    expect(eventDays(timed("ev", CAMPUS, at("09:00"), at("08:00")), ZONE)).toEqual([
+      WEDNESDAY,
+      WEDNESDAY,
+    ]);
+  });
+
+  test("reads an instant in the zone it is given", () => {
+    // 2026-04-15T23:30-07:00 is already the 16th in UTC.
+    expect(eventDays(timed("ev", CAMPUS, at("23:30"), at("23:45")), "UTC")).toEqual([
+      "2026-04-16",
+      "2026-04-16",
+    ]);
+  });
+
+  test("takes the day before an all day end, which Google makes exclusive", () => {
+    expect(eventDays(allDay("ev", CAMPUS, "2026-04-16", "2026-04-19"), ZONE)).toEqual([
+      "2026-04-16",
+      "2026-04-18",
+    ]);
+    expect(eventDays(allDay("ev", CAMPUS, "2026-04-16", "2026-04-17"), ZONE)).toEqual([
+      "2026-04-16",
+      "2026-04-16",
+    ]);
+    // An end equal to the start still covers its one day.
+    expect(eventDays(allDay("ev", CAMPUS, "2026-04-16", "2026-04-16"), ZONE)).toEqual([
+      "2026-04-16",
+      "2026-04-16",
+    ]);
+  });
+
+  test("has nothing to say about a pair it cannot read", () => {
+    expect(eventDays(timed("ev", CAMPUS, "soon", "later"), ZONE)).toBeNull();
+    // An all day event carries date keys in this window, by contract.
+    expect(eventDays(allDay("ev", CAMPUS, at("00:00"), at("00:00", "2026-04-16")), ZONE))
+      .toBeNull();
   });
 });
 
@@ -345,6 +408,19 @@ describe("the window it draws inside", () => {
     expect(early.nowTop).toBeNull();
     expect(early.nowLabel).toBe("02:00");
   });
+
+  // A now line across a column that reads "Not in this copy" would be answering
+  // a question the column has just said it cannot answer.
+  test("leaves it off when today is in the week but not covered", () => {
+    const view = buildCalendarView(
+      quiet({ covered: WEEK.filter((date) => date !== WEDNESDAY) }),
+      [],
+    );
+    expect(dayOf(view, WEDNESDAY).isToday).toBe(true);
+    expect(dayOf(view, WEDNESDAY).covered).toBe(false);
+    expect(view.nowTop).toBeNull();
+    expect(view.nowLabel).toBe("10:20");
+  });
 });
 
 describe("a timed chip", () => {
@@ -383,13 +459,21 @@ describe("a timed chip", () => {
   });
 
   test("stays inside the window, top and bottom", () => {
-    for (const day of buildCalendarView(awkward(), [PLANNED]).days) {
+    const days = buildCalendarView(awkward(), [PLANNED]).days;
+    let counted = 0;
+    for (const day of days) {
       for (const chip of day.chips) {
+        counted += 1;
         expect(chip.top).toBeGreaterThanOrEqual(0);
         expect(chip.height).toBeGreaterThan(0);
-        expect(chip.top + chip.height).toBeLessThanOrEqual(1);
+        // A fraction built by division, so the comparison carries the slack a
+        // float needs; without it this passes or fails on the last bit.
+        expect(chip.top + chip.height).toBeLessThanOrEqual(1 + 1e-9);
       }
     }
+    // Without this the loop above would pass on a week with no chips at all,
+    // which is exactly what a broken layout would hand it.
+    expect(counted).toBe(9);
   });
 
   test("is listed in start order", () => {
@@ -516,15 +600,34 @@ describe("empty", () => {
 
   test("is false once anything lands on a covered day", () => {
     expect(buildCalendarView(quiet(), []).empty).toBe(false);
-    expect(buildCalendarView(data(), [PLANNED]).empty).toBe(false);
     expect(
       buildCalendarView(data({ events: [allDay("ev-notice", CAMPUS, WEDNESDAY, "2026-04-16")] }), [])
         .empty,
     ).toBe(false);
   });
 
+  // It is a statement about the CALENDAR. What the app planned for itself is not
+  // something on the calendar, so a day with a block and no event still reads
+  // "Nothing on the calendar": the blocks are on the screen in their own right,
+  // and saying the calendar has something on it would be a lie about Google.
+  test("is not changed by the blocks the app planned", () => {
+    expect(buildCalendarView(data(), [PLANNED]).empty).toBe(true);
+    expect(buildCalendarView(quiet(), [PLANNED]).empty).toBe(false);
+  });
+
   test("is false when the source covers no day of this week at all", () => {
     expect(buildCalendarView(data({ covered: [] }), []).empty).toBe(false);
+  });
+});
+
+describe("a planned block", () => {
+  test("is dropped on a day the source cannot speak for", () => {
+    const view = buildCalendarView(data({ covered: [WEEK[0]] }), [PLANNED]);
+    expect(dayOf(view, WEDNESDAY).covered).toBe(false);
+    expect(dayOf(view, WEDNESDAY).chips).toEqual([]);
+    // The column says the day is unknown and says nothing else: a block drawn
+    // on it would be an answer about a day the calendar has no answer for.
+    expect(view.days.flatMap((day) => day.chips)).toEqual([]);
   });
 });
 
@@ -544,13 +647,23 @@ describe("the all day row", () => {
   });
 
   test("says when one runs past the week at either end", () => {
-    const term = view.allDay.find((span) => span.id === "ev-term");
-    expect(term).toMatchObject({
-      firstIndex: 0,
-      lastIndex: 6,
-      continuesBefore: true,
-      continuesAfter: true,
-    });
+    // On a week the source covers whole, so nothing cuts it but the week itself.
+    const whole = buildCalendarView(
+      data({ events: [allDay("ev-term", CAMPUS, "2026-04-06", "2026-04-27")] }),
+      [],
+    );
+    expect(whole.allDay).toEqual([
+      {
+        id: "ev-term",
+        title: "ev-term",
+        color: "#7C9BFF",
+        firstIndex: 0,
+        lastIndex: 6,
+        row: 0,
+        continuesBefore: true,
+        continuesAfter: true,
+      },
+    ]);
   });
 
   test("stacks them so two spans never share a row", () => {
@@ -573,6 +686,63 @@ describe("the all day row", () => {
     const view = buildCalendarView(quiet(), []);
     expect(view.allDay).toEqual([]);
     expect(view.allDayRows).toBe(0);
+  });
+
+  // A span drawn across a column that reads "Not in this copy" says the event
+  // covers a day the source has no answer for. It is cut instead, and where an
+  // uncovered day interrupts a run it becomes two spans, each flagged on the
+  // side it was cut. A day that is not covered carries nothing at all.
+  test("is cut at a day the source cannot speak for", () => {
+    const term = buildCalendarView(awkward(), []).allDay.find(
+      (span) => span.id === "ev-term",
+    );
+    // The Sunday is not covered, so the span that ran through the whole week now
+    // stops on the Saturday, still flagged as running on past it.
+    expect(term).toMatchObject({
+      firstIndex: 0,
+      lastIndex: 5,
+      continuesBefore: true,
+      continuesAfter: true,
+    });
+  });
+
+  test("becomes two spans when an uncovered day interrupts it", () => {
+    const view = buildCalendarView(
+      data({
+        covered: WEEK.filter((date) => date !== WEDNESDAY),
+        events: [allDay("ev-term", CAMPUS, WEEK[0], "2026-04-18")],
+      }),
+      [],
+    );
+    expect(view.allDay).toHaveLength(2);
+    expect(view.allDay[0]).toMatchObject({
+      firstIndex: 0,
+      lastIndex: 1,
+      continuesBefore: false,
+      continuesAfter: true,
+      row: 0,
+    });
+    expect(view.allDay[1]).toMatchObject({
+      firstIndex: 3,
+      lastIndex: 4,
+      continuesBefore: true,
+      continuesAfter: false,
+      row: 0,
+    });
+    // Two rows of one list need two keys, so a cut span's pieces are told apart.
+    expect(view.allDay[0].id).not.toBe(view.allDay[1].id);
+    for (const span of view.allDay) expect(span.id).toContain("ev-term");
+    expect(view.allDayRows).toBe(1);
+    expect(dayOf(view, WEDNESDAY).allDay).toEqual([]);
+    expect(dayOf(view, WEEK[1]).allDay).toEqual(["ev-term"]);
+  });
+
+  test("keeps its plain id when nothing cuts it", () => {
+    const view = buildCalendarView(
+      data({ events: [allDay("ev-term", CAMPUS, WEEK[0], "2026-04-18")] }),
+      [],
+    );
+    expect(view.allDay.map((span) => span.id)).toEqual(["ev-term"]);
   });
 
   test("lists each covered day's all day titles for the agenda", () => {
@@ -620,6 +790,25 @@ describe("the legend", () => {
 
   test("is empty on a week with nothing on it", () => {
     expect(buildCalendarView(data(), [PLANNED]).legend).toEqual([]);
+  });
+
+  // A folder can list one calendar twice. Two rows for one calendar is noise,
+  // and two different labels for one id is worse, so the first entry wins
+  // everywhere: in the legend and on the chips.
+  test("names a calendar listed twice once, by its first entry", () => {
+    const view = buildCalendarView(
+      data({
+        calendars: [
+          { id: CAMPUS, label: "Campus", color: "#7C9BFF", writable: true },
+          { id: CAMPUS, label: "Campus again", color: "#FF7A8A", writable: false },
+        ],
+        events: [SEMINAR],
+      }),
+      [],
+    );
+    expect(view.legend).toEqual([{ id: CAMPUS, label: "Campus", color: "#7C9BFF" }]);
+    expect(chipOn(view, WEDNESDAY, "ev-seminar").calendar).toBe("Campus");
+    expect(chipOn(view, WEDNESDAY, "ev-seminar").color).toBe("#7C9BFF");
   });
 });
 

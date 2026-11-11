@@ -66,37 +66,6 @@ function oneOf(value: string | string[] | undefined): string | null {
 }
 
 /**
- * The folder, or the one error it reports. A folder that is missing a file, or
- * has one that cannot be read, is something to go and fix, so it comes back as
- * a value rather than as a thrown error. Anything else still throws.
- *
- * Separate from the component because JSX must not be built inside a try: React
- * renders an element after the function returns, so a catch around it would not
- * catch what it looks like it catches (react-hooks/error-boundaries).
- *
- * The clock is read once and used for both reads, so the day and the week beside
- * it cannot land on different sides of midnight.
- */
-async function readFolder(
-  dir: string,
-  date: string | null,
-  week: string | null,
-): Promise<{ data: TodayScreenData; error?: undefined } | { data?: undefined; error: string }> {
-  try {
-    const now = new Date().toISOString();
-    const data = await loadLocalToday(dir, now, date);
-    if (week === null) return { data };
-    // The calendar's own week links land here. The loader ignores a week the
-    // snapshot cannot speak for and answers its default week instead, so a stale
-    // or hand-typed link shows the week it has rather than an empty grid.
-    return { data: { ...data, calendar: await loadLocalCalendar(dir, now, week) } };
-  } catch (error) {
-    if (error instanceof LocalSnapshotError) return { error: error.message };
-    throw error;
-  }
-}
-
-/**
  * The day, from whichever source the gate allowed.
  *
  * Async, and the loopback check is the first thing in it: a request whose Host
@@ -133,4 +102,40 @@ async function TodayScreen({
   }
 
   return <TodayClient data={folder.data} />;
+}
+
+/**
+ * The folder, or the one error it reports. A folder that is missing a file, or
+ * has one that cannot be read, is something to go and fix, so it comes back as
+ * a value rather than as a thrown error. Anything else still throws.
+ *
+ * Separate from the component because JSX must not be built inside a try: React
+ * renders an element after the function returns, so a catch around it would not
+ * catch what it looks like it catches (react-hooks/error-boundaries).
+ *
+ * The clock is read once and used for both reads, so the day and the week beside
+ * it cannot land on different sides of midnight.
+ *
+ * IT LIVES BELOW `TodayScreen` ON PURPOSE, and a test pins that: every read of
+ * the folder has to appear after the awaited loopback check, so that reading the
+ * file from the top shows the check first and no later edit can quietly move a
+ * read above it. The declaration is hoisted, so the order costs nothing.
+ */
+async function readFolder(
+  dir: string,
+  date: string | null,
+  week: string | null,
+): Promise<{ data: TodayScreenData; error?: undefined } | { data?: undefined; error: string }> {
+  try {
+    const now = new Date().toISOString();
+    const data = await loadLocalToday(dir, now, date);
+    if (week === null) return { data };
+    // The calendar's own week links land here. The loader ignores a week the
+    // snapshot cannot speak for and answers its default week instead, so a stale
+    // or hand-typed link shows the week it has rather than an empty grid.
+    return { data: { ...data, calendar: await loadLocalCalendar(dir, now, week) } };
+  } catch (error) {
+    if (error instanceof LocalSnapshotError) return { error: error.message };
+    throw error;
+  }
 }

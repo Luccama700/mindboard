@@ -180,18 +180,22 @@ function dayOfInstant(instant: Instant, timeZone: string): DateKey | null {
 }
 
 /**
- * The first and last day an event covers, as date keys, or null for a pair that
+ * The days an event is ON, from the first to the last, or null for a pair that
  * cannot be read.
  *
- * Google's all day end is EXCLUSIVE, so the last day covered is the day before
- * it, and an end equal to the start still covers its one day (the live reader
- * falls back to the start when Google sends no end at all).
+ * BOTH ENDS ARE EXCLUSIVE IN THE SAME WAY, and that is the whole point of this
+ * function. Google's all day end is a date key the event does not reach, so the
+ * last day covered is the day before it; a timed event's end is an instant it
+ * does not reach either, so an event running to exactly midnight is on the day
+ * it ran and NOT on the morning after. Taking the day the end instant falls on
+ * put a Friday night shift on the Saturday: that day then went into a snapshot's
+ * derived range, which made it covered with nothing on it, which draws as a free
+ * Saturday the folder never said a word about. It is the same rule `layoutDay`
+ * judges membership by, which is why the two now agree.
  *
- * For a timed event the END DAY IS INCLUSIVE and so can name a day the event
- * draws nothing on: one ending at exactly midnight reads as the next day here.
- * That is deliberate and harmless, because this is only ever used to decide
- * whether an event is worth carrying into the week. What is actually DRAWN is
- * decided by `layoutDay`, which judges instants against each day's midnights.
+ * An end at or before the start still covers its one day, which is not only a
+ * fixture's doing: the live reader falls back to the start when Google sends no
+ * end at all.
  */
 export function eventDays(event: CalEvent, timeZone: string): [DateKey, DateKey] | null {
   if (event.allDay) {
@@ -207,7 +211,8 @@ export function eventDays(event: CalEvent, timeZone: string): [DateKey, DateKey]
   const endMs = maybeInstantMs(event.end) ?? startMs;
   return [
     zonedDateKey(startMs, timeZone),
-    zonedDateKey(Math.max(endMs, startMs), timeZone),
+    // The last moment the event holds, not the first it does not.
+    zonedDateKey(Math.max(endMs - 1, startMs), timeZone),
   ];
 }
 
@@ -280,7 +285,7 @@ export function calendarScreenData(source: CalendarSourceData): CalendarScreenDa
     source.weekParam !== null && isRealDay(source.weekParam)
       ? weekOf(source.weekParam)
       : null;
-  const week = asked !== null && covers(asked) ? asked : weekOf(source.wanted);
+  const week = asked !== null && covers(asked) ? asked : weekOf(nearestWanted(source));
 
   const mondayIfCovered = (monday: DateKey): DateKey | null =>
     covers(weekOf(monday)) ? monday : null;
@@ -292,7 +297,7 @@ export function calendarScreenData(source: CalendarSourceData): CalendarScreenDa
     now: source.now,
     week,
     covered: week.filter((date) => inRange(date, range)),
-    calendars: source.calendars.map((calendar) => ({ ...calendar })),
+    calendars: withoutRepeats(source.calendars),
     events: source.events
       .filter((event) => overlaps(event, week, timeZone))
       .map((event) => ({ ...event })),
@@ -307,6 +312,46 @@ export function calendarScreenData(source: CalendarSourceData): CalendarScreenDa
 function inRange(date: DateKey, range: { from: DateKey; to: DateKey } | null): boolean {
   if (range === null) return false;
   return dayDiff(range.from, date) >= 0 && dayDiff(date, range.to) >= 0;
+}
+
+/**
+ * The day whose week is shown by default: the one asked for, pulled into the
+ * days the source can speak for when it falls outside them.
+ *
+ * A LOCAL SNAPSHOT IS A COPY, AND COPIES GO STALE. The wanted day comes from the
+ * clock, so a folder exported last month covers no part of this week: every
+ * column read "Not in this copy", and the three week links were all null because
+ * none of the neighbouring weeks is covered either, so the weeks the folder DOES
+ * hold could not be reached from the screen at all. Opening on the nearest week
+ * it has is the difference between a stale copy and a wall of nothing.
+ *
+ * Only for the DEFAULT week. An explicit week that the source does not cover
+ * still falls back here rather than being honoured, which is behaviour 5 and now
+ * lands on this same week.
+ */
+function nearestWanted(source: CalendarSourceData): DateKey {
+  const { range, wanted } = source;
+  if (range === null) return wanted;
+  // A range that ends before it starts covers nothing, and there is no nearest
+  // day inside it to move to. It says the same as no range at all, so it is
+  // read that way: the week asked for, with every day of it unknown. Moving to
+  // one of its two ends would show a week and then call all of it unknown.
+  if (dayDiff(range.from, range.to) < 0) return wanted;
+  if (dayDiff(range.from, wanted) < 0) return range.from;
+  if (dayDiff(wanted, range.to) < 0) return range.to;
+  return wanted;
+}
+
+/** One entry per id, the first winning. A folder can list a calendar twice. */
+function withoutRepeats(calendars: readonly ScreenCalendar[]): ScreenCalendar[] {
+  const seen = new Set<string>();
+  const out: ScreenCalendar[] = [];
+  for (const calendar of calendars) {
+    if (seen.has(calendar.id)) continue;
+    seen.add(calendar.id);
+    out.push({ ...calendar });
+  }
+  return out;
 }
 
 function overlaps(event: CalEvent, week: readonly DateKey[], timeZone: string): boolean {
@@ -339,7 +384,14 @@ export function buildCalendarView(
 ): CalendarView {
   const zone = data.timeZone;
   const covered = new Set(data.covered);
-  const byId = new Map(data.calendars.map((calendar) => [calendar.id, calendar]));
+  // The FIRST entry for an id wins, here and in the legend. A folder can list
+  // one calendar twice, and `new Map` of the pairs would keep the last, so a
+  // chip and its legend row could end up with two different names for one
+  // calendar depending on which of them read which.
+  const byId = new Map<string, ScreenCalendar>();
+  for (const calendar of data.calendars) {
+    if (!byId.has(calendar.id)) byId.set(calendar.id, calendar);
+  }
 
   // A planned block goes through the SAME layout as the events of its day, so a
   // block and an event that overlap sit side by side instead of on top of each
@@ -374,11 +426,16 @@ export function buildCalendarView(
 
   // An all day event on no covered day is left out before the rows are stacked,
   // not after: dropping a span afterwards would leave an empty row behind it.
-  const spans = layoutAllDay(
-    data.events.filter(
-      (event) => event.allDay && touchesCovered(event, data.week, covered, zone),
+  // What is left is then cut to the covered days it touches (`clipToCovered`).
+  const spans = clipToCovered(
+    layoutAllDay(
+      data.events.filter(
+        (event) => event.allDay && touchesCovered(event, data.week, covered, zone),
+      ),
+      data.week,
     ),
     data.week,
+    covered,
   );
 
   const today = dayOfInstant(data.now, zone);
@@ -395,14 +452,16 @@ export function buildCalendarView(
     chips: (placed.get(date) ?? []).map((item) =>
       chipOf(item, isPlanned.has(item.event), byId, { fromMinute, span }, zone),
     ),
-    allDay: covered.has(date) ? titlesByIndex[index] : [],
+    // No guard for an uncovered day: the spans were cut to the covered days
+    // above, so a title can only reach a day the source speaks for.
+    allDay: titlesByIndex[index],
   }));
 
   return {
     weekLabel: weekLabel(data.week),
     days,
     allDay: spans.map((item) => ({
-      id: item.event.id,
+      id: item.id,
       title: item.event.title,
       color: byId.get(item.event.calendarId)?.color ?? null,
       firstIndex: item.firstIndex,
@@ -415,17 +474,85 @@ export function buildCalendarView(
     fromMinute,
     toMinute,
     hours: hourLines(fromMinute, toMinute),
-    nowTop: nowTopOf(data.now, today, todayIndex, { fromMinute, span }, zone),
+    nowTop:
+      today !== null && covered.has(today)
+        ? nowTopOf(data.now, today, todayIndex, { fromMinute, span }, zone)
+        : null,
     nowLabel: maybeInstantMs(data.now) === null ? "" : clockLabel(data.now, zone),
     legend: legendOf(drawnCalendarIds(data.week, placed, isPlanned, spans), data.calendars),
     // A day the source cannot speak for says so itself and is not counted here:
     // "nothing on this week" has to mean the week, not the part of it that
     // happens to be in the folder.
-    empty: covered.size > 0 && spans.length === 0 && days.every((day) => day.chips.length === 0),
+    //
+    // It is a statement about the CALENDAR, so the blocks the app planned for
+    // itself are not counted either: they are on the screen in their own right,
+    // and a day holding one and no event still has nothing on its calendar.
+    empty:
+      covered.size > 0 &&
+      spans.length === 0 &&
+      days.every((day) => day.chips.every((chip) => chip.kind === "planned")),
     prevWeek: data.prevWeek,
     nextWeek: data.nextWeek,
     thisWeek: data.thisWeek,
   };
+}
+
+/** A placed all day span after it has been cut to the days the source covers. */
+interface ClippedSpan extends AllDayPlaced {
+  /**
+   * The event's own id, or that id and the day the piece starts on when one
+   * event was cut into several. The pane draws these as rows of one list and
+   * needs a key per row; a cut event would otherwise give two rows one id.
+   */
+  id: string;
+}
+
+/**
+ * Each span cut to the covered days it touches.
+ *
+ * A span drawn across a column that reads "Not in this copy" claims the event
+ * covers a day the source has no answer for. So the run is cut: where an
+ * uncovered day interrupts it the span becomes two, each flagged as continuing
+ * on the side it was cut, which is the same flag the pane already draws for a
+ * span that runs past the edge of the week.
+ *
+ * The rows are kept as `layoutAllDay` assigned them. Two pieces of one span
+ * cannot collide (there is an uncovered day between them), and no row is left
+ * empty, because an event that touches no covered day at all was dropped before
+ * the rows were stacked.
+ */
+function clipToCovered(
+  spans: readonly AllDayPlaced[],
+  week: readonly DateKey[],
+  covered: Set<DateKey>,
+): ClippedSpan[] {
+  const out: ClippedSpan[] = [];
+  for (const span of spans) {
+    const pieces: Array<{ firstIndex: number; lastIndex: number }> = [];
+    let open: { firstIndex: number; lastIndex: number } | null = null;
+    for (let index = span.firstIndex; index <= span.lastIndex; index += 1) {
+      const date = week[index];
+      if (date !== undefined && covered.has(date)) {
+        if (open === null) open = { firstIndex: index, lastIndex: index };
+        else open.lastIndex = index;
+      } else if (open !== null) {
+        pieces.push(open);
+        open = null;
+      }
+    }
+    if (open !== null) pieces.push(open);
+
+    for (const piece of pieces) {
+      out.push({
+        ...span,
+        ...piece,
+        id: pieces.length === 1 ? span.event.id : `${span.event.id}#${piece.firstIndex}`,
+        continuesBefore: span.continuesBefore || piece.firstIndex > span.firstIndex,
+        continuesAfter: span.continuesAfter || piece.lastIndex < span.lastIndex,
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -585,9 +712,15 @@ function legendOf(
   calendars: readonly ScreenCalendar[],
 ): CalendarView["legend"] {
   const known = new Set(calendars.map((calendar) => calendar.id));
+  const listed = new Set<string>();
   return [
     ...calendars
-      .filter((calendar) => drawn.includes(calendar.id))
+      .filter((calendar) => {
+        // One row per calendar, by its first entry: a folder can list one twice.
+        if (!drawn.includes(calendar.id) || listed.has(calendar.id)) return false;
+        listed.add(calendar.id);
+        return true;
+      })
       .map(({ id, label, color }) => ({ id, label, color })),
     ...drawn
       .filter((id) => !known.has(id))

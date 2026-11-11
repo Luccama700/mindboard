@@ -23,10 +23,12 @@
 // read, every path built from the folder and a literal name, and no message ever
 // carrying a value out of a file.
 
+import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import { fromEngineEvent, type CalEvent } from "@/app/lib/v2/calendar/types";
 import { wholeSecond } from "@/app/lib/v2/engine/tick";
-import { dayDiff, planningDate } from "@/app/lib/v2/plan/day";
+import { dayDiff, maybeInstantMs, planningDate, shiftDateKey } from "@/app/lib/v2/plan/day";
 import type { DateKey, Instant } from "@/app/lib/v2/types";
+import { normalizeHex } from "@/app/lib/v2/view/appearance";
 import { calendarScreenData, eventDays } from "@/app/lib/v2/view/calendar";
 import type { CalendarScreenData, ScreenCalendar } from "@/app/lib/v2/view/screen-data";
 
@@ -43,6 +45,44 @@ import {
 
 /** What a calendar no group of this account is linked to is called. */
 const PLAIN_CALENDAR = "Calendar";
+
+const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * A date column as it stands, or the day an instant falls on in the zone.
+ *
+ * The twin of `dateKeyOf` in ./snapshot.ts, which reads the same two spellings
+ * for the day. Written out rather than imported because that module imports this
+ * one, and a cycle between the two halves of the folder reader would buy nothing.
+ */
+function dayKeyOf(value: string, timeZone: string): DateKey | null {
+  if (DATE_KEY.test(value)) return value;
+  const ms = maybeInstantMs(value);
+  return ms === null ? null : zonedDateKey(ms, timeZone);
+}
+
+/**
+ * An all day row as the calendar window holds it: DATE KEYS, the end exclusive,
+ * exactly as Google gives them.
+ *
+ * An export can spell an all day row either way and the day's own reader takes
+ * both (`dateKeyOf` in ./snapshot.ts). The window takes only date keys, so left
+ * as instants an all day notice would show on the day and vanish from the
+ * calendar beside it, which is a disagreement nothing on the screen could
+ * explain. A row whose start cannot be read at all is handed on untouched and
+ * dropped by the window, as it is dropped by the day.
+ */
+function asDayKeys(row: LocalCalendarEvent, timeZone: string): LocalCalendarEvent {
+  if (!row.allDay) return row;
+  const from = dayKeyOf(row.start, timeZone);
+  if (from === null) return row;
+  return {
+    ...row,
+    start: from,
+    // The same fallback the day uses: an unreadable end is one day long.
+    end: dayKeyOf(row.end, timeZone) ?? shiftDateKey(from, 1),
+  };
+}
 
 /**
  * The calendars of an export that does not list any: one per calendar the events
@@ -77,7 +117,12 @@ function namedAfterGroups(
     calendars.push({
       id: event.calendarId,
       label: group?.name ?? PLAIN_CALENDAR,
-      color: group?.color ?? null,
+      // A GROUP'S COLOUR IS FREE TEXT in the column it comes from, while the
+      // colour in `calendars.json` has to be six hex digits. This one ends up in
+      // an inline style on the pane, so it goes through the same door: the two
+      // short spellings a person writes by hand are normalised, and anything
+      // else becomes no colour at all rather than a style the browser drops.
+      color: normalizeHex(group?.color) ?? null,
       // Nothing in a folder says so, and this stage is read only.
       writable: false,
     });
@@ -136,10 +181,17 @@ export async function loadLocalCalendar(
   const zone = planner.timeZone;
   const calendars: ScreenCalendar[] =
     listed === null ? namedAfterGroups(rows, groups) : listed.map(asScreenCalendar);
-  const writable = new Map(calendars.map((calendar) => [calendar.id, calendar.writable]));
+  // THE FIRST ENTRY FOR AN ID WINS, the same rule the view reads these by: a
+  // folder can list one calendar twice, and `new Map` of the pairs would keep
+  // the LAST, so the events on it would take their writability from one entry
+  // while the calendar beside them took its name and colour from the other.
+  const writable = new Map<string, boolean>();
+  for (const calendar of calendars) {
+    if (!writable.has(calendar.id)) writable.set(calendar.id, calendar.writable);
+  }
 
   const events = rows.map((row) =>
-    fromEngineEvent(row, {
+    fromEngineEvent(asDayKeys(row, zone), {
       editable: writable.get(row.calendarId) ?? false,
       // A folder is a copy, not a connection: there is no etag to match and
       // nothing to write back to.

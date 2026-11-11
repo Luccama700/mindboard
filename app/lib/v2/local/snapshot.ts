@@ -65,11 +65,12 @@ import {
 } from "./files";
 
 export { LocalSnapshotError, SNAPSHOT_FILES } from "./files";
-// The loopback speed bump lives with the rest of the gate now
-// (app/lib/v2/source.ts), because a second page needs it. Re-exported so this
-// loader's own callers did not have to change, and so there is still one
-// function rather than two.
-export { isLoopbackHost } from "@/app/lib/v2/source";
+// The loopback speed bump is a leaf of its own now, because the gate
+// (app/lib/v2/source.ts) needs the same answer and this loader's callers have
+// always read it from here. Re-exported rather than moved outright, so there is
+// one function and nobody's import had to change; and read from the leaf rather
+// than from the gate, so this module never imports the module that imports it.
+export { isLoopbackHost } from "@/app/lib/v2/loopback";
 
 /** How far the `date` parameter may move the day, in either direction. */
 const DATE_PARAM_DAYS = 14;

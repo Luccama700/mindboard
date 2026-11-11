@@ -45,19 +45,22 @@
 // a Vercel preview is exactly where it is meant to be looked at, which a
 // loopback check would make impossible. Only real data is worth a speed bump.
 //
-// WHY THIS IMPORTS THE LOADER IT IS ALSO IMPORTED BY. `local/snapshot.ts`
-// re-exports `isLoopbackHost` from here, so its own callers did not have to
-// change when the function moved, and this module reads `localSnapshotDir` from
-// there, where the rest of the folder's rules live. That is a cycle, and it is
-// safe because neither side touches the other while a module is still being
-// evaluated: what crosses it is a hoisted function declaration one way and a
-// re-export binding the other. Nothing in this file may run at import time.
+// WHICH WAY THE IMPORTS RUN. This module reads `localSnapshotDir` from the
+// snapshot loader, where the rest of the folder's rules live, and the loader
+// never reads anything from here. The loopback check that both of them need is a
+// leaf of its own (./loopback.ts), re-exported from both, because when it lived
+// in either the two imported each other, and a cycle held up by a comment is a
+// trap for whoever edits next. A test pins the direction.
 
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 
 import { fixturesEnabled } from "@/app/lib/v2/fixtures/sample-day";
 import { localSnapshotDir } from "@/app/lib/v2/local/snapshot";
+import { isLoopbackHost } from "@/app/lib/v2/loopback";
+
+// Re-exported so the gate is still one import for a caller that needs both.
+export { isLoopbackHost };
 
 /** Where a v2 page's data comes from. There is no third one on this branch. */
 export type ScreenSource = { kind: "sample" } | { kind: "local"; dir: string };
@@ -96,38 +99,4 @@ export async function requireLoopback(source: ScreenSource): Promise<void> {
   if (source.kind === "sample") return;
   const host = (await headers()).get("host");
   if (!isLoopbackHost(host)) notFound();
-}
-
-/**
- * Does the Host header of this request name the machine the server runs on?
- *
- * A SPEED BUMP, NOT A GATE, and the difference matters: a Host header is sent
- * by the client, so anyone who can reach the server can send
- * `Host: localhost`. The thing that actually keeps the owner's data off the
- * network is binding the server to the loopback address (`next dev -H
- * 127.0.0.1`), which nothing in this app can do or check. This only turns the
- * accident, a browser or a scanner elsewhere on the network reaching a server
- * someone started on 0.0.0.0, into a 404.
- *
- * The three spellings a loopback request carries, and nothing else: an IPv6
- * host is bracketed in a Host header, a port is optional, and the whole value
- * is compared in lower case. The value itself is never reported anywhere, so a
- * refused host cannot write a stranger's text into a log or onto the page.
- */
-export function isLoopbackHost(host: string | null | undefined): boolean {
-  if (host === null || host === undefined) return false;
-  const value = host.trim().toLowerCase();
-  if (value.length === 0) return false;
-
-  const bracketed = /^\[([0-9a-f:]+)\](?::\d+)?$/.exec(value);
-  if (bracketed !== null) return bracketed[1] === "::1";
-  if (value === "::1") return true;
-
-  const colon = value.indexOf(":");
-  if (colon === -1) return value === "localhost" || value === "127.0.0.1";
-  // A port is digits. Anything else is not a host this can read, so it is not
-  // one of the three.
-  if (!/^\d+$/.test(value.slice(colon + 1))) return false;
-  const name = value.slice(0, colon);
-  return name === "localhost" || name === "127.0.0.1";
 }
