@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { planReference } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
+import type { PlannedBlock } from "@/app/lib/v2/view/calendar";
 import { clockLabel } from "@/app/lib/v2/view/format";
 import { TODAY_COPY, actionLine, buildTodayView } from "@/app/lib/v2/view/today";
 // Type only, so none of the source that built this day (and none of the schema
@@ -12,6 +13,7 @@ import { TODAY_COPY, actionLine, buildTodayView } from "@/app/lib/v2/view/today"
 import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
 import type { Block, Energy, PlanOutput } from "@/app/lib/v2/types";
 import { AllDayRow } from "../_components/all-day-row";
+import { CalendarPane } from "../_components/calendar/calendar-pane";
 import { DayHeader } from "../_components/day-header";
 import { DayLine } from "../_components/day-line";
 import { EnergyRow } from "../_components/energy-row";
@@ -56,8 +58,8 @@ interface DayState {
  * is what makes the first render deterministic (the server and the browser plan
  * the same day) and a screenshot reproducible.
  *
- * ONE DOCUMENT, EVERY LAYOUT. The order below is rail, main, side, which is the
- * reading and tab order on desktop. Below 1024px the wrappers go
+ * ONE DOCUMENT, EVERY LAYOUT. The order below is rail, main, side, and then the
+ * calendar, which is the reading and tab order on desktop. Below 1024px the wrappers go
  * `display: contents` and the leaves are ordered back into the phone's own
  * sequence by the stylesheet (header, all day, energy, status, the line, what
  * did not fit), so the phone screen is unchanged and there is only ever one copy
@@ -183,11 +185,32 @@ export function TodayClient({ data }: { data: TodayScreenData }) {
     [viewFor, state.energy, state.plan],
   );
 
+  // What the calendar draws as planned: the blocks of the plan on screen that
+  // are not done or skipped, under the titles the line shows for them. Derived
+  // in the render, never kept, so a press or an energy answer moves the chips
+  // in the same render that moves the line. The instants come from the plan and
+  // the words from the view, because the view is what names a block.
+  const planned = useMemo<PlannedBlock[]>(() => {
+    const titles = new Map(
+      view.stops
+        .filter((stop) => stop.source === "block")
+        .map((stop) => [stop.id, stop.title] as const),
+    );
+    return state.plan.blocks
+      .filter((block) => block.state !== "done" && block.state !== "skipped")
+      .map((block) => ({
+        id: block.id,
+        title: titles.get(block.id) ?? block.title,
+        start: block.start,
+        end: block.end,
+      }));
+  }, [state.plan.blocks, view.stops]);
+
   const clock = clockLabel(input.now, input.rules.timeZone);
 
   return (
     <div className="v2-shell">
-      <NavBar />
+      <NavBar current="/v2/today" />
 
       <div className="v2-main">
         <DayHeader dateLabel={view.dateLabel} notice={view.notice} feed={view.feed} />
@@ -245,6 +268,17 @@ export function TodayClient({ data }: { data: TodayScreenData }) {
           <NotTodayList entries={view.notToday} />
         </div>
       </div>
+
+      {/* The week beside the day, on the widest screens only (v2.css): below
+          1760px it is in the document and not on the screen, because the
+          calendar has a page of its own. LAST, so the reading order is rail,
+          day, context, calendar. A source with no calendar draws no pane, and
+          the frame keeps its three columns. It reads `data.calendar` straight
+          from the props, so a week link that re-renders this page with a new
+          `?week=` redraws the week and keeps every press above. */}
+      {data.calendar !== null && (
+        <CalendarPane data={data.calendar} planned={planned} basePath="/v2/today" />
+      )}
     </div>
   );
 }

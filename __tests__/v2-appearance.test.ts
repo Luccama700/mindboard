@@ -50,6 +50,16 @@ const TEXT_TOKENS = ["--v2-ink", "--v2-ink-2", "--v2-ink-3", "--v2-signal"] as c
 const ROOT = path.resolve(__dirname, "..");
 const CSS = readFileSync(path.join(ROOT, "app/v2/v2.css"), "utf8");
 
+/**
+ * Every stylesheet the v2 screens load. Only v2.css may spell out a colour, in
+ * its defaults block; the others say which token each thing uses and nothing
+ * more, so a scheme the owner picks reaches them too.
+ */
+const SHEETS = ["app/v2/v2.css", "app/v2/calendar.css"].map((file) => ({
+  file,
+  css: readFileSync(path.join(ROOT, file), "utf8"),
+}));
+
 /** Colours a real account carries: six bright lanes and three very dark groups. */
 const IDENTITY_COLOURS = [
   "#7C9BFF",
@@ -424,7 +434,9 @@ describe("resolveAppearance", () => {
 // notices, because nothing here imports it. So it is parsed here.
 describe("the stylesheet", () => {
   test("parses", () => {
-    expect(() => postcss.parse(CSS, { from: "app/v2/v2.css" })).not.toThrow();
+    for (const { file, css } of SHEETS) {
+      expect(() => postcss.parse(css, { from: file }), file).not.toThrow();
+    }
   });
 
   /** Every custom property declared on the bare [data-v2-root] rule. */
@@ -452,18 +464,21 @@ describe("the stylesheet", () => {
   });
 
   test("hard codes no colour outside that defaults block", () => {
-    const root = postcss.parse(CSS, { from: "app/v2/v2.css" });
     const offenders: string[] = [];
-    root.walkDecls((decl) => {
-      const onDefaults =
-        decl.parent?.type === "rule" &&
-        (decl.parent as { selector?: string }).selector === "[data-v2-root]" &&
-        decl.parent.parent?.type === "root";
-      if (onDefaults && decl.prop.startsWith("--")) return;
-      if (/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/.test(decl.value)) {
-        offenders.push(`${decl.prop}: ${decl.value}`);
-      }
-    });
+    for (const { file, css } of SHEETS) {
+      const root = postcss.parse(css, { from: file });
+      root.walkDecls((decl) => {
+        const onDefaults =
+          file === "app/v2/v2.css" &&
+          decl.parent?.type === "rule" &&
+          (decl.parent as { selector?: string }).selector === "[data-v2-root]" &&
+          decl.parent.parent?.type === "root";
+        if (onDefaults && decl.prop.startsWith("--")) return;
+        if (/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/.test(decl.value)) {
+          offenders.push(`${file} ${decl.prop}: ${decl.value}`);
+        }
+      });
+    }
     expect(offenders).toEqual([]);
   });
 });

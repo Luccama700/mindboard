@@ -423,6 +423,12 @@ describe("ordering never depends on the locale", () => {
     "app/v2/_components/not-today-list.tsx",
     "app/v2/_components/nav-bar.tsx",
     "app/v2/_components/past-due-list.tsx",
+    "app/v2/_components/calendar/calendar-pane.tsx",
+    "app/v2/_components/calendar/calendar-grid.tsx",
+    "app/v2/_components/calendar/calendar-agenda.tsx",
+    "app/v2/_components/calendar/calendar-chip.tsx",
+    "app/v2/week/page.tsx",
+    "app/v2/week/week-client.tsx",
   ];
 
   // Comments are stripped first: these files explain at length why they do not
@@ -1160,8 +1166,23 @@ describe("the desktop page fills the window", () => {
     }
   });
 
-  test("keeps the rail, the day and the context in that order in the document", () => {
+  // The calendar is the LAST child, so the reading and tab order is rail, day,
+  // context, calendar at every width, including the ones where it is not shown.
+  test("keeps the rail, the day, the context and the calendar in that order", () => {
     const { container } = render(createElement(TodayClient, { data: sampleDay() }));
+    const shell = container.querySelector(".v2-shell") as HTMLElement;
+    expect(Array.from(shell.children).map((child) => child.className)).toEqual([
+      "v2-nav",
+      "v2-main",
+      "v2-side",
+      "v2-cal",
+    ]);
+  });
+
+  test("keeps last night's three children when the source has no calendar", () => {
+    const { container } = render(
+      createElement(TodayClient, { data: { ...sampleDay(), calendar: null } }),
+    );
     const shell = container.querySelector(".v2-shell") as HTMLElement;
     expect(Array.from(shell.children).map((child) => child.className)).toEqual([
       "v2-nav",
@@ -1188,8 +1209,12 @@ describe("the desktop page fills the window", () => {
     expect(caps).toEqual([]);
   });
 
+  /** The frame when the calendar is one of its children, and when it is not. */
+  const WITH_CAL = ".v2-shell:has(> .v2-cal)";
+  const WITHOUT_CAL = ".v2-shell:not(:has(> .v2-cal))";
+
   test("gives everything left over to the context, not to a fixed column", () => {
-    for (const tier of [1024, 1360, 2400]) {
+    for (const tier of [1024, 1360]) {
       const columns = inTier(tier, ".v2-shell", "grid-template-columns") ?? "";
       // The last explicit track is flexible at every tier.
       expect(columns.trim().endsWith("fr)")).toBe(true);
@@ -1212,9 +1237,48 @@ describe("the desktop page fills the window", () => {
     expect(inTier(1360, ".v2-lists", "display")).toBe("flex");
     expect(inTier(1360, ".v2-shell", "grid-auto-flow")).toBe("column");
 
-    // From 1760 each list is a column, so the pair's wrapper is nothing.
-    expect(inTier(1760, ".v2-lists", "display")).toBe("contents");
-    expect(inTier(1760, ".v2-list", "overflow-y")).toBe("auto");
+    // From 1760, a frame with no calendar beside it keeps last night's layout:
+    // each list is a column, so the pair's wrapper is nothing.
+    expect(inTier(1760, `${WITHOUT_CAL} .v2-lists`, "display")).toBe("contents");
+    expect(inTier(1760, `${WITHOUT_CAL} .v2-list`, "overflow-y")).toBe("auto");
+  });
+
+  // Behaviour 10. The owner's monitor is 2000px wide, and the calendar takes
+  // the right of it. The context gives up its columns for it: the side is one
+  // box again and its two halves are nothing, exactly as at 1024.
+  test("puts the calendar beside the context from 1760, as a fourth track", () => {
+    const columns = inTier(1760, WITH_CAL, "grid-template-columns") ?? "";
+    expect(columns).toBe(
+      "auto minmax(420px, 560px) minmax(320px, 0.7fr) minmax(680px, 1.6fr)",
+    );
+    // Four tracks, and the last one, the calendar's, is the flexible one.
+    expect(columns.match(/auto|minmax\([^)]*\)/g)).toHaveLength(4);
+    expect(columns.trim().endsWith("1.6fr)")).toBe(true);
+
+    expect(inTier(1760, `${WITH_CAL} > .v2-side`, "display")).toBe("flex");
+    expect(inTier(1760, `${WITH_CAL} .v2-status`, "display")).toBe("contents");
+    expect(inTier(1760, `${WITH_CAL} .v2-lists`, "display")).toBe("contents");
+  });
+
+  test("shows the calendar on Today from 1760 only, sticky and as tall as the window", () => {
+    expect(atRoot(".v2-shell > .v2-cal", "display")).toBe("none");
+    expect(inTier(1760, ".v2-shell > .v2-cal", "display")).toBe("flex");
+    expect(inTier(1760, ".v2-shell > .v2-cal", "position")).toBe("sticky");
+    expect(inTier(1760, ".v2-shell > .v2-cal", "top")).toBe("0");
+    expect(inTier(1760, ".v2-shell > .v2-cal", "height")).toBe("100dvh");
+    expect(inTier(1760, ".v2-shell > .v2-cal", "min-width")).toBe("0");
+    // Nothing below 1760 shows it.
+    for (const tier of [1024, 1360]) {
+      expect(inTier(tier, ".v2-shell > .v2-cal", "display")).toBeNull();
+    }
+  });
+
+  test("has no 2400px tier any more", () => {
+    const params: string[] = [];
+    sheet.walkAtRules("media", (media) => {
+      params.push(media.params);
+    });
+    expect(params.some((param) => param.includes("2400"))).toBe(false);
   });
 
   test("does not keep an empty column when there is nothing to list", () => {
@@ -1285,7 +1349,7 @@ describe("the desktop page fills the window", () => {
     // A grid item's automatic minimum is its content.
     expect(inTier(1024, ".v2-main", "min-width")).toBe("0");
     expect(inTier(1024, ".v2-side", "min-width")).toBe("0");
-    expect(inTier(1760, ".v2-list", "min-width")).toBe("0");
+    expect(inTier(1760, `${WITHOUT_CAL} .v2-list`, "min-width")).toBe("0");
   });
 
   test("keeps the rail wide enough for its longest word", () => {
@@ -1349,7 +1413,7 @@ describe("the desktop page fills the window", () => {
       [1024, ".v2-side"],
       [1024, ".v2-status"],
       [1024, ".v2-lists"],
-      [1760, ".v2-list"],
+      [1760, `${WITHOUT_CAL} .v2-list`],
     ] as const) {
       expect(inTier(tier, selector, "position")).toBe("sticky");
       expect(inTier(tier, selector, "max-height")).toBe("100dvh");
@@ -1362,13 +1426,27 @@ describe("the desktop page fills the window", () => {
       expect(inTier(tier, ".v2-list", "overflow-y")).toBeNull();
       expect(inTier(tier, ".v2-list", "max-height")).toBeNull();
     }
+    // Beside the calendar the side is one scroller again, so from 1760 a list
+    // becomes a scroller of its own only in a frame with no calendar in it.
+    sheet.walkAtRules("media", (media) => {
+      if (media.params.trim() !== "(min-width: 1760px)") return;
+      media.walkRules((rule) => {
+        if (!rule.selectors.some((one) => one.trim().endsWith(".v2-list"))) return;
+        rule.walkDecls("overflow-y", () => {
+          expect(rule.selectors.map((one) => one.trim())).toEqual([
+            `[data-v2-root] ${WITHOUT_CAL} .v2-list`,
+          ]);
+        });
+      });
+    });
   });
 
-  test("gives the lists most of what is left on the widest screens", () => {
-    expect(inTier(2400, ".v2-shell", "grid-auto-columns")).toBe("minmax(300px, 1.4fr)");
+  test("leaves the context's own widths at 1360 alone", () => {
     expect(inTier(1360, ".v2-shell", "grid-auto-columns")).toBe("minmax(300px, 1.1fr)");
-    // 1760 changes which elements are columns, not how wide a column is.
+    // Without the calendar, 1760 changes which elements are columns, not how
+    // wide a column is.
     expect(inTier(1760, ".v2-shell", "grid-template-columns")).toBeNull();
+    expect(inTier(1760, WITHOUT_CAL, "grid-template-columns")).toBeNull();
   });
 
   test("lets a long group name give way before it pushes the date out of a row", () => {

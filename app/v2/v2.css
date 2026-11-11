@@ -117,6 +117,7 @@
   cursor: default;
 }
 
+[data-v2-root] a:focus-visible,
 [data-v2-root] button:focus-visible,
 [data-v2-root] input:focus-visible,
 [data-v2-root] [tabindex]:focus-visible {
@@ -974,17 +975,29 @@ body:has([data-v2-root]) {
   grid-template-columns: repeat(4, 1fr);
 }
 
-[data-v2-root] .v2-nav button {
+/* Today and Week are links and the two still to come are disabled buttons; the
+   two have to look the same, so every rule here names both. */
+[data-v2-root] .v2-nav button,
+[data-v2-root] .v2-nav a {
   position: relative;
   min-height: 52px;
   font: 600 15px/1 var(--v2-display);
   color: var(--v2-ink-3);
 }
 
-[data-v2-root] .v2-nav button[aria-current="page"] {
+[data-v2-root] .v2-nav a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+[data-v2-root] .v2-nav button[aria-current="page"],
+[data-v2-root] .v2-nav a[aria-current="page"] {
   color: var(--v2-ink);
 }
 
+/* Under the current item: the nav bar sets which one (--v2-nav-at). */
 [data-v2-root] .v2-ind {
   position: absolute;
   top: -2px;
@@ -993,6 +1006,7 @@ body:has([data-v2-root]) {
   width: calc((100% - 20px) / 4);
   background: var(--v2-accent);
   border-radius: 2px;
+  transform: translateX(calc(var(--v2-nav-at, 0) * 100%));
 }
 
 /* The rail's foot. Shown only on the desktop page, where the rail has one. */
@@ -1156,9 +1170,11 @@ body:has([data-v2-root]) {
  *
  *   from 1024px   rail / day / one column (status, then the two lists)
  *   from 1360px   rail / day / status / the two lists
- *   from 1760px   rail / day / status / past their date / did not fit today
- *   from 2400px   the same, with the lists taking most of what is left, and a
- *                 list laying its rows two or three across once it is that wide
+ *   from 1760px   rail / day / one column / the calendar (the week beside the
+ *                 day; the context gives its extra columns up for it)
+ *
+ * A source with no calendar draws no pane, and from 1760px its frame keeps the
+ * columns it had: rail / day / status / past their date / did not fit today.
  *
  * The day's track has a floor of 420px, so at 1024px it gives way before
  * anything overflows sideways. The page is anchored to the left edge, because
@@ -1300,7 +1316,8 @@ body:has([data-v2-root]) {
     gap: 2px;
   }
 
-  [data-v2-root] .v2-nav button {
+  [data-v2-root] .v2-nav button,
+  [data-v2-root] .v2-nav a {
     min-height: 36px;
     padding: 0 8px;
     border-radius: 8px;
@@ -1308,11 +1325,17 @@ body:has([data-v2-root]) {
     font-size: 14px;
   }
 
-  [data-v2-root] .v2-nav button[aria-current="page"] {
+  [data-v2-root] .v2-nav a {
+    justify-content: flex-start;
+  }
+
+  [data-v2-root] .v2-nav button[aria-current="page"],
+  [data-v2-root] .v2-nav a[aria-current="page"] {
     color: var(--v2-signal);
   }
 
-  [data-v2-root] .v2-nav button[aria-current="page"]::before {
+  [data-v2-root] .v2-nav button[aria-current="page"]::before,
+  [data-v2-root] .v2-nav a[aria-current="page"]::before {
     content: "";
     position: absolute;
     left: -14px;
@@ -1448,16 +1471,57 @@ body:has([data-v2-root]) {
   }
 }
 
-/* ---- wider: each list is a column of its own ---- */
+/* ---- the calendar beside the day ---- */
+
+/* On Today the calendar is in the document at every width and on the screen
+   only from 1760px: below that it is its own page (app/v2/week), and the day
+   and its context need the room. */
+[data-v2-root] .v2-shell > .v2-cal {
+  display: none;
+}
 
 @media (min-width: 1760px) {
-  [data-v2-root] .v2-lists {
+  /* rail / day / context / calendar. The day gives up 80px of its ceiling and
+     the context its extra columns, and the calendar takes the most of what is
+     left: it is the one column here with seven days in it. Only a frame that
+     HAS the pane gets this, so a source with no calendar does not keep an
+     empty 680px track. */
+  [data-v2-root] .v2-shell:has(> .v2-cal) {
+    grid-template-columns: auto minmax(420px, 560px) minmax(320px, 0.7fr) minmax(680px, 1.6fr);
+  }
+
+  /* The context is one column again, as at 1024: the side is the box and its
+     two halves are nothing. */
+  [data-v2-root] .v2-shell:has(> .v2-cal) > .v2-side {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-shell:has(> .v2-cal) .v2-status,
+  [data-v2-root] .v2-shell:has(> .v2-cal) .v2-lists {
+    display: contents;
+  }
+
+  /* Sticky and as tall as the window, like the other columns. Its own top and
+     bottom room only: the pane measures its own width to choose a layout, so
+     the room at its inline end is inside it (--v2-cal-end, calendar.css). */
+  [data-v2-root] .v2-shell > .v2-cal {
+    display: flex;
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    min-width: 0;
+    padding: 30px 0 24px;
+    --v2-cal-end: 14px;
+  }
+
+  /* Without a calendar, each list is a column of its own, as before. */
+  [data-v2-root] .v2-shell:not(:has(> .v2-cal)) .v2-lists {
     display: contents;
   }
 
   /* The same column as above, on the list itself. It is a block and not a flex
      column: its heading, its line and its rows already carry their own spacing. */
-  [data-v2-root] .v2-list {
+  [data-v2-root] .v2-shell:not(:has(> .v2-cal)) .v2-list {
     position: sticky;
     top: 0;
     min-width: 0;
@@ -1467,18 +1531,6 @@ body:has([data-v2-root]) {
     scrollbar-width: thin;
     scrollbar-color: var(--v2-edge) transparent;
     scrollbar-gutter: stable;
-  }
-}
-
-/* ---- widest: the lists take most of what is left ---- */
-
-@media (min-width: 2400px) {
-  /* Status is a short column of controls and counts; past about 450px it only
-     gets emptier. The lists are where the words are, and a list this wide lays
-     its rows two or three across (see .v2-list-rows). */
-  [data-v2-root] .v2-shell {
-    grid-template-columns: auto minmax(420px, 640px) minmax(320px, 0.6fr);
-    grid-auto-columns: minmax(300px, 1.4fr);
   }
 }
 

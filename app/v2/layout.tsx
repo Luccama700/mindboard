@@ -19,6 +19,8 @@ import { Atkinson_Hyperlegible, Chakra_Petch } from "next/font/google";
 
 import { AppearanceRoot } from "./_components/appearance-root";
 import "./v2.css";
+// After v2.css, whose tokens it reads and whose frame it sits in.
+import "./calendar.css";
 
 const display = Chakra_Petch({
   weight: ["500", "600", "700"],
