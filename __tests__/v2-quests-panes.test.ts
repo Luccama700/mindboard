@@ -30,13 +30,13 @@ import {
 
 import postcss, { type AtRule, type Rule } from "postcss";
 import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { sampleInstant } from "@/app/lib/v2/fixtures/sample-base";
 import { sampleDesk } from "@/app/lib/v2/fixtures/sample-desk";
 import type { Candidate } from "@/app/lib/v2/types";
 import { DEFAULT_APPEARANCE, identityTokens, tokensFor } from "@/app/lib/v2/view/appearance";
-import { DESK_COPY } from "@/app/lib/v2/view/desk";
+import { DESK_COPY, paneOptions } from "@/app/lib/v2/view/desk";
 import type { DeskScreenData, QuestDone, QuestsScreenData } from "@/app/lib/v2/view/desk-data";
 import {
   QUESTS_COPY,
@@ -405,18 +405,51 @@ describe("lanes", () => {
     });
   });
 
-  test("a lane with only something finished is not quiet, and says its zero open and nothing else", () => {
-    const desk = withQuests((quests) => ({ done: [workFinished(), ...quests.done] }));
+  // No zeros: a lane with nothing open that finished something lately says how
+  // many, in Done lately's words, and never "0 open".
+  test("a lane with only something finished is not quiet, and says what it finished", () => {
+    const second: QuestDone = { ...workFinished(), id: "d-x-float", doneAt: at("15:00", "2026-04-10") };
+    const desk = withQuests((quests) => ({ done: [workFinished(), second, ...quests.done] }));
     const view = viewOf(desk);
     const work = view.lanes.find((lane) => lane.key === "work");
-    expect(work).toMatchObject({ quiet: false, open: 0, next: null });
+    expect(work).toMatchObject({ quiet: false, open: 0, next: null, done: 2 });
     const rows = laneRows(drawPane("lanes", desk));
     const row = rows[view.lanes.findIndex((lane) => lane.key === "work")];
     expect(row.hasAttribute("data-quiet")).toBe(false);
-    expect(row.querySelector(".v2-quests-lane-open")?.textContent).toBe(laneOpenLabel(0));
+    expect(row.querySelector(".v2-quests-lane-open")).toBeNull();
+    expect(row.querySelector(".v2-quests-lane-done")?.textContent).toBe(questDoneTotalLabel(2));
     expect(row.querySelector(".v2-quests-lane-due")).toBeNull();
     expect(row.querySelector(".v2-quests-lane-past")).toBeNull();
     expect(row.querySelector(".v2-quests-next")).toBeNull();
+    expect(row.textContent?.replace(/\s+/g, " ")).toBe(`Work ${questDoneTotalLabel(2)}`);
+  });
+
+  test("a lane with only something finished, over a history too short to count it, is its name alone", () => {
+    const desk = withQuests((quests) => ({ done: [workFinished(), ...quests.done], historyDays: 7 }));
+    const view = viewOf(desk);
+    const work = view.lanes.find((lane) => lane.key === "work");
+    expect(work).toMatchObject({ quiet: false, open: 0, done: null });
+    const rows = laneRows(drawPane("lanes", desk));
+    const row = rows[view.lanes.findIndex((lane) => lane.key === "work")];
+    expect(row.hasAttribute("data-quiet")).toBe(false);
+    expect(row.querySelector(".v2-quests-lane-meta")).toBeNull();
+    expect(row.textContent?.trim()).toBe("Work");
+  });
+
+  test("never prints a zero count, on any desk", () => {
+    const desks = [
+      sampleDesk(null),
+      withSide(),
+      withQuests((quests) => ({ done: [workFinished(), ...quests.done] })),
+      withQuests((quests) => ({ done: [workFinished(), ...quests.done], historyDays: 7 })),
+      withCandidates(() => []),
+    ];
+    for (const desk of desks) {
+      const root = drawPane("lanes", desk);
+      expect(root.textContent).not.toContain(laneOpenLabel(0));
+      expect(root.textContent).not.toContain(questDoneTotalLabel(0));
+      cleanup();
+    }
   });
 
   test("says so when the user has no lanes", () => {
@@ -793,6 +826,91 @@ describe("read only, and one shape for every list", () => {
     expect(row).toBeDefined();
     expect(row.querySelector(".v2-quests-detail")?.textContent).toBe(long);
   });
+
+  // A key React cannot use warns through console.error, and can hand one row's
+  // state to another. Every list, on every desk, in both step views and both
+  // side orders.
+  test("draws every list with keys React accepts", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const desks = [
+        sampleDesk(null),
+        withSide(),
+        withQuests((quests) => ({ done: [workFinished(), ...quests.done] })),
+      ];
+      for (const desk of desks) {
+        for (const [group, sort] of [
+          ["none", "clock"],
+          ["group", "added"],
+        ]) {
+          drawPanes(QUEST_IDS, desk, { steps: { group }, "side-quests": { sort } });
+          cleanup();
+        }
+      }
+      expect(spy.mock.calls.map((call) => String(call[0]))).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+// The desk hands a body its options in an object with NO PROTOTYPE, frozen
+// (`paneOptions`), whose keys come from a URL or a stored layout. Each pane
+// reads its one key as plain data and falls back on anything else, a key that
+// names a prototype method included.
+describe("options, as the desk hands them", () => {
+  const hostile: Array<readonly [string, string]> = [
+    ["constructor", "group"],
+    ["__proto__", "added"],
+    ["toString", "7"],
+    ["hasOwnProperty", "28"],
+  ];
+
+  test("the objects really have no prototype", () => {
+    expect(Object.getPrototypeOf(paneOptions(hostile))).toBeNull();
+  });
+
+  test("steps: group from a prototype free object, and nothing else groups", () => {
+    const grouped = drawPane("steps", sampleDesk(null), paneOptions([...hostile, ["group", "group"]]));
+    expect(grouped.querySelectorAll(".v2-quests-group").length).toBeGreaterThan(1);
+    cleanup();
+    for (const options of [paneOptions([]), paneOptions(hostile), paneOptions([["group", "none"]])]) {
+      const root = drawPane("steps", sampleDesk(null), options);
+      expect(root.querySelectorAll(".v2-quests-group, h3")).toHaveLength(0);
+      cleanup();
+    }
+  });
+
+  test("side quests: added from a prototype free object, and the clock otherwise", () => {
+    const desk = withSide();
+    const view = viewOf(desk);
+    const clock = view.side.map((item) => item.title);
+    const added = drawPane("side-quests", desk, paneOptions([...hostile, ["sort", "added"]]));
+    expect(texts(added, ".v2-quests-row .v2-quests-title")).not.toEqual(clock);
+    cleanup();
+    for (const options of [paneOptions([]), paneOptions(hostile)]) {
+      const root = drawPane("side-quests", desk, options);
+      expect(texts(root, ".v2-quests-row .v2-quests-title")).toEqual(clock);
+      cleanup();
+    }
+  });
+
+  test("done: the span from a prototype free object, and 14 otherwise", () => {
+    const desk = sampleDesk(null);
+    for (const [span, days] of [
+      ["7", 7],
+      ["28", 28],
+    ] as const) {
+      const root = drawPane("done", desk, paneOptions([...hostile, ["span", span]]));
+      expect(root.querySelector(".v2-quests-span")?.textContent).toBe(questSpanLabel(days));
+      cleanup();
+    }
+    for (const options of [paneOptions([]), paneOptions(hostile)]) {
+      const root = drawPane("done", desk, options);
+      expect(root.querySelector(".v2-quests-span")?.textContent).toBe(questSpanLabel(14));
+      cleanup();
+    }
+  });
 });
 
 // ------------------------------------------------------ behaviours 2, 3, 7, 8: the sheet
@@ -950,7 +1068,10 @@ describe("quests.css", () => {
     expect(media).toEqual([]);
   });
 
-  test("moves nothing on load, and changes only at the screen's own speeds", () => {
+  // The plan's motion rule: motion moves only transform and opacity. These
+  // panes move nothing, so today the sheet holds no transition at all; any one
+  // added later may name only those two, at the screen's own speeds.
+  test("moves nothing on load, and transitions nothing but transform or opacity", () => {
     const animations: string[] = [];
     sheet.walkDecls(/^animation/, (decl) => {
       animations.push(decl.value);
@@ -959,19 +1080,48 @@ describe("quests.css", () => {
       animations.push(at.params);
     });
     expect(animations).toEqual([]);
-    let transitions = 0;
+
+    const named: string[] = [];
     sheet.walkDecls(/^transition/, (decl) => {
-      transitions += 1;
-      expect(decl.value).toMatch(/var\(--v2-(quick|std|slow)\)/);
-      expect(decl.value).toMatch(/var\(--v2-ease\)/);
-      expect(decl.value).not.toMatch(/\ball\b/);
-      // Only the hover hairline, which starts from nothing. A colour or a
-      // background starts from the platform's own until the sheet applies, so
-      // transitioning one would fade it in on load.
-      expect(decl.value, decl.toString()).toMatch(/^box-shadow /);
+      if (decl.prop === "transition-property") {
+        named.push(...decl.value.split(",").map((part) => part.trim()));
+        return;
+      }
+      if (decl.prop !== "transition") return;
+      for (const part of decl.value.split(",")) named.push(part.trim().split(/\s+/)[0]);
+      expect(decl.value, decl.toString()).toMatch(/var\(--v2-(quick|std|slow)\)/);
+      expect(decl.value, decl.toString()).toMatch(/var\(--v2-ease(-in)?\)/);
     });
-    expect(transitions).toBeGreaterThan(0);
+    for (const name of named) expect(["transform", "opacity"], name).toContain(name);
+    // The hover hairline is there, and appears at once.
+    expect(valueOf("", ".v2-quests-row:hover", "box-shadow")).toMatch(/var\(--v2-edge\)/);
+    expect(valueOf("", ".v2-quests-row", "transition")).toBeNull();
+    expect(valueOf("", ".v2-quests-lane", "transition")).toBeNull();
     expect(valueOf("", ".v2-quests-chip", "transition")).toBeNull();
+  });
+
+  // Behaviour 7, at the narrowest pane: "Past its date" and a long date side by
+  // side are wider than a 230px row, and the pane clips what overflows it. The
+  // line breaks between the two, never inside either.
+  test("lets a row's date line break between the mark and the date, never inside them", () => {
+    expect(valueOf("", ".v2-quests-due", "flex-wrap")).toBe("wrap");
+    expect(valueOf("", ".v2-quests-due", "min-width")).toBe("0");
+    expect(valueOf("", ".v2-quests-due", "white-space")).toBeNull();
+    expect(valueOf("", ".v2-quests-date", "white-space")).toBe("nowrap");
+    expect(valueOf("", ".v2-quests-when", "white-space")).toBe("nowrap");
+    expect(valueOf("", ".v2-quests-meta", "flex-wrap")).toBe("wrap");
+  });
+
+  // The raw identity colour (--v2-lane) is a mark: held to 3:1, which is enough
+  // for a dot and not for a word. Text in a colour reads --v2-ident.
+  test("never colours text with the raw identity swatch", () => {
+    const offenders: string[] = [];
+    sheet.walkDecls("color", (decl) => {
+      if (decl.value.includes("--v2-lane")) offenders.push(`${(decl.parent as Rule).selector} ${decl}`);
+    });
+    expect(offenders).toEqual([]);
+    expect(valueOf("", ".v2-quests-ident", "color")).toBe("var(--v2-ident)");
+    expect(valueOf("", ".v2-quests-group-head", "color")).toBe("var(--v2-ident)");
   });
 
   test("brings no font of its own and no colour of its own", () => {
@@ -1016,7 +1166,11 @@ describe("quests.css", () => {
 // it, and the desk's DESK_COPY. This pins that the panes added no word of their
 // own by drawing the sample and finding every text node among them.
 test("prints no word of its own invention", () => {
-  const desk = withSide();
+  const side = withSide();
+  const desk: DeskScreenData = {
+    ...side,
+    quests: { ...questsOf(side), done: [workFinished(), ...questsOf(side).done] },
+  };
   const view = viewOf(desk);
   const allowed = new Set<string>([
     ...Object.values<unknown>(QUESTS_COPY).filter(
@@ -1028,6 +1182,7 @@ test("prints no word of its own invention", () => {
       laneOpenLabel(lane.open),
       ...(lane.due === null ? [] : [laneDueLabel(lane.due)]),
       ...(lane.past > 0 ? [questPastLabel(lane.past)] : []),
+      ...(lane.done !== null && lane.done > 0 ? [questDoneTotalLabel(lane.done)] : []),
     ]),
     ...[...view.steps, ...view.side].flatMap((item) => [
       item.title,
@@ -1053,4 +1208,7 @@ test("prints no word of its own invention", () => {
     expect(allowed.has(text), JSON.stringify(text)).toBe(true);
   }
   expect(seen).toBeGreaterThan(40);
+  // Not vacuous: the lane with only something finished is on this desk.
+  expect(view.lanes.find((lane) => lane.key === "work")).toMatchObject({ open: 0, done: 1 });
+  expect(container.textContent).toContain(questDoneTotalLabel(1));
 });

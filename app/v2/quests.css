@@ -34,10 +34,10 @@
  *           lane shares, and the count and the dates in a column at the right.
  *   rows    one column under 560px of pane, two from there, three from 900px.
  *
- * QUIET AND READ ONLY. Nothing animates on load. The one change on a row is a
- * hairline on hover, at the quick duration; the steps pane's lane filter is the
- * only control. Reduced motion is v2.css's one rule, which stops every
- * transition under [data-v2-root].
+ * QUIET AND READ ONLY. Nothing here moves and nothing transitions: motion on
+ * this screen moves only transform and opacity, and these panes have none. The
+ * one change on a row is a hairline on hover, which appears at once; the steps
+ * pane's lane filter is the only control.
  */
 
 /* ------------------------------------------------------------------ the body */
@@ -75,9 +75,11 @@
   background: var(--v2-lane);
 }
 
-/* Where a date stands: a word, and a dot that says the same. Past is the
-   danger mark with the word in the full ink; today is the accent; soon is a
-   ring. A date further off, or none, has no mark at all. */
+/* Where a date stands: a word, and a dot that says the same. Past: the word in
+   the full ink, the danger dot. Today: the word in the signal ink (the scheme's
+   accent, held to an ink's contrast for text), the dot in the accent itself.
+   Soon: the word in the quieter ink, a ring for a dot. A date further off, or
+   none, has no mark at all. */
 [data-v2-root] .v2-quests-when {
   display: inline-flex;
   align-items: center;
@@ -163,11 +165,10 @@
   padding: 9px 12px;
   border-radius: 12px;
   background: var(--v2-card);
-  transition: box-shadow var(--v2-quick) var(--v2-ease);
 }
 
 /* A hairline, not a new surface: the row is not a control, and every ink on it
-   was measured against the card. */
+   was measured against the card. It appears at once: nothing here transitions. */
 [data-v2-root] .v2-quests-row:hover {
   box-shadow: inset 0 0 0 1px var(--v2-edge);
 }
@@ -215,17 +216,25 @@
   font-size: 13px;
 }
 
+/* The mark and the date each stay whole, and the line may break BETWEEN them:
+   in a 230px pane "Past its date" and "30 September" side by side are wider
+   than the row, and the pane clips what overflows it. Held to the line's width
+   (min-width: 0), so it wraps rather than widening the row. */
 [data-v2-root] .v2-quests-due {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: 2px 8px;
+  min-width: 0;
+  max-width: 100%;
   margin-left: auto;
-  white-space: nowrap;
 }
 
 [data-v2-root] .v2-quests-date {
   color: var(--v2-ink-2);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ---- the lane filter: the one control on the layout ---- */
@@ -253,9 +262,7 @@
 }
 
 /* The shared focus ring rounds a button to 10px; a chip keeps its own corners,
-   so taking focus moves nothing. No transition on a chip: its colours start from
-   the platform's button until this sheet applies, and a transition there would
-   be a fade on load. */
+   so taking focus moves nothing. Hover and pressed change at once. */
 [data-v2-root] .v2-quests-chip:focus-visible {
   border-radius: 12px;
 }
@@ -331,7 +338,6 @@
   padding: 9px 12px;
   border-radius: 12px;
   background: var(--v2-card);
-  transition: box-shadow var(--v2-quick) var(--v2-ease);
 }
 
 [data-v2-root] .v2-quests-lane:not([data-quiet]):hover {

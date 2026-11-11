@@ -4,6 +4,7 @@ import {
   QUESTS_COPY,
   laneDueLabel,
   laneOpenLabel,
+  questDoneTotalLabel,
   questPastLabel,
   type QuestLane,
 } from "@/app/lib/v2/view/quests";
@@ -29,6 +30,11 @@ import {
  *
  * A QUIET LANE SAYS NOTHING. Nothing open and nothing finished lately: its name,
  * in the dim ink, and no number, no date, no empty place for a stop.
+ *
+ * NO ZEROS. A lane with nothing open that did finish something lately is not
+ * quiet: it prints its name and how many were finished, in Done lately's words,
+ * when the view has that number. It never prints "0 open", and when the
+ * history cannot count the span it prints its name alone.
  *
  * By the pane's own width (quests.css): under 300px a lane is its name, its
  * count and its next date; from 300px its next stop and what is past its date
@@ -79,11 +85,20 @@ function LaneRow({ lane }: { lane: QuestLane }) {
           <WhenMark when={next.when} /> {next.worked && <WorkedMark />}
         </p>
       )}{" "}
-      <p className="v2-quests-lane-meta">
-        <span className="v2-quests-lane-open">{laneOpenLabel(lane.open)}</span>{" "}
-        {lane.due !== null && <span className="v2-quests-lane-due">{laneDueLabel(lane.due)}</span>}{" "}
-        {lane.past > 0 && <span className="v2-quests-lane-past">{questPastLabel(lane.past)}</span>}
-      </p>
+      {lane.open > 0 ? (
+        <p className="v2-quests-lane-meta">
+          <span className="v2-quests-lane-open">{laneOpenLabel(lane.open)}</span>{" "}
+          {lane.due !== null && <span className="v2-quests-lane-due">{laneDueLabel(lane.due)}</span>}{" "}
+          {lane.past > 0 && <span className="v2-quests-lane-past">{questPastLabel(lane.past)}</span>}
+        </p>
+      ) : (
+        lane.done !== null &&
+        lane.done > 0 && (
+          <p className="v2-quests-lane-meta">
+            <span className="v2-quests-lane-done">{questDoneTotalLabel(lane.done)}</span>
+          </p>
+        )
+      )}
     </li>
   );
 }
