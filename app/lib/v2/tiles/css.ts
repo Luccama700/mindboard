@@ -11,7 +11,7 @@
 // pixel, at whole and fractional workspace sizes, so the two cannot drift
 // apart.
 //
-// THE CONTRACT WITH THE PAGE. Four things, all required:
+// THE CONTRACT WITH THE PAGE. Seven things, all required:
 //
 //  1. propertyRules(scopes) goes into a stylesheet once, before the first
 //     paint. It registers every name this module can write (the pool below) as
@@ -21,27 +21,39 @@
 //     deep split would be the text of every split above it, doubling per level
 //     until the browser's cap on substitution throws the declaration away.
 //  2. The workspace box is a size container: `container-type: size`, not
-//     inline-size, because the height is read from it too. It has no padding
-//     and no border, so the stage that covers it is exactly the box `100cqw`
-//     and `100cqh` measure, and it takes min-width and min-height from `min`.
-//  3. ONE element inside it, the stage, carries `vars` as its style. Nothing
+//     inline-size, because the height is read from it too. Nothing throws when
+//     this is missing: container units with no size container to read fall
+//     back to the small viewport's, so the layout looks nearly right and is
+//     wrong. It has no padding and no border, so the stage that covers it is
+//     exactly the box `100cqw` and `100cqh` measure.
+//  3. THE WORKSPACE IS NEVER SMALLER THAN `min`: its min-width and min-height
+//     are the shown class's `min`, in px. Below `min` some split's two minimums
+//     do not fit, and there the CSS gives the first child its minimum where
+//     layoutTree shares the split evenly, so the drawing and the hit testing
+//     part (see "Where the two forms stop agreeing").
+//  4. ONE element inside it, the stage, carries `vars` as its style. Nothing
 //     between the stage and the workspace is a size container, so `100cqw` and
 //     `100cqh` in its properties are the workspace's own width and height (an
 //     element's container units never read the element itself). It covers the
 //     workspace exactly: `position: absolute; inset: 0` on a workspace that is
 //     a positioning parent does it.
-//  4. Every frame and every divider is a descendant of the stage, absolutely
+//  5. Every frame and every divider is a descendant of the stage, absolutely
 //     positioned against it, with left, top, width and height from `leaves` and
 //     `dividers`. The properties inherit, so a box reads the stage's values.
-//
-// And hit testing reads what the browser computed. The two names extentVars
-// gives are read off the stage with getComputedStyle, turned into a Workspace
-// by workspaceFromComputed, and that is what layoutTree, shareLimits and
-// openPane are handed. No script measures a rectangle and floors it: a measured
-// float can land on the other side of a whole pixel from the browser's own
-// layout (at a device scale of 0.9, Edge measured a workspace 820.0000610351562
-// tall while the stage computed its height as 819px), and then every box is a
-// pixel off.
+//  6. Hit testing reads what the browser computed. The two names extentVars
+//     gives are read off the stage with getComputedStyle, turned into a
+//     Workspace by workspaceFromComputed, and that is what layoutTree,
+//     shareLimits and openPane are handed. No script measures a rectangle and
+//     floors it: a measured float can land on the other side of a whole pixel
+//     from the browser's own layout (at a device scale of 0.9, Edge measured a
+//     workspace 820.0000610351562 tall while the stage computed its height as
+//     819px), and then every box is a pixel off.
+//  7. A drag writes a divider's `ratioVar` on the stage as it moves. When the
+//     drag ends or is cancelled, the page writes the stored ratio back to that
+//     property itself, formatted by ratioText. A drag that ends where the
+//     stored ratio already was leaves the rendered style unchanged, React does
+//     not rewrite a style it believes unchanged, and the drag's last raw value
+//     would stay on the stage.
 //
 // THE POOL. Names are fixed so they can be registered statically, and a split
 // is addressed by its pre-order index k (1 first), never by its id: an id can be
@@ -65,11 +77,11 @@
 // then the 6px gap, then the rest. That is layoutTree's
 // `round(inner * clamp(ratio, firstMin / inner, 1 - secondMin / inner))` with
 // the clamp moved from shares to lengths, and CSS round(nearest) breaks a tie
-// toward positive infinity exactly as Math.round does. The ratio written is the
-// one drawnShare uses: the stored value when it is a finite number, an even
-// share when it is not. It is held to 0 to 1 first, which changes no rectangle
-// (both limits of a split whose sides fit lie inside 0 to 1) and keeps the
-// number short.
+// toward positive infinity exactly as Math.round does. The ratio written (by
+// ratioText) is the one drawnShare uses: the stored value when it is a finite
+// number, an even share when it is not. It is held to 0 to 1 first, which
+// changes no rectangle (both limits of a split whose sides fit lie inside 0 to
+// 1) and keeps the number short.
 //
 // Every box, and every S, is a sum: the workspace's w or h, minus or plus the
 // a<k> of the splits above it, plus or minus whole multiples of the gap. So a
@@ -78,11 +90,12 @@
 //
 // WHERE THE TWO FORMS STOP AGREEING. They agree exactly when every split's two
 // minimums fit inside its own extent less the gap. On a workspace at least
-// `min` in both dimensions once floored, with whole pixel minimums, that is
-// every split: the root fits by the definition of `min`, and a split that fits
-// hands each child at least that child's minimum, because both ends of the clamp
-// are whole pixels and rounding cannot carry a value past either one. The
-// test's sizes start at `min` for this reason.
+// `min` in both dimensions once floored that is every split, because every
+// minimum is a whole number of pixels (cssLayout refuses a pane in the tree
+// whose minimum is not): the root fits by the definition of `min`, and a split
+// that fits hands each child at least that child's minimum, because both ends
+// of the clamp are whole pixels and rounding cannot carry a value past either
+// one. The test's sizes start at `min` for this reason.
 //
 // Where the minimums do not fit, the engine draws the split at an even share
 // (shareLimits answers [0.5, 0.5]) and the CSS does not: a clamp whose lower
@@ -90,14 +103,18 @@
 // child's minimum and the second child gets what is left, which can be less
 // than its own minimum or nothing. Under 6px the engine also narrows the gap,
 // and the CSS does not. Writing the engine's fallback in CSS would take a step
-// function, which baseline CSS has no form for. The desk does not draw there:
-// the workspace takes its min-width and min-height from `min`.
+// function, which baseline CSS has no form for, and a stand-in built from a
+// large multiplier would depend on the cap engines put on lengths. So this is
+// a precondition, not a case: contract point 3 keeps the desk out of it, and
+// the one test drawn below `min` is labelled as outside the contract.
 //
 // NOTHING BUT WHAT THIS MODULE WROTE. Every number in a string is one this
 // module formatted, finite and never in exponent notation, and every name comes
-// from the pool. A scope must be lowercase letters and every node id l<n> or
-// s<n>, or the call throws; ids are checked but never written. No pane id and
-// no title is ever read into a string.
+// from the pool. A scope must be lowercase letters, every node id l<n> or
+// s<n>, and every minimum of a pane in the tree a whole, non-negative, finite
+// number of pixels, or the call throws; ids are checked but never written. A
+// pane with no spec has no minimum, as minSize reads it. No pane id and no
+// title is ever read into a string.
 //
 // Pure. No DOM, no storage, no clock.
 
@@ -257,13 +274,41 @@ function writtenShare(ratio: number): number {
   return Math.max(0, Math.min(1, ratio));
 }
 
-/** Every id well formed, and the number of splits. */
-function checkTree(node: TileNode): number {
+/**
+ * A ratio as `vars` writes it under ratioVar: held to 0 to 1, an even share
+ * when it is no number, and never in exponent notation. What the page writes
+ * back to a ratioVar when a drag ends or is cancelled (contract point 7).
+ */
+export function ratioText(ratio: number): string {
+  return decimal(writtenShare(ratio));
+}
+
+function isWholePixels(value: number): boolean {
+  return Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Every id well formed, every minimum of a pane in the tree a whole number of
+ * pixels, and the number of splits. A minimum is read the way minSize reads it:
+ * the first spec with the pane's id, and none for a pane with no spec.
+ */
+function checkTree(node: TileNode, specs: readonly PaneSpec[]): number {
   if (typeof node.id !== "string" || !ID_SHAPE.test(node.id)) {
     throw new Error("cssLayout: a node id is l or s followed by digits and nothing else");
   }
-  if (node.kind === "leaf") return 0;
-  return 1 + checkTree(node.first) + checkTree(node.second);
+  if (node.kind === "leaf") {
+    for (const tab of node.tabs) {
+      const spec = specs.find((candidate) => candidate.id === tab);
+      if (spec === undefined) continue;
+      if (!isWholePixels(spec.minWidth) || !isWholePixels(spec.minHeight)) {
+        throw new Error(
+          "cssLayout: a pane's minimum size is a whole, non-negative number of pixels and nothing else",
+        );
+      }
+    }
+    return 0;
+  }
+  return 1 + checkTree(node.first, specs) + checkTree(node.second, specs);
 }
 
 /**
@@ -328,8 +373,12 @@ interface Place {
  * The maximized leaf, when there is one, takes the whole workspace, and every
  * other leaf keeps the box it would have, as layoutTree returns them. An id that
  * is no leaf of the tree maximizes nothing. A tree with more than MAX_SPLITS
- * splits, an id that is not l<n> or s<n>, or a scope that is not lowercase
+ * splits, an id that is not l<n> or s<n>, a pane in the tree whose minimum is
+ * not a whole, non-negative number of pixels, or a scope that is not lowercase
  * letters throws.
+ *
+ * The workspace's two extent properties are written for every tree, an empty
+ * one included: they do not depend on the tree, and hit testing reads them.
  */
 export function cssLayout(
   tree: TileNode | null,
@@ -339,14 +388,13 @@ export function cssLayout(
 ): CssLayout {
   checkScope(scope);
   const out: CssLayout = { leaves: [], dividers: [], vars: {}, min: { w: 0, h: 0 } };
-  if (tree === null) return out;
-  if (checkTree(tree) > MAX_SPLITS) {
-    throw new Error(`cssLayout: a tree has at most ${MAX_SPLITS} splits`);
-  }
-
   const { w: width, h: height } = extentVars(scope);
   out.vars[width] = "round(down, 100cqw, 1px)";
   out.vars[height] = "round(down, 100cqh, 1px)";
+  if (tree === null) return out;
+  if (checkTree(tree, specs) > MAX_SPLITS) {
+    throw new Error(`cssLayout: a tree has at most ${MAX_SPLITS} splits`);
+  }
 
   const gap = px(GAP);
   let splits = 0;
@@ -379,7 +427,7 @@ export function cssLayout(
     const first = firstVar(scope, index);
     const inner = moved(extent, -GAP);
 
-    out.vars[ratio] = decimal(writtenShare(node.ratio));
+    out.vars[ratio] = ratioText(node.ratio);
     out.vars[first] =
       `round(nearest, clamp(${px(firstMin)}, (${sum(inner)}) * var(${ratio}), ` +
       `${sum(inner)} - ${px(secondMin)}), 1px)`;

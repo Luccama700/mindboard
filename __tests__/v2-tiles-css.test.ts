@@ -43,6 +43,7 @@ import {
   cssLayout,
   extentVars,
   propertyRules,
+  ratioText,
   ratioVar,
   workspaceFromComputed,
 } from "@/app/lib/v2/tiles/css";
@@ -388,17 +389,32 @@ class Reader {
   }
 }
 
-const RULE =
-  /^@property (--[a-z0-9-]+) \{ syntax: "<(length|number)>"; inherits: true; initial-value: (?:0px|0\.5); \}$/;
+/**
+ * Each syntax with the initial value it must have. A browser drops a rule
+ * whose initial value does not parse as its syntax, so a <length> with 0.5 or
+ * a <number> with 0px is not a registration at all.
+ */
+const RULES: ReadonlyArray<{ kind: Kind; pattern: RegExp }> = [
+  {
+    kind: "length",
+    pattern: /^@property (--[a-z0-9-]+) \{ syntax: "<length>"; inherits: true; initial-value: 0px; \}$/,
+  },
+  {
+    kind: "number",
+    pattern: /^@property (--[a-z0-9-]+) \{ syntax: "<number>"; inherits: true; initial-value: 0\.5; \}$/,
+  },
+];
 
 /** The registrations a block of rules makes, read strictly: a line it cannot read throws. */
 function registryOf(rules: string): Map<string, Kind> {
   const registry = new Map<string, Kind>();
   if (rules === "") return registry;
   for (const line of rules.split("\n")) {
-    const match = RULE.exec(line);
-    if (match === null) throw new Error(`not a rule this file reads: ${line}`);
-    registry.set(match[1], match[2] === "length" ? "length" : "number");
+    const read = RULES.map((rule) => ({ kind: rule.kind, match: rule.pattern.exec(line) })).find(
+      (candidate) => candidate.match !== null,
+    );
+    if (read === undefined || read.match === null) throw new Error(`not a rule this file reads: ${line}`);
+    registry.set(read.match[1], read.kind);
   }
   return registry;
 }
@@ -965,6 +981,22 @@ describe("the browser this file proves with", () => {
   ] as const)("refuses a stage with %s", (_name, overrides) => {
     expect(() => new Stage(T, { ...DECLARED, ...overrides }, CONTAINER)).toThrow();
   });
+
+  test.each([
+    ['a <length> with a number for its initial value', '@property --v2-t-w { syntax: "<length>"; inherits: true; initial-value: 0.5; }'],
+    ['a <number> with a length for its initial value', '@property --v2-t-r1 { syntax: "<number>"; inherits: true; initial-value: 0px; }'],
+    ['a rule that does not inherit', '@property --v2-t-w { syntax: "<length>"; inherits: false; initial-value: 0px; }'],
+    ['another syntax', '@property --v2-t-w { syntax: "<length-percentage>"; inherits: true; initial-value: 0px; }'],
+  ])("refuses a registration that is %s, which a browser would drop", (_name, rule) => {
+    expect(() => registryOf(rule)).toThrow();
+  });
+
+  test("reads every rule propertyRules writes, each syntax with its own initial value", () => {
+    const rules = propertyRules(["t"]).split("\n");
+    expect(rules.filter((rule) => rule.includes('"<length>"')).every((rule) => rule.includes("initial-value: 0px;"))).toBe(true);
+    expect(rules.filter((rule) => rule.includes('"<number>"')).every((rule) => rule.includes("initial-value: 0.5;"))).toBe(true);
+    expect(registryOf(rules.join("\n")).size).toBe(rules.length);
+  });
 });
 
 describe("behaviour 1 and 2: the same formula, proven against layoutTree", () => {
@@ -1030,10 +1062,12 @@ describe("behaviour 1 and 2: the same formula, proven against layoutTree", () =>
     expect(shares.low + shares.high).toBeGreaterThan(0);
   });
 
-  test("below the minimum the engine shares evenly and the CSS keeps the first side's minimum", () => {
-    // The header's boundary, made executable: at the tree's minimum the two
-    // forms agree, one pixel under it they part. a1 is clamp(300px, ..., 99px)
-    // there, whose lower bound wins.
+  test("OUTSIDE THE CONTRACT, below min: the two forms part, pinned so nobody mistakes it for agreement", () => {
+    // Contract point 3 says the workspace is never smaller than `min`, so the
+    // page never draws here. This pins where the agreement ends, not a case
+    // the forms are meant to share: at the tree's minimum they agree, and one
+    // pixel under it they part, the engine sharing the split evenly while a1
+    // is clamp(300px, ..., 99px), whose lower bound wins.
     const tree = splitNode("s1", "h", 0.5, leafNode("l2", "pane1"), leafNode("l3", "pane2"));
     const specs = [paneSpec("pane1", 300, 100), paneSpec("pane2", 100, 100)];
     const layout = cssLayout(tree, null, specs, "wide");
@@ -1140,12 +1174,20 @@ describe("behaviour 3: a maximized leaf, and no tree", () => {
     expect(cssLayout(tree, "s3", specs, "wide")).toEqual(plain);
   });
 
-  test("a null tree gives no leaves, no dividers, no properties and a minimum of zero", () => {
+  test("a null tree gives no leaves, no dividers, a minimum of zero, and still the workspace's two extents", () => {
     expect(cssLayout(null, null, specs, "wide")).toEqual({
       leaves: [],
       dividers: [],
-      vars: {},
+      vars: { "--v2-wide-w": "round(down, 100cqw, 1px)", "--v2-wide-h": "round(down, 100cqh, 1px)" },
       min: { w: 0, h: 0 },
+    });
+  });
+
+  test("hit testing an empty workspace reads its real extent, not the registered initial 0 by 0", () => {
+    const layout = cssLayout(null, null, specs, "wide");
+    expect(computedWorkspace(layout, "wide", { width: 1366.5, height: 700.25 })).toEqual({
+      width: 1366,
+      height: 700,
     });
   });
 
@@ -1226,12 +1268,14 @@ describe("behaviour 5: only what the module wrote", () => {
       splitNode("s4", "h", 1.5, leafNode("l5", "ledger"), leafNode("l6", "forecast", "calendar")),
     ),
   );
+  // Every minimum whole, as cssLayout requires; 1e21 is one, and String()
+  // writes it with an exponent.
   const specs: PaneSpec[] = [
     { ...paneSpec("today", 320, 320), title: "The day" },
-    { ...paneSpec("status", 1e21, 5e-7), title: "Status" },
+    { ...paneSpec("status", 1e21, 150), title: "Status" },
     { ...paneSpec("calendar", 320, 300), title: "Calendar" },
     { ...paneSpec("ledger", 260, 180), title: "Transactions" },
-    { ...paneSpec("forecast", Number.NaN, -20), title: "Forecast" },
+    { ...paneSpec("forecast", 230, 0), title: "Forecast" },
   ];
   const layout = cssLayout(tree, null, specs, "wide");
 
@@ -1255,7 +1299,6 @@ describe("behaviour 5: only what the module wrote", () => {
     expect(layout.vars[ratioVar("wide", 1)]).toBe("0.0000001");
     expect(values).toContain("clamp(320px, ");
     expect(values).toContain(" - 1000000000000000000000px)");
-    expect(values).toContain("clamp(0.0000005px, ");
   });
 
   test("a share that is no number is drawn even, and one outside 0 to 1 is held to it", () => {
@@ -1323,6 +1366,69 @@ describe("behaviour 5: only what the module wrote", () => {
   test("an id used twice is not refused: ids are checked, never written", () => {
     const twice = splitNode("s1", "h", 0.5, leafNode("l3", "today"), leafNode("l3", "status"));
     expect(() => cssLayout(twice, null, specs, "wide")).not.toThrow();
+  });
+
+  test.each([
+    ["a fraction of a pixel wide", 230.5, 150],
+    ["a fraction of a pixel tall", 230, 0.25],
+    ["negative", -1, 150],
+    ["no number", Number.NaN, 150],
+    ["infinite", 230, Number.POSITIVE_INFINITY],
+    ["minus infinity", Number.NEGATIVE_INFINITY, 150],
+  ])("a pane in the tree whose minimum is %s throws", (_name, minWidth, minHeight) => {
+    const shape = splitNode("s1", "h", 0.5, leafNode("l2", "today"), leafNode("l3", "odd"));
+    const withOdd = [...specs, paneSpec("odd", minWidth, minHeight)];
+    expect(() => cssLayout(shape, null, withOdd, "wide")).toThrow();
+    // A tab behind another counts as much as the one in front.
+    const behind = splitNode("s1", "h", 0.5, leafNode("l2", "today", "odd"), leafNode("l3", "status"));
+    expect(() => cssLayout(behind, null, withOdd, "wide")).toThrow();
+  });
+
+  test("a minimum is only refused for a pane in the tree, and a pane with no spec has none", () => {
+    const shape = splitNode("s1", "h", 0.5, leafNode("l2", "today"), leafNode("l3", "unknown"));
+    const withOdd = [...specs, paneSpec("odd", 230.5, Number.NaN)];
+    expect(() => cssLayout(shape, null, withOdd, "wide")).not.toThrow();
+    expect(cssLayout(shape, null, withOdd, "wide").min).toEqual(minSize(shape, withOdd));
+    // Zero and a whole number String() writes with an exponent are whole.
+    const whole = [...specs, paneSpec("unknown", 0, 1e21)];
+    expect(() => cssLayout(shape, null, whole, "wide")).not.toThrow();
+  });
+});
+
+describe("ratioText: a ratio as vars writes it, for the write back after a drag", () => {
+  test.each([
+    [0.5, "0.5"],
+    [0.3333, "0.3333"],
+    [1 / 3, "0.3333333333333333"],
+    [0, "0"],
+    [1, "1"],
+    [1.5, "1"],
+    [-0.25, "0"],
+    [1e-7, "0.0000001"],
+    [Number.NaN, "0.5"],
+    [Number.POSITIVE_INFINITY, "0.5"],
+    [Number.NEGATIVE_INFINITY, "0.5"],
+  ])("writes %s as %j", (ratio, text) => {
+    expect(ratioText(ratio)).toBe(text);
+  });
+
+  test("is what cssLayout writes under every split's ratioVar", () => {
+    const rand = seeded(5);
+    for (let index = 0; index < 50; index += 1) {
+      const { tree, specs } = randomWorld(rand);
+      const layout = cssLayout(tree, null, specs, "wide");
+      const byId = new Map(splitsOf(tree).map((split) => [split.id, split]));
+      for (const divider of layout.dividers) {
+        const split = byId.get(divider.splitId);
+        if (split === undefined) throw new Error("a divider with no split");
+        expect(layout.vars[divider.ratioVar]).toBe(ratioText(split.ratio));
+      }
+    }
+  });
+
+  test("reads back as the number the stage computes for it", () => {
+    const stage = new Stage(registryFor("t"), { "--v2-t-r1": ratioText(1 / 3) }, { width: 100, height: 100 });
+    expect(stage.computedStyle("--v2-t-r1")).toBe(String(1 / 3));
   });
 });
 
