@@ -1,6 +1,11 @@
 "use client";
 
-import { createElement, type CSSProperties } from "react";
+import {
+  createElement,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 
 import {
   PANES,
@@ -9,6 +14,7 @@ import {
   type PaneSpec,
   type ScreenClass,
 } from "@/app/lib/v2/tiles";
+import { DESK_COPY, deskLine } from "@/app/lib/v2/view/desk";
 import { PaneBox } from "./pane-box";
 import { paneBody } from "./pane-registry";
 
@@ -37,6 +43,27 @@ export interface DeskFrame {
   boxes: Partial<Record<TiledClass, CssBox>>;
   /** The strip over this frame, once per distinct strip, when it is in front of a leaf of several. */
   strips: FrameStrip[];
+  /**
+   * The tiled classes where the pane is alone in its leaf, shown, and not the
+   * last pane open: there its title carries a close control of its own. (On a
+   * class with a strip, every tab has one: a strip means two panes are open.)
+   */
+  soloClose: TiledClass[];
+  /** The tiled classes where this pane is the one maximized. */
+  maximized: TiledClass[];
+  /**
+   * The classes where the frame is the panel of a tab: always on the phone,
+   * whose bar is the one leaf's strip, and on a tiled class where a strip is
+   * drawn over it.
+   */
+  panelIn: ScreenClass[];
+}
+
+/** What a press in a frame's header asks the desk to do. The pressed element comes along for focus. */
+export interface FrameActions {
+  onTab(cls: TiledClass, pane: PaneId, pressed: HTMLElement): void;
+  onClose(cls: TiledClass, pane: PaneId, pressed: HTMLElement): void;
+  onMaximize(cls: TiledClass, pane: PaneId, pressed: HTMLElement): void;
 }
 
 /**
@@ -72,6 +99,102 @@ export function shortOf(pane: PaneId): string {
   return PANES.find((spec) => spec.id === pane)?.short ?? pane;
 }
 
+/** A pane's title. */
+export function titleOf(pane: PaneId): string {
+  return PANES.find((spec) => spec.id === pane)?.title ?? pane;
+}
+
+/**
+ * The tiled class a control acts on: the class on screen when the control is
+ * drawn there, and otherwise the first class it is drawn in (a browser that
+ * never said its width; the stylesheet still shows exactly one).
+ */
+export function tiledTarget(cls: ScreenClass | null, among: readonly TiledClass[]): TiledClass | null {
+  if ((cls === "regular" || cls === "wide") && among.includes(cls)) return cls;
+  return among[0] ?? null;
+}
+
+/** The tiled classes the frame is displayed in. */
+function tiledShown(frame: DeskFrame): TiledClass[] {
+  return TILED_CLASSES.filter((cls) => frame.shown.includes(cls));
+}
+
+/** A strip's keys: along the strip, wrapping, and to either end. Alt is never bound. */
+function stepTo(key: string, at: number, count: number): number | null {
+  if (key === "ArrowRight") return (at + 1) % count;
+  if (key === "ArrowLeft") return (at - 1 + count) % count;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  return null;
+}
+
+function TabStrip({
+  strip,
+  cls,
+  actions,
+}: {
+  strip: FrameStrip;
+  cls: ScreenClass | null;
+  actions: FrameActions;
+}) {
+  const target = tiledTarget(cls, strip.classes);
+
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, pane: PaneId) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "Delete") {
+      if (target === null) return;
+      event.preventDefault();
+      actions.onClose(target, pane, event.currentTarget);
+      return;
+    }
+    const to = stepTo(event.key, strip.tabs.indexOf(pane), strip.tabs.length);
+    if (to === null) return;
+    event.preventDefault();
+    const list = event.currentTarget.closest('[role="tablist"]');
+    list?.querySelector<HTMLElement>(`[data-tab="${strip.tabs[to]}"]`)?.focus();
+  };
+
+  return (
+    <div className="v2-frame-tabs" role="tablist" data-in={strip.classes.join(" ")}>
+      {strip.tabs.map((tab) => {
+        const selected = tab === strip.active;
+        return (
+          // The tab and its close control side by side: a control may not sit
+          // inside another, so the pair is held by an element with no role.
+          <span key={tab} className="v2-frame-tabitem" role="presentation">
+            <button
+              type="button"
+              className="v2-frame-tab"
+              role="tab"
+              data-tab={tab}
+              aria-selected={selected}
+              aria-controls={frameId(tab)}
+              tabIndex={selected ? 0 : -1}
+              onClick={(event) => {
+                if (target !== null) actions.onTab(target, tab, event.currentTarget);
+              }}
+              onKeyDown={(event) => onKeyDown(event, tab)}
+            >
+              {shortOf(tab)}
+            </button>
+            <button
+              type="button"
+              className="v2-frame-close"
+              data-close={tab}
+              aria-label={deskLine(DESK_COPY.closePane, { pane: titleOf(tab) })}
+              title={deskLine(DESK_COPY.closePane, { pane: titleOf(tab) })}
+              tabIndex={selected ? 0 : -1}
+              onClick={(event) => {
+                if (target !== null) actions.onClose(target, tab, event.currentTarget);
+              }}
+            />
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * One pane on the desk: a header, then the box its body is drawn in.
  *
@@ -82,8 +205,14 @@ export function shortOf(pane: PaneId): string {
  * two are chosen per class by desk.css, because the same pane can be in front
  * of a leaf of four on a laptop and alone on a big screen.
  *
- * In this task the header has no controls: the strip says which panes share the
- * leaf and which is in front, and pressing it does nothing yet.
+ * THE HEADER'S CONTROLS. A strip's tabs bring a pane to the front (a click,
+ * Enter or Space; the arrow keys, Home and End move along the strip; Delete
+ * closes), and each tab has its close control. A pane alone in its leaf has a
+ * close control by its title, except the last pane open. Maximize is a button
+ * here and a double click on the header; while a pane fills the desk every
+ * other frame is not shown, so it is inert. Each control is drawn for the
+ * classes it applies to (`data-in`), like the strips, and the class on screen
+ * is the one it acts on.
  *
  * ONE SHAPE, ALWAYS. The header and the box are the section's two children
  * whatever the arrangement, so no change of layout, class or tab can change the
@@ -92,32 +221,51 @@ export function shortOf(pane: PaneId): string {
  * every time), never as a tag on a local name and never called.
  *
  * A frame that is not displayed in the class the browser reports is also
- * `inert`, so nothing in it can take focus whatever a later style does.
+ * `inert`, so nothing in it can take focus whatever a later style does. Once
+ * the class is known, a frame a tab shows is that tab's panel.
  */
 export function PaneFrame({
   frame,
   cls,
   options,
+  actions,
 }: {
   frame: DeskFrame;
   cls: ScreenClass | null;
   options: Readonly<Record<string, string>>;
+  actions: FrameActions;
 }) {
   const { pane } = frame;
   const titleId = frameTitleId(pane.id);
   const stripIn = frame.strips.flatMap((strip) => strip.classes).join(" ");
+  const tiled = tiledShown(frame);
+  const maximizeTarget = tiledTarget(cls, tiled);
+  const soloTarget = tiledTarget(cls, frame.soloClose);
+  // Before the browser has said its class, regular's, as a body's options are.
+  const pressedIn: ScreenClass = cls ?? "regular";
+  const maximizedNow = frame.maximized.some((held) => held === pressedIn);
+  const panel = cls !== null && frame.panelIn.includes(cls);
+
+  const onDoubleClick = (event: MouseEvent<HTMLElement>) => {
+    if ((event.target as Element).closest("button") !== null) return;
+    const header = event.currentTarget;
+    if (maximizeTarget === null) return;
+    const button = header.querySelector<HTMLElement>(".v2-frame-max");
+    actions.onMaximize(maximizeTarget, pane.id, button ?? header);
+  };
 
   return (
     <section
       className="v2-frame"
       id={frameId(pane.id)}
+      role={panel ? "tabpanel" : undefined}
       aria-labelledby={titleId}
       data-pane={pane.id}
       data-shown={frame.shown.join(" ")}
       inert={cls !== null && !frame.shown.includes(cls)}
       style={frameStyle(frame.boxes)}
     >
-      <header className="v2-frame-head">
+      <header className="v2-frame-head" onDoubleClick={onDoubleClick}>
         <h2 className="v2-hidden" id={titleId}>
           {pane.title}
         </h2>
@@ -125,24 +273,38 @@ export function PaneFrame({
           {pane.title}
         </p>
         {frame.strips.map((strip) => (
-          <div
+          <TabStrip
             key={strip.classes.join(" ")}
-            className="v2-frame-tabs"
-            role="tablist"
-            data-in={strip.classes.join(" ")}
-          >
-            {strip.tabs.map((tab) => (
-              <span
-                key={tab}
-                className="v2-frame-tab"
-                role="tab"
-                aria-selected={tab === strip.active}
-              >
-                {shortOf(tab)}
-              </span>
-            ))}
-          </div>
+            strip={strip}
+            cls={cls}
+            actions={actions}
+          />
         ))}
+        <span className="v2-frame-tools" data-in={tiled.join(" ")}>
+          {frame.soloClose.length > 0 && (
+            <button
+              type="button"
+              className="v2-frame-close v2-frame-solo"
+              data-in={frame.soloClose.join(" ")}
+              aria-label={deskLine(DESK_COPY.closePane, { pane: pane.title })}
+              title={deskLine(DESK_COPY.closePane, { pane: pane.title })}
+              onClick={(event) => {
+                if (soloTarget !== null) actions.onClose(soloTarget, pane.id, event.currentTarget);
+              }}
+            />
+          )}
+          <button
+            type="button"
+            className="v2-frame-max"
+            aria-label={deskLine(DESK_COPY.maximizePane, { pane: pane.title })}
+            title={deskLine(DESK_COPY.maximizePane, { pane: pane.title })}
+            aria-pressed={maximizedNow}
+            data-max={frame.maximized.join(" ")}
+            onClick={(event) => {
+              if (maximizeTarget !== null) actions.onMaximize(maximizeTarget, pane.id, event.currentTarget);
+            }}
+          />
+        </span>
       </header>
       <PaneBox paneId={pane.id} labelledBy={titleId}>
         {createElement(paneBody(pane.id), { options })}

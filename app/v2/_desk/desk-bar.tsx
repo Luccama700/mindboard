@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import type { LayoutId, PaneId, TileSet } from "@/app/lib/v2/tiles";
 import { DESK_COPY } from "@/app/lib/v2/view/desk";
@@ -23,13 +23,16 @@ const LAYOUT_LIST_ID = "v2-desk-layout-list";
 export function DeskTopBar({
   set,
   date,
+  week = null,
   onOpen,
 }: {
   set: TileSet;
   date: string | null;
+  week?: string | null;
   onOpen(layout: LayoutId): void;
 }) {
   const [open, setOpen] = useState(false);
+  const bar = useRef<HTMLElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const title = set.layouts.find((meta) => meta.id === set.current)?.title ?? "";
 
@@ -40,8 +43,20 @@ export function DeskTopBar({
     button.current?.focus();
   };
 
+  // A press anywhere outside the bar closes the list. Focus is left where the
+  // press put it: that is where the user went.
+  useEffect(() => {
+    if (!open) return;
+    const onPress = (event: Event) => {
+      if (event.target instanceof Node && bar.current?.contains(event.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPress);
+    return () => document.removeEventListener("pointerdown", onPress);
+  }, [open]);
+
   return (
-    <header className="v2-desk-top" onKeyDown={onKeyDown}>
+    <header ref={bar} className="v2-desk-top" onKeyDown={onKeyDown}>
       <button
         ref={button}
         type="button"
@@ -61,8 +76,12 @@ export function DeskTopBar({
         hidden={!open}
         set={set}
         date={date}
+        week={week}
         onOpen={(layout) => {
+          // The anchor that was pressed is about to be hidden with the list,
+          // so the focus goes back to the button that opened it, as Escape does.
           setOpen(false);
+          button.current?.focus();
           onOpen(layout);
         }}
       />

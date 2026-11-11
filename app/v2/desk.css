@@ -194,7 +194,12 @@
 /* ---- a frame ---- */
 
 /* Not displayed until a class shows it (below). Its border is inside its box,
-   so the frame is exactly the rectangle the engine gives its leaf. */
+   so the frame is exactly the rectangle the engine gives its leaf.
+   THE BODY IS THE PAGE'S COLOUR. Pane bodies were drawn against the page, and
+   their rows, cells and cards are the card's surface: a frame of that surface
+   would swallow every one of them. So the frame keeps its hairline and its
+   radius, its header is a band of the card's surface, and the body under it is
+   the page, as the 6px between frames is. */
 [data-v2-root] .v2-frame {
   position: absolute;
   display: none;
@@ -202,7 +207,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: var(--v2-card);
+  background: var(--v2-page);
   border: 1px solid var(--v2-edge);
   border-radius: 12px;
 }
@@ -217,9 +222,11 @@
   display: flex;
   flex: none;
   align-items: stretch;
+  gap: 8px;
   min-width: 0;
   min-height: 32px;
-  padding: 0 12px;
+  padding: 0 8px 0 12px;
+  background: var(--v2-card);
 }
 
 /* The title as it is seen. The h2 beside it is read, not seen, and is what the
@@ -236,12 +243,18 @@
 }
 
 /* A leaf's tabs, in place of the title on a class where the pane shares its
-   leaf. Not a control yet. */
+   leaf. Each tab is a button with its close control beside it. */
 [data-v2-root] .v2-frame-tabs {
   display: none;
-  gap: 16px;
+  gap: 10px;
   min-width: 0;
   overflow: hidden;
+}
+
+[data-v2-root] .v2-frame-tabitem {
+  display: flex;
+  flex: none;
+  gap: 2px;
 }
 
 [data-v2-root] .v2-frame-tab {
@@ -255,6 +268,7 @@
   letter-spacing: 0.02em;
 }
 
+[data-v2-root] .v2-frame-tab:hover,
 [data-v2-root] .v2-frame-tab[aria-selected="true"] {
   color: var(--v2-ink);
 }
@@ -270,8 +284,93 @@
   background: var(--v2-accent);
 }
 
-/* The gap a divider will be dragged in. Nothing to see: the page shows
-   through it. */
+/* The header's tools, at its far end: a close control for a pane alone in its
+   leaf, and maximize. Not displayed until a class shows them (below). */
+[data-v2-root] .v2-frame-tools {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+[data-v2-root] .v2-frame-solo {
+  display: none;
+}
+
+/* QUIET UNTIL ASKED FOR. A header's controls are drawn only while the header
+   is hovered or holds the focus, at once (no fade); a touch screen has no
+   hover, so there they are always drawn. They keep their place at rest, so
+   nothing moves when they appear. */
+[data-v2-root] .v2-frame-close,
+[data-v2-root] .v2-frame-max {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--v2-ink-3);
+  opacity: 0;
+}
+
+[data-v2-root] .v2-frame-head:hover .v2-frame-close,
+[data-v2-root] .v2-frame-head:hover .v2-frame-max,
+[data-v2-root] .v2-frame-head:focus-within .v2-frame-close,
+[data-v2-root] .v2-frame-head:focus-within .v2-frame-max {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  [data-v2-root] .v2-frame-close,
+  [data-v2-root] .v2-frame-max {
+    opacity: 1;
+  }
+}
+
+[data-v2-root] .v2-frame-close:hover,
+[data-v2-root] .v2-frame-max:hover {
+  color: var(--v2-ink);
+  background: var(--v2-card-2);
+}
+
+[data-v2-root] .v2-frame-close:focus-visible,
+[data-v2-root] .v2-frame-max:focus-visible {
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* A cross, drawn in the text's own colour. */
+[data-v2-root] .v2-frame-close::before,
+[data-v2-root] .v2-frame-close::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 50%;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+[data-v2-root] .v2-frame-close::after {
+  transform: translateY(-50%) rotate(-45deg);
+}
+
+/* A square: the pane at the size of the desk. Pressed, two smaller ones. */
+[data-v2-root] .v2-frame-max::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+/* The gap a divider is dragged in. Nothing is drawn at rest: the page shows
+   through it. Its hit area reaches 3px into each frame beside it (12px in
+   all), which stops well short of a header's controls (8px in), and a cursor
+   says which way it moves. It never selects text and never scrolls the page. */
 [data-v2-root] .v2-divider {
   position: absolute;
   display: none;
@@ -279,6 +378,90 @@
   top: var(--v2-divider-top);
   width: var(--v2-divider-width);
   height: var(--v2-divider-height);
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+[data-v2-root] .v2-divider[data-dir="v"] {
+  cursor: row-resize;
+}
+
+[data-v2-root] .v2-divider::before {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+}
+
+[data-v2-root] .v2-divider[data-dir="v"]::before {
+  inset: -3px 0;
+}
+
+/* The hairline in the accent, down the middle of the gap, while the divider is
+   hovered, focused from the keyboard, or dragged. A change at once. */
+[data-v2-root] .v2-divider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--v2-accent);
+  opacity: 0;
+  transform: translateX(-50%);
+}
+
+[data-v2-root] .v2-divider[data-dir="v"]::after {
+  top: 50%;
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+[data-v2-root] .v2-divider:hover::after,
+[data-v2-root] .v2-divider:focus-visible::after,
+[data-v2-root] .v2-desk-stage[data-drag] .v2-divider:focus::after {
+  opacity: 1;
+}
+
+/* From the keyboard the line is the focus mark, two pixels wide. */
+[data-v2-root] .v2-divider:focus-visible {
+  outline: none;
+}
+
+[data-v2-root] .v2-divider:focus-visible::after {
+  width: 2px;
+}
+
+[data-v2-root] .v2-divider[data-dir="v"]:focus-visible::after {
+  width: auto;
+  height: 2px;
+}
+
+/* While a divider is dragged nothing on the stage is selected. */
+[data-v2-root] .v2-desk-stage[data-drag] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* INSIDE A FRAME, A BODY DOES NOT SAY ITS PANE'S TITLE AGAIN. The frame's
+   header names the pane, and its h2 is what the frame is read by, so the two
+   lists' own headings and the calendar's small "Calendar" are not displayed
+   (and so not read twice). The sentence under a list's heading and the
+   calendar's week stay. The gallery and the classic pages have no frame. */
+[data-v2-root] .v2-frame .v2-list > .v2-sub,
+[data-v2-root] .v2-frame .v2-cal-name {
+  display: none;
+}
+
+/* The day pane's own appearance dot: the desk has its own way in (the rail's
+   foot, the phone's top bar). The feed dots beside it stay. */
+[data-v2-root] .v2-desk .v2-pane .v2-top-aside .v2-appearance-dot {
+  display: none;
 }
 
 /* The day's notice is the desk's to say, once, on the rail or under the top
@@ -508,15 +691,33 @@
 
 /* A pane, quiet, and a little less quiet with a mark when it is open in the
    layout on screen. The mark keeps its place when it is not drawn, so the
-   names stay in one column. */
+   names stay in one column. Each is a button: a closed pane opens, an open one
+   comes to the front. */
 [data-v2-root] .v2-desk-pane {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  padding: 3px 8px;
   color: var(--v2-ink-3);
   font-size: 12px;
   line-height: 1.3;
+}
+
+[data-v2-root] .v2-desk-pane-button {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  text-align: left;
+  line-height: inherit;
+}
+
+[data-v2-root] .v2-desk-pane-button:hover {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-desk-pane-button:focus-visible {
+  outline-offset: -2px;
+  border-radius: 6px;
 }
 
 [data-v2-root] .v2-desk-pane-name {
@@ -599,14 +800,34 @@
   [data-v2-root] .v2-frame-name {
     display: none;
   }
+
+  /* The scroller's padding is the pane's inset here as it is from 1024px, so
+     the leaves' own phone gutter goes to nothing inside it: the two together
+     stood the day 30px off the edge. A length still, because the line's rail
+     reads it inside calc(). */
+  [data-v2-root] .v2-desk .v2-pane {
+    --v2-gutter: 0px;
+  }
 }
 
 /* ---- regular ---- */
 
 @media (1024px <= width < 1600px) {
+  /* A DEFINITE HEIGHT, never a stretched one. The workspace is the size
+     container its stage's extents are measured in, and a container's block
+     size that came from stretching to a line whose height its own min-height
+     set is not known when the browser first resolves the stage's units: on a
+     window shorter than the tree's minimum the first layout measured 0px tall
+     and drew every frame 2px high. So the height is written out: the window
+     less the 6px margin above and below, or the class's minimum (which already
+     carries its pixel of slack) when that is more. The width needs no such
+     help: it is the flex item's main size, resolved (min-width included)
+     before anything inside it is laid out. */
   [data-v2-root] .v2-desk-work {
+    align-self: flex-start;
     min-width: var(--v2-desk-regular-min-w);
     min-height: var(--v2-desk-regular-min-h);
+    height: max(calc(100dvh - 12px), var(--v2-desk-regular-min-h));
   }
 
   [data-v2-root] .v2-frame[data-shown~="regular"] {
@@ -629,6 +850,28 @@
     display: block;
   }
 
+  [data-v2-root] .v2-frame-tools[data-in~="regular"] {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-frame-solo[data-in~="regular"] {
+    display: block;
+  }
+
+  /* Maximized: two squares, the front one lower right. */
+  [data-v2-root] .v2-frame-max[data-max~="regular"]::before {
+    inset: 8px 5px 5px 8px;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="regular"]::after {
+    content: "";
+    position: absolute;
+    inset: 5px 8px 8px 5px;
+    border-top: 1.5px solid currentColor;
+    border-left: 1.5px solid currentColor;
+    border-radius: 2px 0 0 0;
+  }
+
   [data-v2-root] .v2-desk-pane[data-open~="regular"] {
     color: var(--v2-ink-2);
   }
@@ -641,9 +884,12 @@
 /* ---- wide ---- */
 
 @media (min-width: 1600px) {
+  /* A definite height, for the reason given in the regular block. */
   [data-v2-root] .v2-desk-work {
+    align-self: flex-start;
     min-width: var(--v2-desk-wide-min-w);
     min-height: var(--v2-desk-wide-min-h);
+    height: max(calc(100dvh - 12px), var(--v2-desk-wide-min-h));
   }
 
   [data-v2-root] .v2-frame[data-shown~="wide"] {
@@ -664,6 +910,27 @@
 
   [data-v2-root] .v2-divider[data-shown~="wide"] {
     display: block;
+  }
+
+  [data-v2-root] .v2-frame-tools[data-in~="wide"] {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-frame-solo[data-in~="wide"] {
+    display: block;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="wide"]::before {
+    inset: 8px 5px 5px 8px;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="wide"]::after {
+    content: "";
+    position: absolute;
+    inset: 5px 8px 8px 5px;
+    border-top: 1.5px solid currentColor;
+    border-left: 1.5px solid currentColor;
+    border-radius: 2px 0 0 0;
   }
 
   [data-v2-root] .v2-desk-pane[data-open~="wide"] {

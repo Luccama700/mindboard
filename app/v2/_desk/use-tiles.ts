@@ -19,20 +19,60 @@ import {
   WIDE_MIN_WIDTH,
   activateTab,
   arrangementOf,
+  closePane,
+  equalize,
+  openPane,
   setCurrent,
+  setRatio,
+  toggleMaximize,
   withArrangement,
+  type Arrangement,
   type LayoutId,
   type PaneId,
   type ScreenClass,
   type TileSet,
+  type Workspace,
 } from "@/app/lib/v2/tiles";
 
+/**
+ * Every action that changes one arrangement names the class it is for, as
+ * `tab` does: the reducer's own `cls` is null until the browser has answered,
+ * and an action must never fall on another class than the one it was made on.
+ */
 export type TilesAction =
   | { type: "class"; cls: ScreenClass }
   | { type: "layout"; id: LayoutId }
   | { type: "replace"; set: TileSet }
   /** Bring a pane to the front of its leaf in the current layout, on that class. */
-  | { type: "tab"; cls: ScreenClass; pane: PaneId };
+  | { type: "tab"; cls: ScreenClass; pane: PaneId }
+  /** A divider let go, or moved by a key: `setRatio` at the size of the split it divides. */
+  | { type: "ratio"; cls: ScreenClass; splitId: string; ratio: number; size: number }
+  /** Both sides of a divider the same: `equalize`. */
+  | { type: "equalize"; cls: ScreenClass; splitId: string }
+  | { type: "close"; cls: ScreenClass; pane: PaneId }
+  /** Open a pane, placed by the engine on the workspace the browser computed. */
+  | { type: "open"; cls: ScreenClass; pane: PaneId; workspace: Workspace }
+  | { type: "maximize"; cls: ScreenClass; pane: PaneId };
+
+/** The engine call each arrangement action is: one each, and nothing else. */
+function changed(arrangement: Arrangement, action: TilesAction): Arrangement {
+  switch (action.type) {
+    case "tab":
+      return activateTab(arrangement, action.pane);
+    case "ratio":
+      return setRatio(arrangement, action.splitId, action.ratio, action.size);
+    case "equalize":
+      return equalize(arrangement, action.splitId);
+    case "close":
+      return closePane(arrangement, action.pane);
+    case "open":
+      return openPane(arrangement, action.pane, action.workspace);
+    case "maximize":
+      return toggleMaximize(arrangement, action.pane);
+    default:
+      return arrangement;
+  }
+}
 
 export interface TilesState {
   set: TileSet;
@@ -55,10 +95,10 @@ export function tilesReducer(state: TilesState, action: TilesAction): TilesState
     }
     case "replace":
       return action.set === state.set ? state : { ...state, set: action.set };
-    case "tab": {
+    default: {
       const layout = state.set.current;
       const before = arrangementOf(state.set, layout, action.cls);
-      const after = activateTab(before, action.pane);
+      const after = changed(before, action);
       if (after === before) return state;
       const set = withArrangement(state.set, layout, action.cls, after);
       return set === state.set ? state : { ...state, set };
@@ -73,6 +113,16 @@ export const WIDE_QUERY = `(min-width: ${WIDE_MIN_WIDTH}px)`;
 function classOf(wide: boolean, tiled: boolean): ScreenClass {
   if (wide) return "wide";
   return tiled ? "regular" : "compact";
+}
+
+/**
+ * The class the window is now, read the way the hook reads it, for code that
+ * runs before the hook's answer has been rendered (the first effects after
+ * hydration). Null in a browser without matchMedia.
+ */
+export function classNow(): ScreenClass | null {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return null;
+  return classOf(window.matchMedia(WIDE_QUERY).matches, window.matchMedia(TILED_QUERY).matches);
 }
 
 /**
@@ -117,11 +167,14 @@ export const DESK_PATH = "/v2/desk";
 
 /**
  * A layout's address: `/v2/desk?layout=<id>`, carrying the request's `date`
- * when it had a usable one, so the day stays the day that was planned.
+ * when it had a usable one, so the day stays the day that was planned, and the
+ * week on screen when the request asked for one the calendar used, so a reload
+ * or a new tab shows the week that was showing.
  */
-export function deskHref(layout: LayoutId, date: string | null): string {
+export function deskHref(layout: LayoutId, date: string | null, week: string | null = null): string {
   const params = new URLSearchParams({ layout });
   if (date !== null) params.set("date", date);
+  if (week !== null) params.set("week", week);
   return `${DESK_PATH}?${params.toString()}`;
 }
 

@@ -2,7 +2,7 @@
 
 import type { MouseEvent } from "react";
 
-import type { LayoutId, PaneGroup, TileSet } from "@/app/lib/v2/tiles";
+import type { LayoutId, PaneGroup, PaneId, TileSet } from "@/app/lib/v2/tiles";
 import { DESK_COPY } from "@/app/lib/v2/view/desk";
 import { AppearanceTrigger } from "../_components/appearance-root";
 import { useDeskData } from "./desk-data-provider";
@@ -40,6 +40,7 @@ function pressed(event: MouseEvent<HTMLAnchorElement>): boolean {
 export function LayoutLinks({
   set,
   date,
+  week = null,
   onOpen,
   id,
   className,
@@ -47,6 +48,8 @@ export function LayoutLinks({
 }: {
   set: TileSet;
   date: string | null;
+  /** The week on screen, when the request asked for one the calendar used. */
+  week?: string | null;
   onOpen(layout: LayoutId): void;
   id?: string;
   className: string;
@@ -58,7 +61,7 @@ export function LayoutLinks({
       {visible.map((meta) => (
         <li key={meta.id}>
           <a
-            href={deskHref(meta.id, date)}
+            href={deskHref(meta.id, date, week)}
             aria-current={meta.id === set.current ? "page" : undefined}
             onClick={(event) => {
               if (!pressed(event)) return;
@@ -92,29 +95,54 @@ export function DeskNotes({ where }: { where: "rail" | "compact" }) {
 }
 
 /**
+ * The longest title the rail's pane list shows whole. Past it, a title wraps at
+ * the rail's 128px ("Past their date", "Did not fit today"), so the list shows
+ * the catalog's short label and keeps the title as what is read.
+ */
+export const RAIL_TITLE_MAX = 12;
+
+/** A pane's name on the rail: its title, or its short label when the title would wrap. */
+function railName(title: string, short: string) {
+  if (title.length <= RAIL_TITLE_MAX) return <span className="v2-desk-pane-name">{title}</span>;
+  return (
+    <>
+      <span className="v2-desk-pane-name" aria-hidden="true">
+        {short}
+      </span>
+      <span className="v2-hidden">{title}</span>
+    </>
+  );
+}
+
+/**
  * The rail, from 1024px: the layouts, the panes by group with a mark on the
  * ones open in the layout on screen, the notes, and the appearance panel at its
  * foot.
  *
  * The marks are written for both tiled classes (`data-open`) and desk.css shows
- * the class that applies, because the server cannot know which it is. Nothing in
- * the pane list is a control yet.
+ * the class that applies, because the server cannot know which it is. Each pane
+ * is a control: a closed one opens where it was, an open one is brought to the
+ * front and takes the focus.
  */
 export function DeskRail({
   set,
   stage,
   date,
+  week = null,
   onOpen,
+  onPane,
 }: {
   set: TileSet;
   stage: DeskStage;
   date: string | null;
+  week?: string | null;
   onOpen(layout: LayoutId): void;
+  onPane?(pane: PaneId, pressed: HTMLElement): void;
 }) {
   return (
     <nav className="v2-desk-rail" aria-label={DESK_COPY.rail}>
       <h2 className="v2-desk-rail-head">{DESK_COPY.layouts}</h2>
-      <LayoutLinks set={set} date={date} onOpen={onOpen} className="v2-desk-layouts" />
+      <LayoutLinks set={set} date={date} week={week} onOpen={onOpen} className="v2-desk-layouts" />
       <h2 className="v2-desk-rail-head v2-desk-panes-head">{DESK_COPY.panes}</h2>
       {GROUPS.map(({ group, name }) => (
         <div key={group} className="v2-desk-group">
@@ -129,11 +157,17 @@ export function DeskRail({
                   data-pane={frame.pane.id}
                   data-open={frame.open.join(" ")}
                 >
-                  <span className="v2-desk-pane-name">{frame.pane.title}</span>
-                  <span className="v2-desk-open">
-                    <span className="v2-desk-open-dot" aria-hidden="true" />
-                    <span className="v2-hidden"> {DESK_COPY.open}</span>
-                  </span>
+                  <button
+                    type="button"
+                    className="v2-desk-pane-button"
+                    onClick={(event) => onPane?.(frame.pane.id, event.currentTarget)}
+                  >
+                    {railName(frame.pane.title, frame.pane.short)}
+                    <span className="v2-desk-open">
+                      <span className="v2-desk-open-dot" aria-hidden="true" />
+                      <span className="v2-hidden"> {DESK_COPY.open}</span>
+                    </span>
+                  </button>
                 </li>
               ))}
           </ul>

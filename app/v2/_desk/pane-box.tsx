@@ -19,6 +19,8 @@ import type { CSSProperties, ReactNode } from "react";
  *
  * `labelledBy` names the scroller after whatever holds the box: on the desk,
  * the frame's title, so a keyboard that lands on it hears which pane it is in.
+ * A named scroller is a `group`, because an element with no role may not carry
+ * a name. Without a name it has no role, so the gallery's markup is unchanged.
  */
 export function PaneBox({
   paneId,
@@ -33,7 +35,12 @@ export function PaneBox({
 }) {
   return (
     <div className="v2-pane" data-pane={paneId} style={style}>
-      <div className="v2-pane-body" tabIndex={0} aria-labelledby={labelledBy}>
+      <div
+        className="v2-pane-body"
+        tabIndex={0}
+        role={labelledBy === undefined ? undefined : "group"}
+        aria-labelledby={labelledBy}
+      >
         {children}
       </div>
     </div>

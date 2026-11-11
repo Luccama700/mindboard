@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 
 import {
   PANES,
@@ -9,23 +9,26 @@ import {
   flatten,
   leafOf,
   leavesOf,
+  openPanes,
   optionsOf,
   type Arrangement,
-  type CssBox,
   type LayoutId,
   type PaneId,
   type ScreenClass,
-  type SplitDir,
   type TileSet,
+  type Workspace as WorkspaceSize,
 } from "@/app/lib/v2/tiles";
 import { paneOptions } from "@/app/lib/v2/view/desk";
+import { Divider, measureWorkspace, type DeskDivider } from "./divider";
 import {
-  BOX_SIDES,
   PaneFrame,
   TILED_CLASSES,
   type DeskFrame,
+  type FrameActions,
   type TiledClass,
 } from "./pane-frame";
+
+export { dividerVar, type DeskDivider } from "./divider";
 
 // The workspace: one size container, one stage inside it, and on the stage the
 // fourteen frames and the dividers of both tiled classes.
@@ -39,7 +42,8 @@ import {
 //     `--v2-frame-<class>-<side>`, and says in `data-shown` which classes it is
 //     displayed in;
 //   - the workspace carries each class's minimum as `--v2-desk-<class>-min-*`.
-// The class the browser reports later only adds `inert`.
+// The class the browser reports later only adds `inert`, and the roles that
+// depend on it.
 //
 // FLAT AND STABLE. The stage's children are the fourteen frames in the
 // catalog's order, keyed by pane id and nothing else, then the dividers. A
@@ -49,18 +53,6 @@ import {
 
 /** Every class, in the order `data-shown` lists them. */
 export const SCREEN_CLASSES: readonly ScreenClass[] = ["compact", "regular", "wide"];
-
-export interface DeskDivider {
-  cls: TiledClass;
-  /** The split's pre-order index, which is also what keys it: split ids are minted again on a load. */
-  index: number;
-  splitId: string;
-  dir: SplitDir;
-  ratioVar: string;
-  box: CssBox;
-  /** False when a maximized pane covers the workspace on this class. */
-  shown: boolean;
-}
 
 export interface DeskStage {
   /** Both tiled classes' registered properties, for the stage. */
@@ -73,11 +65,6 @@ export interface DeskStage {
   dividers: DeskDivider[];
   /** The phone's one leaf: its tabs in order, and the one in front. */
   compact: { tabs: PaneId[]; active: PaneId | null };
-}
-
-/** The property a divider's box is written in. A divider belongs to one class. */
-export function dividerVar(side: (typeof BOX_SIDES)[number]): string {
-  return `--v2-divider-${side}`;
 }
 
 /** The property the workspace's minimum is written in, for one class. */
@@ -101,7 +88,16 @@ export function deskStage(set: TileSet, layout: LayoutId): DeskStage {
   const byPane = new Map<PaneId, DeskFrame>();
   const strips = new Map<PaneId, Array<{ cls: TiledClass; tabs: PaneId[]; active: PaneId }>>();
   for (const pane of PANES) {
-    byPane.set(pane.id, { pane, shown: [], open: [], boxes: {}, strips: [] });
+    byPane.set(pane.id, {
+      pane,
+      shown: [],
+      open: [],
+      boxes: {},
+      strips: [],
+      soloClose: [],
+      maximized: [],
+      panelIn: [],
+    });
     strips.set(pane.id, []);
   }
 
@@ -117,6 +113,7 @@ export function deskStage(set: TileSet, layout: LayoutId): DeskStage {
     const tree = arrangement.tree;
     const maximized =
       arrangement.maximized === null ? null : leafOf(tree, arrangement.maximized);
+    const several = openPanes(tree).length > 1;
 
     const css = cls === "compact" ? null : cssLayout(tree, maximized?.id ?? null, PANES, cls);
     if (css !== null && cls !== "compact") {
@@ -145,14 +142,21 @@ export function deskStage(set: TileSet, layout: LayoutId): DeskStage {
         if (frame === undefined) continue;
         frame.open.push(cls);
         const front = leaf.active === tab;
-        if (front && (maximized === null || maximized.id === leaf.id)) frame.shown.push(cls);
-        if (cls === "compact") continue;
+        const shown = front && (maximized === null || maximized.id === leaf.id);
+        if (shown) frame.shown.push(cls);
+        if (cls === "compact") {
+          frame.panelIn.push(cls);
+          continue;
+        }
         if (box !== undefined) {
           frame.boxes[cls] = { left: box.left, top: box.top, width: box.width, height: box.height };
         }
+        if (arrangement.maximized === tab) frame.maximized.push(cls);
         if (front && leaf.tabs.length > 1) {
           strips.get(tab)?.push({ cls, tabs: [...leaf.tabs], active: leaf.active });
         }
+        if (leaf.tabs.length > 1) frame.panelIn.push(cls);
+        else if (shown && several) frame.soloClose.push(cls);
       }
     }
   }
@@ -194,7 +198,8 @@ function optionsByPane(arrangement: Arrangement): Map<PaneId, Readonly<Record<st
  * workspace to whole pixels, so a workspace held at exactly `min` would read as
  * `min` less one, a split's two minimums would no longer fit, and the CSS and
  * the engine would then draw that split differently: a whole split apart, not a
- * pixel. The one pixel of slack keeps the floor at `min` or above.
+ * pixel. The one pixel of slack keeps the floor at `min` or above. The minimum
+ * is the tree on screen's, so it follows every change to that tree.
  */
 export const MIN_SLACK = 1;
 
@@ -208,10 +213,54 @@ function minStyle(min: DeskStage["min"]): CSSProperties {
   return style as CSSProperties;
 }
 
-function dividerStyle(box: CssBox): CSSProperties {
-  const style: Record<string, string> = {};
-  for (const side of BOX_SIDES) style[dividerVar(side)] = box[side];
-  return style as CSSProperties;
+type Measured = Record<TiledClass, WorkspaceSize | null>;
+
+const NOTHING_MEASURED: Measured = { regular: null, wide: null };
+
+function sameSize(a: WorkspaceSize | null, b: WorkspaceSize | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.width === b.width && a.height === b.height;
+}
+
+/**
+ * The workspace each tiled class computes on the stage, read again whenever the
+ * workspace is resized. It feeds only the values a divider announces; every
+ * action reads the stage afresh when it is taken.
+ */
+function useMeasured(
+  work: RefObject<HTMLElement | null>,
+  stage: RefObject<HTMLDivElement | null>,
+): Measured {
+  const [measured, setMeasured] = useState<Measured>(NOTHING_MEASURED);
+  useEffect(() => {
+    const read = () => {
+      const next: Measured = {
+        regular: measureWorkspace(stage.current, "regular"),
+        wide: measureWorkspace(stage.current, "wide"),
+      };
+      setMeasured((was) =>
+        sameSize(was.regular, next.regular) && sameSize(was.wide, next.wide) ? was : next,
+      );
+    };
+    if (typeof ResizeObserver === "function" && work.current !== null) {
+      const observer = new ResizeObserver(read);
+      observer.observe(work.current);
+      return () => observer.disconnect();
+    }
+    const frame = window.requestAnimationFrame(read);
+    window.addEventListener("resize", read);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", read);
+    };
+  }, [work, stage]);
+  return measured;
+}
+
+/** What the workspace asks the desk to do besides the frames' own actions. */
+export interface WorkspaceActions extends FrameActions {
+  onRatio(cls: TiledClass, splitId: string, ratio: number, size: number): void;
+  onEqualize(cls: TiledClass, splitId: string): void;
 }
 
 /**
@@ -221,7 +270,8 @@ function dividerStyle(box: CssBox): CSSProperties {
  * and `100cqh`), with no padding and no border, so its size is the size hit
  * testing will measure. The stage covers it exactly and is the ONE element that
  * sets the properties; nothing between a frame and the stage, or between the
- * stage and the workspace, is a size container.
+ * stage and the workspace, is a size container. `stageRef` is how the desk
+ * reads what the stage computed, and where a drag writes.
  *
  * A body's options follow the class on screen; before the browser has said
  * which that is, they are regular's, on the server and in the first render
@@ -231,38 +281,57 @@ export function Workspace({
   set,
   stage,
   cls,
+  stageRef,
+  actions,
 }: {
   set: TileSet;
   stage: DeskStage;
   cls: ScreenClass | null;
+  stageRef?: RefObject<HTMLDivElement | null>;
+  actions?: WorkspaceActions;
 }) {
   const reference = arrangementOf(set, set.current, cls ?? "regular");
   const options = useMemo(() => optionsByPane(reference), [reference]);
+  const work = useRef<HTMLElement>(null);
+  const ownStage = useRef<HTMLDivElement>(null);
+  const stageElement = stageRef ?? ownStage;
+  const measured = useMeasured(work, stageElement);
+  const act = actions ?? NO_ACTIONS;
 
   return (
-    <main className="v2-desk-work" style={minStyle(stage.min)}>
-      <div className="v2-desk-stage" style={stage.vars as CSSProperties}>
+    <main ref={work} className="v2-desk-work" style={minStyle(stage.min)}>
+      <div ref={stageElement} className="v2-desk-stage" style={stage.vars as CSSProperties}>
         {stage.frames.map((frame) => (
           <PaneFrame
             key={frame.pane.id}
             frame={frame}
             cls={cls}
             options={options.get(frame.pane.id) as Readonly<Record<string, string>>}
+            actions={act}
           />
         ))}
         {stage.dividers.map((divider) => (
-          <div
+          <Divider
             key={`${divider.cls}-${divider.index}`}
-            className="v2-divider"
-            data-class={divider.cls}
-            data-dir={divider.dir}
-            data-split={divider.index}
-            data-shown={divider.shown ? divider.cls : ""}
-            aria-hidden="true"
-            style={dividerStyle(divider.box)}
+            divider={divider}
+            arrangement={arrangementOf(set, set.current, divider.cls)}
+            stage={stageElement}
+            measured={measured[divider.cls]}
+            cls={cls}
+            onRatio={act.onRatio}
+            onEqualize={act.onEqualize}
           />
         ))}
       </div>
     </main>
   );
 }
+
+/** A workspace drawn on its own (a test, the gallery of a later task) answers nothing. */
+const NO_ACTIONS: WorkspaceActions = {
+  onTab: () => {},
+  onClose: () => {},
+  onMaximize: () => {},
+  onRatio: () => {},
+  onEqualize: () => {},
+};

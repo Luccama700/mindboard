@@ -541,8 +541,8 @@ describe("flat and stable (behaviour 7)", () => {
     const tabs = within(strip).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual(["Day", "Status", "Past", "Did not fit"]);
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["true", "false", "false", "false"]);
-    // Not controls yet.
-    expect(strip.querySelectorAll("button, a, [tabindex]")).toHaveLength(0);
+    // Controls since Task 10 (v2-desk-controls.test.ts): one tab stop, on the tab in front.
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1, -1]);
     expect(frameOf(container, "today").querySelector(".v2-frame-name")?.getAttribute("data-strip")).toBe(
       "regular",
     );
@@ -663,8 +663,9 @@ describe("the frame (behaviour 9)", () => {
       expect(box.dataset.pane).toBe(pane);
       const scroller = box.querySelector(".v2-pane-body") as HTMLElement;
       expect(scroller.getAttribute("aria-labelledby")).toBe(frameTitleId(pane));
-      // Nothing in the header is a control in this task.
-      expect(children[0].querySelectorAll("button, a, input, [tabindex]")).toHaveLength(0);
+      // The header's controls (Task 10, v2-desk-controls.test.ts) sit inside
+      // the header and never between it and the box.
+      expect(children[1].querySelector(".v2-frame-tools, .v2-frame-tab")).toBeNull();
     }
   });
 
@@ -713,7 +714,8 @@ describe("the rail (behaviour 10)", () => {
     expect(open.lanes).toBe("");
     for (const item of items) {
       expect(item.querySelector(".v2-desk-open .v2-hidden")?.textContent?.trim()).toBe(DESK_COPY.open);
-      expect(item.querySelectorAll("button, a, input")).toHaveLength(0);
+      // One control per pane since Task 10 (v2-desk-controls.test.ts).
+      expect(item.querySelectorAll("button, a, input")).toHaveLength(1);
     }
   });
 

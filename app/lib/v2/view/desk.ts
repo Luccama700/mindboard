@@ -35,7 +35,31 @@ export const DESK_COPY = {
   bar: "Panes in this layout",
   /** Read before the layout's name on the phone's top bar button. */
   layoutButton: "Layout",
+  /** A divider's name: the panes on either side of it. `{first}` and `{second}` are filled. */
+  divider: "Resize {first} and {second}",
+  /** The close control on a pane's tab, or beside its title. `{pane}` is filled. */
+  closePane: "Close {pane}",
+  /** The maximize control in a pane's header, pressed while the pane fills the desk. */
+  maximizePane: "Maximize {pane}",
+  /** What the live region says after a change on the desk. `{pane}` is filled. */
+  paneClosed: "{pane} closed.",
+  paneOpened: "{pane} opened.",
+  paneMaximized: "{pane} fills the desk.",
+  paneRestored: "{pane} is back in its place.",
+  /** A desk too large for the cookie: kept in this browser, but the server cannot draw it. */
+  savedHereOnly: "Layout saved on this device. The first paint may show the default.",
 } as const;
+
+/**
+ * One of the desk's sentences with its slots filled: `{pane}`, `{first}`,
+ * `{second}`. One pass with a function, for galleryLine's reason: a title is
+ * filled in as plain text, and a slot written inside a title stays as it is.
+ */
+export function deskLine(template: string, slots: Readonly<Record<string, string>>): string {
+  return template.replace(/\{(pane|first|second)\}/g, (whole, name: string) =>
+    Object.hasOwn(slots, name) ? slots[name] : whole,
+  );
+}
 
 /**
  * The gallery's one line: which pane, and the size of its box.

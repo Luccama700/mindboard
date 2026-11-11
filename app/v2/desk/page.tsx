@@ -1,10 +1,11 @@
 // The desk: one workspace of tiled panes, in four layouts of the same fourteen
 // panes, on a big screen, a laptop and a phone.
 //
-// /v2/desk?layout=<id>, with `date` and `week` read as Today reads them. In this
-// task nothing on it can be moved: it opens on the layout the address names, in
-// the default arrangement for whatever size the window is, and switching layout
-// changes it. The saved layout (a cookie) is read by a later task.
+// /v2/desk?layout=<id>, with `date` and `week` read as Today reads them. It
+// opens on the desk the browser saved (its cookie: the rail and the open
+// layout's arrangements, see app/lib/v2/tiles/cookie.ts), on the layout the
+// address names when it names one the desk shows, and on the cookie's own open
+// layout when it does not. A cookie that does not decode is the empty desk.
 //
 // It is gated exactly as Today is, and for the same reasons, which are written
 // out at the top of app/v2/today/page.tsx and in app/lib/v2/source.ts: the gate
@@ -14,6 +15,7 @@
 // the quests and the money of one request), because a pane reads its data from
 // the desk's providers and never from a source of its own.
 
+import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
@@ -21,7 +23,7 @@ import { sampleDesk } from "@/app/lib/v2/fixtures/sample-desk";
 import { loadLocalDesk } from "@/app/lib/v2/local/desk";
 import { LocalSnapshotError } from "@/app/lib/v2/local/snapshot";
 import { requireLoopback, screenSource, type ScreenSource } from "@/app/lib/v2/source";
-import { EMPTY_TILE_SET, setCurrent, type TileSet } from "@/app/lib/v2/tiles";
+import { TILE_COOKIE, decodeTileCookie, setCurrent, type TileSet } from "@/app/lib/v2/tiles";
 import { DESK_COPY } from "@/app/lib/v2/view/desk";
 import type { DeskScreenData } from "@/app/lib/v2/view/desk-data";
 import { SnapshotError } from "../_components/snapshot-error";
@@ -57,12 +59,12 @@ function oneOf(value: string | string[] | undefined): string | null {
 }
 
 /**
- * The desk the address asks for. In this task it is the empty desk, opened on
- * the layout named: one it does not have, or a hidden one, is refused by the
- * engine and the desk's own current layout is drawn instead.
+ * The desk the address asks for: the saved desk, opened on the layout named.
+ * One it does not have, or a hidden one, is refused by the engine and the
+ * desk's own current layout is drawn instead.
  */
-function deskSet(layout: string | null): TileSet {
-  return layout === null ? EMPTY_TILE_SET : setCurrent(EMPTY_TILE_SET, layout);
+function deskSet(saved: TileSet, layout: string | null): TileSet {
+  return layout === null ? saved : setCurrent(saved, layout);
 }
 
 /**
@@ -72,6 +74,18 @@ function deskSet(layout: string | null): TileSet {
  */
 function keptDate(date: string | null, data: DeskScreenData): string | null {
   return date !== null && date === data.today.input.date ? date : null;
+}
+
+/**
+ * The request's `week`, as the Monday of the week on screen, when the calendar
+ * showed the week it asked for. A week the source ignored (not a day, or one it
+ * cannot speak for) changed nothing, and is not carried: the same rule as the
+ * date's.
+ */
+function keptWeek(week: string | null, data: DeskScreenData): string | null {
+  const calendar = data.today.calendar;
+  if (week === null || calendar === null || !calendar.week.includes(week)) return null;
+  return calendar.week[0];
 }
 
 /**
@@ -91,17 +105,36 @@ async function DeskScreen({
   const layout = oneOf(asked.layout);
   const date = oneOf(asked.date);
   const week = oneOf(asked.week);
-  const initial = deskSet(layout);
+  // The browser's own picture of its desk; anything that does not decode is
+  // the empty desk (decodeTileCookie never throws).
+  const saved = decodeTileCookie((await cookies()).get(TILE_COOKIE)?.value);
+  const initial = deskSet(saved, layout);
 
   if (source.kind === "sample") {
     const data = sampleDesk(week);
-    return <DeskClient data={data} initial={initial} date={keptDate(date, data)} />;
+    return (
+      <DeskClient
+        data={data}
+        initial={initial}
+        date={keptDate(date, data)}
+        week={keptWeek(week, data)}
+        home={saved.current}
+      />
+    );
   }
 
   const folder = await readFolder(source.dir, date, week);
   if (folder.data === undefined) return <SnapshotError message={folder.error} />;
 
-  return <DeskClient data={folder.data} initial={initial} date={keptDate(date, folder.data)} />;
+  return (
+    <DeskClient
+      data={folder.data}
+      initial={initial}
+      date={keptDate(date, folder.data)}
+      week={keptWeek(week, folder.data)}
+      home={saved.current}
+    />
+  );
 }
 
 /**

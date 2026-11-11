@@ -18,13 +18,16 @@ import type { Root } from "react-dom/client";
 import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-// There is no request in a test, and the snapshot branch reads one header.
+// There is no request in a test, and the snapshot branch reads one header. The
+// page also reads the desk's cookie (Task 10); none is sent here, so every page
+// below is drawn from the empty desk, as before.
 const request = vi.hoisted(() => ({ host: "127.0.0.1:3111" }));
 vi.mock("next/headers", () => ({
   headers: () =>
     Promise.resolve({
       get: (name: string) => (name.toLowerCase() === "host" ? request.host : null),
     }),
+  cookies: () => Promise.resolve({ get: () => undefined }),
 }));
 
 import { sampleDesk } from "@/app/lib/v2/fixtures/sample-desk";
@@ -221,12 +224,14 @@ describe("one page, every layout", () => {
     }
   });
 
-  test("opens a layout in the browser: the reducer, then pushState, and no request", async () => {
+  // Whether a press reaches the network is checked in a real browser with the
+  // network recorded: jsdom mounts no router, so a spy on fetch here could not
+  // fail (Task 9 review, finding 6).
+  test("opens a layout in the browser: the reducer, then pushState", async () => {
     sample();
     stubMedia(2000);
     window.history.replaceState(null, "", deskHref("today", null));
     const pushed = vi.spyOn(window.history, "pushState");
-    const fetched = vi.spyOn(globalThis, "fetch");
     const { container } = render(await page({}));
 
     await act(async () => {
@@ -237,7 +242,6 @@ describe("one page, every layout", () => {
     expect(pushed.mock.calls[0][2]).toBe(deskHref("money", null));
     expect(window.location.pathname + window.location.search).toBe(deskHref("money", null));
     expect(railLink(container, "Money").getAttribute("aria-current")).toBe("page");
-    expect(fetched).not.toHaveBeenCalled();
 
     // The layout already on screen pushes nothing.
     await act(async () => {
