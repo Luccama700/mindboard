@@ -55,6 +55,9 @@ Read this first when resuming. Newest entry on top. `PLAN.md` is the current pla
 - **The tile engine is committed and unwired** (`a2fef4e`, `6e4d446`): `app/lib/v2/tiles`, a split tree with tabs, its geometry, six default arrangements over two screen classes, and a tolerant parser for the saved form. 161 tests, among them a seeded run of 400 operations from each default. One rule came out of its review: what is focused can always be seen.
 - **Two defects that no test saw, found by building and by looking.** The plan named a file `layout.ts` under `app/lib`, which Next reads as a route layout: the build failed while the type check and every test passed. And the first render on real data drew every event from its own day to the right edge of the grid. Both are fixed and each now has a test that fails on it. See Known traps.
 
+- **A whole-branch review of stage 1, and its one fix round** (`b09a3c9`). No critical finding. Two real ones, both about days. A week link on Today dropped `?date=` while the screen kept its plan across a change of planned day, so the header and the line could show different days: the screen's state is now keyed on the planned day and the links carry the day shown. And the calendar took "today" from the clock while the planner's day runs to lights out: after midnight it marked the wrong day, and a block planned after midnight pulled the whole week's grid to 00:00. `CalendarScreenData` now carries the planned day, and a planned block never widens the grid. Smaller fixes in the same round are listed in that commit. What was left open by ruling is in `PLAN-OS.md` under "Known open edges after stage 1"; the one to settle before this branch serves anyone is that a v2 page with the flags off answers with the not-found screen and no data, but with status 200.
+- **`PLAN-SHELL.md` is written, for the owner's yes** (`5cdbbab`, `68c63ef`): the desk, tiled panes with tabs at a new address, five tasks. Nothing in it is built.
+
 ### How the build runs
 
 One implementer agent per task, then a separate reviewer agent, then fixes until the review is clean. The orchestrating session makes every commit. The working ledger with every ruling is `.superpowers/sdd/PLAN/progress.md` (git-ignored, so it can be lost; the rulings that matter are copied into the final report and into `docs/rebuild/04-decisions.md`).
@@ -74,6 +77,7 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 | After the review of the full-width page, `b1b8633` | 0 errors, 2 warnings | 2941 of 2941 (121 files) | ok, placeholder env |
 | After the whole-range review and its two fix rounds, with the calendar engine, `c00ec02` | 0 errors, 2 warnings | 3163 of 3163 (124 files) | ok, placeholder env |
 | Stage 1 of the windowed screen and the tile engine, `b7027b5` | 0 errors, 2 warnings | 3636 of 3636 (134 files) | ok, placeholder env |
+| After the whole-branch review of stage 1 and its one fix round, `b09a3c9` | 0 errors, 2 warnings | 3673 of 3673 (134 files) | ok, placeholder env |
 
 ### Known traps
 
