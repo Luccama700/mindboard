@@ -16,8 +16,10 @@
  * and the side column's own rules there are written for both places at once.
  * What is here is the box itself and what a body is wrapped in.
  *
- * Nothing here animates. Reduced motion is v2.css's one rule, which stops
- * every transition under [data-v2-root].
+ * Nothing here animates. The desk's frames glide by script (flip.ts, the Web
+ * Animations API, transform and opacity only), which asks for reduced motion
+ * itself: v2.css's one rule stops every CSS transition under [data-v2-root]
+ * and does not reach a script's animation.
  */
 
 /* ------------------------------------------------------------------- the box */
@@ -155,7 +157,8 @@
  *
  * Quiet chrome, loud content: a frame is the card's surface with a hairline,
  * its header one short line in the quiet ink, and the 6px between frames is the
- * page, where the dividers will be. Nothing here animates.
+ * page, where the dividers will be. Nothing here animates: a change of
+ * arrangement or of layout glides by script (flip.ts).
  * ==========================================================================*/
 
 [data-v2-root] .v2-desk {
@@ -321,9 +324,32 @@
   opacity: 1;
 }
 
+/* The pane menu's button (pane-menu.tsx), the first of the tools: as quiet as
+   the others, and drawn too while its menu is open. */
+[data-v2-root] .v2-frame-menu-button {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--v2-ink-3);
+  opacity: 0;
+}
+
+[data-v2-root] .v2-frame-head:hover .v2-frame-menu-button,
+[data-v2-root] .v2-frame-head:focus-within .v2-frame-menu-button,
+[data-v2-root] .v2-frame-menu-button[aria-expanded="true"] {
+  opacity: 1;
+}
+
 @media (hover: none) {
   [data-v2-root] .v2-frame-close,
   [data-v2-root] .v2-frame-max {
+    opacity: 1;
+  }
+
+  [data-v2-root] .v2-frame-menu-button {
     opacity: 1;
   }
 }
@@ -365,6 +391,108 @@
   inset: 6px;
   border: 1.5px solid currentColor;
   border-radius: 2px;
+}
+
+/* ---- the pane menu: the first of the header's tools ---- */
+
+/* Its wrapper holds the button and the menu, and is not positioned. */
+[data-v2-root] .v2-frame-menu {
+  display: flex;
+  flex: none;
+}
+
+/* Its button (quiet like the other tools, above) is three dots in the text's
+   own colour. */
+[data-v2-root] .v2-frame-menu-button:hover,
+[data-v2-root] .v2-frame-menu-button[aria-expanded="true"] {
+  color: var(--v2-ink);
+  background: var(--v2-card-2);
+}
+
+[data-v2-root] .v2-frame-menu-button:focus-visible {
+  outline-offset: -2px;
+}
+
+[data-v2-root] .v2-frame-menu-button::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    -5px 0 0 currentColor,
+    5px 0 0 currentColor;
+  transform: translate(-50%, -50%);
+}
+
+/* THE MENU STAYS INSIDE ITS FRAME. The header, the tools and the wrapper are
+   not positioned, so the frame (absolute, overflow hidden) is the block the
+   menu is placed against: under the 32px header, 6px in from the frame's right
+   edge, never wider than the frame less 6px a side, never taller than what is
+   under the header less 6px, nor than the window less 24px, and scrolling
+   inside itself past that. So the frame's overflow never cuts it, and once it
+   is scrolled into view on opening (pane-menu.tsx) it is whole in the window.
+   Above the body, whose scroller is positioned and comes later, and above the
+   calendar's sticky head inside it (calendar.css, z-index 3): no frame is a
+   stacking context, so the two are weighed against each other. */
+[data-v2-root] .v2-frame-menu-list {
+  position: absolute;
+  z-index: 4;
+  top: 36px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: max-content;
+  min-width: min(180px, calc(100% - 12px));
+  max-width: calc(100% - 12px);
+  max-height: min(calc(100% - 42px), calc(100dvh - 24px));
+  padding: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--v2-card);
+  border: 1px solid var(--v2-edge);
+  border-radius: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--v2-edge) transparent;
+}
+
+[data-v2-root] .v2-frame-menu-list[hidden] {
+  display: none;
+}
+
+[data-v2-root] .v2-frame-menu-item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--v2-ink-2);
+  font: 500 13px/1.2 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-frame-menu-item:hover,
+[data-v2-root] .v2-frame-menu-item:focus-visible {
+  color: var(--v2-ink);
+  background: var(--v2-card-2);
+}
+
+[data-v2-root] .v2-frame-menu-item:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Between the kinds of item: moves, tabs, size, other layouts. */
+[data-v2-root] .v2-frame-menu-rule {
+  flex: none;
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--v2-edge);
 }
 
 /* The gap a divider is dragged in. Nothing is drawn at rest: the page shows
@@ -1105,6 +1233,34 @@
 
   [data-v2-root] .v2-desk-menu a[data-changed~="compact"] .v2-desk-changed {
     display: inline-block;
+  }
+
+  /* The pane menu is the header's one control here: a row of a finger's
+     height, the button at its right end. Maximize is a tiled control. */
+  [data-v2-root] .v2-frame-tools[data-in~="compact"] {
+    display: flex;
+    margin-right: 4px;
+  }
+
+  [data-v2-root] .v2-frame-max {
+    display: none;
+  }
+
+  [data-v2-root] .v2-frame-menu-button {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+  }
+
+  [data-v2-root] .v2-frame-menu-list {
+    top: 48px;
+    max-height: min(calc(100% - 54px), calc(100dvh - 24px));
+  }
+
+  [data-v2-root] .v2-frame-menu-item {
+    min-height: 44px;
+    padding: 0 12px;
+    font-size: 15px;
   }
 }
 

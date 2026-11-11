@@ -23,6 +23,7 @@ import {
   closePane,
   equalize,
   moveLayout,
+  movePane,
   moveTab,
   openPane,
   removeLayout,
@@ -39,7 +40,24 @@ import {
   type ScreenClass,
   type TileSet,
   type Workspace,
+  type Zone,
 } from "@/app/lib/v2/tiles";
+
+/**
+ * The layout an action was worked out on: a divider's split and size, a menu's
+ * leaf ids. Split and leaf ids are minted per arrangement, so the same id can
+ * name another split or leaf in another layout. An action carrying `layout` is
+ * refused when another layout is on screen, which no queued change of layout
+ * can race. The class is the action's own `cls`.
+ *
+ * THE LAYOUT, NOT THE ARRANGEMENT OBJECT. A write from another tab is merged
+ * in, and when it draws the same as what is on screen the merge takes the other
+ * tab's object; an identity test would refuse a release that is perfectly good
+ * on the same layout and class.
+ */
+interface WorkedOn {
+  layout?: LayoutId;
+}
 
 /**
  * Every action that changes one arrangement names the class it is for, as
@@ -53,19 +71,28 @@ export type TilesAction =
   /** Bring a pane to the front of its leaf in the current layout, on that class. */
   | { type: "tab"; cls: ScreenClass; pane: PaneId }
   /** A divider let go, or moved by a key: `setRatio` at the size of the split it divides. */
-  | { type: "ratio"; cls: ScreenClass; splitId: string; ratio: number; size: number }
+  | ({ type: "ratio"; cls: ScreenClass; splitId: string; ratio: number; size: number } & WorkedOn)
   /** Both sides of a divider the same: `equalize`. */
-  | { type: "equalize"; cls: ScreenClass; splitId: string }
-  | { type: "close"; cls: ScreenClass; pane: PaneId }
+  | ({ type: "equalize"; cls: ScreenClass; splitId: string } & WorkedOn)
+  | ({ type: "close"; cls: ScreenClass; pane: PaneId } & WorkedOn)
   /**
    * Open a pane, placed by the engine on the workspace the browser computed. On
    * the phone there is none to give (its arrangement is one stack, which has no
    * geometry), and null is the engine's own answer for that: the first leaf.
    */
   | { type: "open"; cls: ScreenClass; pane: PaneId; workspace: Workspace | null }
-  | { type: "maximize"; cls: ScreenClass; pane: PaneId }
+  | ({ type: "maximize"; cls: ScreenClass; pane: PaneId } & WorkedOn)
   /** A tab moved along its own stack: the phone's list. */
   | { type: "moveTab"; cls: ScreenClass; pane: PaneId; to: number }
+  /** A pane put against a leaf, or made one of its tabs: `movePane`, what a drop and the pane menu do. */
+  | ({ type: "move"; cls: ScreenClass; pane: PaneId; leafId: string; zone: Zone } & WorkedOn)
+  /**
+   * A pane moved to another layout: closed in the layout on screen and opened
+   * in that one's arrangement for the same class, on the workspace the browser
+   * computed (null on the phone, as for `open`). Both or neither: a pane that
+   * cannot be closed here, or is open there already, moves nowhere.
+   */
+  | ({ type: "sendPane"; cls: ScreenClass; pane: PaneId; to: LayoutId; workspace: Workspace | null } & WorkedOn)
   | LayoutAction;
 
 /** What changes the desk's list of layouts rather than one arrangement: one engine call each. */
@@ -127,9 +154,25 @@ function changed(arrangement: Arrangement, action: TilesAction): Arrangement {
       return toggleMaximize(arrangement, action.pane);
     case "moveTab":
       return moveTab(arrangement, action.pane, action.to);
+    case "move":
+      return movePane(arrangement, action.pane, action.leafId, action.zone);
     default:
       return arrangement;
   }
+}
+
+/** A pane closed here and opened in another layout, on one class: two engine calls, kept only when both change. */
+function sentSet(set: TileSet, action: Extract<TilesAction, { type: "sendPane" }>): TileSet {
+  const here = set.current;
+  if (action.layout !== undefined && action.layout !== here) return set;
+  if (action.to === here || !set.layouts.some((meta) => meta.id === action.to)) return set;
+  const before = arrangementOf(set, here, action.cls);
+  const closed = closePane(before, action.pane);
+  if (closed === before) return set;
+  const there = arrangementOf(set, action.to, action.cls);
+  const opened = openPane(there, action.pane, action.workspace);
+  if (opened === there) return set;
+  return withArrangement(withArrangement(set, here, action.cls, closed), action.to, action.cls, opened);
 }
 
 export interface TilesState {
@@ -153,12 +196,18 @@ export function tilesReducer(state: TilesState, action: TilesAction): TilesState
     }
     case "replace":
       return action.set === state.set ? state : { ...state, set: action.set };
+    case "sendPane": {
+      const set = sentSet(state.set, action);
+      return set === state.set ? state : { ...state, set };
+    }
     default: {
       if (isLayoutAction(action)) {
         const set = changedSet(state.set, action);
         return set === state.set ? state : { ...state, set };
       }
       const layout = state.set.current;
+      // Worked out on another layout (one switched in under it): nothing.
+      if ("layout" in action && action.layout !== undefined && action.layout !== layout) return state;
       const before = arrangementOf(state.set, layout, action.cls);
       const after = changed(before, action);
       if (after === before) return state;

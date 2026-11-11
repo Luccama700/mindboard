@@ -257,10 +257,14 @@ function useMeasured(
   return measured;
 }
 
-/** What the workspace asks the desk to do besides the frames' own actions. */
+/**
+ * What the workspace asks the desk to do besides the frames' own actions. A
+ * divider's change carries `layout`, the layout the divider was drawn and
+ * measured on, so the reducer can refuse it once another layout is on screen.
+ */
 export interface WorkspaceActions extends FrameActions {
-  onRatio(cls: TiledClass, splitId: string, ratio: number, size: number): void;
-  onEqualize(cls: TiledClass, splitId: string): void;
+  onRatio(cls: TiledClass, splitId: string, ratio: number, size: number, layout: LayoutId): void;
+  onEqualize(cls: TiledClass, splitId: string, layout: LayoutId): void;
 }
 
 /**
@@ -310,18 +314,22 @@ export function Workspace({
             actions={act}
           />
         ))}
-        {stage.dividers.map((divider) => (
-          <Divider
-            key={`${divider.cls}-${divider.index}`}
-            divider={divider}
-            arrangement={arrangementOf(set, set.current, divider.cls)}
-            stage={stageElement}
-            measured={measured[divider.cls]}
-            cls={cls}
-            onRatio={act.onRatio}
-            onEqualize={act.onEqualize}
-          />
-        ))}
+        {stage.dividers.map((divider) => {
+          // The layout this divider is drawn on, which its changes carry.
+          const drawnOn = set.current;
+          return (
+            <Divider
+              key={`${divider.cls}-${divider.index}`}
+              divider={divider}
+              arrangement={arrangementOf(set, drawnOn, divider.cls)}
+              stage={stageElement}
+              measured={measured[divider.cls]}
+              cls={cls}
+              onRatio={(on, splitId, ratio, size) => act.onRatio(on, splitId, ratio, size, drawnOn)}
+              onEqualize={(on, splitId) => act.onEqualize(on, splitId, drawnOn)}
+            />
+          );
+        })}
       </div>
     </main>
   );
@@ -332,6 +340,8 @@ const NO_ACTIONS: WorkspaceActions = {
   onTab: () => {},
   onClose: () => {},
   onMaximize: () => {},
+  menuItems: () => [],
+  onMenu: () => {},
   onRatio: () => {},
   onEqualize: () => {},
 };

@@ -97,6 +97,23 @@ export const DESK_COPY = {
   paneMovedDown: "{pane} moved down.",
   paneHidden: "{pane} hidden.",
   paneShown: "{pane} shown.",
+
+  // The pane menu in each frame's header. `{pane}`, `{first}` and `{layout}`
+  // are filled. Moving up and down reuses moveUp, moveDown, paneMovedUp and
+  // paneMovedDown above; a tab is named with TILE_COPY.zone.centre.
+  paneMenu: "Menu for {pane}",
+  moveLeft: "Move left",
+  moveRight: "Move right",
+  splitOff: "Split this tab off",
+  maximize: "Maximize",
+  restore: "Restore",
+  close: "Close",
+  sendTo: "Move to {layout}",
+  paneMovedLeft: "{pane} moved left.",
+  paneMovedRight: "{pane} moved right.",
+  paneTabbed: "{pane} is now a tab of {first}.",
+  paneSplit: "{pane} split off.",
+  paneSent: "{pane} moved to {layout}.",
 } as const;
 
 /**

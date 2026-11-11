@@ -16,6 +16,7 @@ import {
 } from "@/app/lib/v2/tiles";
 import { DESK_COPY, deskLine } from "@/app/lib/v2/view/desk";
 import { PaneBox } from "./pane-box";
+import { PaneMenu, type PaneMenuItem } from "./pane-menu";
 import { paneBody } from "./pane-registry";
 
 /** The classes that are tiled, and drawn from `cssLayout`. Compact never is. */
@@ -64,6 +65,20 @@ export interface FrameActions {
   onTab(cls: TiledClass, pane: PaneId, pressed: HTMLElement): void;
   onClose(cls: TiledClass, pane: PaneId, pressed: HTMLElement): void;
   onMaximize(cls: TiledClass, pane: PaneId, pressed: HTMLElement): void;
+  /** What the pane menu offers for this pane on this class, the desk as it is now. */
+  menuItems(cls: ScreenClass, pane: PaneId): PaneMenuItem[];
+  /** One item of the pane menu taken; `button` is the menu's own button. */
+  onMenu(cls: ScreenClass, pane: PaneId, item: PaneMenuItem, button: HTMLElement): void;
+}
+
+/**
+ * The class a frame's menu acts on: the class on screen where the frame is
+ * drawn there, and otherwise, before the browser has said its class, the first
+ * class the frame is drawn in.
+ */
+function menuTarget(cls: ScreenClass | null, frame: DeskFrame): ScreenClass | null {
+  if (cls !== null) return frame.shown.includes(cls) ? cls : null;
+  return tiledTarget(null, tiledShown(frame)) ?? (frame.shown.includes("compact") ? "compact" : null);
 }
 
 /**
@@ -210,7 +225,9 @@ function TabStrip({
  * closes), and each tab has its close control. A pane alone in its leaf has a
  * close control by its title, except the last pane open. Maximize is a button
  * here and a double click on the header; while a pane fills the desk every
- * other frame is not shown, so it is inert. Each control is drawn for the
+ * other frame is not shown, so it is inert. The pane menu (pane-menu.tsx) is
+ * the tools' first control, on every class the frame is drawn in, the phone
+ * included, where it is the header's only one. Each control is drawn for the
  * classes it applies to (`data-in`), like the strips, and the class on screen
  * is the one it acts on.
  *
@@ -247,7 +264,7 @@ export function PaneFrame({
   const panel = cls !== null && frame.panelIn.includes(cls);
 
   const onDoubleClick = (event: MouseEvent<HTMLElement>) => {
-    if ((event.target as Element).closest("button") !== null) return;
+    if ((event.target as Element).closest('button, [role="menu"]') !== null) return;
     const header = event.currentTarget;
     if (maximizeTarget === null) return;
     const button = header.querySelector<HTMLElement>(".v2-frame-max");
@@ -280,7 +297,14 @@ export function PaneFrame({
             actions={actions}
           />
         ))}
-        <span className="v2-frame-tools" data-in={tiled.join(" ")}>
+        <span className="v2-frame-tools" data-in={frame.shown.join(" ")}>
+          <PaneMenu
+            paneId={pane.id}
+            title={pane.title}
+            target={menuTarget(cls, frame)}
+            itemsFor={(on) => actions.menuItems(on, pane.id)}
+            onPick={(on, item, button) => actions.onMenu(on, pane.id, item, button)}
+          />
           {frame.soloClose.length > 0 && (
             <button
               type="button"
@@ -296,6 +320,7 @@ export function PaneFrame({
           <button
             type="button"
             className="v2-frame-max"
+            data-in={tiled.join(" ")}
             aria-label={deskLine(DESK_COPY.maximizePane, { pane: pane.title })}
             title={deskLine(DESK_COPY.maximizePane, { pane: pane.title })}
             aria-pressed={maximizedNow}

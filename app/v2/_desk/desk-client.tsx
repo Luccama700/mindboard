@@ -24,7 +24,9 @@ import { DeskTabBar, DeskTopBar } from "./desk-bar";
 import { DeskDataProvider } from "./desk-data-provider";
 import { DeskNotes, DeskRail } from "./desk-rail";
 import { measureWorkspace } from "./divider";
+import { flipChange } from "./flip";
 import { frameId, titleOf, type TiledClass } from "./pane-frame";
+import { paneMenuItems } from "./pane-menu";
 import { useSavedDesk } from "./persist";
 import { DESK_PATH, deskHref, deskKeep, layoutAsked, useTiles, type LayoutAction, type TilesAction } from "./use-tiles";
 import type { OnLayout } from "./layout-menu";
@@ -113,6 +115,24 @@ function paneTarget(pane: PaneId, cls: ScreenClass): HTMLElement | null {
   return tab ?? frame.querySelector<HTMLElement>(".v2-pane-body");
 }
 
+/** A pane's menu button: where the focus follows a pane the pane menu moved. */
+function menuButtonOf(pane: PaneId): HTMLElement | null {
+  const frame = document.getElementById(frameId(pane));
+  return frame?.querySelector<HTMLElement>(":scope > header .v2-frame-menu-button") ?? null;
+}
+
+/**
+ * The phone's list that orders, hides and shows the stack (pane-list.tsx),
+ * opened from the pane menu rather than repeated in it, with the focus on its
+ * button.
+ */
+function openArrange(): void {
+  const toggle = document.querySelector<HTMLElement>(".v2-desk-bar .v2-desk-arrange-toggle");
+  if (toggle === null) return;
+  if (toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+  toggle.focus();
+}
+
 /**
  * The desk: one workspace of tiled panes, in whichever of its layouts the
  * address names.
@@ -173,6 +193,18 @@ export function DeskClient({
     latest.current = set;
   });
 
+  // A change a person makes glides (flip.ts), on the class on screen as last
+  // committed. A change of class, the saved desk loading and a divider's ratio
+  // are dispatched directly and never come here.
+  const shownClass = useRef(cls);
+  useLayoutEffect(() => {
+    shownClass.current = cls;
+  });
+  const glide = useCallback(
+    (change: () => void) => flipChange(stageRef.current, shownClass.current, change),
+    [],
+  );
+
   // What the save said while an action was being committed: it is said after
   // the action's own sentence, in the same breath, so neither hides the other.
   const notice = useRef<string | null>(null);
@@ -206,7 +238,7 @@ export function DeskClient({
     ): TileSet | null => {
       const before = latest.current;
       notice.current = null;
-      flushSync(() => dispatch(action));
+      glide(() => flushSync(() => dispatch(action)));
       const after = latest.current;
       if (after.current !== before.current) {
         const href = deskHref(after.current, date, week);
@@ -224,7 +256,7 @@ export function DeskClient({
       }
       return after === before ? null : after;
     },
-    [dispatch, date, week],
+    [dispatch, glide, date, week],
   );
 
   const actions = useMemo<WorkspaceActions>(
@@ -243,8 +275,29 @@ export function DeskClient({
         const filled = arrangementOf(after, after.current, on).maximized === pane;
         say(deskLine(filled ? DESK_COPY.paneMaximized : DESK_COPY.paneRestored, { pane: titleOf(pane) }));
       },
-      onRatio: (on, splitId, ratio, size) => dispatch({ type: "ratio", cls: on, splitId, ratio, size }),
-      onEqualize: (on, splitId) => dispatch({ type: "equalize", cls: on, splitId }),
+      // The pane menu: what it offers is worked out from the desk as it is
+      // when it opens, on the workspace the browser computed (none on the
+      // phone). A pick is one action; the focus follows the pane to its menu
+      // button, or goes to the one of the pane the engine focuses when the
+      // pane has left (closed, or moved to another layout).
+      menuItems: (on, pane) =>
+        paneMenuItems(latest.current, on, pane, isTiled(on) ? measureWorkspace(stageRef.current, on) : null),
+      onMenu: (on, _pane, item, button) => {
+        if (item.action === null) {
+          openArrange();
+          return;
+        }
+        const after = commit(item.action, button, on, (next) => {
+          const arrangement = arrangementOf(next, next.current, on);
+          const focused = arrangement.focus ?? leavesOf(arrangement.tree)[0]?.active;
+          if (focused === undefined) return null;
+          const target = menuButtonOf(focused);
+          return reachable(target, on) ? target : paneTarget(focused, on);
+        });
+        if (after !== null) say(item.said);
+      },
+      onRatio: (on, splitId, ratio, size, layout) => dispatch({ type: "ratio", cls: on, splitId, ratio, size, layout }),
+      onEqualize: (on, splitId, layout) => dispatch({ type: "equalize", cls: on, splitId, layout }),
     }),
     [commit, dispatch, say],
   );
@@ -259,7 +312,7 @@ export function DeskClient({
       if (!isTiled(cls)) return;
       const arrangement = arrangementOf(set, set.current, cls);
       if (leafOf(arrangement.tree, pane) !== null) {
-        flushSync(() => dispatch({ type: "tab", cls, pane }));
+        glide(() => flushSync(() => dispatch({ type: "tab", cls, pane })));
         paneTarget(pane, cls)?.focus();
         return;
       }
@@ -269,7 +322,7 @@ export function DeskClient({
         say(deskLine(DESK_COPY.paneOpened, { pane: titleOf(pane) }));
       }
     },
-    [cls, set, dispatch, commit, say],
+    [cls, set, dispatch, glide, commit, say],
   );
 
   /** The rail's and the sheet's layout actions: one engine call, the focus, one sentence. */
@@ -298,15 +351,15 @@ export function DeskClient({
     (id: LayoutId) => {
       // A layout already on screen, hidden, or not on the desk: nothing to push.
       if (setCurrent(set, id) === set) return;
-      dispatch({ type: "layout", id });
+      glide(() => flushSync(() => dispatch({ type: "layout", id })));
       window.history.pushState(null, "", deskHref(id, date, week));
     },
-    [set, date, week, dispatch],
+    [set, date, week, dispatch, glide],
   );
 
   const showTab = useCallback(
-    (pane: PaneId) => dispatch({ type: "tab", cls: "compact", pane }),
-    [dispatch],
+    (pane: PaneId) => glide(() => flushSync(() => dispatch({ type: "tab", cls: "compact", pane }))),
+    [dispatch, glide],
   );
 
   // Back and Forward. An address without a usable layout is the one the server
@@ -314,11 +367,12 @@ export function DeskClient({
   useEffect(() => {
     const onPop = () => {
       if (window.location.pathname !== DESK_PATH) return;
-      dispatch({ type: "layout", id: layoutAsked(window.location.search, set, fallback) });
+      const id = layoutAsked(window.location.search, set, fallback);
+      glide(() => flushSync(() => dispatch({ type: "layout", id })));
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [set, fallback, dispatch]);
+  }, [set, fallback, dispatch, glide]);
 
   return (
     <>
