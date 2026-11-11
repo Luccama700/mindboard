@@ -233,46 +233,57 @@ export function serializeTileSet(set: TileSet): string;
 
 ### Task 2: the engine's geometry as CSS
 
-Pure code, one new file. It reads only what Task 1 does not change the shape of: `TileNode`, `Split`, `Leaf`, `PaneSpec` (`minWidth`, `minHeight`), `minSize`, `shareLimits`, `layoutTree`, `leavesOf`, `GAP`.
+Pure code, one module. It reads only what Task 1 does not change the shape of: `TileNode`, `Split`, `Leaf`, `PaneSpec` (`minWidth`, `minHeight`), `minSize`, `shareLimits`, `layoutTree`, `leavesOf`, `GAP`.
+
+(Rewritten after its first pass. The first version wrote the formula over unregistered custom properties, which a browser pastes as text, so what it evaluated doubled with each level of nesting, and browsers cap that. A chain of docked panes is a deep chain. This is the version that stays.)
 
 **Files:**
 - Create: `app/lib/v2/tiles/css.ts`, `__tests__/v2-tiles-css.test.ts`
-- Do not edit any other file, not even `index.ts`: Task 1 is rewriting the engine beside you. Import from `./types`, `./tree`, `./geometry` directly. If `tsc` reports errors in files you do not own while Task 1 is mid-change, name them and move on.
 
 **Interfaces**
 
 ```ts
+export const MAX_SPLITS = 13;                         // fourteen panes, thirteen splits; more throws
 export interface CssBox { left: string; top: string; width: string; height: string }
 export interface CssLayout {
-  /** One per leaf, in the order leavesOf gives. Lengths are relative to the workspace box. */
+  /** One per leaf, in the order leavesOf gives. Lengths are relative to the stage. */
   leaves: Array<CssBox & { leafId: string }>;
-  /** One per split: the divider's box. */
-  dividers: Array<CssBox & { splitId: string; dir: SplitDir }>;
-  /** Custom properties for the workspace element: one ratio per split, and the shared sub-expressions. */
+  /** One per split: the divider's box, its pre-order index, and the property a drag writes. */
+  dividers: Array<CssBox & { splitId: string; dir: SplitDir; index: number; ratioVar: string }>;
+  /** Custom properties for the STAGE element. */
   vars: Record<string, string>;
   /** The smallest workspace this tree can be drawn in. */
   min: { w: number; h: number };
 }
-/** `scope` goes into every custom property's name: the server writes several classes' layouts into one document and each tree has an `s1`. It must match [a-z]+. */
-export function ratioVar(scope: string, splitId: string): string;        // "--v2-r-wide-s3"
+/** `scope` goes into every property's name: the server writes several classes' layouts into one document. It must match [a-z]+. */
+export function ratioVar(scope: string, index: number): string;            // "--v2-wide-r3"
+export function extentVars(scope: string): { w: string; h: string };        // "--v2-wide-w", "--v2-wide-h"
 export function cssLayout(tree: TileNode | null, maximizedLeafId: string | null, specs: readonly PaneSpec[], scope: string): CssLayout;
+/** The @property rules for the whole pool of names, for those scopes: text for a stylesheet, once. */
+export function propertyRules(scopes: readonly string[]): string;
+/** The workspace the browser itself computed, from the stage's two computed extent properties ("1826px"). */
+export function workspaceFromComputed(w: string, h: string): Workspace | null;
 ```
 
-`cssLayout` takes the tree and the id of the maximized leaf (or null) rather than an `Arrangement`, so it does not depend on the fields Task 1 is adding.
+**The contract with whoever uses it**
+
+1. `propertyRules(["regular", "wide"])` is in a stylesheet before the first paint.
+2. The workspace box is a size container (`container-type: size`), with no padding and no border, sized by its parent.
+3. One element inside it, the stage (`position: absolute; inset: 0`), carries `vars` for every class. Nothing between the stage and the workspace is a size container.
+4. Every frame and divider is a descendant of the stage, absolutely positioned against it.
+5. A drag writes `divider.ratioVar` on the stage, as a plain number.
+6. **Hit testing reads what the browser computed.** The size given to `layoutTree`, `shareLimits` and `openPane` is `workspaceFromComputed(getComputedStyle(stage).getPropertyValue(extentVars(scope).w), ...h)`. It is NOT a measured rectangle floored in script: a real browser at 90 percent zoom reports a workspace 820.00006 px tall while its own layout holds 819.98, so the stylesheet floors to 819 and a script floors to 820, and every pane is a pixel off. Found by the controller in Edge; with the computed values the two agree at every zoom tried.
 
 **Behaviour the tests pin**
 
-1. **The same formula.** For a split given an extent `S`, the first child is `round(nearest, clamp(<min first>px, (S - 6px) * var(<ratio var>), S - 6px - <min second>px), 1px)`, then the 6 px gap, then the rest. When the two minimums cannot both fit, `shareLimits` answers `[0.5, 0.5]`: write that case as the engine computes it, so the two forms agree below the minimum as well, or state in the file's header exactly where they stop agreeing and make the test's sizes start there.
-2. **Proven, not asserted.** The test holds a small evaluator for exactly the CSS it needs (`+`, `-`, `*`, `clamp`, `round(nearest, x, 1px)`, `min`, `max`, `px`, `%`, `var`) and checks, for 200 seeded random trees of up to 12 leaves with random minimum sizes, at 40 workspace sizes from `min` up to 3840 by 2160, that every leaf and divider box equals `layoutTree`'s rect to the pixel.
-3. **A maximized leaf** gets the whole box (`0`, `0`, `100%`, `100%`); the others keep their own boxes, as `layoutTree` returns them. A null tree gives no leaves, no dividers and a `min` of zero.
-4. **Linear, not exponential.** Shared sub-expressions go into `vars`, so the total length of a layout's strings grows linearly with the number of splits. A 12 deep chain stays under 8 KB.
-5. **Only what the module wrote.** Every string is built from numbers the module formatted (finite, no exponent notation) and ids matching `^[ls][0-9]+$`. A tree carrying any other id, or a `scope` not matching `^[a-z]+$`, throws. No title and no pane id reaches a string.
+1. **The same formula, computed once per split.** A split is addressed by its pre-order index k. `--v2-<scope>-w` and `-h` are `round(down, 100cqw, 1px)` and `round(down, 100cqh, 1px)`; `--v2-<scope>-a<k>` is the first child's extent, `round(nearest, clamp(<min first>px, (S - 6px) * var(<ratio>), S - 6px - <min second>px), 1px)`, with `S` written as a sum and difference of its ancestors' `a` properties. All are registered as `<length>`, the ratios as `<number>`. Where two minimums cannot both fit, the form agrees with the engine's `[0.5, 0.5]`.
+2. **Proven, not asserted.** The test holds an evaluator that models a browser: each registered property is computed once, in dependency order, to a number. For 200 seeded random trees of up to 14 leaves with random minimum sizes, at 40 workspace sizes from `min` to 3840 by 2160, about half of them fractional, and for chains of 13 splits in each direction and alternating, every leaf and divider box equals `layoutTree`'s rect to the pixel on the floored workspace. Five deliberate breakages each turn it red.
+3. **A maximized leaf** gets the whole stage; the others keep their own boxes. A null tree gives no leaves, no dividers and a `min` of zero.
+4. **Linear, pinned.** For a 13 split chain the total length of every string returned is under 24 KB, no value references a property outside the pool, and no `a<k>` holds another's definition text, only a `var()` of it.
+5. **Only what the module wrote.** Every string is built from numbers the module formatted and names from its own pool. A tree with more than `MAX_SPLITS` splits, an id not matching `^[ls][0-9]+$`, or a `scope` not matching `^[a-z]+$` throws.
+6. **`workspaceFromComputed`** reads two strings of the form `<number>px` into whole numbers and answers null for anything else (an empty string before the stylesheet has applied, `auto`, a percentage).
 
-**Steps**
-
-- [ ] Write the evaluator and the failing equality test. Run, fail.
-- [ ] Implement `css.ts`. Run, pass.
-- [ ] `npx eslint` on your two files, `npx tsc --noEmit`.
+**Checked in a real browser by the controller** (Edge 158, a self-checking page outside git): the eight regular and wide defaults and four 13 split chains, at 2000 by 985, 1366 by 768, 1024 by 768 and at device scale 0.67, 0.8, 0.9, 1.1, 1.25, 1.5 and 1.75. No frame differs from `layoutTree` by more than device pixel snapping (0.03 px) when the workspace is read from the computed properties.
 
 ---
 
@@ -628,7 +639,14 @@ The page exists. It opens on the layout the address names, in the default arrang
 
 **Files:**
 - Create: `app/v2/desk/page.tsx`, `app/v2/_desk/{desk-client,workspace,pane-frame,desk-rail,desk-bar,announcer}.tsx`, `app/v2/_desk/use-tiles.ts`, `__tests__/v2-desk-page.test.ts`, `__tests__/v2-desk-workspace.test.ts`
-- Modify: `app/v2/desk.css`, `app/lib/v2/view/desk.ts`, `app/v2/v2.css` (only if a rail rule must be shared), `__tests__/v2-source.test.ts` (ONLY the pinned set of pages, which gains the desk page)
+- Modify: `app/v2/desk.css`, `app/lib/v2/view/desk.ts` (copy), `app/v2/_desk/pane-box.tsx` (the scroller takes its name from the frame), `__tests__/v2-source.test.ts` (ONLY the pinned set of pages, which gains the desk page)
+- Do not touch: `app/v2/v2.css`, the classic Today and Week pages and their clients, any pane body, anything under `app/lib/v2/tiles/**`.
+
+**What it is built on (all committed)**
+
+- The engine, from `@/app/lib/v2/tiles` (its index): `PANES`, `BUILT_IN_LAYOUTS`, `EMPTY_TILE_SET`, `arrangementOf(set, layout, cls)`, `setCurrent(set, id)`, `isChanged(set, layout, cls)`, `optionsOf(arr, pane)`, `leavesOf`, `screenClassFor(width)`, and the geometry as CSS: `cssLayout`, `propertyRules`, `extentVars`. In memory a set holds exactly the arrangement it was given; only the saved form skips a default one.
+- `DayProvider` and `useDay()`, `DeskDataProvider` and `useDeskData()`, `useDeskKeep()`, `useDeskPath()`, `paneBody(id)`, `PaneBox`, `paneOptions` (in `view/desk.ts`): read `.superpowers/sdd/PLAN-DESK/task-5-report.md`, the current "writing a pane body" section.
+- `sampleDesk(weekParam)` and `loadLocalDesk(dir, now, dateParam, weekParam)`.
 
 **Interfaces**
 
@@ -648,24 +666,30 @@ export function useTiles(initial: TileSet): {
 
 **Behaviour the tests pin**
 
-1. **The gate.** `/v2/desk` is not found with the flags off and in production, awaits the loopback check before any read, and reads `?layout=`, `?date=` and `?week=` inside the guarded child. An unknown or hidden `layout` falls back to the set's current one. The gate walk passes with the page in it.
+1. **The gate.** `/v2/desk` is not found with the flags off and in production, awaits the loopback check before any read, and reads `?layout=`, `?date=` and `?week=` inside the guarded child. An unknown or hidden `layout` falls back to the set's current one. The gate walk passes with the page in it. In this task the set is `EMPTY_TILE_SET` with `current` from the address: the cookie is read by Task 10.
 2. **One page, every layout.** The rail's layouts are anchors to `/v2/desk?layout=<id>` carrying `date` when the request had a usable one. A press changes the layout in the browser (the reducer, then `window.history.pushState`, which Next 16 keeps in step with `useSearchParams`; read the guide in `node_modules/next/dist/docs/` and name it in your report) with no request to the server, so the day's presses are kept. Back and Forward change the layout. Without script the anchor loads that layout from the server.
-3. **The server draws every class.** It cannot know the window's size, so each frame's box is written three times as custom properties (`--v2-x-regular`, `--v2-x-wide`, and the same for `y`, `w`, `h`, from `cssLayout`), and each frame says in which classes it is shown (`data-shown="compact regular wide"`, some, or none). `desk.css` uses the regular set from 1024 px and the wide set from `@media (min-width: 1600px)`, shows in compact only the front tab of the one leaf, and does not display a frame that is not shown in the class that applies. No script is needed for the first paint.
-4. **The first client render is the server's HTML.** The reducer's first state is built only from the server's props. The class is `null` on the first render, on the server and in the browser alike; it is read from `matchMedia` in an effect. A test renders the desk to a string as the server does, hydrates that markup with a different window width, and asserts React reports no mismatch and the markup is unchanged until the effects have run.
-5. **Flat and stable.** The workspace's children are the fourteen frames in catalog order, then the dividers of the classes. A frame is a `section` labelled by its title. A leaf holding several panes shows a tab strip (`role="tablist"`, the short labels); only the front tab's body is displayed. Bodies of background tabs, of panes not in this layout and of panes behind a maximized one stay mounted and are not displayed, which takes them out of the tab order and the accessibility tree; once the class is known they are also `inert`.
-6. **Mount once.** A test switches through the four layouts and back and asserts no body was unmounted (a counter in the test's stand-in bodies), and that a press on Today's lit card made before the switches is still there after them.
-7. **The frame.** A header with the pane's title (or the tab strip), then the `PaneBox` with `paneBody(id)` and that pane's options from the arrangement. In this task the header has no controls.
-8. **Regular and wide.** The existing rail on the left: the layouts (the current one marked with `aria-current="page"`), then the pane list by group with a mark for open in this layout, then Appearance. The workspace fills the rest of the window, with `min-width` and `min-height` from `cssLayout`. A window too short for the tree scrolls the page; no pane overflows its box.
-9. **Compact.** One slot. The top bar holds the current layout's name as a button that opens the list of layouts (a sheet of anchors); the bottom bar is the current layout's tabs in order, the front one marked, scrolling sideways when there are more than fit. The slot fills the space between the bars and its body scrolls inside it.
-10. **One live region.** The desk's `Announcer` is the only `role="status"` on the page, outside every pane, and speaks `useDay().said`. The notes of `DeskScreenData.notes` and the day's notice are shown once, in the rail on a big screen and under the top bar on a phone.
-11. **The local source** uses `loadLocalDesk`; a folder whose day cannot be read gets the shared snapshot error screen.
+3. **Its own root.** The desk's root element has the class `v2-desk` and is NOT inside a `.v2-shell`: a rule of the classic page in `v2.css` reaches every list under `.v2-shell` on a wide window.
+4. **The geometry's contract, exactly** (it is checked in a real browser and it is strict):
+   - `propertyRules(["regular", "wide"])` is in a `<style>` the server sends with the page, once.
+   - The workspace box is `container-type: size`, with no padding and no border, sized by its parent, with `min-width` and `min-height` from the shown class's `cssLayout(...).min`.
+   - One element inside it, the stage (`position: absolute; inset: 0`), carries in its inline style the `vars` of BOTH classes for the layout shown.
+   - Every frame and divider is a descendant of the stage, absolutely positioned against it. Nothing between a frame and the stage, and nothing between the stage and the workspace, is a size container. (A pane body's own `v2-pane` container is INSIDE its frame, which is fine.)
+5. **The server draws every class.** It cannot know the window's size, so each frame's box is written once per class as custom properties in the frame's inline style (`--v2-frame-regular-left`, `-top`, `-width`, `-height`, and the same with `wide`, holding the strings `cssLayout` returned), and each frame says in which classes it is shown (`data-shown="compact regular wide"`, some, or none). `desk.css` uses the regular set from 1024 px and the wide set from `@media (min-width: 1600px)`, shows in compact only the front tab of the one leaf, and does not display a frame that is not shown in the class that applies. No script is needed for the first paint. Do not confuse the frame's properties with the stage's (`--v2-wide-w` is the whole workspace's width).
+6. **The first client render is the server's HTML.** The reducer's first state is built only from the server's props. The class is `null` on the first render, on the server and in the browser alike; it is read from `matchMedia` in an effect. A test renders the desk to a string as the server does, hydrates that markup with a different window width, and asserts React reports no mismatch and the markup is unchanged until the effects have run.
+7. **Flat and stable.** The stage's children are the fourteen frames in catalog order, then the dividers of each class. A frame is a `section` labelled by its title. A leaf holding several panes shows a tab strip (`role="tablist"`, the short labels) in the frame of its front tab; only the front tab's frame is displayed. Frames of background tabs, of panes not in this layout and of panes behind a maximized one stay mounted and are not displayed, which takes them out of the tab order and the accessibility tree; once the class is known they are also `inert`. Frames are keyed by pane id and by nothing else: leaf and split ids are minted again when a saved layout is read.
+8. **Mount once.** A test switches through the four layouts and back and asserts no body was unmounted (a counter in the test's stand-in bodies), and that a press on Today's lit card made before the switches is still there after them.
+9. **The frame.** A header with the pane's title (or the tab strip), then the `PaneBox` with `paneBody(id)` rendered through `createElement` with that pane's options (`optionsOf`, through `paneOptions`). The `PaneBox` scroller is named by the frame's title (`aria-labelledby`). In this task the header has no controls.
+10. **Regular and wide.** A rail on the left, the width of the existing one (`--v2-rail-w`): the layouts (the current one with `aria-current="page"`), then the pane list by group with a mark for open in this layout (not controls yet), then Appearance (the existing panel). The workspace fills the rest of the window. A window too short or too narrow for the tree scrolls the page; no pane overflows its box.
+11. **Compact.** One slot. A top bar holds the current layout's name as a button that opens the list of layouts (anchors); a bottom bar is the current layout's tabs in order (the compact arrangement's one leaf), the front one marked, scrolling sideways when there are more than fit. A press on a tab shows that pane (`activateTab` through the reducer, as one more action). The slot fills the space between the bars and its body scrolls inside it. The bars follow the existing phone bar's look.
+12. **One live region.** The desk's `Announcer` is the only `role="status"` on the page, outside every pane, and speaks `useDay().said`. The notes of `DeskScreenData.notes` and the day's notice are shown once, in the rail on a big screen and under the top bar on a phone.
+13. **The local source** uses `loadLocalDesk`; a folder whose day cannot be read gets the shared snapshot error screen. `DayProvider` is keyed on the planned day, as on the classic page.
 
 **Steps**
 
 - [ ] Write the failing tests. Run, fail.
 - [ ] Build the page, the client, the reducer, the workspace, the frame, the rail, the bars, the announcer; extend `desk.css`.
 - [ ] Run this task's tests and every test that reads `app/v2`. `npx eslint`, `npx tsc --noEmit`.
-- [ ] The controller builds, captures the four layouts at 2000 by 985, 1366 by 768 and 390 by 844 on the sample and on the local copy, and presses through the layouts in a browser with a press on Today made first.
+- [ ] The controller builds, captures the four layouts at 2000 by 985, 1366 by 768 and 390 by 844 on the sample and on the local copy, compares every frame's box with `layoutTree` in the browser, and presses through the layouts with a press on Today made first.
 
 ---
 
@@ -679,7 +703,7 @@ export function useTiles(initial: TileSet): {
 
 **Behaviour the tests pin**
 
-1. **A divider** is a `role="separator"` with `aria-orientation` and the three values from `shareLimits`, focusable. Arrow keys move it by 2 percent of the split, with Shift by 10; Home and End go to the limits; Enter makes both sides equal, as a double click does. Dragging writes the ratio's custom property straight onto the workspace element on each pointer move, clamped, with no React render; on release one action commits it through `setRatio`. Pointer capture is taken, and Escape during a drag restores the ratio it started from.
+1. **A divider** is a `role="separator"` with `aria-orientation` and the three values from `shareLimits`, focusable. Arrow keys move it by 2 percent of the split, with Shift by 10; Home and End go to the limits; Enter makes both sides equal, as a double click does. Dragging writes the divider's `ratioVar` straight onto the STAGE (where the geometry's properties live) on each pointer move, as a plain number, clamped, with no React render; on release one action commits it through `setRatio`. Every size handed to the engine for a drag, a limit or an open (`shareLimits`, `layoutTree`, `openPane`) is the workspace the browser itself computed: `workspaceFromComputed` over the stage's two computed extent properties, never a measured rectangle floored in script. Pointer capture is taken, and Escape during a drag restores the ratio it started from.
 2. **Tabs.** A click or Enter on a tab is `activateTab`. Arrow keys move along the strip. Each tab has a close control (`closePane`), absent when it is the last pane of the layout. Alt with the arrow keys is NOT bound.
 3. **Close and reopen.** The pane list marks what is open in this layout. Pressing a closed pane opens it (`openPane` with the workspace's measured size) and it returns where it was; pressing an open one focuses it.
 4. **Maximize** is a button in the frame's header and a double click on the header. While a pane is maximized every other body is `inert`, and one press restores.
