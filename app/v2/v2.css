@@ -985,11 +985,19 @@ body:has([data-v2-root]) {
   color: var(--v2-ink-3);
 }
 
+/* A link that works reads brighter than a placeholder that does not, and says
+   so again under the pointer. The disabled two stay at --v2-ink-3. */
 [data-v2-root] .v2-nav a {
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--v2-ink-2);
   text-decoration: none;
+  transition: color var(--v2-quick) var(--v2-ease);
+}
+
+[data-v2-root] .v2-nav a:not([aria-current="page"]):hover {
+  color: var(--v2-ink);
 }
 
 [data-v2-root] .v2-nav button[aria-current="page"],

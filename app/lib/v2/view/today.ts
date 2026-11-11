@@ -321,6 +321,14 @@ export const STOP_STATUS_COPY: Record<Stop["state"], string> = {
   later: "",
 };
 
+/** The four destinations, by name, so nothing has to find one by its place in a list. */
+const NAV = {
+  today: "Today",
+  week: "Week",
+  quests: "Quests",
+  money: "Money",
+} as const;
+
 /** Every static string on the Today screen. */
 export const TODAY_COPY = {
   empty: "Nothing planned. Add a task and it lands here.",
@@ -373,7 +381,9 @@ export const TODAY_COPY = {
   // the source itself, as `notice`, so a real account does not get told it is
   // looking at a sample and the sample still says so.
   navLabel: "Main",
-  navItems: ["Today", "Week", "Quests", "Money"],
+  nav: NAV,
+  /** The same four, in the order the rail shows them. */
+  navItems: [NAV.today, NAV.week, NAV.quests, NAV.money],
   feedState: {
     alive: "Alive",
     late: "Late",

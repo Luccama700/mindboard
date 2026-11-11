@@ -17,6 +17,7 @@ import { loadLocalCalendar } from "@/app/lib/v2/local/calendar";
 import { LocalSnapshotError } from "@/app/lib/v2/local/snapshot";
 import { requireLoopback, screenSource, type ScreenSource } from "@/app/lib/v2/source";
 import type { CalendarScreenData } from "@/app/lib/v2/view/screen-data";
+import { SnapshotError } from "../_components/snapshot-error";
 import { WeekClient } from "./week-client";
 
 export const metadata: Metadata = {
@@ -67,17 +68,7 @@ async function WeekScreen({
   if (source.kind === "sample") return <WeekClient calendar={sampleWeek(week)} />;
 
   const folder = await readCalendar(source.dir, week);
-  if (folder.error !== undefined) {
-    return (
-      <main style={{ padding: "2rem 1rem", maxWidth: "34rem", lineHeight: 1.5 }}>
-        <h1 style={{ fontSize: "1.1rem", fontWeight: 700 }}>The snapshot is not ready</h1>
-        <p style={{ marginTop: "0.75rem" }}>{folder.error}</p>
-        <p style={{ marginTop: "0.75rem", opacity: 0.7 }}>
-          The folder is the one V2_LOCAL_SNAPSHOT points at. Nothing was changed in it.
-        </p>
-      </main>
-    );
-  }
+  if (folder.error !== undefined) return <SnapshotError message={folder.error} />;
 
   // null is a folder with no calendar file, which the screen says in words.
   return <WeekClient calendar={folder.calendar} />;

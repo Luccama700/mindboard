@@ -13,20 +13,27 @@ import { CalendarChipItem } from "./calendar-chip";
  * the current date and its heading wears the accent. A day the source cannot
  * speak for says so in its list and holds nothing else, and an empty covered
  * day is an empty list: the week's one "nothing on" sentence is in the pane's
- * header, not repeated seven times here.
+ * header, not repeated seven times here. Each list says `role="list"` out loud,
+ * because a list with its bullets styled away is no longer a list to Safari's
+ * screen reader.
  */
-export function CalendarAgenda({ view, headingId }: { view: CalendarView; headingId: string }) {
+export function CalendarAgenda({ view }: { view: CalendarView }) {
   const base = useId();
 
   return (
-    // Focusable so a keyboard can scroll it; it is named by the pane's heading.
-    <div className="v2-cal-agenda" role="group" aria-labelledby={headingId} tabIndex={0}>
+    // Focusable so a keyboard can scroll it. No name of its own: the section
+    // around it carries the pane's, and its days are named by their headings.
+    <div className="v2-cal-agenda" tabIndex={0}>
       {view.days.map((day) => {
         const id = `${base}-${day.date}`;
         return (
           <div key={day.date} className="v2-cal-aday" data-today={day.isToday ? "" : undefined}>
             <h3 id={id}>{day.label}</h3>
-            <ul aria-labelledby={id} aria-current={day.isToday ? "date" : undefined}>
+            <ul
+              role="list"
+              aria-labelledby={id}
+              aria-current={day.isToday ? "date" : undefined}
+            >
               {day.covered ? (
                 <>
                   {day.allDay.map((title, at) => (
@@ -35,7 +42,7 @@ export function CalendarAgenda({ view, headingId }: { view: CalendarView; headin
                     </li>
                   ))}
                   {day.chips.map((chip) => (
-                    <CalendarChipItem key={`${chip.kind}:${chip.id}`} chip={chip} />
+                    <CalendarChipItem key={`${chip.kind}:${chip.id}`} chip={chip} placed={false} />
                   ))}
                 </>
               ) : (

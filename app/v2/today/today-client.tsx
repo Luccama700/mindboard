@@ -200,6 +200,8 @@ export function TodayClient({ data }: { data: TodayScreenData }) {
       .filter((block) => block.state !== "done" && block.state !== "skipped")
       .map((block) => ({
         id: block.id,
+        // Never reached: buildTodayView makes a stop for every block of this
+        // same plan. It is here because Map.get cannot say so to the types.
         title: titles.get(block.id) ?? block.title,
         start: block.start,
         end: block.end,

@@ -27,8 +27,12 @@ export function calendarIdentity(
  *
  * READ ONLY. It is a list item and nothing else: no link, no button, no tab
  * stop, so a keyboard walks the links and the scrollers and never a hundred
- * chips. The whole of it is in `title` for a pointer, because a short chip
- * shows only its first line.
+ * chips.
+ *
+ * A TOOLTIP IN THE GRID ONLY. A placed chip clips, so its whole text is in
+ * `title` for a pointer. An agenda chip shows all of it, and a list item takes
+ * its name from `title`, so there the tooltip would only make a screen reader
+ * say the chip twice.
  *
  * The same element serves the agenda and the grid; the stylesheet decides
  * whether it flows or is placed, reading the four numbers below in the grid and
@@ -39,7 +43,14 @@ export function calendarIdentity(
  * its own element with a space between, so a screen reader hears four phrases
  * and not one run of text.
  */
-export function CalendarChipItem({ chip }: { chip: CalendarChip }) {
+export function CalendarChipItem({
+  chip,
+  placed,
+}: {
+  chip: CalendarChip;
+  /** In the grid, where the chip is sized by its time and clips its words. */
+  placed: boolean;
+}) {
   const { tokens } = useAppearance();
   const planned = chip.kind === "planned";
 
@@ -70,7 +81,7 @@ export function CalendarChipItem({ chip }: { chip: CalendarChip }) {
       data-before={chip.continuesBefore ? "" : undefined}
       data-after={chip.continuesAfter ? "" : undefined}
       style={style}
-      title={parts.map(([, text]) => text).join("\n")}
+      title={placed ? parts.map(([, text]) => text).join("\n") : undefined}
     >
       {parts.map(([className, text], index) => (
         <Fragment key={className}>

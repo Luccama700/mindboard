@@ -19,9 +19,13 @@
  * QUIET, READ ONLY. Hour lines are hairlines that recede and the chips carry the
  * weight. Two places take the eye: the week label, and today's column (a quiet
  * tint, its weekday in the accent). The only motion is a chip's hover and a
- * link's, at the quick duration, and none at all under reduced motion. Nothing
- * animates on load, and the now line holds still: the one loop on this screen is
- * the "you are here" dot on the day's own line.
+ * link's, at the quick duration. Nothing animates on load, and the now line
+ * holds still: the one loop on this screen is the "you are here" dot on the
+ * day's own line.
+ *
+ * REDUCED MOTION IS v2.css's ONE RULE, which stops every transition under
+ * [data-v2-root]. Every selector here starts there, so this file needs no block
+ * of its own, and a test holds both halves of that.
  */
 
 /* ------------------------------------------------------------------ the pane */
@@ -186,12 +190,15 @@
    tinted with it, the title in the ink. The fill and the ink are the identity
    pair identityTokens holds at 4.5:1, so the title reads on any colour the
    owner gave a calendar, on any scheme. This is the agenda's chip; the grid's
-   is placed and tightened below. */
+   is placed and tightened below.
+   CLIP, NOT HIDDEN. A hidden overflow is still a scroll box, so find in page
+   could scroll a clipped chip sideways onto its second column and leave it
+   there. A clipped one cannot be scrolled at all. */
 [data-v2-root] .v2-cal-chip {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  overflow: hidden;
+  overflow: clip;
   padding: 8px 12px 9px 11px;
   border-radius: 12px;
   background: var(--v2-lit);
@@ -244,6 +251,9 @@
 
 /* ---------------------------------------------------------------- the agenda */
 
+/* The same gutter treatment as the side lists: the scrollbar's room is always
+   kept, so a classic scrollbar sits beside the cards and never on them, and
+   the cards keep a little air from it. */
 [data-v2-root] .v2-cal-agenda {
   display: flex;
   flex: 1;
@@ -251,9 +261,10 @@
   gap: 18px;
   min-height: 0;
   overflow-y: auto;
-  padding-inline-end: var(--v2-cal-end);
+  padding-inline-end: calc(var(--v2-cal-end) + 8px);
   scrollbar-width: thin;
   scrollbar-color: var(--v2-edge) transparent;
+  scrollbar-gutter: stable;
 }
 
 [data-v2-root] .v2-cal-agenda:focus-visible {
@@ -436,8 +447,10 @@
   inset: var(--v2-cal-inset) 0 0;
 }
 
+/* Both lines are named on purpose. For an absolutely positioned child of a
+   grid, an end line left to "auto" is the container's edge, not one track. */
 [data-v2-root] .v2-cal-gutter {
-  grid-column: 1;
+  grid-column: 1 / 2;
 }
 
 [data-v2-root] .v2-cal-lines {
@@ -542,13 +555,35 @@
   white-space: nowrap;
 }
 
-/* Too short for two lines of title and the time under them: one line of title,
-   so the time keeps its place. Under one line of title and one of time, the
-   wrap above leaves the title alone. */
-@container v2-chip (max-height: 49.98px) {
+/* THE TITLE HAS FIRST CALL ON THE CHIP'S HEIGHT. In a seven day grid a column
+   is about 100px wide, and a title cut to two words is no use to anybody: the
+   calendar it is on is already said by the mark and the legend. So the title
+   gets as many lines as fit with the time still whole under it, up to four,
+   and the calendar's name and the place take whatever whole lines are left
+   (the wrap above moves out any that do not fit).
+   The steps are the line heights above, measured on the chip's content box,
+   which is what a size query reads: N lines of title (15px each) and the time
+   (14px) need 15N + 14. So one line under 44px, two from 44 (the default
+   above), three from 59, four from 74. No step lets a line be cut in half.
+   Under 29px there is no room for the time either, and the title is alone. */
+@container v2-chip (max-height: 43.98px) {
   [data-v2-root] .v2-cal-col .v2-cal-chip-title {
     -webkit-line-clamp: 1;
     line-clamp: 1;
+  }
+}
+
+@container v2-chip (min-height: 59px) {
+  [data-v2-root] .v2-cal-col .v2-cal-chip-title {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+}
+
+@container v2-chip (min-height: 74px) {
+  [data-v2-root] .v2-cal-col .v2-cal-chip-title {
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
   }
 }
 
@@ -670,14 +705,5 @@
 
   [data-v2-root] .v2-week-main {
     padding: 30px 24px 24px 0;
-  }
-}
-
-/* -------------------------------------------------------- reduced motion */
-
-@media (prefers-reduced-motion: reduce) {
-  [data-v2-root] .v2-cal,
-  [data-v2-root] .v2-cal * {
-    transition-duration: 0.01ms !important;
   }
 }

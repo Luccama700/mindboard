@@ -29,7 +29,7 @@ export function WeekClient({ calendar }: { calendar: CalendarScreenData | null }
     <div className="v2-week">
       <NavBar current="/v2/week" />
       <main className="v2-week-main">
-        <h1 className="v2-hidden">{TODAY_COPY.navItems[1]}</h1>
+        <h1 className="v2-hidden">{TODAY_COPY.nav.week}</h1>
         {calendar === null ? (
           <p className="v2-empty">{CALENDAR_COPY.noCalendar}</p>
         ) : (

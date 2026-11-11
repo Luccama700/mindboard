@@ -32,9 +32,11 @@ const yesNo = (value: boolean) => (value ? "yes" : "no");
  * WHAT A SCREEN READER GETS is one list per day, named by the day's full label,
  * holding that day's all day events and its chips in order, and today's marked
  * as the current date. The weekday row, the all day bars and the hour labels
- * draw the same facts for the eye and are hidden from it.
+ * draw the same facts for the eye and are hidden from it. Each list says
+ * `role="list"` out loud, because a list with its bullets styled away is no
+ * longer a list to Safari's screen reader.
  */
-export function CalendarGrid({ view, headingId }: { view: CalendarView; headingId: string }) {
+export function CalendarGrid({ view }: { view: CalendarView }) {
   const { tokens } = useAppearance();
   const tracks = {
     "--v2-cal-all": view.days.map(() => TRACK).join(" "),
@@ -42,14 +44,10 @@ export function CalendarGrid({ view, headingId }: { view: CalendarView; headingI
   } as CSSProperties;
 
   return (
-    // Focusable so a keyboard can scroll it; it is named by the pane's heading.
-    <div
-      className="v2-cal-grid"
-      role="group"
-      aria-labelledby={headingId}
-      tabIndex={0}
-      style={tracks}
-    >
+    // Focusable so a keyboard can scroll it. It has no name of its own: the
+    // section around it already carries the pane's, and a third copy of the
+    // same name would only be announced again.
+    <div className="v2-cal-grid" tabIndex={0} style={tracks}>
       <div className="v2-cal-top" aria-hidden="true">
         <div className="v2-cal-days">
           {view.days.map((day, index) => (
@@ -119,10 +117,16 @@ export function CalendarGrid({ view, headingId }: { view: CalendarView; headingI
             data-near={yesNo(day.near)}
             data-covered={yesNo(day.covered)}
             data-today={day.isToday ? "" : undefined}
-            style={{ gridColumn: index + 2 }}
+            // Both lines, always: this column is absolutely positioned, and
+            // for such a child an end line left to "auto" is the grid's edge.
+            style={{ gridColumn: `${index + 2} / ${index + 3}` }}
           >
             <div className="v2-cal-plane">
-              <ul aria-label={day.label} aria-current={day.isToday ? "date" : undefined}>
+              <ul
+                role="list"
+                aria-label={day.label}
+                aria-current={day.isToday ? "date" : undefined}
+              >
                 {day.covered ? (
                   <>
                     {day.allDay.map((title, at) => (
@@ -134,7 +138,7 @@ export function CalendarGrid({ view, headingId }: { view: CalendarView; headingI
                     ))}
                     {day.chips.map((chip) => (
                       // A planned block and an event can share an id.
-                      <CalendarChipItem key={`${chip.kind}:${chip.id}`} chip={chip} />
+                      <CalendarChipItem key={`${chip.kind}:${chip.id}`} chip={chip} placed />
                     ))}
                   </>
                 ) : (

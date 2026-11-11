@@ -28,6 +28,7 @@ import { loadLocalCalendar } from "@/app/lib/v2/local/calendar";
 import { LocalSnapshotError, loadLocalToday } from "@/app/lib/v2/local/snapshot";
 import { requireLoopback, screenSource, type ScreenSource } from "@/app/lib/v2/source";
 import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
+import { SnapshotError } from "../_components/snapshot-error";
 import { TodayClient } from "./today-client";
 
 export const metadata: Metadata = {
@@ -89,17 +90,7 @@ async function TodayScreen({
   }
 
   const folder = await readFolder(source.dir, oneOf(asked.date), week);
-  if (folder.data === undefined) {
-    return (
-      <main style={{ padding: "2rem 1rem", maxWidth: "34rem", lineHeight: 1.5 }}>
-        <h1 style={{ fontSize: "1.1rem", fontWeight: 700 }}>The snapshot is not ready</h1>
-        <p style={{ marginTop: "0.75rem" }}>{folder.error}</p>
-        <p style={{ marginTop: "0.75rem", opacity: 0.7 }}>
-          The folder is the one V2_LOCAL_SNAPSHOT points at. Nothing was changed in it.
-        </p>
-      </main>
-    );
-  }
+  if (folder.data === undefined) return <SnapshotError message={folder.error} />;
 
   return <TodayClient data={folder.data} />;
 }
@@ -116,10 +107,11 @@ async function TodayScreen({
  * The clock is read once and used for both reads, so the day and the week beside
  * it cannot land on different sides of midnight.
  *
- * IT LIVES BELOW `TodayScreen` ON PURPOSE, and a test pins that: every read of
- * the folder has to appear after the awaited loopback check, so that reading the
- * file from the top shows the check first and no later edit can quietly move a
- * read above it. The declaration is hoisted, so the order costs nothing.
+ * IT LIVES BELOW `TodayScreen`, so reading the file from the top shows the
+ * awaited loopback check before any read of the folder. That is for the reader:
+ * the gate check in __tests__/v2-source.test.ts reads the syntax tree and does
+ * not care where the helper is written, only that every call to it waits for
+ * the check. The declaration is hoisted, so the order costs nothing.
  */
 async function readFolder(
   dir: string,

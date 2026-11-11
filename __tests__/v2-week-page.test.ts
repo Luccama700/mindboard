@@ -28,6 +28,7 @@ vi.mock("next/headers", () => ({
 import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
 import { CALENDAR_COPY } from "@/app/lib/v2/view/calendar";
 import { TODAY_COPY } from "@/app/lib/v2/view/today";
+import { SnapshotError } from "@/app/v2/_components/snapshot-error";
 import WeekPage, { dynamic } from "@/app/v2/week/page";
 import { WeekClient } from "@/app/v2/week/week-client";
 
@@ -136,10 +137,37 @@ describe("the Week page shows the week it is asked for", () => {
   test("names the file it could not read, and draws no week from it", async () => {
     await local({ "calendar-events.json": "this is not json" });
     const { inner } = await page();
-    expect(inner.type).not.toBe(WeekClient);
+    expect(inner.type).toBe(SnapshotError);
     render(inner);
     expect(document.body.textContent).toContain("calendar-events.json");
     expect(document.querySelector(".v2-cal")).toBeNull();
+  });
+});
+
+// One home for the screen a folder that cannot be read gets, so Today and Week
+// cannot come to say different things about the same folder.
+describe("the snapshot error screen", () => {
+  test("is the one component both pages hand the folder's error to", async () => {
+    // A folder with nothing in it: Today cannot find its day.
+    await local();
+    const { default: TodayPage } = await import("@/app/v2/today/page");
+    const outer = TodayPage({ searchParams: Promise.resolve({}) }) as unknown as {
+      type: (props: unknown) => Promise<ReactElement<{ message?: unknown }>>;
+      props: unknown;
+    };
+    const today = await outer.type(outer.props);
+    expect(today.type).toBe(SnapshotError);
+    expect(typeof today.props.message).toBe("string");
+
+    await local({ "calendar-events.json": "this is not json" });
+    expect((await page()).inner.type).toBe(SnapshotError);
+  });
+
+  test("says what failed, and that the folder was not touched", () => {
+    render(createElement(SnapshotError, { message: "rules.json: not valid JSON" }));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("The snapshot is not ready");
+    expect(document.body.textContent).toContain("rules.json: not valid JSON");
+    expect(document.body.textContent).toContain("Nothing was changed in it.");
   });
 });
 
@@ -159,7 +187,7 @@ describe("the Week screen", () => {
 
   test("names the page for a screen reader, and marks Week in the rail", () => {
     render(createElement(WeekClient, { calendar: sampleWeek(null) }));
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(TODAY_COPY.navItems[1]);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(TODAY_COPY.nav.week);
     const current = document.querySelector('.v2-nav [aria-current="page"]');
     expect(current?.textContent).toBe("Week");
     expect(current?.getAttribute("href")).toBe("/v2/week");

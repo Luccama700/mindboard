@@ -1,4 +1,4 @@
-﻿// PLAN-OS Task 2: the calendar pane, and the blocks Today hands it.
+// PLAN-OS Task 2: the calendar pane, and the blocks Today hands it.
 //
 // The pane is read only and draws what buildCalendarView decided, so what is
 // pinned here is the part a test without a browser can see: what a screen
@@ -26,7 +26,16 @@ import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
 import { planReference } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import type { Block, PlanOutput } from "@/app/lib/v2/types";
-import { DEFAULT_APPEARANCE, identityTokens, tokensFor } from "@/app/lib/v2/view/appearance";
+import {
+  DEFAULT_APPEARANCE,
+  LIT_INK_TOKENS,
+  SCHEMES,
+  contrast,
+  deriveTokens,
+  identityTokens,
+  mixHex,
+  tokensFor,
+} from "@/app/lib/v2/view/appearance";
 import {
   CALENDAR_COPY,
   buildCalendarView,
@@ -147,6 +156,19 @@ describe("the pane is read only", () => {
     expect(stops.map((stop) => stop.className).sort()).toEqual(["v2-cal-agenda", "v2-cal-grid"]);
     for (const stop of stops) expect(stop.tabIndex).toBe(0);
   });
+
+  // The section already carries the pane's name. A scroller that repeated it
+  // was the same words announced a second and a third time.
+  test("gives the scrollers no name or role of their own", () => {
+    paneOf();
+    for (const scroller of [agenda(), grid()]) {
+      for (const attribute of ["role", "aria-label", "aria-labelledby"]) {
+        expect(scroller.hasAttribute(attribute), `${scroller.className} ${attribute}`).toBe(false);
+      }
+    }
+    expect(screen.getAllByRole("region")).toHaveLength(1);
+    expect(screen.queryAllByRole("group")).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -164,6 +186,16 @@ describe("the pane reads in order", () => {
     const heading = document.getElementById(region.getAttribute("aria-labelledby") ?? "");
     expect(heading?.tagName).toBe("H2");
     expect(region.querySelector("h1")).toBeNull();
+  });
+
+  // A list whose bullets are styled away stops being a list to VoiceOver in
+  // Safari, so every list in the pane says what it is.
+  test("says role list on every list it styles, in both layouts and the legend", () => {
+    const { container } = paneOf();
+    const lists = Array.from(container.querySelectorAll("ul"));
+    // Seven days twice, and the legend.
+    expect(lists).toHaveLength(15);
+    for (const list of lists) expect(list.getAttribute("role"), list.className).toBe("list");
   });
 
   test("gives each day of the grid its own list, named by the day, today marked", () => {
@@ -203,6 +235,17 @@ describe("the pane reads in order", () => {
     expect(chipTitled(gridDay("Thursday 16 April"), "Glaze delivery").textContent).toBe(
       "Glaze delivery 15:00 to 16:00 Campus",
     );
+  });
+
+  // A list item takes its name from `title`, so a tooltip on a chip that shows
+  // all its words makes a screen reader say the chip twice. Only the grid's
+  // chips clip, so only they carry one.
+  test("gives a tooltip to a chip in the grid, which clips, and not in the agenda", () => {
+    paneOf();
+    expect(chipTitled(gridDay("Wednesday 15 April"), "Morning seminar").title).toBe(
+      "Morning seminar\n09:00 to 10:15\nCampus\nHall B",
+    );
+    for (const chip of chipsIn(agenda())) expect(chip.hasAttribute("title")).toBe(false);
   });
 
   test("reads a planned chip as Planned where a calendar would be named", () => {
@@ -638,6 +681,36 @@ describe("the rail", () => {
     const current = items().filter((item) => item.current === "page");
     expect(current.map((item) => item.text)).toEqual(["Week"]);
   });
+
+  // The rail and the Week page's heading read the four by name, and the list
+  // the rail shows is built from the same names, so the two cannot drift.
+  test("names its four destinations, and lists them in the rail's order", () => {
+    const { nav } = TODAY_COPY;
+    expect(TODAY_COPY.navItems).toEqual([nav.today, nav.week, nav.quests, nav.money]);
+    render(createElement(NavBar, { current: "/v2/today" }));
+    expect(items().map((item) => item.text)).toEqual([...TODAY_COPY.navItems]);
+  });
+
+  // A working link and a placeholder that does nothing used to look the same.
+  test("draws a link that works brighter than a placeholder, and answers the pointer", () => {
+    const sheet = postcss.parse(readFileSync(path.join(ROOT, "app/v2/v2.css"), "utf8"));
+    /** The last colour a selector is given outside any media query. */
+    const colourOf = (selector: string) => {
+      let found: string | null = null;
+      sheet.walkRules((rule) => {
+        if (rule.parent?.type !== "root") return;
+        if (!rule.selectors.map((one) => one.trim()).includes(`[data-v2-root] ${selector}`)) return;
+        rule.walkDecls("color", (decl) => {
+          found = decl.value;
+        });
+      });
+      return found;
+    };
+    expect(colourOf(".v2-nav button")).toBe("var(--v2-ink-3)");
+    expect(colourOf(".v2-nav a")).toBe("var(--v2-ink-2)");
+    expect(colourOf('.v2-nav a:not([aria-current="page"]):hover')).toBe("var(--v2-ink)");
+    expect(colourOf('.v2-nav a[aria-current="page"]')).toBe("var(--v2-ink)");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -737,41 +810,72 @@ describe("calendar.css", () => {
     expect(border).toContain("var(--v2-accent)");
   });
 
-  test("keeps every word of a chip inside the chip", () => {
-    expect(declOf(".v2-cal-chip", "overflow")).toBe("hidden");
+  // `clip`, not `hidden`: a hidden overflow is still a scroll box, and find in
+  // page could scroll a chip sideways onto its second column and leave it there.
+  test("keeps every word of a chip inside the chip, and cannot be scrolled", () => {
+    expect(declOf(".v2-cal-chip", "overflow")).toBe("clip");
     expect(declOf(".v2-cal-chip", "min-width")).toBe("0");
     expect(declOf(".v2-cal-chip-title", "overflow-wrap")).toBe("anywhere");
     expect(declOf(".v2-cal-col", "min-width")).toBe("0");
   });
 
-  // A short chip shows its title alone. Lines that do not fit WRAP into a second
-  // column, which the chip's own overflow clips, so they leave whole rather
-  // than being cut through the middle and stay in the accessibility tree; the
-  // title drops to one line once two would not fit beside the time.
-  test("shows a chip too short for two lines as its title alone, without measuring", () => {
+  // Lines that do not fit WRAP into a second column, which the chip's own
+  // overflow clips, so they leave whole rather than being cut through the
+  // middle, and stay in what a screen reader hears.
+  test("lets a line that does not fit leave whole, without measuring", () => {
     expect(declOf(".v2-cal-col .v2-cal-chip", "flex-flow")).toBe("column wrap");
     expect(declOf(".v2-cal-col .v2-cal-chip", "container-type")).toBe("size");
     expect(declOf(".v2-cal-col .v2-cal-chip", "container-name")).toBe("v2-chip");
-    let clamp: string | null = null;
+  });
+
+  // The owner's ruling on the 2000px screen: a day column is about 100px wide,
+  // and a title cut to two words is no use. The title takes the chip's height
+  // first, as many lines as fit with the time still whole under it, up to four;
+  // the calendar and the place get whatever whole lines are left. Worked out
+  // from the stylesheet's own line heights, at every half pixel, so a step that
+  // let a line be cut in half, or kept a line the chip had room for, fails.
+  test("gives the title as many lines as fit with the time under it, up to four", () => {
+    const px = (value: string | null) => Number.parseFloat(value ?? "NaN");
+    const title = px(declOf(".v2-cal-col .v2-cal-chip-title", "line-height"));
+    const line = px(
+      declOf(".v2-cal-col .v2-cal-chip > span:not(.v2-cal-chip-title)", "line-height"),
+    );
+    const base = Number(declOf(".v2-cal-col .v2-cal-chip-title", "line-clamp"));
+    expect([title, line, base]).toEqual([15, 14, 2]);
+
+    const steps: Array<{ kind: string; limit: number; lines: number }> = [];
     sheet.walkAtRules("container", (at) => {
-      if (!/^v2-chip \(max-height: \d+(\.\d+)?px\)$/.test(at.params)) return;
+      const match = /^v2-chip \((min|max)-height: ([\d.]+)px\)$/.exec(at.params);
+      if (match === null) return;
+      let lines = Number.NaN;
       at.walkDecls("line-clamp", (decl) => {
-        clamp = decl.value;
+        lines = Number(decl.value);
       });
+      steps.push({ kind: match[1], limit: Number(match[2]), lines });
     });
-    expect(clamp).toBe("1");
+    expect(steps.length).toBeGreaterThanOrEqual(3);
+
+    // What a size query reads is the chip's content box, which is `height` here.
+    const linesAt = (height: number) =>
+      steps.reduce(
+        (lines, step) =>
+          (step.kind === "min" ? height >= step.limit : height <= step.limit)
+            ? step.lines
+            : lines,
+        base,
+      );
+    for (let height = 8; height <= 160; height += 0.5) {
+      const expected = Math.min(4, Math.max(1, Math.floor((height - line) / title)));
+      expect(linesAt(height), `${height}px`).toBe(expected);
+    }
+    // The agenda shows a chip whole, so it keeps its own three lines.
+    expect(declOf(".v2-cal-chip-title", "line-clamp")).toBe("3");
   });
 
   test("moves only on hover, at the screen's own speeds, and never on load", () => {
     const transitions: string[] = [];
     sheet.walkDecls(/^transition/, (decl) => {
-      // The reduced motion block is the one place a duration is not a token:
-      // it is the switch that turns them all off.
-      const block = decl.parent?.parent;
-      const reduced =
-        block?.type === "atrule" &&
-        (block as AtRule).params.includes("prefers-reduced-motion");
-      if (!reduced) transitions.push(decl.value);
+      transitions.push(decl.value);
     });
     expect(transitions.length).toBeGreaterThan(0);
     for (const value of transitions) {
@@ -788,18 +892,180 @@ describe("calendar.css", () => {
     expect(animations).toEqual([]);
   });
 
-  test("stops all of it under reduced motion", () => {
-    let covered = false;
+  // Reduced motion is v2.css's one rule, on everything under [data-v2-root]. A
+  // second copy here was a second place to keep in step, so the test holds the
+  // two halves instead: every selector in this file is under the root, and the
+  // root's rule stops every transition under it.
+  test("leaves reduced motion to v2.css's one rule, which reaches all of it", () => {
+    const own: string[] = [];
     sheet.walkAtRules("media", (media) => {
-      if (!media.params.includes("prefers-reduced-motion: reduce")) return;
+      if (media.params.includes("prefers-reduced-motion")) own.push(media.params);
+    });
+    expect(own).toEqual([]);
+
+    sheet.walkRules((rule) => {
+      for (const selector of rule.selectors) {
+        expect(selector.trim().startsWith("[data-v2-root] "), selector).toBe(true);
+      }
+    });
+
+    const global = postcss.parse(readFileSync(path.join(ROOT, "app/v2/v2.css"), "utf8"));
+    const stops: string[] = [];
+    global.walkAtRules("media", (media) => {
+      if (media.params.trim() !== "(prefers-reduced-motion: reduce)") return;
       media.walkRules((rule) => {
-        if (!rule.selectors.some((one) => one.includes(".v2-cal"))) return;
-        rule.walkDecls("transition-duration", () => {
-          covered = true;
+        if (!rule.selectors.map((one) => one.trim()).includes("[data-v2-root] *")) return;
+        rule.walkDecls("transition-duration", (decl) => {
+          if (decl.important) stops.push(decl.value);
         });
       });
     });
-    expect(covered).toBe(true);
+    expect(stops).toEqual(["0.01ms"]);
+  });
+
+  // A classic scrollbar takes room from the box it scrolls. Kept always, as the
+  // side lists keep theirs, the cards sit beside it instead of under it.
+  test("keeps the agenda's scrollbar room, as the side lists do", () => {
+    expect(declOf(".v2-cal-agenda", "scrollbar-gutter")).toBe("stable");
+    expect(declOf(".v2-cal-agenda", "padding-inline-end")).toMatch(/\+\s*\d+px/);
+  });
+
+  // Behaviour 6, the arithmetic half. A chip's words sit on its tinted fill,
+  // and identityTokens holds exactly four colours against that fill: the three
+  // scheme inks it measures (LIT_INK_TOKENS) and the identity it derives. A
+  // planned chip has no fill, so its words sit on the page, where every scheme
+  // ink is held. Any other colour on a chip is a guess.
+  test("writes a chip's words only in colours held against what is under them", () => {
+    const onFill = new Set<string>([...LIT_INK_TOKENS, "--v2-ident"]);
+    const onPage = new Set<string>(["--v2-ink", "--v2-ink-2", "--v2-ink-3", "--v2-signal"]);
+
+    /** Every colour a chip rule sets: which part it is for, and for which chip. */
+    const colours: Array<{ selector: string; part: string; planned: boolean; token: string }> = [];
+    sheet.walkRules((rule) => {
+      for (const selector of rule.selectors) {
+        const parts = selector.match(/\.v2-cal-(?:chip[\w-]*|span)/g);
+        if (parts === null) continue;
+        rule.walkDecls("color", (decl) => {
+          const token = /^var\((--v2-[a-z0-9-]+)\)$/.exec(decl.value)?.[1];
+          expect(token, `${selector}: ${decl.value}`).toBeDefined();
+          colours.push({
+            selector,
+            part: parts[parts.length - 1],
+            planned: selector.includes('[data-kind="planned"]'),
+            token: token ?? "",
+          });
+        });
+      }
+    });
+    expect(colours.length).toBeGreaterThanOrEqual(5);
+
+    for (const { selector, planned, token } of colours) {
+      expect((planned ? onPage : onFill).has(token), `${selector}: ${token}`).toBe(true);
+    }
+    // And on a planned chip, what each part ends up wearing: its own planned
+    // rule if it has one, otherwise the rule every chip shares.
+    const chipParts = new Set(
+      colours.filter((one) => one.part !== ".v2-cal-span").map((one) => one.part),
+    );
+    for (const part of chipParts) {
+      const own = colours.filter((one) => one.part === part);
+      const plannedOwn = own.filter((one) => one.planned);
+      const worn = (plannedOwn.length > 0 ? plannedOwn : own)[
+        (plannedOwn.length > 0 ? plannedOwn : own).length - 1
+      ].token;
+      expect(onPage.has(worn), `${part} on a planned chip: ${worn}`).toBe(true);
+    }
+  });
+
+  // The lists above are only as good as the guarantees behind them, so they are
+  // measured here, on every scheme, against the colours this sample really has
+  // and a colourless calendar (which takes the accent). A planned chip's words
+  // also sit over today's tint, which is the accent at the stylesheet's own
+  // percentage over the page, so they are measured there too.
+  test("holds those colours at 4.5:1 on every scheme, on the fill and on today's tint", () => {
+    const tint = /var\(--v2-accent\)\s+(\d+(?:\.\d+)?)%/.exec(
+      declOf(".v2-cal-col[data-today]", "background") ?? "",
+    );
+    expect(tint).not.toBeNull();
+    const share = Number(tint?.[1]) / 100;
+
+    for (const scheme of SCHEMES) {
+      const tokens = deriveTokens(scheme.background, scheme.accent);
+      for (const colour of ["#7C9BFF", "#2FD6A3", "#C58BFF", null]) {
+        const identity = identityTokens(colour ?? tokens["--v2-accent"], tokens);
+        const fill = identity["--v2-lit"];
+        for (const ink of [...LIT_INK_TOKENS.map((name) => tokens[name]), identity["--v2-ident"]]) {
+          expect(contrast(ink, fill), `${scheme.id} ${colour} ${ink}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+      const tinted = mixHex(tokens["--v2-page"], tokens["--v2-accent"], share);
+      for (const name of ["--v2-ink", "--v2-ink-2", "--v2-signal"]) {
+        expect(contrast(tokens[name], tinted), `${scheme.id} ${name}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  // THE BUG THIS PINS. Every day column, and every chip, hairline and label in
+  // it, ran from its own track to the grid's right edge. The columns are
+  // absolutely positioned children of the canvas grid, placed by one line
+  // (`grid-column: 3`), and for such a child an end line left to auto is the
+  // grid container's padding edge, not the next line. So every absolutely
+  // positioned child of a grid names both of its lines, whether they come from
+  // this stylesheet or from the markup. jsdom lays nothing out, so this walks
+  // the rendered pane and asks the stylesheet which elements are such children.
+  test("places every absolutely positioned grid child between two named lines", () => {
+    const { container } = render(
+      createElement(
+        "div",
+        { "data-v2-root": "" },
+        createElement(CalendarPane, {
+          data: sampleWeek(null),
+          planned: [BLOCK],
+          basePath: "/v2/today",
+        }),
+      ),
+    );
+
+    const rules: Array<{ selectors: string[]; decls: Map<string, string> }> = [];
+    sheet.walkRules((rule) => {
+      const decls = new Map<string, string>();
+      rule.walkDecls((decl) => {
+        decls.set(decl.prop, decl.value);
+      });
+      rules.push({ selectors: rule.selectors.map((one) => one.trim()), decls });
+    });
+    /** What the last rule of this sheet that matches the element gives it. */
+    const ruled = (element: Element, prop: string): string | null => {
+      let found: string | null = null;
+      for (const rule of rules) {
+        const value = rule.decls.get(prop);
+        if (value === undefined) continue;
+        const hit = rule.selectors.some((selector) => {
+          try {
+            return element.matches(selector);
+          } catch {
+            // A pseudo element or state jsdom cannot match is not a place.
+            return false;
+          }
+        });
+        if (hit) found = value;
+      }
+      return found;
+    };
+
+    const placed: string[] = [];
+    for (const element of container.querySelectorAll<HTMLElement>("*")) {
+      const parent = element.parentElement;
+      if (parent === null || ruled(element, "position") !== "absolute") continue;
+      if (ruled(parent, "display") !== "grid") continue;
+      const column =
+        element.style.getPropertyValue("grid-column") || ruled(element, "grid-column") || "";
+      placed.push(`${element.className} ${column}`);
+      expect(column, `${element.className} grid-column`).toMatch(/\/|\bspan\b/);
+    }
+    // The hour labels, the hairlines and the seven days: if this count drops,
+    // the walk above stopped seeing them and proves nothing.
+    expect(placed).toHaveLength(9);
   });
 
   test("brings no font of its own", () => {

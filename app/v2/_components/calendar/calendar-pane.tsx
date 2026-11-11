@@ -87,7 +87,7 @@ export function CalendarPane({
 
         <div className="v2-cal-meta">
           {view.legend.length > 0 && (
-            <ul className="v2-cal-legend">
+            <ul className="v2-cal-legend" role="list">
               {view.legend.map((entry) => (
                 <li
                   key={entry.id}
@@ -102,8 +102,8 @@ export function CalendarPane({
         </div>
       </header>
 
-      <CalendarAgenda view={view} headingId={headingId} />
-      <CalendarGrid view={view} headingId={headingId} />
+      <CalendarAgenda view={view} />
+      <CalendarGrid view={view} />
     </section>
   );
 }
