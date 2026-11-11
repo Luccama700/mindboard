@@ -11,7 +11,7 @@
 // and that every page under app/v2 asks this module rather than reading the
 // variables itself. Nothing here is about what a page then renders.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import ts from "typescript";
@@ -249,14 +249,36 @@ function walk(node: ts.Node, visit: (node: ts.Node) => void): void {
   node.forEachChild((child) => walk(child, visit));
 }
 
-/** Which module a specifier names, as a repository path, or null for a package. */
-function resolvedModule(file: string, specifier: string): string | null {
+/**
+ * Which module a specifier names, as a repository path, or null for a package.
+ *
+ * A FOLDER RESOLVES TO THE `index` INSIDE IT, the way the bundler resolves it:
+ * both engines have one, so `@/app/lib/v2/calendar` and
+ * `@/app/lib/v2/calendar/index` are the same module, and a rule that knew only
+ * the second spelling was one spelling short of the truth.
+ *
+ * `exists` says which modules there are. It reads the real tree by default, and
+ * an invented graph answers for itself, so the set below can be tested without
+ * writing files.
+ */
+function resolvedModule(
+  file: string,
+  specifier: string,
+  exists: (key: string) => boolean = onDisk,
+): string | null {
   const bare = specifier.replace(/\.(ts|tsx|js)$/, "");
-  if (bare.startsWith("@/")) return bare.slice(2);
-  if (bare.startsWith(".")) {
-    return path.posix.normalize(path.posix.join(path.posix.dirname(file), bare));
-  }
-  return null;
+  const target = bare.startsWith("@/")
+    ? bare.slice(2)
+    : bare.startsWith(".")
+      ? path.posix.normalize(path.posix.join(path.posix.dirname(file), bare))
+      : null;
+  if (target === null) return null;
+  return !exists(target) && exists(`${target}/index`) ? `${target}/index` : target;
+}
+
+/** Is there a module at this repository path, on disk? */
+function onDisk(key: string): boolean {
+  return existsSync(path.join(ROOT, `${key}.ts`)) || existsSync(path.join(ROOT, `${key}.tsx`));
 }
 
 /** Every module this file imports from or re-exports, as written. */
@@ -354,6 +376,22 @@ function importsAValue(clause: ts.ImportClause | undefined): boolean {
 }
 
 /**
+ * Does this `export ... from` pass a value on?
+ *
+ * A re-export reaches a loader exactly as an import does, and a module that
+ * hands one on is a way to reach it: a view module doing
+ * `export { loadLocalToday } from "<loader>"` would otherwise not be in the set,
+ * and a page importing through it would pass every rule.
+ */
+function exportsAValue(node: ts.ExportDeclaration): boolean {
+  if (node.isTypeOnly) return false;
+  const clause = node.exportClause;
+  // `export * from "..."`, and `export * as ns from "..."`.
+  if (clause === undefined || ts.isNamespaceExport(clause)) return true;
+  return clause.elements.some((element) => !element.isTypeOnly);
+}
+
+/**
  * Every module that can reach a loader, as extensionless repository paths.
  *
  * WHY THIS EXISTS. The rules used to ask whether an import came from under
@@ -371,6 +409,10 @@ function importsAValue(clause: ts.ImportClause | undefined): boolean {
  */
 function dataModulesIn(sources: Map<string, string>): Set<string> {
   const marked = new Set<string>();
+  // The graph answers for itself which modules exist, so a folder import inside
+  // an invented one resolves to the index it names.
+  const keys = new Set([...sources.keys()].map(moduleKey));
+  const known = (key: string) => keys.has(key);
   for (;;) {
     let grew = false;
     for (const [file, source] of sources) {
@@ -380,7 +422,7 @@ function dataModulesIn(sources: Map<string, string>): Set<string> {
       let reaches = false;
       const consider = (specifier: string) => {
         if (reaches) return;
-        const target = resolvedModule(file, specifier);
+        const target = resolvedModule(file, specifier, known);
         if (target !== null && (readsTheFolder(target) || marked.has(target))) reaches = true;
       };
 
@@ -388,6 +430,14 @@ function dataModulesIn(sources: Map<string, string>): Set<string> {
         if (reaches) return;
         if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
           if (importsAValue(node.importClause)) consider(node.moduleSpecifier.text);
+          return;
+        }
+        if (
+          ts.isExportDeclaration(node) &&
+          node.moduleSpecifier !== undefined &&
+          ts.isStringLiteral(node.moduleSpecifier)
+        ) {
+          if (exportsAValue(node)) consider(node.moduleSpecifier.text);
           return;
         }
         if (!ts.isCallExpression(node) || node.arguments.length === 0) return;
@@ -485,7 +535,7 @@ function topLevelFunctions(tree: ts.SourceFile): TopLevel[] {
  * dropped in an array and invoked later is the same read, and each of those
  * walked past a rule that looked for `name(`.
  */
-function isValueReference(node: ts.Identifier): boolean {
+function isValueReference(node: ts.Identifier, ownFunctions: Set<string>): boolean {
   const parent = node.parent;
   if (parent === undefined) return false;
 
@@ -515,19 +565,26 @@ function isValueReference(node: ts.Identifier): boolean {
   if (ts.isPropertyAccessExpression(parent) && parent.name === node) return false;
   if (ts.isQualifiedName(parent) && parent.right === node) return false;
 
-  // A JSX TAG IS NOT A CALL. `<Screen source={source} />` hands React an
-  // element and returns; the child's own body runs afterwards, inside its own
-  // function, where its own guard sits first. Counting the tag as a read would
-  // refuse the one shape this whole gate is built on, and it would refuse it in
-  // the entry, where the child is always named. A child called outright,
-  // `Screen()`, is a call like any other and is still counted.
+  // A JSX TAG IS NOT A CALL, BUT ONLY WHEN IT NAMES A FUNCTION OF THIS FILE.
+  // `<Screen source={source} />` hands React an element and returns; the child's
+  // body runs afterwards, inside its own function, where its own guard sits
+  // first and where THIS checker reads it. Counting that tag as a read would
+  // refuse the one shape the gate is built on, in the entry, where the child is
+  // always named.
+  //
+  // An IMPORTED component is the opposite case, and it was the hole this rule
+  // left: nothing here checks its body (it is not a route file, even when it
+  // sits in the page's own folder), so an async server component that reads the
+  // folder could be rendered straight from the synchronous entry and the page
+  // passed. A tag naming anything this file did not declare is therefore a read
+  // at that position, and legal only inside a guarded function.
   if (
     (ts.isJsxSelfClosingElement(parent) ||
       ts.isJsxOpeningElement(parent) ||
       ts.isJsxClosingElement(parent)) &&
     parent.tagName === node
   ) {
-    return false;
+    return ownFunctions.has(node.text) ? false : true;
   }
 
   for (let current: ts.Node | undefined = parent; current !== undefined; current = current.parent) {
@@ -556,10 +613,14 @@ interface Bindings {
 }
 
 /** Every mention of a loader in this node, and the name it was reached by. */
-function readsIn(node: ts.Node, bindings: Bindings): Array<{ node: ts.Node; name: string }> {
+function readsIn(
+  node: ts.Node,
+  bindings: Bindings,
+  ownFunctions: Set<string>,
+): Array<{ node: ts.Node; name: string }> {
   const found: Array<{ node: ts.Node; name: string }> = [];
   walk(node, (child) => {
-    if (!ts.isIdentifier(child) || !isValueReference(child)) return;
+    if (!ts.isIdentifier(child) || !isValueReference(child, ownFunctions)) return;
     const { text } = child;
     if (bindings.namespaces.has(text)) {
       const parent = child.parent;
@@ -642,11 +703,12 @@ function dataBindings(file: string, tree: ts.SourceFile, wrappers: Set<string>):
   });
 
   const locals = topLevelFunctions(tree);
+  const ownFunctions = new Set(locals.map((local) => local.name));
   for (;;) {
     let grew = false;
     for (const local of locals) {
       if (bindings.names.has(local.name)) continue;
-      if (readsIn(local.node, bindings).length === 0) continue;
+      if (readsIn(local.node, bindings, ownFunctions).length === 0) continue;
       bindings.names.add(local.name);
       grew = true;
     }
@@ -654,6 +716,16 @@ function dataBindings(file: string, tree: ts.SourceFile, wrappers: Set<string>):
   }
 
   return bindings;
+}
+
+/** The names this file renders as a tag, where the tag is a plain name. */
+function renderedAsTags(tree: ts.SourceFile): Set<string> {
+  const found = new Set<string>();
+  walk(tree, (node) => {
+    if (!ts.isJsxSelfClosingElement(node) && !ts.isJsxOpeningElement(node)) return;
+    if (ts.isIdentifier(node.tagName)) found.add(node.tagName.text);
+  });
+  return found;
 }
 
 /**
@@ -931,12 +1003,25 @@ function gateProblems(
     return found;
   }
 
-  const reads = readsIn(tree, bindings);
+  const ownFunctions = new Set(locals.map((local) => local.name));
+  const tags = renderedAsTags(tree);
+  const reads = readsIn(tree, bindings, ownFunctions);
 
-  /** The helper a function node is, when it is one that reads data. */
+  /**
+   * The helper a function node is, when it is one that reads data AND may lean
+   * on its call sites.
+   *
+   * A function this file RENDERS AS A TAG may not: React runs it, so there is no
+   * call site to check, and one guarded call elsewhere would otherwise excuse
+   * the render path as well. Such a function carries its own guard or nothing.
+   */
   const helperOf = (fn: FunctionNode): TopLevel | null =>
     locals.find(
-      (local) => local.node === fn && bindings.names.has(local.name) && !local.isDefault,
+      (local) =>
+        local.node === fn &&
+        bindings.names.has(local.name) &&
+        !local.isDefault &&
+        !tags.has(local.name),
     ) ?? null;
 
   /**
@@ -1067,6 +1152,43 @@ describe("the modules that can reach a loader", () => {
       "app/lib/v2/view/a",
       "app/lib/v2/view/b",
       "app/lib/v2/view/c",
+    ]);
+  });
+
+  // A re-export reaches a loader exactly as an import does. Following only
+  // imports left a view module that hands one on unmarked, so a page importing
+  // through it passed, and the test below about what the view layer can reach
+  // would not have failed either.
+  test("follows a loader handed on by a re-export, by name and by star", () => {
+    const graph = new Map([
+      ["app/lib/v2/view/a.ts", 'export { loadLocalToday } from "@/app/lib/v2/local/snapshot";'],
+      ["app/lib/v2/view/b.ts", 'export * from "@/app/lib/v2/fixtures/sample-day";'],
+      ["app/lib/v2/view/c.ts", 'import { loadLocalToday } from "./a";'],
+      ["app/lib/v2/view/d.ts", 'export * as week from "./b";'],
+      // A type handed on is still only a type.
+      ["app/lib/v2/view/e.ts", 'export type { LocalCalendar } from "@/app/lib/v2/local/files";'],
+      ["app/lib/v2/view/f.ts", 'export { type LocalCalendar } from "@/app/lib/v2/local/files";'],
+    ]);
+    expect([...dataModulesIn(graph)].sort()).toEqual([
+      "app/lib/v2/view/a",
+      "app/lib/v2/view/b",
+      "app/lib/v2/view/c",
+      "app/lib/v2/view/d",
+    ]);
+  });
+
+  test("follows a folder import to the index inside it", () => {
+    const graph = new Map([
+      [
+        "app/lib/v2/view/wrap/index.ts",
+        'import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";',
+      ],
+      ["app/lib/v2/view/b.ts", 'import { thing } from "./wrap";'],
+      ["app/lib/v2/view/c.ts", 'import { other } from "./nowhere";'],
+    ]);
+    expect([...dataModulesIn(graph)].sort()).toEqual([
+      "app/lib/v2/view/b",
+      "app/lib/v2/view/wrap/index",
     ]);
   });
 
@@ -1690,6 +1812,126 @@ describe("the gate checker catches", () => {
     expect(problems).toContain("calls data before awaiting requireLoopback (loadLocalToday)");
   });
 
+  // ------------------------------------------- round 4: the door a tag opened
+
+  // The JSX exclusion applied to EVERY tag, which left one door open: an
+  // imported component is not checked by anything here (it is not a route file,
+  // even sitting in the page's own folder), so an async server component that
+  // reads the folder could be rendered straight from the synchronous entry, and
+  // the page passed while the read happened before any check.
+  const screenPage = (specifier: string, where: "entry" | "child") =>
+    [
+      'import { notFound } from "next/navigation";',
+      `import { WeekScreen } from "${specifier}";`,
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      ...(where === "entry"
+        ? ["  return <WeekScreen source={source} />;"]
+        : ["  return <Shell source={source} />;"]),
+      "}",
+      "async function Shell({ source }) {",
+      "  await requireLoopback(source);",
+      ...(where === "child"
+        ? ["  return <WeekScreen source={source} />;"]
+        : ["  return <div />;"]),
+      "}",
+    ].join("\n");
+
+  test("an imported screen that reads, rendered from the entry", () => {
+    // Through a wrapper in the page's own folder, which the set knows about.
+    const beside = complain(
+      screenPage("./week-screen", "entry"),
+      "app/v2/week/page.tsx",
+      new Set(["app/v2/week/week-screen"]),
+    );
+    expect(beside).toContain("reads data in its default export (WeekScreen)");
+    expect(beside).toContain("calls data before awaiting requireLoopback (WeekScreen)");
+
+    // And straight out of a loader folder, where no set is needed at all.
+    const loader = complain(
+      screenPage("@/app/lib/v2/local/week-screen", "entry"),
+      "app/v2/week/page.tsx",
+    );
+    expect(loader).toContain("reads data in its default export (WeekScreen)");
+  });
+
+  test("but the same screen rendered from a guarded child is fine", () => {
+    expect(
+      complain(
+        screenPage("./week-screen", "child"),
+        "app/v2/week/page.tsx",
+        new Set(["app/v2/week/week-screen"]),
+      ),
+    ).toBe("");
+    expect(
+      complain(screenPage("@/app/lib/v2/local/week-screen", "child"), "app/v2/week/page.tsx"),
+    ).toBe("");
+  });
+
+  // React runs a rendered function, so there is no call site to check. One
+  // guarded call somewhere else used to excuse the render path as well.
+  test("a screen of this file that is rendered and also called, and guards neither", () => {
+    const source = [
+      'import { notFound } from "next/navigation";',
+      'import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";',
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      "  return <Screen source={source} />;",
+      "}",
+      "async function Guarded({ source }) {",
+      "  await requireLoopback(source);",
+      "  return <div>{await Screen(source)}</div>;",
+      "}",
+      "async function Screen(source) {",
+      "  return sampleDay().notice;",
+      "}",
+    ].join("\n");
+    expect(complain(source)).toContain("calls data before awaiting requireLoopback (sampleDay)");
+  });
+
+  test("and the same screen is fine once it carries its own check", () => {
+    const source = [
+      'import { notFound } from "next/navigation";',
+      'import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";',
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      "  return <Screen source={source} />;",
+      "}",
+      "async function Screen({ source }) {",
+      "  await requireLoopback(source);",
+      "  return <div>{sampleDay().notice}</div>;",
+      "}",
+    ].join("\n");
+    expect(complain(source)).toBe("");
+  });
+
+  test("a loader reached through a view module that hands it on", () => {
+    const source = [
+      'import { notFound } from "next/navigation";',
+      'import { loadLocalCalendar } from "@/app/lib/v2/view/week-data";',
+      'import { requireLoopback, screenSource } from "@/app/lib/v2/source";',
+      "export default function Page() {",
+      "  const source = screenSource({ V2_FIXTURES: process.env.V2_FIXTURES });",
+      "  if (source === null) notFound();",
+      "  const week = loadLocalCalendar(source.dir, now, null);",
+      "  return <Shell source={source} week={week} />;",
+      "}",
+      "async function Shell({ source, week }) {",
+      "  await requireLoopback(source);",
+      "  return <div>{(await week).week[0]}</div>;",
+      "}",
+    ].join("\n");
+    expect(
+      complain(source, "app/v2/week/page.tsx", new Set(["app/lib/v2/view/week-data"])),
+    ).toContain("reads data in its default export (loadLocalCalendar)");
+  });
+
   test("nothing in a route handler that asks the gate first", () => {
     const source = [
       'import { notFound } from "next/navigation";',
@@ -1709,6 +1951,32 @@ describe("the gate checker catches", () => {
 // The engine's write half has open defects, so a screen may reach only its two
 // pure halves: not ops, not edit, not port, not the fake port, and not the
 // barrel index, which pulls all of them in at once.
+// A specifier is not a path until something resolves it, and two spellings name
+// the same module: both engines have an `index.ts`, so a rule that knew only
+// `@/app/lib/v2/calendar/index` and not `@/app/lib/v2/calendar` was one spelling
+// short of what the bundler does.
+describe("resolving a specifier", () => {
+  test("reads a folder as the index inside it, in the real tree", () => {
+    const from = "app/lib/v2/view/x.ts";
+    expect(resolvedModule(from, "@/app/lib/v2/calendar")).toBe("app/lib/v2/calendar/index");
+    expect(resolvedModule(from, "@/app/lib/v2/tiles")).toBe("app/lib/v2/tiles/index");
+    expect(resolvedModule(from, "../calendar")).toBe("app/lib/v2/calendar/index");
+  });
+
+  test("leaves a module that is a file alone, extension or not", () => {
+    const from = "app/lib/v2/view/x.ts";
+    expect(resolvedModule(from, "@/app/lib/v2/calendar/grid")).toBe("app/lib/v2/calendar/grid");
+    expect(resolvedModule(from, "@/app/lib/v2/calendar/grid.ts")).toBe("app/lib/v2/calendar/grid");
+    expect(resolvedModule(from, "./format")).toBe("app/lib/v2/view/format");
+  });
+
+  test("and says nothing about a package", () => {
+    expect(resolvedModule("app/v2/x/page.tsx", "next/navigation")).toBeNull();
+    expect(resolvedModule("app/v2/x/page.tsx", "react")).toBeNull();
+    expect(resolvedModule("app/v2/x/page.tsx", "node:process")).toBeNull();
+  });
+});
+
 describe("the calendar engine's boundary", () => {
   const ENGINE = "app/lib/v2/calendar";
   const ALLOWED = [`${ENGINE}/types`, `${ENGINE}/grid`];
