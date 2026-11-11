@@ -49,6 +49,12 @@ Read this first when resuming. Newest entry on top. `PLAN.md` is the current pla
 - **The calendar engine is committed** (`b2af919`): `app/lib/v2/calendar`, 166 tests, reviewed twice, imported by nothing. What it still owes before a screen uses it is in PLAN.md under Known open edges.
 - **A new direction from the owner: the app as an OS of windows, with the Google calendar back as an editable window.** Nothing of it is wired into the product. What exists: research and audit notes, a concept, five clickable prototypes and an architecture plan (all outside git), and one pure engine in the tree, `app/lib/v2/calendar` (week grid layout, edits as data, a port with a fake behind it), which nothing imports yet. The direction waits for the owner's decisions.
 
+- **The owner chose tiled panes with tabs.** `PLAN-OS.md` is the active plan, with its own ledger. Stage 1 is his literal first ask, a read only week calendar beside Today. The tiled shell is not in that plan and is not started without his yes.
+- **Stage 1 is built, on sample data and on a local copy.** The calendar's data and view model, with one gate that every v2 page goes through (`76d1580`, `b46948f`); the pane, its place as a fourth track on the Today page from 1760 px, and `/v2/week` (`5aef278`, `b7027b5`). It sizes itself by its own width: an agenda under 480 px, three days from 480, seven from 760. It imports only the types and grid halves of the calendar engine and never fetches. What the app planned is drawn dashed, so it cannot be mistaken for what is on the calendar. A day the source does not cover says so and is never drawn as free.
+- **The gate test reads the code's structure** (`bedf42c`, `ed96a88`, `c6422b1`). The first version matched text and a comment could satisfy it. After four review rounds it parses each route file with the TypeScript compiler: the entry is synchronous and starts no read, every read sits behind a plain awaited loopback check in the same function, a loader reached through a wrapper or rendered as an imported component counts, and `process` is refused outside the gate's own argument.
+- **The tile engine is committed and unwired** (`a2fef4e`, `6e4d446`): `app/lib/v2/tiles`, a split tree with tabs, its geometry, six default arrangements over two screen classes, and a tolerant parser for the saved form. 161 tests, among them a seeded run of 400 operations from each default. One rule came out of its review: what is focused can always be seen.
+- **Two defects that no test saw, found by building and by looking.** The plan named a file `layout.ts` under `app/lib`, which Next reads as a route layout: the build failed while the type check and every test passed. And the first render on real data drew every event from its own day to the right edge of the grid. Both are fixed and each now has a test that fails on it. See Known traps.
+
 ### How the build runs
 
 One implementer agent per task, then a separate reviewer agent, then fixes until the review is clean. The orchestrating session makes every commit. The working ledger with every ruling is `.superpowers/sdd/PLAN/progress.md` (git-ignored, so it can be lost; the rulings that matter are copied into the final report and into `docs/rebuild/04-decisions.md`).
@@ -67,6 +73,7 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 | Colour fixes and the full-width desktop page, `434d355` | 0 errors, 2 warnings | 2935 of 2935 (121 files) | ok, placeholder env |
 | After the review of the full-width page, `b1b8633` | 0 errors, 2 warnings | 2941 of 2941 (121 files) | ok, placeholder env |
 | After the whole-range review and its two fix rounds, with the calendar engine, `c00ec02` | 0 errors, 2 warnings | 3163 of 3163 (124 files) | ok, placeholder env |
+| Stage 1 of the windowed screen and the tile engine, `b7027b5` | 0 errors, 2 warnings | 3636 of 3636 (134 files) | ok, placeholder env |
 
 ### Known traps
 
@@ -77,3 +84,5 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 - Do not assume Docker, the Supabase CLI or `pg_dump` exist where this runs. Migrations are rehearsed in an in-memory Postgres (Task 9).
 - Several agents share this folder during a wave. They do not commit and they run only their own tests. Commit by explicit path, never `git add -A`.
 - `next dev` and `next start` listen on every network interface unless told otherwise. Local mode and sample mode show their data to whoever can reach the server, so always start them with `-H 127.0.0.1`. A review found the real-data page reachable from the local network for about three hours on 2026-11-10 because of this.
+- A file under `app/` named like a route file (`layout.ts`, `page.ts`, `route.ts`, `icon.ts` and the rest) is a route to Next even inside `app/lib`. The type check reads generated route types that only a build or `npx next typegen` refreshes, so it stays green on a stale tree while the build fails. Run a real build before a task is called done. `__tests__/v2-reserved-filenames.test.ts` guards the names.
+- An absolutely positioned child of a CSS grid, placed with a single `grid-column` line, runs to the container's edge: an end line left to `auto` is the grid's padding edge, not one track. Tests that read markup and stylesheet text cannot see layout. Render a screen at the owner's width before calling it done.
