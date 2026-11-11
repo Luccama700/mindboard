@@ -381,8 +381,8 @@ Pure code and one file reader. No component.
 ```jsonc
 {
   "version": 1,
-  "takenAt": "<instant>", "today": "YYYY-MM-DD", "currency": "CAD", "netWorth": 0,
-  "accounts": [{ "id": "", "name": "", "type": "checking", "balance": 0, "currency": "CAD" }],
+  "takenAt": "<instant>", "today": "YYYY-MM-DD", "currency": "<code>", "netWorth": 0,
+  "accounts": [{ "id": "", "name": "", "type": "checking", "balance": 0, "currency": "<code>" }],
   "recurring": [{ "id": "", "name": "", "amount": 0, "category": "", "schedule": "monthly on day 28" }],
   "income": [{ "id": "", "name": "", "hourlyWage": 0, "taxRatePct": 0, "calendarId": null,
                "paySchedule": { "frequency": "monthly", "anchorPayday": "YYYY-MM-DD" },
@@ -767,3 +767,36 @@ The pane menu gains a "View" group for a pane whose spec declares options: one r
 - The owner uses it. If it is right, `/v2/today` and `/v2/week` become redirects into the desk and their client files are removed.
 - Editing the calendar; a task dragged onto a calendar day; docking against the edge of the whole workspace; keyboard chords; touch dragging.
 - After the security release: layouts on the account, live data, Quests and Money that write.
+
+## What was built, and what was not
+
+Tasks 1 to 11 and the first bullet of Task 14 are built, reviewed and committed. Tasks 12 (the heads-up line) and 13 (pane options in the menu) were cut by the order above; the panes take their options already, there is no control for them.
+
+Departures from the plan as written, each a ruling in the ledger:
+
+- Task 11 was built menu, motion, drag (the plan says menu, drag, motion).
+- On a phone a frame has no header and no pane menu. The "Arrange" list orders, hides and shows panes there. "Move to another layout" is not on the phone.
+- Amendment A (a layout nobody changed is not stored) applies to the saved form only. In memory a set holds exactly what it was given.
+- On load, storage wins over a default the server painted, with one jump, unless the cookie carried that arrangement.
+- Two tabs merge three ways against the desk the tab last wrote or read. No rule keeps the screen still across that merge.
+- The workspace's minimum carries one pixel of slack and its height is definite. Hit testing reads the stage's computed extent properties.
+- A frame's body is the page colour under a header band in the card surface.
+- A side quest shows its date and no clock: no source carries an expiry.
+- A lane shows no finished count.
+
+## Known open edges after this plan
+
+Most likely to be met first.
+
+1. **Tab order after a rearrangement.** The fourteen frames are in catalog order in the document. Once panes are moved, the keyboard's order no longer follows the screen. Reordering keyed frames moves their nodes (scroll positions, a glide in flight, focus), so it needs a browser session of its own.
+2. **One browser engine.** The CSS geometry (registered properties, container units, `round()`) and the drags were checked in one Chromium build. Safari and Firefox are not checked. On a phone there is one pane and no split, so the risk is on a desktop or a tablet. The media queries use range syntax, which needs Safari 16.4.
+3. **Two tabs changing the same arrangement.** The tab being looked at wins. The other tab's change to that one arrangement is lost.
+4. **A desk already at twelve layouts.** When two tabs each make a layout with the same id, the second is dropped.
+5. **A touch screen wide enough to be tiled.** Nothing drags on a coarse pointer. The pane menu and the divider's keys are the way.
+6. **Options.** `setOption` is reachable only from tests. The calendar's `days` option is declared, saved and read by nothing.
+7. **A new layout made on a phone before the page has hydrated** copies the laptop's arrangement.
+8. **A lane's date** is the lane's nearest date and can sit under a next stop it does not belong to.
+9. **The first paint of a layout opened by a link** (`?layout=`) when the cookie was written on another layout shows the default for a moment.
+10. **From stage 1, still open:** a page under `/v2` with the flags off answers with the not-found screen and no data, but with status 200.
+
+Smaller things recorded in the ledger and not done: a view that says whether the history is missing, short or full; an "added" index carried by the quests view; a cap on a transaction note's length; the close buttons sitting inside a tab list for an accessibility checker; focus after Back or a change of class when the focused control is no longer displayed; Escape inside a pending Delete or Reset in the phone's sheet; the address after a merge that shows another layout; a divider drag when the window loses focus; exports used only in their own file.

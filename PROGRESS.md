@@ -1,6 +1,6 @@
 # Rebuild progress
 
-Read this first when resuming. Newest entry on top. `PLAN.md` is the current plan. The design and decisions are in `docs/rebuild/` (kept outside git, see its README).
+Read this first when resuming. The log runs oldest first; the last dated section is where things stand. `PLAN.md` is the engine's plan, `PLAN-OS.md` the windowed screen's first stage, and `PLAN-DESK.md` the desk, which is the one built last. The design and decisions are in `docs/rebuild/` (kept outside git, see its README).
 
 ## Standing rules
 
@@ -58,11 +58,27 @@ Read this first when resuming. Newest entry on top. `PLAN.md` is the current pla
 - **A whole-branch review of stage 1, and its one fix round** (`b09a3c9`). No critical finding. Two real ones, both about days. A week link on Today dropped `?date=` while the screen kept its plan across a change of planned day, so the header and the line could show different days: the screen's state is now keyed on the planned day and the links carry the day shown. And the calendar took "today" from the clock while the planner's day runs to lights out: after midnight it marked the wrong day, and a block planned after midnight pulled the whole week's grid to 00:00. `CalendarScreenData` now carries the planned day, and a planned block never widens the grid. Smaller fixes in the same round are listed in that commit. What was left open by ruling is in `PLAN-OS.md` under "Known open edges after stage 1"; the one to settle before this branch serves anyone is that a v2 page with the flags off answers with the not-found screen and no data, but with status 200.
 - **`PLAN-SHELL.md` is written, for the owner's yes** (`5cdbbab`, `68c63ef`): the desk, tiled panes with tabs at a new address, five tasks. Nothing in it is built.
 
+### 2026-11-11
+
+- **The owner asked for the whole desk:** Quests and Money, the tile feel on every screen, maximum customization. `PLAN-DESK.md` is the active plan (it replaces `PLAN-SHELL.md`) and has its own ledger. Built overnight in three waves by implementer agents, each piece read by a separate reviewer, then driven in a real browser by the orchestrating session.
+- **What exists at `/v2/desk`.** One workspace of tiled panes. Fourteen panes: the day's line, status, two lists, the week calendar, four for Quests (lanes, steps, side quests, done lately), five for Money (the money calendar, accounts, coming up, hours, transactions). Today, Week, Quests and Money are four layouts of the same panes. `/v2` redirects there. The older `/v2/today` and `/v2/week` stay as they were, with one more item on their rail.
+- **What can be changed, all of it saved in the browser.** Drag the gap between panes or use its keys; tabs; close a pane and reopen it from the rail; maximize; move a pane from its menu (to a side, into a tab, split off, to another layout) or pick it up by its header or tab and drop it on a zone; layouts of one's own (new from the one on screen, rename, delete, reorder, hide, reset). A reload is painted rearranged by the server from a cookie that holds the layout on screen; the whole set is in the browser's storage. Each screen class keeps its own arrangement: one pane at a time with a bottom bar under 1024 px, tiled from 1024 px, a second tiled arrangement from 1600 px. Changes of arrangement and of layout glide (translation and opacity only, nothing under reduced motion).
+- **Read only, on the sample or on a local copy.** The desk is behind the same gate as every page under `app/v2`. Nothing in it writes anywhere but the browser's own storage. Money says how old its numbers are before it shows them.
+- **One fact, one number.** Quests is handed the very planner input Today plans from, and Money's hours come from the same plan, so two panes on one desk cannot disagree on a count. A press on Done means worked on today, not finished.
+- **The tile engine grew to carry it** (`app/lib/v2/tiles`): three screen classes, fourteen panes, built in and user layouts, options per pane, a saved form in which a layout nobody changed is not stored, a compact codec and a cookie that always fits, and its geometry written as CSS over registered custom properties and container units, proven equal to the numeric form by an evaluator in the tests and then in a browser.
+- **Cut by the plan's own order:** the one line readout across the top (Task 12) and pane options in a menu (Task 13; the panes already take their options, there is no control for them yet).
+- **What only a real browser found.** These are in Known traps below. A desk that drew blank in a window shorter than its minimum. A one pixel disagreement between the stylesheet and a script at 90 percent zoom, which became a rule (read what the browser computed). Pane bodies designed on the page colour whose cards vanished inside card coloured frames. Real account names squeezing a transaction's note to eight characters.
+- **What reviews found that tests had passed.** Two browser tabs writing over each other's layouts (fixed with a three way merge, and then fixed again when the whole-branch review showed the merge could still undo the other tab). A refused save recorded as done. A divider drag that outlived a layout switch and would have committed onto the other layout. A count on a lane that could disagree with the pane beside it.
+- **Measured.** 208 combinations of window size, device scale (67 to 125 percent) and layout: every frame equals the engine's rectangle on the workspace the browser computed. The drags, keys, reloads, tabs, layouts, the pane menu, drag to dock and the phone's lists were each driven with a real pointer and real keys through the DevTools protocol.
+- **Open edges after this plan** are listed at the end of `PLAN-DESK.md`. The two that matter most: the frames are in catalog order in the document, so after a rearrangement the keyboard's tab order no longer follows the screen; and only one browser engine has been used to check the CSS geometry.
+
 ### How the build runs
 
 One implementer agent per task, then a separate reviewer agent, then fixes until the review is clean. The orchestrating session makes every commit. The working ledger with every ruling is `.superpowers/sdd/PLAN/progress.md` (git-ignored, so it can be lost; the rulings that matter are copied into the final report and into `docs/rebuild/04-decisions.md`).
 
-To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD`. A task is done when its commit exists and the ledger has a `complete` line for it. Tasks without one start again from their brief (`bash <skill>/scripts/task-brief PLAN.md <n>`).
+Each plan has its own ledger beside that one (`.superpowers/sdd/PLAN-OS/`, `.superpowers/sdd/PLAN-DESK/`), with every ruling, every review's verdict and what the orchestrating session checked in a browser.
+
+To resume: read this file, then the plan named in the last dated section, then `git log --oneline bd91c3e..HEAD`. A task is done when its commit exists and the ledger has a `complete` line for it. Tasks without one start again from their brief (`bash <skill>/scripts/task-brief PLAN.md <n>`).
 
 ### Gate results
 
@@ -78,6 +94,10 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 | After the whole-range review and its two fix rounds, with the calendar engine, `c00ec02` | 0 errors, 2 warnings | 3163 of 3163 (124 files) | ok, placeholder env |
 | Stage 1 of the windowed screen and the tile engine, `b7027b5` | 0 errors, 2 warnings | 3636 of 3636 (134 files) | ok, placeholder env |
 | After the whole-branch review of stage 1 and its one fix round, `b09a3c9` | 0 errors, 2 warnings | 3673 of 3673 (134 files) | ok, placeholder env |
+| The desk standing still, end of the second wave, `24aaf49` | 0 errors, 2 warnings | 4442 of 4442 (146 files) | ok, placeholder env |
+| The desk moving and saving, `2651e67` | 0 errors, 2 warnings | 4518 of 4518 (148 files) | ok, placeholder env |
+| The pane menu, motion and drag to dock, `0ff3a93` | 0 errors, 2 warnings | 4605 of 4605 (149 files) | ok, placeholder env |
+| After the whole-branch review of the desk, its one fix round and the closing re-review | 0 errors, 2 warnings | 4630 of 4630 (149 files) | ok, placeholder env |
 
 ### Known traps
 
@@ -90,3 +110,10 @@ To resume: read this file, then `PLAN.md`, then `git log --oneline bd91c3e..HEAD
 - `next dev` and `next start` listen on every network interface unless told otherwise. Local mode and sample mode show their data to whoever can reach the server, so always start them with `-H 127.0.0.1`. A review found the real-data page reachable from the local network for about three hours on 2026-11-10 because of this.
 - A file under `app/` named like a route file (`layout.ts`, `page.ts`, `route.ts`, `icon.ts` and the rest) is a route to Next even inside `app/lib`. The type check reads generated route types that only a build or `npx next typegen` refreshes, so it stays green on a stale tree while the build fails. Run a real build before a task is called done. `__tests__/v2-reserved-filenames.test.ts` guards the names.
 - An absolutely positioned child of a CSS grid, placed with a single `grid-column` line, runs to the container's edge: an end line left to `auto` is the grid's padding edge, not one track. Tests that read markup and stylesheet text cannot see layout. Render a screen at the owner's width before calling it done.
+- A size container (`container-type: size`) needs a DEFINITE block size. When its height came from stretching in a flex row whose own height came from that item's `min-height`, the browser computed the descendants' container units as zero on the first layout and did not recompute them: the desk drew blank in a short window and was fine after any resize. Give it an explicit height.
+- Under a fractional zoom a browser holds a box a fraction under the length it was given. A script that floors a measured rectangle and a stylesheet that floors with `round()` then disagree by a pixel. Read the stylesheet's own computed value. For the same reason a minimum that must never be undercut carries one pixel of slack.
+- An unregistered custom property is pasted as text wherever it is used, so a formula nested through `var()` doubles with each level and browsers cap it. Register the property (`@property`, with a syntax) and it is computed once.
+- A build can be made in a clean detached worktree while builders are still writing (`.claude/worktrees/gate`, already ignored by git, the test runner and the linter). It has no `node_modules` of its own, so its local, never committed `next.config.ts` points the build's root at the main worktree.
+- Driving a headless browser: the launcher returns before a picture is written and leaves browser processes behind (stop them by their profile folder); a page nobody paints gets no frame callbacks and throttled timers, and React reveals streamed content on a frame, so never wait inside the page; a synthetic mouse move with a button held must name the button or pointer capture is not honoured; a synthetic Enter must carry its text or a button is not pressed. Each of these looked like an application bug first.
+- Some file-writing tools turn a typed `\u` escape into the raw character. An invisible or direction-changing character then sits raw in a test file. Build such characters from their code points and scan the branch for raw ones before a push.
+- Inside the desk, `element.querySelector("[data-layout=x] [data-part=y]")` can match through an ancestor, because the desk's root carries `data-layout` and every frame `data-pane`. Use `:scope`.
