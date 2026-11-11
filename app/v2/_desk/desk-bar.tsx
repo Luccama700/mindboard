@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
-import type { LayoutId, PaneId, TileSet } from "@/app/lib/v2/tiles";
+import type { LayoutId, PaneId, ScreenClass, TileSet } from "@/app/lib/v2/tiles";
 import { DESK_COPY } from "@/app/lib/v2/view/desk";
 import { AppearanceTrigger } from "../_components/appearance-root";
 import { LayoutLinks } from "./desk-rail";
+import { LayoutMenu, type OnLayout } from "./layout-menu";
 import { frameId, shortOf } from "./pane-frame";
+import { PaneList, type OnArrange } from "./pane-list";
 
 // The phone's two bars, under 1024px. They follow the phone bar of Today and
 // Week: the card's surface with a hairline, 52px of row, the display face, the
@@ -17,19 +19,23 @@ const LAYOUT_LIST_ID = "v2-desk-layout-list";
 
 /**
  * The top bar: the layout on screen, as a button that opens the list of
- * layouts (the same anchors as the rail), and the way in to the appearance
- * panel the phone header has on Today.
+ * layouts (the same anchors and the same way to manage them as the rail), and
+ * the way in to the appearance panel the phone header has on Today.
  */
 export function DeskTopBar({
   set,
+  cls = null,
   date,
   week = null,
   onOpen,
+  onLayout,
 }: {
   set: TileSet;
+  cls?: ScreenClass | null;
   date: string | null;
   week?: string | null;
   onOpen(layout: LayoutId): void;
+  onLayout?: OnLayout;
 }) {
   const [open, setOpen] = useState(false);
   const bar = useRef<HTMLElement>(null);
@@ -70,39 +76,55 @@ export function DeskTopBar({
         <span className="v2-desk-chev" aria-hidden="true" />
       </button>
       <AppearanceTrigger variant="header" />
-      <LayoutLinks
-        id={LAYOUT_LIST_ID}
-        className="v2-desk-menu"
-        hidden={!open}
-        set={set}
-        date={date}
-        week={week}
-        onOpen={(layout) => {
-          // The anchor that was pressed is about to be hidden with the list,
-          // so the focus goes back to the button that opened it, as Escape does.
-          setOpen(false);
-          button.current?.focus();
-          onOpen(layout);
-        }}
-      />
+      <div id={LAYOUT_LIST_ID} className="v2-desk-menu" hidden={!open}>
+        <LayoutMenu
+          set={set}
+          cls={cls}
+          where="sheet"
+          onLayout={onLayout ?? NO_LAYOUT}
+          links={
+            <LayoutLinks
+              className="v2-desk-menu-links"
+              set={set}
+              date={date}
+              week={week}
+              onOpen={(layout) => {
+                // The anchor that was pressed is about to be hidden with the
+                // list, so the focus goes back to the button that opened it, as
+                // Escape does.
+                setOpen(false);
+                button.current?.focus();
+                onOpen(layout);
+              }}
+            />
+          }
+        />
+      </div>
     </header>
   );
 }
+
+/** A bar drawn with nothing to answer its actions (a test) changes nothing. */
+const NO_LAYOUT: OnLayout = () => null;
+const NO_ARRANGE: OnArrange = () => {};
 
 /**
  * The bottom bar: the tabs of the phone's one leaf, in order, the one in front
  * marked. It scrolls sideways when there are more than fit. A press shows that
  * pane, through the engine (`activateTab`, the reducer's `tab` action on the
  * compact class); the arrow keys, Home and End move along it as a tab strip.
+ * At its end, the list that arranges them (pane-list.tsx).
  */
 export function DeskTabBar({
   tabs,
   active,
   onTab,
+  onArrange,
 }: {
   tabs: readonly PaneId[];
   active: PaneId | null;
   onTab(pane: PaneId): void;
+  onArrange?: OnArrange;
 }) {
   const strip = useRef<HTMLDivElement>(null);
 
@@ -139,6 +161,7 @@ export function DeskTabBar({
           </button>
         ))}
       </div>
+      <PaneList tabs={tabs} onArrange={onArrange ?? NO_ARRANGE} />
     </div>
   );
 }

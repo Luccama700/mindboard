@@ -535,7 +535,8 @@
   transform: translateY(2px) rotate(225deg);
 }
 
-/* The list of layouts, over the slot. */
+/* The list of layouts, over the slot. Long when it is being edited, so it
+   scrolls inside itself. */
 [data-v2-root] .v2-desk-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -544,12 +545,23 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: calc(100dvh - 140px);
   margin: 0;
   padding: 6px;
+  overflow-y: auto;
   list-style: none;
   background: var(--v2-card);
   border: 1px solid var(--v2-edge);
   border-radius: 14px;
+}
+
+[data-v2-root] .v2-desk-menu-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 [data-v2-root] .v2-desk-menu[hidden] {
@@ -575,7 +587,10 @@
 /* ---- the phone's bottom bar: the layout's tabs ---- */
 
 [data-v2-root] .v2-desk-bar {
+  position: relative;
+  display: flex;
   flex: none;
+  align-items: stretch;
   padding: 0 10px calc(8px + env(safe-area-inset-bottom));
   background: var(--v2-card);
   border-top: 1px solid var(--v2-edge);
@@ -583,6 +598,8 @@
 
 [data-v2-root] .v2-desk-bar-tabs {
   display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -741,6 +758,283 @@
   background: var(--v2-ink-2);
 }
 
+/* ---- managing the layouts: on the rail, and in the phone's sheet ---- */
+
+/* The rail's heading and its one control, Edit, on one line. */
+[data-v2-root] .v2-desk-rail-headrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+[data-v2-root] .v2-desk-rail-headrow .v2-desk-rail-head {
+  margin: 0 0 0 8px;
+}
+
+[data-v2-root] .v2-desk-edit-toggle {
+  min-height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--v2-ink-3);
+  font: 600 11px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+[data-v2-root] .v2-desk-edit-toggle:hover,
+[data-v2-root] .v2-desk-edit-toggle[aria-expanded="true"] {
+  color: var(--v2-ink);
+}
+
+/* The quiet mark on a layout that differs from its default, drawn for the
+   class shown only (in each class's block below). */
+[data-v2-root] .v2-desk-changed {
+  display: none;
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--v2-ink-3);
+}
+
+/* The column of layouts while it is being managed. */
+[data-v2-root] .v2-desk-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-desk-edit-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--v2-ink-2);
+  font: 600 14px/1.15 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-desk-edit-name:hover,
+[data-v2-root] .v2-desk-edit-name[aria-expanded="true"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-desk-edit li[aria-current] .v2-desk-edit-name {
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-desk-edit-note {
+  color: var(--v2-ink-3);
+  font: 500 11px/1.2 var(--v2-display);
+}
+
+/* A layout's actions, a question, or a field, stacked under its name: the
+   column stays one column. */
+[data-v2-root] .v2-desk-edit-actions,
+[data-v2-root] .v2-desk-edit-ask,
+[data-v2-root] .v2-desk-edit-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 2px 0 8px 8px;
+}
+
+[data-v2-root] .v2-desk-edit-actions button,
+[data-v2-root] .v2-desk-edit-ask button,
+[data-v2-root] .v2-desk-edit-field button,
+[data-v2-root] .v2-desk-edit-make {
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--v2-ink-2);
+  font: 500 12px/1.2 var(--v2-display);
+}
+
+[data-v2-root] .v2-desk-edit-actions button:hover,
+[data-v2-root] .v2-desk-edit-ask button:hover,
+[data-v2-root] .v2-desk-edit-field button:hover,
+[data-v2-root] .v2-desk-edit-make:hover {
+  color: var(--v2-ink);
+  background: var(--v2-card-2);
+}
+
+/* A move that cannot be made is said to be unavailable, and stays where it is
+   so the focus does not fall off it. */
+[data-v2-root] .v2-desk-edit-actions button[aria-disabled="true"],
+[data-v2-root] .v2-desk-arrange button[aria-disabled="true"] {
+  color: var(--v2-ink-3);
+  background: none;
+  cursor: default;
+  opacity: 0.55;
+}
+
+[data-v2-root] .v2-desk-edit-ask p {
+  padding: 4px 8px;
+  color: var(--v2-ink);
+  font-size: 12px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+[data-v2-root] .v2-desk-edit-ask [data-part="confirm"] {
+  color: var(--v2-warn);
+}
+
+[data-v2-root] .v2-desk-edit-field input {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 8px;
+  background: var(--v2-card);
+  color: var(--v2-ink);
+  font: 500 13px/1.2 var(--v2-text);
+}
+
+[data-v2-root] .v2-desk-edit-make {
+  width: 100%;
+  margin-top: 6px;
+  color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-desk-edit-new {
+  margin-top: 6px;
+  padding-left: 0;
+}
+
+[data-v2-root] .v2-desk-edit-limit {
+  margin-top: 6px;
+  padding: 0 8px;
+  color: var(--v2-ink-3);
+  font-size: 12px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+/* In the phone's sheet every control is a finger's size. */
+[data-v2-root] .v2-desk-menu .v2-desk-edit-name,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-actions button,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-ask button,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-field button,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-field input,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-make,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-toggle {
+  min-height: 44px;
+  padding-inline: 12px;
+  font-size: 15px;
+}
+
+[data-v2-root] .v2-desk-menu .v2-desk-edit-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid var(--v2-edge);
+}
+
+/* ---- the phone's list of panes, from the end of the bottom bar ---- */
+
+[data-v2-root] .v2-desk-arrange {
+  display: flex;
+  flex: none;
+}
+
+[data-v2-root] .v2-desk-arrange-toggle {
+  min-width: 44px;
+  min-height: 52px;
+  padding: 0 12px;
+  color: var(--v2-ink-3);
+  font: 600 15px/1 var(--v2-display);
+}
+
+[data-v2-root] .v2-desk-arrange-toggle[aria-expanded="true"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-desk-arrange-toggle:focus-visible {
+  outline-offset: -3px;
+}
+
+/* Over the slot, above the bar. */
+[data-v2-root] .v2-desk-arrange-sheet {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 10px;
+  right: 10px;
+  z-index: 2;
+  max-height: calc(100dvh - 140px);
+  padding: 6px;
+  overflow-y: auto;
+  background: var(--v2-card);
+  border: 1px solid var(--v2-edge);
+  border-radius: 14px;
+}
+
+[data-v2-root] .v2-desk-arrange-sheet[hidden] {
+  display: none;
+}
+
+[data-v2-root] .v2-desk-arrange-head {
+  padding: 8px 10px 4px;
+  color: var(--v2-ink-3);
+  font: 600 12px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+[data-v2-root] .v2-desk-arrange ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-desk-arrange-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  min-height: 48px;
+  padding: 0 2px 0 10px;
+}
+
+[data-v2-root] .v2-desk-arrange-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--v2-ink);
+  font: 600 15px/1.2 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-desk-arrange-actions {
+  display: flex;
+  flex: none;
+  margin-left: auto;
+}
+
+[data-v2-root] .v2-desk-arrange-actions button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: 10px;
+  color: var(--v2-ink-2);
+  font: 500 13px/1.1 var(--v2-display);
+}
+
+[data-v2-root] .v2-desk-arrange-actions button:focus-visible {
+  outline-offset: -3px;
+}
+
 /* ---- from 1024px: the rail and the tiled workspace ---- */
 
 @media (min-width: 1024px) {
@@ -808,6 +1102,10 @@
   [data-v2-root] .v2-desk .v2-pane {
     --v2-gutter: 0px;
   }
+
+  [data-v2-root] .v2-desk-menu a[data-changed~="compact"] .v2-desk-changed {
+    display: inline-block;
+  }
 }
 
 /* ---- regular ---- */
@@ -852,6 +1150,10 @@
 
   [data-v2-root] .v2-frame-tools[data-in~="regular"] {
     display: flex;
+  }
+
+  [data-v2-root] .v2-desk-layouts a[data-changed~="regular"] .v2-desk-changed {
+    display: inline-block;
   }
 
   [data-v2-root] .v2-frame-solo[data-in~="regular"] {
@@ -914,6 +1216,10 @@
 
   [data-v2-root] .v2-frame-tools[data-in~="wide"] {
     display: flex;
+  }
+
+  [data-v2-root] .v2-desk-layouts a[data-changed~="wide"] .v2-desk-changed {
+    display: inline-block;
   }
 
   [data-v2-root] .v2-frame-solo[data-in~="wide"] {

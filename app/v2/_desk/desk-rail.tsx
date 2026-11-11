@@ -2,12 +2,20 @@
 
 import type { MouseEvent } from "react";
 
-import type { LayoutId, PaneGroup, PaneId, TileSet } from "@/app/lib/v2/tiles";
+import {
+  isChanged,
+  type LayoutId,
+  type PaneGroup,
+  type PaneId,
+  type ScreenClass,
+  type TileSet,
+} from "@/app/lib/v2/tiles";
 import { DESK_COPY } from "@/app/lib/v2/view/desk";
 import { AppearanceTrigger } from "../_components/appearance-root";
 import { useDeskData } from "./desk-data-provider";
+import { LayoutMenu, type OnLayout } from "./layout-menu";
 import { deskHref } from "./use-tiles";
-import type { DeskStage } from "./workspace";
+import { SCREEN_CLASSES, type DeskStage } from "./workspace";
 
 /** The pane list's groups, in the order the rail shows them, with their names. */
 const GROUPS: ReadonlyArray<{ group: PaneGroup; name: string }> = [
@@ -33,9 +41,17 @@ function pressed(event: MouseEvent<HTMLAnchorElement>): boolean {
   );
 }
 
+/** The classes a layout differs from its default on: the engine's `isChanged`, class by class. */
+export function changedIn(set: TileSet, layout: LayoutId): ScreenClass[] {
+  return SCREEN_CLASSES.filter((cls) => isChanged(set, layout, cls));
+}
+
 /**
  * The layouts the desk shows, in the rail's order, as anchors to their own
- * addresses. The one on screen says so with `aria-current`.
+ * addresses. The one on screen says so with `aria-current`. A layout that
+ * differs from its default carries a quiet mark, written for every class it
+ * differs on (`data-changed`) and drawn by desk.css for the class shown, and
+ * read as part of its name there.
  */
 export function LayoutLinks({
   set,
@@ -58,21 +74,30 @@ export function LayoutLinks({
   const visible = set.layouts.filter((meta) => !set.hidden.includes(meta.id));
   return (
     <ul id={id} className={className} hidden={hidden}>
-      {visible.map((meta) => (
-        <li key={meta.id}>
-          <a
-            href={deskHref(meta.id, date, week)}
-            aria-current={meta.id === set.current ? "page" : undefined}
-            onClick={(event) => {
-              if (!pressed(event)) return;
-              event.preventDefault();
-              onOpen(meta.id);
-            }}
-          >
-            {meta.title}
-          </a>
-        </li>
-      ))}
+      {visible.map((meta) => {
+        const changed = changedIn(set, meta.id).join(" ");
+        return (
+          <li key={meta.id}>
+            <a
+              href={deskHref(meta.id, date, week)}
+              aria-current={meta.id === set.current ? "page" : undefined}
+              data-changed={changed === "" ? undefined : changed}
+              onClick={(event) => {
+                if (!pressed(event)) return;
+                event.preventDefault();
+                onOpen(meta.id);
+              }}
+            >
+              {meta.title}
+              {changed !== "" && (
+                <span className="v2-desk-changed">
+                  <span className="v2-hidden">, {DESK_COPY.changed}</span>
+                </span>
+              )}
+            </a>
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -127,22 +152,31 @@ function railName(title: string, short: string) {
 export function DeskRail({
   set,
   stage,
+  cls = null,
   date,
   week = null,
   onOpen,
   onPane,
+  onLayout,
 }: {
   set: TileSet;
   stage: DeskStage;
+  cls?: ScreenClass | null;
   date: string | null;
   week?: string | null;
   onOpen(layout: LayoutId): void;
   onPane?(pane: PaneId, pressed: HTMLElement): void;
+  onLayout?: OnLayout;
 }) {
   return (
     <nav className="v2-desk-rail" aria-label={DESK_COPY.rail}>
-      <h2 className="v2-desk-rail-head">{DESK_COPY.layouts}</h2>
-      <LayoutLinks set={set} date={date} week={week} onOpen={onOpen} className="v2-desk-layouts" />
+      <LayoutMenu
+        set={set}
+        cls={cls}
+        where="rail"
+        onLayout={onLayout ?? NO_LAYOUT}
+        links={<LayoutLinks set={set} date={date} week={week} onOpen={onOpen} className="v2-desk-layouts" />}
+      />
       <h2 className="v2-desk-rail-head v2-desk-panes-head">{DESK_COPY.panes}</h2>
       {GROUPS.map(({ group, name }) => (
         <div key={group} className="v2-desk-group">
@@ -178,3 +212,6 @@ export function DeskRail({
     </nav>
   );
 }
+
+/** A rail drawn with nothing to answer its layout actions (a test) changes nothing. */
+const NO_LAYOUT: OnLayout = () => null;

@@ -101,6 +101,11 @@ import { MIN_SLACK, Workspace, deskStage, dividerVar, minVar } from "@/app/v2/_d
 
 const ROOT = path.resolve(__dirname, "..");
 
+// A desk render costs about half a second in jsdom, and the full suite runs
+// some 150 files at once: the default 5 s is too close for a test that renders
+// and presses several times.
+vi.setConfig({ testTimeout: 15_000 });
+
 const TILED: TiledClass[] = ["regular", "wide"];
 const SIDES = ["left", "top", "width", "height"] as const;
 const PANE_IDS = PANES.map((pane) => pane.id);
@@ -448,11 +453,15 @@ describe("the geometry's contract (behaviour 4)", () => {
   test("holds the workspace one pixel over each class's minimum, so a zoom cannot floor it under", () => {
     expect(MIN_SLACK).toBe(1);
     stubMedia(2000);
+    // One render, the four layouts opened on it from the rail: the minimum
+    // follows the tree on screen.
+    const { container } = drawDesk();
+    const work = container.querySelector(".v2-desk-work") as HTMLElement;
     for (const meta of BUILT_IN_LAYOUTS) {
-      cleanup();
+      act(() => {
+        fireEvent.click(railLink(container, meta.title));
+      });
       const set = setCurrent(EMPTY_TILE_SET, meta.id);
-      const { container } = drawDesk(set);
-      const work = container.querySelector(".v2-desk-work") as HTMLElement;
       for (const cls of TILED) {
         const { min } = cssLayout(arrangementOf(set, meta.id, cls).tree, null, PANES, cls);
         expect(min.w).toBeGreaterThan(0);

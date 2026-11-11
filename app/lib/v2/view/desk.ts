@@ -48,15 +48,63 @@ export const DESK_COPY = {
   paneRestored: "{pane} is back in its place.",
   /** A desk too large for the cookie: kept in this browser, but the server cannot draw it. */
   savedHereOnly: "Layout saved on this device. The first paint may show the default.",
+
+  // Managing the layouts, on the rail and in the phone's list. `{layout}` is filled.
+  /** The control that turns the list of layouts into the list to manage them. */
+  editLayouts: "Edit",
+  editLayoutsName: "Edit layouts",
+  doneEditing: "Done",
+  doneEditingName: "Done editing layouts",
+  /** Read after a layout that differs from its default on this screen size. */
+  changed: "changed",
+  /** Shown after a built in layout that is hidden from the list. */
+  hidden: "hidden",
+  moveUp: "Move up",
+  moveDown: "Move down",
+  rename: "Rename",
+  renameField: "New name for {layout}",
+  save: "Save",
+  cancel: "Cancel",
+  remove: "Delete",
+  confirmRemove: "Delete {layout}?",
+  keep: "Keep",
+  hide: "Hide",
+  show: "Show",
+  reset: "Reset this layout",
+  confirmReset: "Put {layout} back as it started, on this screen size?",
+  resetConfirm: "Reset",
+  newLayout: "New layout from this one",
+  newField: "Name for the new layout",
+  /** Said where "New layout from this one" would be, once the desk is full. */
+  layoutLimit: "A desk holds twelve layouts. Delete one of your own to make room for another.",
+  layoutMade: "Made {layout}.",
+  layoutRenamed: "Renamed to {layout}.",
+  layoutRemoved: "{layout} deleted.",
+  layoutMovedUp: "{layout} moved up.",
+  layoutMovedDown: "{layout} moved down.",
+  layoutHidden: "{layout} hidden.",
+  layoutShown: "{layout} shown.",
+  layoutReset: "{layout} is back as it started.",
+
+  // The phone's list of the panes in the layout on screen. `{pane}` is filled.
+  arrangePanes: "Arrange",
+  arrangePanesName: "Arrange the panes in this layout",
+  inLayout: "In this layout",
+  notInLayout: "Not in this layout",
+  paneMovedUp: "{pane} moved up.",
+  paneMovedDown: "{pane} moved down.",
+  paneHidden: "{pane} hidden.",
+  paneShown: "{pane} shown.",
 } as const;
 
 /**
  * One of the desk's sentences with its slots filled: `{pane}`, `{first}`,
- * `{second}`. One pass with a function, for galleryLine's reason: a title is
- * filled in as plain text, and a slot written inside a title stays as it is.
+ * `{second}`, `{layout}`. One pass with a function, for galleryLine's reason: a
+ * title is filled in as plain text, and a slot written inside a title stays as
+ * it is.
  */
 export function deskLine(template: string, slots: Readonly<Record<string, string>>): string {
-  return template.replace(/\{(pane|first|second)\}/g, (whole, name: string) =>
+  return template.replace(/\{(pane|first|second|layout)\}/g, (whole, name: string) =>
     Object.hasOwn(slots, name) ? slots[name] : whole,
   );
 }

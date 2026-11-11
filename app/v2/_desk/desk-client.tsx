@@ -26,7 +26,9 @@ import { DeskNotes, DeskRail } from "./desk-rail";
 import { measureWorkspace } from "./divider";
 import { frameId, titleOf, type TiledClass } from "./pane-frame";
 import { useSavedDesk } from "./persist";
-import { DESK_PATH, deskHref, deskKeep, layoutAsked, useTiles, type TilesAction } from "./use-tiles";
+import { DESK_PATH, deskHref, deskKeep, layoutAsked, useTiles, type LayoutAction, type TilesAction } from "./use-tiles";
+import type { OnLayout } from "./layout-menu";
+import type { OnArrange } from "./pane-list";
 import { Workspace, deskStage, type WorkspaceActions } from "./workspace";
 
 /**
@@ -35,6 +37,46 @@ import { Workspace, deskStage, type WorkspaceActions } from "./workspace";
  * once on the stage instead of substituting its text into every frame.
  */
 export const DESK_PROPERTY_RULES = propertyRules(["regular", "wide"]);
+
+/** A layout's title on a desk, or its id when the desk no longer has it. */
+function titleIn(set: TileSet, id: LayoutId): string {
+  return set.layouts.find((meta) => meta.id === id)?.title ?? id;
+}
+
+/** What the live region says after a layout action the engine took. */
+function layoutSentence(action: LayoutAction, before: TileSet, after: TileSet): string {
+  const line = (template: string, set: TileSet, id: LayoutId) => deskLine(template, { layout: titleIn(set, id) });
+  switch (action.type) {
+    case "addLayout":
+      return line(DESK_COPY.layoutMade, after, after.current);
+    case "renameLayout":
+      return line(DESK_COPY.layoutRenamed, after, action.id);
+    case "removeLayout":
+      return line(DESK_COPY.layoutRemoved, before, action.id);
+    case "moveLayout": {
+      const from = before.layouts.findIndex((meta) => meta.id === action.id);
+      return line(action.to < from ? DESK_COPY.layoutMovedUp : DESK_COPY.layoutMovedDown, after, action.id);
+    }
+    case "hideLayout":
+      return line(action.hidden ? DESK_COPY.layoutHidden : DESK_COPY.layoutShown, after, action.id);
+    case "resetLayout":
+      return line(DESK_COPY.layoutReset, after, action.id);
+  }
+}
+
+/** What the live region says after a change from the phone's list of panes. */
+function arrangeSentence(action: TilesAction, before: TileSet): string {
+  if (action.type === "moveTab") {
+    const tree = arrangementOf(before, before.current, "compact").tree;
+    const from = tree === null ? -1 : leavesOf(tree).flatMap((leaf) => leaf.tabs).indexOf(action.pane);
+    return deskLine(action.to < from ? DESK_COPY.paneMovedUp : DESK_COPY.paneMovedDown, {
+      pane: titleOf(action.pane),
+    });
+  }
+  if (action.type === "close") return deskLine(DESK_COPY.paneHidden, { pane: titleOf(action.pane) });
+  if (action.type === "open") return deskLine(DESK_COPY.paneShown, { pane: titleOf(action.pane) });
+  return "";
+}
 
 function isTiled(cls: ScreenClass | null): cls is TiledClass {
   return cls === "regular" || cls === "wide";
@@ -147,26 +189,42 @@ export function DeskClient({
 
   /**
    * One action, committed before anything else happens, so the focus can be
-   * put on what is there now. Answers the set it committed, or null when the
+   * put on what is there now: the pressed control when it can still be
+   * reached, then `fallback` when the caller knows better (a row of a list),
+   * then the front tab of the pane the engine says has the focus. When the
+   * layout on screen changed with it (a layout made, deleted or hidden), the
+   * address follows: a new layout is a new entry in the history, the others
+   * replace the one there. Answers the set it committed, or null when the
    * engine refused it.
    */
   const commit = useCallback(
-    (action: TilesAction, pressed: HTMLElement | null, on: TiledClass): TileSet | null => {
+    (
+      action: TilesAction,
+      pressed: HTMLElement | null,
+      on: ScreenClass,
+      fallback?: (after: TileSet) => HTMLElement | null,
+    ): TileSet | null => {
       const before = latest.current;
       notice.current = null;
       flushSync(() => dispatch(action));
       const after = latest.current;
-      if (after === before) return null;
+      if (after.current !== before.current) {
+        const href = deskHref(after.current, date, week);
+        if (action.type === "addLayout") window.history.pushState(null, "", href);
+        else window.history.replaceState(null, "", href);
+      }
       if (reachable(pressed, on)) {
         if (document.activeElement !== pressed) pressed.focus();
-        return after;
+      } else if (fallback !== undefined) {
+        fallback(after)?.focus();
+      } else {
+        const arrangement = arrangementOf(after, after.current, on);
+        const pane = arrangement.focus ?? leavesOf(arrangement.tree)[0]?.active;
+        if (pane !== undefined) paneTarget(pane, on)?.focus();
       }
-      const arrangement = arrangementOf(after, after.current, on);
-      const pane = arrangement.focus ?? leavesOf(arrangement.tree)[0]?.active;
-      if (pane !== undefined) paneTarget(pane, on)?.focus();
-      return after;
+      return after === before ? null : after;
     },
-    [dispatch],
+    [dispatch, date, week],
   );
 
   const actions = useMemo<WorkspaceActions>(
@@ -214,6 +272,28 @@ export function DeskClient({
     [cls, set, dispatch, commit, say],
   );
 
+  /** The rail's and the sheet's layout actions: one engine call, the focus, one sentence. */
+  const onLayout = useCallback<OnLayout>(
+    (action, pressed, fallback) => {
+      const before = latest.current;
+      const after = commit(action, pressed, cls ?? "regular", fallback);
+      if (after !== null) say(layoutSentence(action, before, after));
+      return after;
+    },
+    [cls, commit, say],
+  );
+
+  /** The phone's list of panes: one engine call on the phone's arrangement, the focus, one sentence. */
+  const onArrange = useCallback<OnArrange>(
+    (action, pressed, fallback) => {
+      const before = latest.current;
+      if (commit(action, pressed, "compact", () => fallback()) !== null) {
+        say(arrangeSentence(action, before));
+      }
+    },
+    [commit, say],
+  );
+
   const openLayout = useCallback(
     (id: LayoutId) => {
       // A layout already on screen, hidden, or not on the desk: nothing to push.
@@ -246,11 +326,25 @@ export function DeskClient({
       <DeskDataProvider data={data} keep={keep}>
         <DayProvider key={data.today.input.date} data={data.today}>
           <div className="v2-desk" data-layout={layout}>
-            <DeskTopBar set={set} date={date} week={week} onOpen={openLayout} />
-            <DeskRail set={set} stage={stage} date={date} week={week} onOpen={openLayout} onPane={onPane} />
+            <DeskTopBar set={set} cls={cls} date={date} week={week} onOpen={openLayout} onLayout={onLayout} />
+            <DeskRail
+              set={set}
+              stage={stage}
+              cls={cls}
+              date={date}
+              week={week}
+              onOpen={openLayout}
+              onPane={onPane}
+              onLayout={onLayout}
+            />
             <DeskNotes where="compact" />
             <Workspace set={set} stage={stage} cls={cls} stageRef={stageRef} actions={actions} />
-            <DeskTabBar tabs={stage.compact.tabs} active={stage.compact.active} onTab={showTab} />
+            <DeskTabBar
+              tabs={stage.compact.tabs}
+              active={stage.compact.active}
+              onTab={showTab}
+              onArrange={onArrange}
+            />
             <Announcer desk={said} />
           </div>
         </DayProvider>

@@ -43,6 +43,11 @@ import DeskPage, { dynamic, metadata } from "@/app/v2/desk/page";
 /** What `notFound()` throws, as Next spells it (http-access-fallback.js). */
 const NOT_FOUND_DIGEST = "NEXT_HTTP_ERROR_FALLBACK;404";
 
+// A desk render costs about half a second in jsdom, and the full suite runs
+// some 150 files at once: the default 5 s is too close for a test that renders
+// and presses several times.
+vi.setConfig({ testTimeout: 15_000 });
+
 const made: string[] = [];
 
 /** jsdom has no matchMedia: this one answers `(min-width: Npx)` against a set width. */

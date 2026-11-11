@@ -87,7 +87,10 @@ import {
   EMPTY_TILE_SET,
   PANES,
   TILE_COOKIE,
+  MAX_LAYOUTS,
+  addLayout,
   arrangementOf,
+  cleanTitle,
   closePane,
   decodeTileCookie,
   drawnShare,
@@ -97,6 +100,7 @@ import {
   isChanged,
   layoutTree,
   leafOf,
+  moveTab,
   normalizeRatio,
   openPane,
   parseTileSet,
@@ -131,6 +135,11 @@ import { deskHref, tilesReducer, type TilesState } from "@/app/v2/_desk/use-tile
 import DeskPage from "@/app/v2/desk/page";
 
 const ROOT = path.resolve(__dirname, "..");
+
+// A desk render costs about half a second in jsdom, and the full suite runs
+// some 150 files at once: the default 5 s is too close for a test that renders
+// and presses several times.
+vi.setConfig({ testTimeout: 15_000 });
 const PANE_IDS = PANES.map((pane) => pane.id);
 const titleOf = (pane: string) => PANES.find((spec) => spec.id === pane)?.title ?? pane;
 
@@ -854,61 +863,49 @@ function expectReachesOnlyWhatIsShown(container: HTMLElement, cls: ScreenClass) 
 }
 
 describe("tab order (behaviour 9)", () => {
-  test("in four states never reaches a body that is not displayed", () => {
-    const cases: Array<[string, number, ScreenClass, (container: HTMLElement) => void]> = [
-      ["default, wide", 2000, "wide", () => {}],
-      ["default, regular", 1366, "regular", () => {}],
-      ["default, phone", 390, "compact", () => {}],
-      [
-        "one pane maximized",
-        2000,
-        "wide",
-        (container) => {
-          act(() => {
-            fireEvent.click(frameOf(container, "status").querySelector(".v2-frame-max") as HTMLElement);
-          });
-        },
-      ],
-      [
-        "one pane closed",
-        1366,
-        "regular",
-        (container) => {
-          act(() => {
-            fireEvent.click(
-              frameOf(container, "today").querySelector('[data-close="status"]') as HTMLElement,
-            );
-          });
-        },
-      ],
-      [
-        "another layout",
-        2000,
-        "wide",
-        (container) => {
-          act(() => {
-            fireEvent.click(
-              within(container.querySelector(".v2-desk-rail") as HTMLElement).getByRole("link", { name: "Money" }),
-            );
-          });
-        },
-      ],
-    ];
-    for (const [name, width, cls, arrange] of cases) {
-      cleanup();
-      vi.restoreAllMocks();
-      stubMedia(width);
+  // One render, every state driven on it: a desk render costs about half a
+  // second in jsdom, and six of them timed out at 5 s in the full suite.
+  test(
+    "in four states never reaches a body that is not displayed",
+    () => {
+      const media = stubMedia(2000);
       stubExtents({ wide: WIDE, regular: REGULAR });
-      window.localStorage.clear();
       const { container } = drawDesk();
-      arrange(container);
-      try {
-        expectReachesOnlyWhatIsShown(container, cls);
-      } catch (error) {
-        throw new Error(`${name}: ${(error as Error).message}`);
-      }
-    }
-  });
+      const check = (name: string, cls: ScreenClass) => {
+        try {
+          expectReachesOnlyWhatIsShown(container, cls);
+        } catch (error) {
+          throw new Error(`${name}: ${(error as Error).message}`);
+        }
+      };
+      const press = (element: Element | null) => {
+        act(() => {
+          fireEvent.click(element as HTMLElement);
+        });
+      };
+
+      check("default, wide", "wide");
+      media.resize(1366);
+      check("default, regular", "regular");
+      media.resize(390);
+      check("default, phone", "compact");
+
+      media.resize(2000);
+      const maximize = frameOf(container, "status").querySelector(".v2-frame-max");
+      press(maximize);
+      check("one pane maximized", "wide");
+      press(maximize);
+
+      media.resize(1366);
+      press(frameOf(container, "today").querySelector('[data-close="status"]'));
+      check("one pane closed", "regular");
+
+      media.resize(2000);
+      press(within(container.querySelector(".v2-desk-rail") as HTMLElement).getByRole("link", { name: "Money" }));
+      check("another layout", "wide");
+    },
+    20_000,
+  );
 });
 
 // ============================================================ behaviour 7
@@ -1308,6 +1305,425 @@ describe("Task 9 review, folded in", () => {
   });
 });
 
+// ============================================================ behaviour 5
+
+/** The rail's layout region, and the controls in it by name. */
+const railOf = (container: HTMLElement) => container.querySelector(".v2-desk-rail") as HTMLElement;
+
+function editOn(where: HTMLElement) {
+  const toggle = within(where).getByRole("button", { name: DESK_COPY.editLayoutsName });
+  act(() => {
+    fireEvent.click(toggle);
+  });
+  return toggle;
+}
+
+/** A row of the list being managed: its name button and, once opened, its actions. */
+function rowOf(where: HTMLElement, layout: string) {
+  const row = where.querySelector(`.v2-desk-edit li[data-layout="${layout}"]`) as HTMLElement;
+  const part = (name: string) => row.querySelector<HTMLButtonElement>(`[data-part="${name}"]`);
+  return {
+    row,
+    name: part("name") as HTMLButtonElement,
+    part,
+    open() {
+      act(() => {
+        fireEvent.click(part("name") as HTMLButtonElement);
+      });
+    },
+  };
+}
+
+function press(element: Element | null) {
+  act(() => {
+    fireEvent.click(element as HTMLElement);
+  });
+}
+
+function typeAndEnter(field: HTMLInputElement, text: string) {
+  act(() => {
+    fireEvent.change(field, { target: { value: text } });
+  });
+  act(() => {
+    fireEvent.keyDown(field, { key: "Enter" });
+  });
+}
+
+/** A desk with layouts of the user's own, made by the engine. */
+function withUserLayouts(count: number, title = "Mine"): TileSet {
+  let set = EMPTY_TILE_SET;
+  for (let n = 0; n < count; n += 1) set = addLayout(set, `${title} ${n + 1}`, "today", "regular");
+  return setCurrent(set, "today");
+}
+
+const EMOJI = String.fromCodePoint(0x1f33f);
+
+describe("layouts (behaviour 5)", () => {
+  test("at rest the rail is the list it was, with one control, Edit, and a quiet mark on a changed layout", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const rail = railOf(container);
+    expect(within(rail).getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "Today",
+      "Week",
+      "Quests",
+      "Money",
+    ]);
+    const toggle = within(rail).getByRole("button", { name: DESK_COPY.editLayoutsName });
+    expect(toggle.textContent).toBe(DESK_COPY.editLayouts);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    press(frameOf(container, "today").querySelector('[data-close="status"]'));
+    const today = within(rail).getByRole("link", { name: /^Today/ });
+    expect(today.getAttribute("data-changed")).toBe("regular");
+    expect(today.textContent).toBe(`Today, ${DESK_COPY.changed}`);
+    expect(within(rail).getByRole("link", { name: "Week" }).hasAttribute("data-changed")).toBe(false);
+  });
+
+  test("Edit lists every layout as a disclosure of its actions, a built in one with Hide, nothing it cannot do", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const rail = railOf(container);
+    const toggle = editOn(rail);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-label")).toBe(DESK_COPY.doneEditingName);
+    expect(toggle.textContent).toBe(DESK_COPY.doneEditing);
+    // The anchors give way to the list being managed: one column still.
+    expect(within(rail).queryAllByRole("link")).toHaveLength(0);
+    const week = rowOf(rail, "week");
+    expect(week.name.getAttribute("aria-expanded")).toBe("false");
+    week.open();
+    expect(week.name.getAttribute("aria-expanded")).toBe("true");
+    const actions = Array.from(week.row.querySelectorAll<HTMLButtonElement>("[data-part]"))
+      .map((button) => button.dataset.part)
+      .filter((part) => part !== "name");
+    expect(actions).toEqual(["up", "down", "hide"]);
+    // Back at rest, the anchors again.
+    press(toggle);
+    expect(within(rail).getAllByRole("link")).toHaveLength(4);
+  });
+
+  test("New layout from this one asks for a name in place, keeps an emoji, opens the layout made and pushes its address", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const asked = vi.spyOn(window, "prompt");
+    const pushed = vi.spyOn(window.history, "pushState");
+    const { container } = drawDesk();
+    press(frameOf(container, "today").querySelector('[data-close="status"]'));
+    const rail = railOf(container);
+    editOn(rail);
+    press(rail.querySelector('[data-part="new"]'));
+    const field = within(rail).getByRole("textbox", { name: DESK_COPY.newField }) as HTMLInputElement;
+    expect(document.activeElement).toBe(field);
+    expect(field.maxLength).toBe(-1);
+    const typed = `Deep work ${EMOJI}`;
+    typeAndEnter(field, typed);
+
+    const desk = saved();
+    const made = desk.layouts[desk.layouts.length - 1];
+    expect(made).toEqual({ id: "u1", title: cleanTitle(typed), base: "today" });
+    expect(made.title).toContain(EMOJI);
+    expect(desk.current).toBe("u1");
+    // A copy of the layout on screen, on the class on screen.
+    expect(leafOf(arrangementOf(desk, "u1", "regular").tree, "status")).toBeNull();
+    expect(pushed.mock.calls.at(-1)?.[2]).toBe(deskHref("u1", null));
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.layoutMade, { layout: cleanTitle(typed) }));
+    expect(document.activeElement).toBe(rowOf(rail, "u1").name);
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  test("a name goes to the engine as it was typed: nothing here cuts it", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk(withUserLayouts(1));
+    const rail = railOf(container);
+    editOn(rail);
+    const mine = rowOf(rail, "u1");
+    mine.open();
+    press(mine.part("rename"));
+    const field = within(rail).getByRole("textbox", {
+      name: deskLine(DESK_COPY.renameField, { layout: "Mine 1" }),
+    }) as HTMLInputElement;
+    expect(field.value).toBe("Mine 1");
+    expect(document.activeElement).toBe(field);
+    const long = `${EMOJI} ${"a".repeat(40)}`;
+    act(() => {
+      fireEvent.change(field, { target: { value: long } });
+    });
+    expect(field.value).toBe(long);
+    act(() => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(saved().layouts.find((meta) => meta.id === "u1")?.title).toBe(cleanTitle(long));
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.layoutRenamed, { layout: cleanTitle(long) }));
+    expect(document.activeElement).toBe(rowOf(rail, "u1").part("rename"));
+  });
+
+  test("Escape in a name field cancels it and goes no further", () => {
+    stubMedia(390);
+    const { container } = drawDesk(withUserLayouts(1));
+    const sheet = container.querySelector(".v2-desk-menu") as HTMLElement;
+    press(container.querySelector(".v2-desk-switch"));
+    editOn(sheet);
+    const mine = rowOf(sheet, "u1");
+    mine.open();
+    press(mine.part("rename"));
+    const field = within(sheet).getByRole("textbox") as HTMLInputElement;
+    act(() => {
+      fireEvent.change(field, { target: { value: "Something else" } });
+    });
+    act(() => {
+      fireEvent.keyDown(field, { key: "Escape" });
+    });
+    expect(sheet.hidden).toBe(false);
+    expect(within(sheet).queryByRole("textbox")).toBeNull();
+    expect(document.activeElement).toBe(rowOf(sheet, "u1").part("rename"));
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+  });
+
+  test("Delete asks once, in place, with Keep in front; deleting the one on screen opens its neighbour and replaces the address", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const asked = vi.spyOn(window, "confirm");
+    const replaced = vi.spyOn(window.history, "replaceState");
+    const { container } = drawDesk(setCurrent(withUserLayouts(2), "u1"));
+    const rail = railOf(container);
+    editOn(rail);
+    const mine = rowOf(rail, "u1");
+    mine.open();
+    press(mine.part("remove"));
+    expect(mine.row.textContent).toContain(deskLine(DESK_COPY.confirmRemove, { layout: "Mine 1" }));
+    const keep = within(mine.row).getByRole("button", { name: DESK_COPY.keep });
+    expect(document.activeElement).toBe(keep);
+    press(keep);
+    expect(document.activeElement).toBe(mine.part("remove"));
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBeNull();
+
+    press(mine.part("remove"));
+    press(mine.part("confirm"));
+    const desk = saved();
+    expect(desk.layouts.map((meta) => meta.id)).toEqual(["today", "week", "quests", "money", "u2"]);
+    expect(desk.current).toBe("money");
+    expect(replaced.mock.calls.at(-1)?.[2]).toBe(deskHref("money", null));
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.layoutRemoved, { layout: "Mine 1" }));
+    expect(document.activeElement).toBe(rowOf(rail, "u2").name);
+    expect(asked).not.toHaveBeenCalled();
+  });
+
+  test("Move up and Move down, unavailable at the ends, keep the focus on the button pressed", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    const rail = railOf(container);
+    editOn(rail);
+    const week = rowOf(rail, "week");
+    week.open();
+    const up = week.part("up") as HTMLButtonElement;
+    expect(up.getAttribute("aria-disabled")).toBe("false");
+    up.focus();
+    press(up);
+    expect(saved().layouts.map((meta) => meta.id)).toEqual(["week", "today", "quests", "money"]);
+    expect(document.activeElement).toBe(up);
+    expect(up.getAttribute("aria-disabled")).toBe("true");
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.layoutMovedUp, { layout: "Week" }));
+    const text = window.localStorage.getItem(DESK_STORAGE_KEY);
+    press(up);
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBe(text);
+    press(week.part("down"));
+    expect(saved().layouts.map((meta) => meta.id)).toEqual(["today", "week", "quests", "money"]);
+  });
+
+  test("Hide and Show for a built in layout; hiding the one on screen opens the next; the last one shown cannot be hidden", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const replaced = vi.spyOn(window.history, "replaceState");
+    const { container } = drawDesk();
+    const rail = railOf(container);
+    editOn(rail);
+    const today = rowOf(rail, "today");
+    today.open();
+    const hide = today.part("hide") as HTMLButtonElement;
+    hide.focus();
+    press(hide);
+    expect(saved().hidden).toEqual(["today"]);
+    expect(saved().current).toBe("week");
+    expect(replaced.mock.calls.at(-1)?.[2]).toBe(deskHref("week", null));
+    expect(hide.textContent).toBe(DESK_COPY.show);
+    expect(document.activeElement).toBe(hide);
+    expect(today.name.textContent).toContain(DESK_COPY.hidden);
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.layoutHidden, { layout: "Today" }));
+    press(hide);
+    expect(saved().hidden).toEqual([]);
+
+    for (const id of ["week", "quests", "today"]) {
+      const row = rowOf(rail, id);
+      row.open();
+      press(row.part("hide"));
+    }
+    const money = rowOf(rail, "money");
+    money.open();
+    expect(money.part("hide")?.getAttribute("aria-disabled")).toBe("true");
+    press(money.part("hide"));
+    expect(saved().hidden).toEqual(["week", "quests", "today"]);
+  });
+
+  test("Reset this layout is offered when the engine says it is changed, and asks once in place", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    press(frameOf(container, "today").querySelector('[data-close="status"]'));
+    const rail = railOf(container);
+    editOn(rail);
+    const week = rowOf(rail, "week");
+    week.open();
+    expect(week.part("reset")).toBeNull();
+    const today = rowOf(rail, "today");
+    today.open();
+    expect(today.name.textContent).toContain(DESK_COPY.changed);
+    press(today.part("reset"));
+    expect(today.row.textContent).toContain(deskLine(DESK_COPY.confirmReset, { layout: "Today" }));
+    press(today.part("confirm"));
+    expect(isChanged(saved(), "today", "regular")).toBe(false);
+    expect(frameOf(container, "status").getAttribute("data-shown")).toBe("wide");
+    expect(today.part("reset")).toBeNull();
+    expect(document.activeElement).toBe(today.name);
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.layoutReset, { layout: "Today" }));
+  });
+
+  test("says the limit of twelve in words where New would be", () => {
+    stubMedia(1366);
+    const full = withUserLayouts(8);
+    expect(full.layouts).toHaveLength(MAX_LAYOUTS);
+    const { container } = drawDesk(full);
+    const rail = railOf(container);
+    editOn(rail);
+    expect(rail.querySelector('[data-part="new"]')).toBeNull();
+    expect(rail.textContent).toContain(DESK_COPY.layoutLimit);
+  });
+
+  test("the phone's sheet has the same list, its Edit at the foot, its actions on the phone's own arrangement", () => {
+    stubMedia(390);
+    const { container } = drawDesk();
+    act(() => {
+      fireEvent.click(within(barOf(container)).getByRole("tab", { name: "Status" }));
+    });
+    press(container.querySelector(".v2-desk-switch"));
+    const sheet = container.querySelector(".v2-desk-menu") as HTMLElement;
+    expect(sheet.lastElementChild?.querySelector("button")?.getAttribute("aria-label")).toBe(
+      DESK_COPY.editLayoutsName,
+    );
+    expect(within(sheet).getByRole("link", { name: /^Today/ }).getAttribute("data-changed")).toBe("compact");
+    editOn(sheet);
+    const today = rowOf(sheet, "today");
+    today.open();
+    press(today.part("reset"));
+    press(today.part("confirm"));
+    expect(isChanged(saved(), "today", "compact")).toBe(false);
+    expect(sheet.hidden).toBe(false);
+  });
+});
+
+// ============================================================ behaviour 6
+
+const barOf = (container: HTMLElement) => container.querySelector(".v2-desk-bar") as HTMLElement;
+
+function arrangeOpen(container: HTMLElement) {
+  const toggle = within(barOf(container)).getByRole("button", { name: DESK_COPY.arrangePanesName });
+  press(toggle);
+  return { toggle, sheet: document.getElementById(toggle.getAttribute("aria-controls") as string) as HTMLElement };
+}
+
+const barTabs = (container: HTMLElement) =>
+  within(barOf(container)).getAllByRole("tab").map((tab) => tab.getAttribute("data-tab"));
+
+function control(sheet: HTMLElement, pane: string, part: string) {
+  return sheet.querySelector<HTMLButtonElement>(`[data-pane="${pane}"] [data-part="${part}"]`);
+}
+
+describe("the phone's list of panes (behaviour 6)", () => {
+  test("lists the layout's panes in the bar's order, then the others, each a group named for its pane", () => {
+    stubMedia(390);
+    const { container } = drawDesk();
+    const { toggle, sheet } = arrangeOpen(container);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(sheet.hidden).toBe(false);
+    const [inside, outside] = Array.from(sheet.querySelectorAll("ul"));
+    expect(Array.from(inside.querySelectorAll("li")).map((li) => li.dataset.pane)).toEqual(barTabs(container));
+    expect(Array.from(outside.querySelectorAll("li")).map((li) => li.dataset.pane)).toEqual(
+      PANE_IDS.filter((pane) => !barTabs(container).includes(pane)),
+    );
+    expect(within(sheet).getByRole("group", { name: titleOf("status") })).not.toBeNull();
+    // No drag anywhere in it: every move is a button.
+    expect(sheet.querySelectorAll("[draggable]")).toHaveLength(0);
+  });
+
+  test("Move up and Move down reorder the bar through moveTab, the ends unavailable, the focus kept", () => {
+    stubMedia(390);
+    const { container } = drawDesk();
+    const { sheet } = arrangeOpen(container);
+    const up = control(sheet, "status", "up") as HTMLButtonElement;
+    up.focus();
+    press(up);
+    expect(barTabs(container)).toEqual(["status", "today", "past-due", "not-today", "calendar"]);
+    expect(arrangementOf(saved(), "today", "compact")).toEqual(
+      moveTab(arrangementOf(EMPTY_TILE_SET, "today", "compact"), "status", 0),
+    );
+    expect(document.activeElement).toBe(up);
+    expect(up.getAttribute("aria-disabled")).toBe("true");
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.paneMovedUp, { pane: titleOf("status") }));
+    expect(control(sheet, "calendar", "down")?.getAttribute("aria-disabled")).toBe("true");
+    // The front tab did not change: reordering is not choosing.
+    expect(within(barOf(container)).getByRole("tab", { selected: true }).getAttribute("data-tab")).toBe("today");
+  });
+
+  test("Hide closes a pane and moves the focus to its Show; Show opens it at the end of the bar", () => {
+    stubMedia(390);
+    const { container } = drawDesk();
+    const { sheet } = arrangeOpen(container);
+    press(control(sheet, "past-due", "hide"));
+    expect(barTabs(container)).toEqual(["today", "status", "not-today", "calendar"]);
+    expect(document.activeElement).toBe(control(sheet, "past-due", "show"));
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.paneHidden, { pane: titleOf("past-due") }));
+    press(control(sheet, "ledger", "show"));
+    expect(barTabs(container)).toEqual(["today", "status", "not-today", "calendar", "ledger"]);
+    expect(document.activeElement).toBe(control(sheet, "ledger", "hide"));
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.paneShown, { pane: titleOf("ledger") }));
+    expectNoRemount();
+  });
+
+  test("the last pane in the layout cannot be hidden", () => {
+    stubMedia(390);
+    let set = EMPTY_TILE_SET;
+    for (const pane of ["status", "past-due", "not-today", "calendar"]) {
+      set = withArrangement(set, "today", "compact", closePane(arrangementOf(set, "today", "compact"), pane));
+    }
+    const { container } = drawDesk(set);
+    const { sheet } = arrangeOpen(container);
+    const hide = control(sheet, "today", "hide") as HTMLButtonElement;
+    expect(hide.getAttribute("aria-disabled")).toBe("true");
+    press(hide);
+    expect(barTabs(container)).toEqual(["today"]);
+  });
+
+  test("Escape closes it with the focus back on Arrange, and a press outside closes it", () => {
+    stubMedia(390);
+    const { container } = drawDesk();
+    const { toggle, sheet } = arrangeOpen(container);
+    act(() => {
+      fireEvent.keyDown(control(sheet, "today", "down") as HTMLElement, { key: "Escape" });
+    });
+    expect(sheet.hidden).toBe(true);
+    expect(document.activeElement).toBe(toggle);
+    press(toggle);
+    act(() => {
+      fireEvent.pointerDown(container.querySelector(".v2-desk-work") as HTMLElement);
+    });
+    expect(sheet.hidden).toBe(true);
+  });
+});
+
 // ============================================================ the reducer
 
 describe("the reducer's new actions", () => {
@@ -1391,6 +1807,20 @@ describe("the rulings in the stylesheets", () => {
     }
     // The phone's slot keeps its height from the bars: no explicit height there.
     expect(declsIn(SHEET, "[data-v2-root] .v2-desk-work", null).height).toBeUndefined();
+  });
+
+  test("draws a layout's changed mark only for the class shown, and makes every control in the phone's lists a finger's size", () => {
+    expect(declsIn(SHEET, "[data-v2-root] .v2-desk-changed", null).display).toBe("none");
+    for (const [selector, media] of [
+      ['[data-v2-root] .v2-desk-layouts a[data-changed~="regular"] .v2-desk-changed', "(1024px <= width < 1600px)"],
+      ['[data-v2-root] .v2-desk-layouts a[data-changed~="wide"] .v2-desk-changed', "(min-width: 1600px)"],
+      ['[data-v2-root] .v2-desk-menu a[data-changed~="compact"] .v2-desk-changed', "(width < 1024px)"],
+    ] as const) {
+      expect(declsIn(SHEET, selector, media).display, media).toBe("inline-block");
+    }
+    expect(declsIn(SHEET, "[data-v2-root] .v2-desk-menu .v2-desk-edit-name", null)["min-height"]).toBe("44px");
+    expect(declsIn(SHEET, "[data-v2-root] .v2-desk-arrange-actions button", null)["min-height"]).toBe("44px");
+    expect(declsIn(SHEET, "[data-v2-root] .v2-desk-arrange-toggle", null)["min-height"]).toBe("52px");
   });
 
   test("a divider draws nothing at rest, says its way with a cursor, and never selects or scrolls", () => {

@@ -68,6 +68,14 @@ export function cookieValue(cookies: string): string | null {
  * the cookie carried one that draws differently (see the head of this file).
  * When the stored desk cannot show the painted layout (it has no such layout,
  * or it is hidden there), the stored desk is the answer as it is.
+ *
+ * WHY STORAGE WINS UNLESS THE COOKIE CARRIED THE ARRANGEMENT (ruled in Task 10;
+ * do not "fix" it back to keeping whatever the server painted). Where the
+ * cookie carried nothing for this layout and class, the server painted a
+ * default nobody chose (a link to another layout than the one the cookie was
+ * written on, or no cookie at all), and keeping it would write that default
+ * over the owner's own arrangement at the next save. One jump on load is the
+ * smaller loss.
  */
 export function mergeSaved(painted: TileSet, saved: TileSet, shown: readonly ScreenClass[]): TileSet {
   const layout = painted.current;

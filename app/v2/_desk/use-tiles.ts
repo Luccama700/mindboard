@@ -18,11 +18,18 @@ import {
   TILES_MIN_WIDTH,
   WIDE_MIN_WIDTH,
   activateTab,
+  addLayout,
   arrangementOf,
   closePane,
   equalize,
+  moveLayout,
+  moveTab,
   openPane,
+  removeLayout,
+  renameLayout,
+  resetLayout,
   setCurrent,
+  setHidden,
   setRatio,
   toggleMaximize,
   withArrangement,
@@ -50,9 +57,58 @@ export type TilesAction =
   /** Both sides of a divider the same: `equalize`. */
   | { type: "equalize"; cls: ScreenClass; splitId: string }
   | { type: "close"; cls: ScreenClass; pane: PaneId }
-  /** Open a pane, placed by the engine on the workspace the browser computed. */
-  | { type: "open"; cls: ScreenClass; pane: PaneId; workspace: Workspace }
-  | { type: "maximize"; cls: ScreenClass; pane: PaneId };
+  /**
+   * Open a pane, placed by the engine on the workspace the browser computed. On
+   * the phone there is none to give (its arrangement is one stack, which has no
+   * geometry), and null is the engine's own answer for that: the first leaf.
+   */
+  | { type: "open"; cls: ScreenClass; pane: PaneId; workspace: Workspace | null }
+  | { type: "maximize"; cls: ScreenClass; pane: PaneId }
+  /** A tab moved along its own stack: the phone's list. */
+  | { type: "moveTab"; cls: ScreenClass; pane: PaneId; to: number }
+  | LayoutAction;
+
+/** What changes the desk's list of layouts rather than one arrangement: one engine call each. */
+export type LayoutAction =
+  /** A layout of the user's, made from another on this class, and opened. */
+  | { type: "addLayout"; title: string; from: LayoutId; cls: ScreenClass }
+  | { type: "renameLayout"; id: LayoutId; title: string }
+  | { type: "removeLayout"; id: LayoutId }
+  | { type: "moveLayout"; id: LayoutId; to: number }
+  | { type: "hideLayout"; id: LayoutId; hidden: boolean }
+  /** One class of a layout put back to its default. */
+  | { type: "resetLayout"; id: LayoutId; cls: ScreenClass };
+
+/** The engine call each layout action is. */
+function changedSet(set: TileSet, action: LayoutAction): TileSet {
+  switch (action.type) {
+    case "addLayout":
+      return addLayout(set, action.title, action.from, action.cls);
+    case "renameLayout":
+      return renameLayout(set, action.id, action.title);
+    case "removeLayout":
+      return removeLayout(set, action.id);
+    case "moveLayout":
+      return moveLayout(set, action.id, action.to);
+    case "hideLayout":
+      return setHidden(set, action.id, action.hidden);
+    case "resetLayout":
+      return resetLayout(set, action.id, action.cls);
+  }
+}
+
+const LAYOUT_ACTIONS: ReadonlySet<string> = new Set([
+  "addLayout",
+  "renameLayout",
+  "removeLayout",
+  "moveLayout",
+  "hideLayout",
+  "resetLayout",
+]);
+
+function isLayoutAction(action: TilesAction): action is LayoutAction {
+  return LAYOUT_ACTIONS.has(action.type);
+}
 
 /** The engine call each arrangement action is: one each, and nothing else. */
 function changed(arrangement: Arrangement, action: TilesAction): Arrangement {
@@ -69,6 +125,8 @@ function changed(arrangement: Arrangement, action: TilesAction): Arrangement {
       return openPane(arrangement, action.pane, action.workspace);
     case "maximize":
       return toggleMaximize(arrangement, action.pane);
+    case "moveTab":
+      return moveTab(arrangement, action.pane, action.to);
     default:
       return arrangement;
   }
@@ -96,6 +154,10 @@ export function tilesReducer(state: TilesState, action: TilesAction): TilesState
     case "replace":
       return action.set === state.set ? state : { ...state, set: action.set };
     default: {
+      if (isLayoutAction(action)) {
+        const set = changedSet(state.set, action);
+        return set === state.set ? state : { ...state, set };
+      }
       const layout = state.set.current;
       const before = arrangementOf(state.set, layout, action.cls);
       const after = changed(before, action);
