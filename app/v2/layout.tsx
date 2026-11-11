@@ -23,6 +23,7 @@ import "./v2.css";
 import "./calendar.css";
 // Last: the box a pane is drawn in, around the leaves of both sheets above.
 import "./desk.css";
+import "./money.css";
 
 const display = Chakra_Petch({
   weight: ["500", "600", "700"],

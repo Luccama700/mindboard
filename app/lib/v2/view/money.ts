@@ -188,6 +188,15 @@ export const MONEY_COPY = {
   underZero: "Under zero",
   /** `{count}` is the number of lines not shown. */
   more: "{count} more",
+  /**
+   * The word after an amount that says which way it goes: "50 out", "2,000 in".
+   * `kind` says the same in two words, which a forecast cell has no room for.
+   */
+  sign: { in: "in", out: "out" },
+  /** Beside a stale pane's main figure: it is what was last known, not what is. */
+  lastKnownTag: "Last known",
+  /** Under a forecast the source stops short of the span. `{date}` is its last day. */
+  endsOn: "The forecast in this copy ends on {date}.",
   empty: {
     forecast: "No forecast in this copy.",
     accounts: "No accounts in this copy.",

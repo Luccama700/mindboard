@@ -1,0 +1,723 @@
+/* The Money panes: the forecast, the accounts, what is coming up, the hours
+ * and the ledger.
+ *
+ * Loaded after desk.css (app/v2/layout.tsx), and scoped the same way: every
+ * selector starts at [data-v2-root], so nothing here can reach a page outside
+ * app/v2. Every class here starts with v2-money-; the shared leaves of v2.css
+ * are not touched at all, so no rule here can win over one on Today's page.
+ *
+ * NO COLOUR IS WRITTEN HERE. Every colour is a scheme token from v2.css.
+ * __tests__/v2-appearance.test.ts reads every stylesheet in this folder for a
+ * hex, an rgb() or an hsl() and must find none.
+ *
+ * IT ADMITS WHEN IT IS GUESSING. A pane whose numbers are old carries
+ * `data-stale` on its root and leads with the age line: set apart in a hairline
+ * box and in the full ink, so it is the loudest text in the pane. Every figure
+ * under it drops to the quieter ink, the big total steps down so it cannot out
+ * shout the sentence, and the danger mark loses its colour (the words stay): a
+ * loud "Under zero" drawn from a ledger that stopped months ago would be the
+ * confident claim this screen exists not to make.
+ *
+ * DANGER IS ONE ALIAS. v2.css has no danger token, so the panes read
+ * --v2-money-danger, set once on their root to --v2-warn: the state colour the
+ * feed dots use for "late", derived per scheme to clear 3:1 as a MARK on the
+ * card (appearance.ts). It is only ever a mark (a ring, a bar, a dot) on the
+ * page or a card, never the colour of a word: every danger mark has its word
+ * beside it, in an ink. A real token later is a one line change here.
+ *
+ * SIZED BY THE PANE, NOT THE WINDOW. Each body sits in the desk's `v2-pane`
+ * box, an inline-size container, and its two layouts are container queries on
+ * it: the forecast is a list under 480px of pane and a month grid from there;
+ * a ledger line is two lines under 420px and one from there. RANGE SYNTAX,
+ * because a container's width can be fractional.
+ *
+ * QUIET AND READ ONLY. Nothing here is a control and nothing animates on load:
+ * the one change is a ledger line's hover, at the quick duration. Reduced
+ * motion is v2.css's one rule, which stops every transition under
+ * [data-v2-root].
+ */
+
+/* ------------------------------------------------------------------ the body */
+
+/* One column of blocks, with the side column's own spacing. */
+[data-v2-root] .v2-money {
+  --v2-money-danger: var(--v2-warn);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+/* The word stays, the alarm colour goes: see the head of this file. */
+[data-v2-root] .v2-money[data-stale] {
+  --v2-money-danger: var(--v2-ink-3);
+}
+
+/* How old the numbers are. First, set apart, in the full ink. */
+[data-v2-root] .v2-money-age {
+  padding: 10px 12px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+  color: var(--v2-ink);
+  font: 700 14px/1.45 var(--v2-text);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+/* EVERY FIGURE. One class on every amount and balance, so one rule can quiet
+   them all when the pane is stale. Sizes are given as longhands where a figure
+   is placed, because a `font` shorthand would reset the tabular figures. */
+[data-v2-root] .v2-money-fig {
+  color: var(--v2-ink);
+  font-family: var(--v2-display);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-v2-root] .v2-money[data-stale] .v2-money-fig {
+  color: var(--v2-ink-2);
+}
+
+/* "Last known", beside a stale pane's main figure. */
+[data-v2-root] .v2-money-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 6px;
+  color: var(--v2-ink-2);
+  font: 600 12px/1.3 var(--v2-display);
+  white-space: nowrap;
+}
+
+/* A quiet word over a figure: "Total", "Lowest". */
+[data-v2-root] .v2-money-label {
+  color: var(--v2-ink-3);
+  font: 600 13px/1.2 var(--v2-display);
+}
+
+/* A pane with nothing of its kind in this copy: said in words, in a box that
+   is plainly not a list of zero. */
+[data-v2-root] .v2-money-empty {
+  padding: 14px 16px;
+  border: 1px dashed var(--v2-edge);
+  border-radius: 14px;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+/* An amount and its sign word ("50 out"), kept on one line. */
+[data-v2-root] .v2-money-amt {
+  flex: none;
+  text-align: right;
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-money-sign,
+[data-v2-root] .v2-money-cur {
+  color: var(--v2-ink-3);
+  font: 600 12px/1 var(--v2-display);
+}
+
+/* A name in a list: an account, a bill, a pay. The user's own words, of any
+   length, so it gives way before the amount beside it does. */
+[data-v2-root] .v2-money-name {
+  min-width: 0;
+  color: var(--v2-ink);
+  font: 600 14px/1.3 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-money-date,
+[data-v2-root] .v2-money-when {
+  color: var(--v2-ink-2);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/* -------------------------------------------------------------- the forecast */
+
+/* The lowest day, named once above both layouts. Its dot is the danger mark
+   the day itself carries below. */
+[data-v2-root] .v2-money-lowest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+[data-v2-root] .v2-money-lowest .v2-money-label::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--v2-money-danger);
+}
+
+[data-v2-root] .v2-money-lowest .v2-money-fig {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+/* Stale, it steps down as the big total does, under the age line. */
+[data-v2-root] .v2-money[data-stale] .v2-money-lowest .v2-money-fig {
+  font-size: 17px;
+  font-weight: 500;
+}
+
+/* "Lowest", "Under zero": the word every danger mark has beside it, in an ink. */
+[data-v2-root] .v2-money-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+[data-v2-root] .v2-money-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--v2-ink);
+  font: 600 11px/1.25 var(--v2-display);
+}
+
+[data-v2-root] .v2-money-flag::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--v2-money-danger);
+}
+
+[data-v2-root] .v2-money[data-stale] .v2-money-flag {
+  color: var(--v2-ink-2);
+}
+
+/* What is firm on a day: a short quiet line each, under the balance. */
+[data-v2-root] .v2-money-marks {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-money-mark {
+  min-width: 0;
+  color: var(--v2-ink-3);
+  font: 400 11px/1.3 var(--v2-text);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* ---- under 480px of pane: the days as a list ---- */
+
+[data-v2-root] .v2-money-days {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The date and the balance on one line, the words and marks under them. The
+   inline start keeps room for the danger bar, so a marked day does not shift. */
+[data-v2-root] .v2-money-day {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 12px;
+  row-gap: 3px;
+  padding: 8px 4px 8px 10px;
+  border-bottom: 1px solid var(--v2-card-2);
+}
+
+[data-v2-root] .v2-money-day .v2-money-date {
+  grid-column: 1;
+  min-width: 0;
+}
+
+[data-v2-root] .v2-money-day .v2-money-fig {
+  grid-column: 2;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: right;
+}
+
+[data-v2-root] .v2-money-day .v2-money-flags,
+[data-v2-root] .v2-money-day .v2-money-marks {
+  grid-column: 1 / -1;
+}
+
+/* Today, as the calendar's agenda marks it: the day's name in the accent. */
+[data-v2-root] .v2-money-day[data-today] .v2-money-date {
+  color: var(--v2-signal);
+  font-weight: 700;
+}
+
+[data-v2-root] .v2-money-day[data-lowest],
+[data-v2-root] .v2-money-day[data-negative] {
+  box-shadow: inset 3px 0 0 var(--v2-money-danger);
+}
+
+/* ---- from 480px of pane: a month grid ---- */
+
+[data-v2-root] .v2-money-grid {
+  display: none;
+}
+
+/* Seven tracks a long word cannot widen, the same for the header and the
+   days, so the two line up without knowing how wide either is. */
+[data-v2-root] .v2-money-wkdays,
+[data-v2-root] .v2-money-cells {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+[data-v2-root] .v2-money-wkdays {
+  margin-bottom: 6px;
+  color: var(--v2-ink-3);
+  font: 400 12px/1 var(--v2-text);
+}
+
+[data-v2-root] .v2-money-wkdays span {
+  min-width: 0;
+  overflow: hidden;
+  padding-inline: 5px;
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-money-cells {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A day: its number, its balance at the right of the cell so the balances of
+   a column read as a column, then its words and marks. A surface step, like a
+   row of the side lists; a cell that only pads a week is nothing at all. */
+[data-v2-root] .v2-money-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  min-height: 72px;
+  padding: 6px 5px 8px;
+  border-radius: 10px;
+  background: var(--v2-card);
+}
+
+[data-v2-root] .v2-money-cell[data-pad] {
+  background: none;
+}
+
+/* A day of the span the source has no row for: its place and its number, no
+   figure, and plainly not a day like the others (the calendar's dashed edge
+   for a day nobody can see), so it does not read as a day of zero. */
+[data-v2-root] .v2-money-cell[data-blank] {
+  background: none;
+  outline: 1px dashed var(--v2-edge);
+  outline-offset: -1px;
+}
+
+[data-v2-root] .v2-money-dhead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+[data-v2-root] .v2-money-dnum {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 11px;
+  color: var(--v2-ink-2);
+  font: 600 13px/1 var(--v2-display);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Today, as the calendar marks it: the day's number on the accent. */
+[data-v2-root] .v2-money-cell[data-today] .v2-money-dnum {
+  background: var(--v2-accent);
+  color: var(--v2-on-accent);
+}
+
+[data-v2-root] .v2-money-month {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-ink-3);
+  font: 500 11px/1 var(--v2-display);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The balance, sized by the pane so a six figure one ("123,456", "-12,345")
+   fits a cell at 480px; a longer one breaks after a comma (see `breakable`),
+   and only a group too long for the cell on its own breaks anywhere. */
+[data-v2-root] .v2-money-cell .v2-money-fig {
+  align-self: flex-end;
+  max-width: 100%;
+  font-size: clamp(11px, 2.3cqw, 15px);
+  font-weight: 600;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+/* The lowest day and every day under zero: a ring in the danger mark, and the
+   word inside the cell. */
+[data-v2-root] .v2-money-cell[data-lowest],
+[data-v2-root] .v2-money-cell[data-negative] {
+  box-shadow: inset 0 0 0 1.5px var(--v2-money-danger);
+}
+
+@container v2-pane (width >= 480px) {
+  [data-v2-root] .v2-money-grid {
+    display: block;
+  }
+
+  [data-v2-root] .v2-money-days {
+    display: none;
+  }
+}
+
+/* Where the source's forecast stops, and what its balances are made of: under
+   the days, in the quiet ink, always. */
+[data-v2-root] .v2-money-ends,
+[data-v2-root] .v2-money-estimate {
+  color: var(--v2-ink-3);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+/* -------------------------------------------------------------- the accounts */
+
+[data-v2-root] .v2-money-total {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+[data-v2-root] .v2-money-sum {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+/* The one large figure of the Money layout. */
+[data-v2-root] .v2-money-big {
+  min-width: 0;
+  font-size: clamp(30px, 9cqw, 48px);
+  font-weight: 600;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+/* Stale, it steps down in size and weight as well as ink, or it would still be
+   the loudest thing in the pane by size alone. */
+[data-v2-root] .v2-money[data-stale] .v2-money-big {
+  font-size: clamp(22px, 6cqw, 30px);
+  font-weight: 500;
+}
+
+[data-v2-root] .v2-money-note {
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+/* Name left, balance right, close enough to read as one line on a wide pane. */
+[data-v2-root] .v2-money-accts {
+  display: flex;
+  flex-direction: column;
+  max-width: 560px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-money-acct {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--v2-card-2);
+}
+
+[data-v2-root] .v2-money-acct:first-child {
+  border-top: 1px solid var(--v2-card-2);
+}
+
+[data-v2-root] .v2-money-acct .v2-money-fig {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+[data-v2-root] .v2-money-taken {
+  color: var(--v2-ink-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------- coming up */
+
+/* Each a row as the side lists draw one: the name and the amount on top, the
+   date and how far off under them. Held to a column, so the amount is never a
+   hand's width from its name. */
+[data-v2-root] .v2-money-coming {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 560px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-money-due {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 12px;
+  row-gap: 2px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--v2-card);
+}
+
+[data-v2-root] .v2-money-due .v2-money-fig {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+[data-v2-root] .v2-money-due .v2-money-date {
+  min-width: 0;
+}
+
+[data-v2-root] .v2-money-due .v2-money-when {
+  justify-self: end;
+  text-align: right;
+}
+
+/* ----------------------------------------------------------------- the hours */
+
+/* Two plain bars at most, each with its sentence. No percentage, nothing that
+   reads as a score. */
+[data-v2-root] .v2-money-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 560px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-money-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+[data-v2-root] .v2-money-meter-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+
+[data-v2-root] .v2-money-meter-name {
+  color: var(--v2-ink-2);
+  font: 600 13px/1.3 var(--v2-display);
+}
+
+[data-v2-root] .v2-money-meter-value {
+  color: var(--v2-ink);
+  font-family: var(--v2-display);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The track is the card, which the danger mark is held against; the fill is
+   drawn up to its share and never past the end. */
+[data-v2-root] .v2-money-bar {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--v2-card);
+}
+
+[data-v2-root] .v2-money-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--v2-money-at, 0) * 100%);
+  border-radius: inherit;
+  background: var(--v2-accent);
+}
+
+/* The cap is a ceiling, not a goal: neutral until it is crossed. */
+[data-v2-root] .v2-money-meter[data-kind="cap"] .v2-money-bar-fill {
+  background: var(--v2-ink-2);
+}
+
+[data-v2-root] .v2-money-meter[data-over] .v2-money-bar-fill {
+  background: var(--v2-money-danger);
+}
+
+[data-v2-root] .v2-money-over {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--v2-ink);
+  font: 600 13px/1.3 var(--v2-display);
+}
+
+[data-v2-root] .v2-money-over::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--v2-money-danger);
+}
+
+/* ---------------------------------------------------------------- the ledger */
+
+[data-v2-root] .v2-money-txs {
+  display: flex;
+  flex-direction: column;
+  max-width: 960px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* UNDER 420PX, TWO LINES: the note and the amount, then the date, the account
+   and the category. The five parts stay in reading order in the document, and
+   only their places move, so a screen reader hears one sentence a line. */
+[data-v2-root] .v2-money-tx {
+  display: grid;
+  grid-template-columns: max-content minmax(0, max-content) minmax(0, 1fr) max-content;
+  align-items: baseline;
+  column-gap: 12px;
+  row-gap: 2px;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--v2-card-2);
+  transition: background-color var(--v2-quick) var(--v2-ease);
+}
+
+[data-v2-root] .v2-money-tx:hover {
+  background-color: var(--v2-card);
+}
+
+[data-v2-root] .v2-money-tx-note {
+  display: -webkit-box;
+  grid-row: 1;
+  grid-column: 1 / 4;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-ink);
+  font: 600 14px/1.3 var(--v2-display);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+[data-v2-root] .v2-money-tx .v2-money-amt {
+  grid-row: 1;
+  grid-column: 4;
+}
+
+[data-v2-root] .v2-money-tx .v2-money-fig {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+[data-v2-root] .v2-money-tx-date,
+[data-v2-root] .v2-money-tx-acct,
+[data-v2-root] .v2-money-tx-cat {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-ink-3);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-money-tx-date {
+  grid-row: 2;
+  grid-column: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-v2-root] .v2-money-tx-acct {
+  grid-row: 2;
+  grid-column: 2;
+}
+
+/* To the line's end: the amount's column is empty on the second line. */
+[data-v2-root] .v2-money-tx-cat {
+  grid-row: 2;
+  grid-column: 3 / -1;
+}
+
+/* FROM 420PX, ONE LINE, on columns every line shares: the list is the grid and
+   each line a subgrid of it, so the dates, accounts, categories and amounts
+   line up down the pane whatever their lengths. The account and the category
+   take what their words need, up to a limit, and the note takes the rest, cut
+   to one line; its whole text is its title. */
+@container v2-pane (width >= 420px) {
+  [data-v2-root] .v2-money-txs {
+    display: grid;
+    grid-template-columns:
+      max-content minmax(0, 1fr) fit-content(9em) fit-content(9em)
+      max-content;
+    column-gap: 12px;
+  }
+
+  [data-v2-root] .v2-money-tx {
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    padding: 7px 6px;
+  }
+
+  /* The amount's own placement above is one class heavier than `> *`, so it
+     is named here too, or it would keep its two line place. */
+  [data-v2-root] .v2-money-tx > *,
+  [data-v2-root] .v2-money-tx .v2-money-amt {
+    grid-row: auto;
+    grid-column: auto;
+  }
+
+  [data-v2-root] .v2-money-tx-note {
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+  }
+}
+
+[data-v2-root] .v2-money-more {
+  color: var(--v2-ink-3);
+  font: 600 13px/1.2 var(--v2-display);
+}
