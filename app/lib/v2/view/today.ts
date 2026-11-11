@@ -597,6 +597,38 @@ function pastDueLines(
   return overdue.map((entry) => entry.line);
 }
 
+/**
+ * The one identity rule, for anything that shows a task: the task's own group,
+ * else its lane, else nothing.
+ *
+ * Exported so every screen that names a task resolves it the same way (the
+ * line of the day, the lists, the quests): two copies of this rule would be two
+ * colours for one task on one desk.
+ *
+ * A tag with no label is no identity: it would print an empty line and tint a
+ * card with a colour the user cannot name. When two lanes share a key the later
+ * one wins, as it always has.
+ */
+export function identityFor(
+  taskId: string | null,
+  lane: LaneKey | null,
+  tags: Readonly<Record<string, TaskTag>>,
+  lanes: ReadonlyArray<{ key: LaneKey; label: string; color: string }>,
+): Stop["identity"] {
+  if (taskId !== null) {
+    const tag = tags[taskId];
+    if (tag !== undefined && tag.label.trim() !== "") {
+      return { label: tag.label, color: tag.color, source: "tag" };
+    }
+  }
+  if (lane === null) return null;
+  let found: Stop["identity"] = null;
+  for (const entry of lanes) {
+    if (entry.key === lane) found = { label: entry.label, color: entry.color, source: "lane" };
+  }
+  return found;
+}
+
 export function buildTodayView(input: TodayInput): TodayView {
   const { plan, timeZone, now } = input;
   const nowMs = msOf(now);
@@ -604,26 +636,10 @@ export function buildTodayView(input: TodayInput): TodayView {
   // the planner's reference, which before wake is later than the clock.
   const referenceMs = msOf(input.reference);
 
-  const laneById = new Map(
-    input.lanes.map((lane) => [
-      lane.key,
-      { label: lane.label, color: lane.color, source: "lane" as const },
-    ]),
-  );
   const leaveByFixedId = new Map(plan.leaveBy.map((entry) => [entry.fixedId, entry.at]));
 
-  // A tag with no label is no identity: it would print an empty line and tint a
-  // card with a colour the user cannot name.
-  const tagOf = (taskId: string | null): Stop["identity"] => {
-    if (taskId === null) return null;
-    const tag = input.tags[taskId];
-    if (tag === undefined || tag.label.trim() === "") return null;
-    return { label: tag.label, color: tag.color, source: "tag" };
-  };
-
-  /** The one identity rule: the task's own group, else its lane, else nothing. */
   const identityOf = (taskId: string | null, lane: LaneKey | null): Stop["identity"] =>
-    tagOf(taskId) ?? (lane === null ? null : (laneById.get(lane) ?? null));
+    identityFor(taskId, lane, input.tags, input.lanes);
 
   const entries: Entry[] = [];
 

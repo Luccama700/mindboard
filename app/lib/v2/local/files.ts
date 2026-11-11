@@ -290,6 +290,46 @@ async function readRowsFor(
   return rows.filter((row) => row.user_id === userId);
 }
 
+/**
+ * A whole JSON file of the folder checked against a schema, or null when the
+ * folder has no such file. For the parts of a snapshot a folder may leave out.
+ *
+ * A file that is there and cannot be read, is not JSON or does not match is the
+ * same `LocalSnapshotError` every other file reports: a literal file name and a
+ * fixed phrase, with the path of the field for a bad shape, never a value.
+ */
+export async function readOptionalFile<S extends z.ZodTypeAny>(
+  dir: string,
+  file: string,
+  schema: S,
+): Promise<z.infer<S> | null> {
+  const body = await readText(dir, file);
+  if (body === null) return null;
+  return shaped(file, schema, parseJson(file, body));
+}
+
+/**
+ * This account's rows of a file of rows, each checked against a schema, or null
+ * when the folder has no such file. The rows of other accounts are dropped
+ * before the schema sees them, so a row that is not this account's cannot fail
+ * the read.
+ */
+export async function readOptionalRows<S extends z.ZodTypeAny>(
+  dir: string,
+  file: string,
+  userId: string,
+  schema: S,
+): Promise<Array<z.infer<S>> | null> {
+  const body = await readText(dir, file);
+  if (body === null) return null;
+  const rows = shaped(file, rowList, parseJson(file, body));
+  return shaped(
+    file,
+    z.array(schema),
+    rows.filter((row) => row.user_id === userId),
+  );
+}
+
 const taskRowSchema = z.object({
   id: z.string().min(1),
   title: text,
