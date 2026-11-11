@@ -2097,7 +2097,7 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
 
   test("this tab's rename is kept, and a name only the other tab changed is the other's", () => {
     const base = twoOwn();
-    const merged = mergeThree(base, renameLayout(base, "u1", "Here"), renameLayout(base, "u2", "There"), ["regular"]);
+    const merged = mergeThree(base, renameLayout(base, "u1", "Here"), renameLayout(base, "u2", "There"));
     expect(titleIn(merged, "u1")).toBe("Here");
     expect(titleIn(merged, "u2")).toBe("There");
   });
@@ -2111,7 +2111,7 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
       closePane(arrangementOf(base, "today", "wide"), "status"),
     );
     const theirs = renameLayout(base, "u2", "There");
-    const merged = mergeThree(base, mine, theirs, ["regular"]);
+    const merged = mergeThree(base, mine, theirs);
     expect(ids(merged)).toEqual(["today", "week", "quests", "money", "u1", "u2", "u3"]);
     expect(titleIn(merged, "u3")).toBe("Made here");
     expect(leafOf(arrangementOf(merged, "u3", "wide").tree, "status")).toBeNull();
@@ -2126,7 +2126,7 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
       closePane(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "calendar"),
     );
     const theirs = addLayout(EMPTY_TILE_SET, "There", "money", "regular");
-    const merged = mergeThree(EMPTY_TILE_SET, mine, theirs, ["regular"]);
+    const merged = mergeThree(EMPTY_TILE_SET, mine, theirs);
     // The engine's own next id on a desk that holds the other tab's u1.
     const engineNext = addLayout(theirs, "", "today", "regular").layouts.at(-1)?.id;
     expect(engineNext).toBe("u2");
@@ -2145,20 +2145,20 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
 
   test("a layout this tab deleted stays deleted, even renamed by the other tab", () => {
     const base = twoOwn();
-    const merged = mergeThree(base, removeLayout(base, "u1"), renameLayout(base, "u1", "There"), ["regular"]);
+    const merged = mergeThree(base, removeLayout(base, "u1"), renameLayout(base, "u1", "There"));
     expect(ids(merged)).not.toContain("u1");
     expect(ids(merged)).toContain("u2");
   });
 
   test("a layout the other tab deleted is not brought back", () => {
     const base = twoOwn();
-    const merged = mergeThree(base, base, removeLayout(base, "u1"), ["regular"]);
+    const merged = mergeThree(base, base, removeLayout(base, "u1"));
     expect(ids(merged)).not.toContain("u1");
   });
 
   test("a layout this tab changed survives a deletion it never saw", () => {
     const base = twoOwn();
-    const merged = mergeThree(base, renameLayout(base, "u1", "Still here"), removeLayout(base, "u1"), ["regular"]);
+    const merged = mergeThree(base, renameLayout(base, "u1", "Still here"), removeLayout(base, "u1"));
     expect(titleIn(merged, "u1")).toBe("Still here");
   });
 
@@ -2166,7 +2166,7 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
     const base = setCurrent(addLayout(EMPTY_TILE_SET, "One", "today", "regular"), "today");
     const mine = moveLayout(base, "u1", 0);
     const theirs = setCurrent(addLayout(base, "Two", "today", "regular"), "today");
-    expect(ids(mergeThree(base, mine, theirs, ["regular"]))).toEqual([
+    expect(ids(mergeThree(base, mine, theirs))).toEqual([
       "u1",
       "today",
       "week",
@@ -2181,7 +2181,6 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
       EMPTY_TILE_SET,
       setHidden(EMPTY_TILE_SET, "week", true),
       setHidden(EMPTY_TILE_SET, "quests", true),
-      ["regular"],
     );
     expect(merged.hidden).toEqual(["quests", "week"]);
   });
@@ -2199,7 +2198,7 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
       "wide",
       closePane(arrangementOf(EMPTY_TILE_SET, "money", "wide"), "hours"),
     );
-    const merged = mergeThree(EMPTY_TILE_SET, mine, theirs, ["wide"]);
+    const merged = mergeThree(EMPTY_TILE_SET, mine, theirs);
     expect(leafOf(arrangementOf(merged, "today", "regular").tree, "status")).toBeNull();
     expect(leafOf(arrangementOf(merged, "money", "wide").tree, "hours")).toBeNull();
   });
@@ -2213,7 +2212,7 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
     );
     const mine = resetLayout(base, "today", "regular");
     const theirs = setHidden(base, "money", true);
-    const merged = mergeThree(base, mine, theirs, ["wide"]);
+    const merged = mergeThree(base, mine, theirs);
     expect(isChanged(merged, "today", "regular")).toBe(false);
     expect(merged.hidden).toEqual(["money"]);
   });
@@ -2225,11 +2224,14 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
       "regular",
       closePane(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "status"),
     );
-    const merged = mergeThree(EMPTY_TILE_SET, EMPTY_TILE_SET, theirs, ["wide"]);
+    const merged = mergeThree(EMPTY_TILE_SET, EMPTY_TILE_SET, theirs);
     expect(leafOf(arrangementOf(merged, "today", "regular").tree, "status")).toBeNull();
   });
 
-  test("nothing on screen moves: the open layout stays open, and its arrangement on the class shown stays this tab's", () => {
+  // The last pass's ruling: no override for the layout on screen. Where this
+  // tab changed nothing since the base, the other tab's arrangement is taken,
+  // even under the owner's eyes: it is his own action in his other tab.
+  test("the arrangement on screen is the other tab's where this tab changed nothing since the base; the open layout stays this tab's", () => {
     const base = withArrangement(
       EMPTY_TILE_SET,
       "today",
@@ -2240,13 +2242,49 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
       withArrangement(base, "today", "wide", closePane(arrangementOf(base, "today", "wide"), "calendar")),
       "week",
     );
-    const shownWide = mergeThree(base, base, theirs, ["wide"]);
-    expect(shownWide.current).toBe("today");
-    expect(leafOf(arrangementOf(shownWide, "today", "wide").tree, "calendar")).not.toBeNull();
-    // On a class not shown here, the other tab's change is taken.
-    const shownRegular = mergeThree(base, base, theirs, ["regular"]);
-    expect(leafOf(arrangementOf(shownRegular, "today", "wide").tree, "calendar")).toBeNull();
-    expect(shownRegular.current).toBe("today");
+    const merged = mergeThree(base, base, theirs);
+    expect(merged.current).toBe("today");
+    expect(leafOf(arrangementOf(merged, "today", "wide").tree, "calendar")).toBeNull();
+    expect(leafOf(arrangementOf(merged, "today", "wide").tree, "past-due")).toBeNull();
+  });
+
+  test("an arrangement both tabs changed since the base is this tab's: the one loss left", () => {
+    const base = withArrangement(
+      EMPTY_TILE_SET,
+      "today",
+      "wide",
+      closePane(arrangementOf(EMPTY_TILE_SET, "today", "wide"), "past-due"),
+    );
+    const mine = withArrangement(base, "today", "wide", closePane(arrangementOf(base, "today", "wide"), "status"));
+    const theirs = withArrangement(base, "today", "wide", closePane(arrangementOf(base, "today", "wide"), "calendar"));
+    const merged = mergeThree(base, mine, theirs);
+    expect(leafOf(arrangementOf(merged, "today", "wide").tree, "status")).toBeNull();
+    expect(leafOf(arrangementOf(merged, "today", "wide").tree, "calendar")).not.toBeNull();
+  });
+
+  test("the reviewer's sequence: the other tab's close on the layout on screen is taken in, and survives this tab's next write", () => {
+    stubMedia(1366);
+    // Today was changed at some point, and stored.
+    const start = withArrangement(
+      EMPTY_TILE_SET,
+      "today",
+      "regular",
+      closePane(arrangementOf(EMPTY_TILE_SET, "today", "regular"), "status"),
+    );
+    window.localStorage.setItem(DESK_STORAGE_KEY, serializeTileSet(start));
+    tabs.clear();
+    const first = openTab("first");
+    const second = openTab("second");
+    expect(isChanged(first.set, "today", "regular")).toBe(true);
+    // Both on Today on the same class: the second closes the Calendar and writes.
+    second.act({ type: "close", cls: "regular", pane: "calendar" });
+    storageEventFor(window.localStorage.getItem(DESK_STORAGE_KEY) as string);
+    expect(leafOf(arrangementOf(first.set, "today", "regular").tree, "calendar")).toBeNull();
+    // The first then writes something unrelated: the close is still there.
+    first.act({ type: "hideLayout", id: "money", hidden: true });
+    const stored = parseTileSet(window.localStorage.getItem(DESK_STORAGE_KEY));
+    expect(stored.hidden).toEqual(["money"]);
+    expect(leafOf(arrangementOf(stored, "today", "regular").tree, "calendar")).toBeNull();
   });
 
   test("in the desk: a tab that missed another's write keeps its own new layout, and the other's", () => {
@@ -2265,6 +2303,87 @@ describe("the three-way merge before a write (fix round 2, item 3)", () => {
     expect(stored.current).toBe("u2");
     expect(first.set.current).toBe("u2");
     expect(first.set.layouts.map((meta) => meta.id)).toEqual(["today", "week", "quests", "money", "u1", "u2"]);
+  });
+});
+
+
+// ============================================================ the last pass
+
+describe("a desk saved by another version (last pass, item 2)", () => {
+  const NEWER = JSON.stringify({ version: 2, layouts: [{ id: "today" }], hidden: [], current: "today", slots: {}, extra: 1 });
+
+  function closeOn(container: HTMLElement, pane: string) {
+    act(() => {
+      fireEvent.click(frameOf(container, "today").querySelector(`[data-close="${pane}"]`) as HTMLElement);
+    });
+  }
+
+  test("is left alone from the load: neither storage nor the cookie is written, and it is said once", () => {
+    window.localStorage.setItem(DESK_STORAGE_KEY, NEWER);
+    document.cookie = deskCookie("2!newer", false);
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    const cookies = vi.spyOn(document, "cookie", "set");
+    const { container } = drawDesk();
+    closeOn(container, "status");
+    expect(spoken(container)).toBe(
+      `${deskLine(DESK_COPY.paneClosed, { pane: titleOf("status") })} ${DESK_COPY.savedByNewer}`,
+    );
+    closeOn(container, "past-due");
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.paneClosed, { pane: titleOf("past-due") }));
+    expect(writes).not.toHaveBeenCalled();
+    expect(cookies).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBe(NEWER);
+    expect(cookieValue(document.cookie)).toBe("2!newer");
+  });
+
+  test("storage that is not a desk at all is still nothing stored, and the next change writes over it", () => {
+    for (const unreadable of ["not json", "{}", "null", "[1,2]"]) {
+      cleanup();
+      vi.restoreAllMocks();
+      window.localStorage.setItem(DESK_STORAGE_KEY, unreadable);
+      stubMedia(1366);
+      stubExtents({ wide: WIDE, regular: REGULAR });
+      const { container } = drawDesk();
+      closeOn(container, "status");
+      expect(leafOf(arrangementOf(saved(), "today", "regular").tree, "status"), unreadable).toBeNull();
+    }
+  });
+
+  test("a storage event carrying another version stops this session's saving, said once", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    closeOn(container, "status");
+    const cookie = cookieValue(document.cookie);
+    expect(cookie).not.toBeNull();
+    // A newer build in another tab writes, and the browser tells this one.
+    window.localStorage.setItem(DESK_STORAGE_KEY, NEWER);
+    storageEventFor(NEWER);
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    closeOn(container, "past-due");
+    expect(spoken(container)).toBe(
+      `${deskLine(DESK_COPY.paneClosed, { pane: titleOf("past-due") })} ${DESK_COPY.savedByNewer}`,
+    );
+    closeOn(container, "not-today");
+    expect(spoken(container)).toBe(deskLine(DESK_COPY.paneClosed, { pane: titleOf("not-today") }));
+    expect(writes).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBe(NEWER);
+    expect(cookieValue(document.cookie)).toBe(cookie);
+  });
+
+  test("a newer desk found at the read before a write, with no event, is not written over either", () => {
+    stubMedia(1366);
+    stubExtents({ wide: WIDE, regular: REGULAR });
+    const { container } = drawDesk();
+    closeOn(container, "status");
+    window.localStorage.setItem(DESK_STORAGE_KEY, NEWER);
+    const writes = vi.spyOn(Storage.prototype, "setItem");
+    closeOn(container, "past-due");
+    expect(writes).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(DESK_STORAGE_KEY)).toBe(NEWER);
+    expect(spoken(container)).toContain(DESK_COPY.savedByNewer);
   });
 });
 

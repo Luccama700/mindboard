@@ -141,24 +141,23 @@ function nextLayoutId(kept: readonly Kept[]): LayoutId | null {
 
 /**
  * The desk after another tab wrote while this one held `mine`, both grown from
- * `base` (the last desk this tab wrote or read).
+ * `base` (the last desk this tab wrote or read). The open layout stays this
+ * tab's own view (it is the tab's address, not something the owner arranged);
+ * everything else follows the rule below.
  *
  * A three-way merge, field by field, because taking either desk whole loses the
  * other's changes and a union brings deleted layouts back: for the rail (each
- * layout's name, its place, whether it is hidden, the one open) and for each
- * layout's each class, this tab's value where it differs from the base, and the
- * stored one otherwise. A layout missing on one side is deleted there (one this
- * tab still changed survives a deletion it never saw), a layout both sides made
- * with the same id is kept twice, this tab's renumbered by the engine, and
- * nothing on screen here moves: the open layout stays open, and its arrangement
- * on the classes shown stays this tab's when it differs from its default.
+ * layout's name, its place, whether it is hidden) and for each layout's each
+ * class, the layout on screen included, this tab's value where THIS TAB changed
+ * it since the base, and the stored one otherwise, so the screen may change
+ * under the owner for his own action in his other tab. A layout missing on one
+ * side is deleted there (one this tab still changed survives a deletion it never
+ * saw), a layout both sides made with the same id is kept twice, this tab's
+ * renumbered by the engine, and the one loss left is an arrangement both tabs
+ * changed since the base, where this tab's wins because it is what he is
+ * looking at.
  */
-export function mergeThree(
-  base: TileSet,
-  mine: TileSet,
-  theirs: TileSet,
-  shown: readonly ScreenClass[],
-): TileSet {
+export function mergeThree(base: TileSet, mine: TileSet, theirs: TileSet): TileSet {
   const renamedHere = (id: LayoutId) => {
     const here = metaIn(mine, id);
     const before = metaIn(base, id);
@@ -239,22 +238,10 @@ export function mergeThree(
     ...hiddenIds.filter((id) => !theirs.hidden.includes(id)),
   ];
 
-  // Nothing on screen moves.
+  // The open layout is this tab's own, under its new id when renumbered, while it can still be shown.
   const open = moved.get(mine.current) ?? mine.current;
   const showable = ordered.some((entry) => entry.id === open && !entry.hidden);
-  const current = showable ? open : theirs.current;
-  const final = ordered.map((entry) =>
-    entry.id !== open
-      ? entry
-      : {
-          ...entry,
-          slot: (cls: ScreenClass) =>
-            shown.includes(cls) && isChanged(mine, mine.current, cls)
-              ? arrangementOf(mine, mine.current, cls)
-              : entry.slot(cls),
-        },
-  );
-  return parseTileSet(deskValue(final, hidden, current));
+  return parseTileSet(deskValue(ordered, hidden, showable ? open : theirs.current));
 }
 
 /** What is written: the storage text and the cookie value, each null when nothing was. */
@@ -335,6 +322,24 @@ function storedDesk(text: string | null): TileSet | null {
   return saved === EMPTY_TILE_SET ? null : saved;
 }
 
+/**
+ * Whether storage holds a desk written by another version of this code:
+ * readable JSON, an object, with a `version` that is not this build's. Such a
+ * desk is not "nothing stored": this build cannot read it, and must not write
+ * over it either (a newer build's desk is the owner's latest). Anything that is
+ * not readable at all still counts as nothing stored.
+ */
+export function otherVersion(text: string | null): boolean {
+  if (text === null) return false;
+  try {
+    const value: unknown = JSON.parse(text);
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+    return Object.hasOwn(value, "version") && (value as { version: unknown }).version !== EMPTY_TILE_SET.version;
+  } catch {
+    return false;
+  }
+}
+
 /** The classes whose arrangement is on screen: the one the window is, or all three before it says. */
 function shownClasses(): readonly ScreenClass[] {
   const cls = classNow();
@@ -358,10 +363,11 @@ function shownClasses(): readonly ScreenClass[] {
  * over them. Two guards, because the browser's `storage` event can come late or
  * not at all (a tab asleep in the background):
  *   - the event: another tab's desk is taken in at once (`mergeThree` against
- *     the base this tab holds, so it keeps its own changes, its open layout and
- *     the arrangement on screen), and recorded as what this tab last wrote, so
- *     it does not write it straight back (two tabs on two layouts would
- *     otherwise answer each other forever);
+ *     the base this tab holds, so it keeps its own changes and its open layout,
+ *     and takes the other's everywhere else, the arrangement on screen
+ *     included), and recorded as what this tab last wrote, so it does not write
+ *     it straight back (two tabs on two layouts would otherwise answer each
+ *     other forever);
  *   - before every write, storage is read again; when it holds anything but the
  *     text this tab last wrote or read, another tab got there first, and the
  *     same merge is made before writing, so neither tab's changes are lost.
@@ -370,6 +376,11 @@ function shownClasses(): readonly ScreenClass[] {
  * last written stays as it was, so the next change tries again, the cookie is
  * left as it was too (a cookie newer than storage would paint a desk the load
  * then throws away), and `onNotSaved` is told once, until a write succeeds.
+ *
+ * A DESK FROM A NEWER VERSION IS LEFT ALONE. When storage holds a desk of
+ * another version (`otherVersion`), at the load, in an event or at the read
+ * before a write, this session writes neither storage nor the cookie again, and
+ * `onNotSaved` is told once, at the first change that is not saved.
  */
 export function useSavedDesk(
   set: TileSet,
@@ -384,6 +395,9 @@ export function useSavedDesk(
   const base = useRef<TileSet | null>(null);
   const latest = useRef(set);
   const failing = useRef(false);
+  /** Storage holds another version's desk: nothing is written this session. */
+  const frozen = useRef(false);
+  const frozenSaid = useRef(false);
   // Held, not depended on: the desk may hand a new function every render.
   const notSaved = useRef(onNotSaved);
 
@@ -399,9 +413,14 @@ export function useSavedDesk(
       if (event.storageArea !== null && event.storageArea !== storage()) return;
       const before = written.current;
       if (before === null || event.newValue === seen.current) return;
+      if (otherVersion(event.newValue)) {
+        frozen.current = true;
+        seen.current = event.newValue;
+        return;
+      }
       const theirs = storedDesk(event.newValue);
       if (theirs === null) return;
-      const merged = mergeThree(base.current ?? theirs, latest.current, theirs, shownClasses());
+      const merged = mergeThree(base.current ?? theirs, latest.current, theirs);
       seen.current = event.newValue;
       base.current = theirs;
       written.current = { text: serializeTileSet(merged), cookie: encodeTileCookie(merged) ?? before.cookie };
@@ -415,6 +434,7 @@ export function useSavedDesk(
   useEffect(() => {
     if (written.current === null) {
       const text = readStored();
+      frozen.current = otherVersion(text);
       const saved = storedDesk(text);
       const cookie = cookieValue(document.cookie);
       seen.current = text;
@@ -438,10 +458,19 @@ export function useSavedDesk(
     let next = set;
     let last = written.current;
     const there = readStored();
+    if (there !== seen.current && otherVersion(there)) frozen.current = true;
+    if (frozen.current) {
+      // A change that would have been saved: said once, and nothing written.
+      if (saveStep(set, last).storage !== null && !frozenSaid.current) {
+        frozenSaid.current = true;
+        notSaved.current?.(DESK_COPY.savedByNewer);
+      }
+      return;
+    }
     if (there !== null && there !== seen.current) {
       const theirs = storedDesk(there);
       if (theirs !== null) {
-        next = mergeThree(base.current ?? theirs, set, theirs, shownClasses());
+        next = mergeThree(base.current ?? theirs, set, theirs);
         seen.current = there;
         base.current = theirs;
         last = { text: there, cookie: last.cookie };

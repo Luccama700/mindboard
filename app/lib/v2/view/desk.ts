@@ -50,6 +50,7 @@ export const DESK_COPY = {
   savedHereOnly: "Layout saved on this device. The first paint may show the default.",
   /** Storage refused the desk (full, or not allowed): said once, until a save succeeds. */
   notSavedHere: "The desk could not be saved on this device, so changes last only until this page is closed.",
+  savedByNewer: "The desk on this device was saved by a newer version, so changes made here are not saved.",
 
   // Managing the layouts, on the rail and in the phone's list. `{layout}` is filled.
   /** The control that turns the list of layouts into the list to manage them. */
