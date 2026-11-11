@@ -18,13 +18,24 @@
 // applied before overlap is judged. This file maps their minutes onto the window
 // the screen is drawing and adds the words. Nothing below recomputes any of it.
 //
-// THE WINDOW IS WIDENED, NEVER NARROWED. The rules say which hours a day
-// normally spans, and that is where the grid starts; then every chip of the week
-// is let into it. An event at 23:55 is fifteen minutes tall by the floor above,
-// so it ends at 00:10 the next morning and the window runs to minute 1500: a
-// grid of 25 rows, the last of them labelled 24:00. That is on purpose. A window
-// that stopped at midnight would have to draw that chip three minutes tall or
-// outside itself, and both are worse than one odd looking row.
+// THE WINDOW IS WIDENED, NEVER NARROWED, AND ONLY BY THE CALENDAR. The rules say
+// which hours a day normally spans, and that is where the grid starts; then
+// every EVENT of the week is let into it. An event at 23:55 is fifteen minutes
+// tall by the floor above, so it ends at 00:10 the next morning and the window
+// runs to minute 1500: a grid of 25 rows, the last of them labelled 24:00. That
+// is on purpose. A window that stopped at midnight would have to draw that chip
+// three minutes tall or outside itself, and both are worse than one odd looking
+// row.
+//
+// A BLOCK THE PLANNER PLACED NEVER MOVES IT. A block is drawn inside the window
+// and cut at its edge, and one wholly outside it is not drawn on the calendar at
+// all (it is still on the day's own line). Let in like an event, one block at
+// 00:10 on the morning after pulled the start of all seven columns back to
+// midnight.
+//
+// TODAY IS THE PLANNING DATE, handed over by the source, never read off the
+// clock. The planner keeps the previous day until lights out, which can be after
+// midnight, and the day being lived is the one the calendar has to mark.
 //
 // A DAY THAT IS NOT COVERED IS NOT AN EMPTY DAY. The source says which days its
 // calendar can speak for, and a day outside that gets no chips, is flagged, and
@@ -42,7 +53,14 @@ import {
   type CalEvent,
   type TimedPlaced,
 } from "@/app/lib/v2/calendar/types";
-import { dayDiff, dayWindow, maybeInstantMs, shiftDateKey } from "@/app/lib/v2/plan/day";
+import {
+  dayDiff,
+  dayWindow,
+  maybeInstantMs,
+  shiftDateKey,
+  wallMinutes,
+  weekdayOf,
+} from "@/app/lib/v2/plan/day";
 import type { DateKey, Instant, PlannerRules } from "@/app/lib/v2/types";
 import { clockLabel, dayLabel, timeRangeLabel, weekLabel } from "@/app/lib/v2/view/format";
 import type {
@@ -85,7 +103,11 @@ export interface CalendarDayView {
   dayNumber: string; // "10"
   isToday: boolean;
   covered: boolean;
-  /** Today and the two days after it (or the first three days when today is not in the week). */
+  /**
+   * Three days: today and the two after it, pulled back so all three are in the
+   * week (Friday to Sunday when today is the Saturday or the Sunday), or the
+   * first three when today is not in the week.
+   */
   near: boolean;
   chips: CalendarChip[]; // timed, in start order
   allDay: string[]; // titles of the all day events on this day, for the agenda
@@ -118,7 +140,11 @@ export interface CalendarView {
   fromMinute: number;
   toMinute: number;
   hours: Array<{ label: string; top: number }>; // one per hour line, "09:00"
-  /** Where the now line sits in today's column, or null when it is not on screen. */
+  /**
+   * Where the now line sits in today's column, or null when it is not on screen:
+   * today is not a covered day of this week, the instant is not ON the day marked
+   * today (after midnight, before lights out), or it is outside the window.
+   */
   nowTop: number | null;
   nowLabel: string;
   /** Only the calendars with something on this week, in the data's order. */
@@ -162,7 +188,7 @@ const PLANNED_CALENDAR = "planned-block";
 
 const MINUTES_PER_HOUR = 60;
 const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
-/** Today and the two days after it. */
+/** How many days the narrow grid shows. */
 const NEAR_DAYS = 3;
 
 // ------------------------------------------------------------------ the week
@@ -180,12 +206,6 @@ const NEAR_DAYS = 3;
  */
 function isRealDay(value: string): boolean {
   return DATE_KEY.test(value) && shiftDateKey(value, 0) === value;
-}
-
-/** The day an instant falls on in the zone, or null when it cannot be read. */
-function dayOfInstant(instant: Instant, timeZone: string): DateKey | null {
-  const ms = maybeInstantMs(instant);
-  return ms === null ? null : zonedDateKey(ms, timeZone);
 }
 
 /**
@@ -234,9 +254,16 @@ function dayMinutes(ms: number, date: DateKey, timeZone: string): number {
 }
 
 /**
- * The hours a day of this week normally spans: the earliest wake across its
- * seven days to the latest lights out, both read through the planner's own
- * `dayWindow` so the calendar and the day agree about when the day starts.
+ * The hours a day of this week normally spans: the earliest wake target across
+ * its seven days to the latest lights out.
+ *
+ * THE START IS THE WAKE, NOT THE PLANNER'S WINDOW. `dayWindow` starts at the
+ * later of the wake and `noFocusBefore`, which is a rule about what the planner
+ * may place, not about when the day begins: a calendar starting there left the
+ * now line off the grid between waking and the first focus hour. The wake is the
+ * weekday's own wall clock, which is what a grid of wall clock rows wants. The
+ * END is read through `dayWindow`, so the calendar and the planner agree about
+ * when the day is over.
  *
  * Capped to one day. A lights out after midnight belongs to the next calendar
  * day (types.ts), which would otherwise ask for a window longer than the grid.
@@ -248,9 +275,9 @@ function windowAcross(
   let from = MINUTES_PER_DAY;
   let to = 0;
   for (const date of week) {
-    const window = dayWindow(date, rules);
-    from = Math.min(from, dayMinutes(window.startMs, date, rules.timeZone));
-    to = Math.max(to, dayMinutes(window.endMs, date, rules.timeZone));
+    const wake = rules.wakeByWeekday[weekdayOf(date)] ?? rules.wakeByWeekday[0];
+    from = Math.min(from, wallMinutes(wake));
+    to = Math.max(to, dayMinutes(dayWindow(date, rules).endMs, date, rules.timeZone));
   }
   const fromMinute = clampMinute(from);
   return { fromMinute, toMinute: Math.max(clampMinute(to), fromMinute) };
@@ -271,7 +298,11 @@ export interface CalendarSourceData {
   calendars: readonly ScreenCalendar[];
   /** The days the events can speak for, inclusive. null: none of them. */
   range: { from: DateKey; to: DateKey } | null;
-  /** The day whose week is shown when `weekParam` does not pick another. */
+  /**
+   * The planning date: the day the Today screen plans for the same request. It
+   * is the day marked today, and the day whose week is shown when `weekParam`
+   * does not pick another.
+   */
   wanted: DateKey;
   /** The `week` search parameter, exactly as it arrived. */
   weekParam: string | null;
@@ -298,12 +329,12 @@ export function calendarScreenData(source: CalendarSourceData): CalendarScreenDa
 
   const mondayIfCovered = (monday: DateKey): DateKey | null =>
     covers(weekOf(monday)) ? monday : null;
-  const today = dayOfInstant(source.now, timeZone);
-  const thisMonday = today === null ? null : weekOf(today)[0];
+  const thisMonday = weekOf(source.wanted)[0];
 
   return {
     timeZone,
     now: source.now,
+    today: source.wanted,
     week,
     covered: week.filter((date) => inRange(date, range)),
     calendars: withoutRepeats(source.calendars),
@@ -313,8 +344,7 @@ export function calendarScreenData(source: CalendarSourceData): CalendarScreenDa
     dayWindow: windowAcross(week, source.rules),
     prevWeek: mondayIfCovered(shiftDateKey(week[0], -7)),
     nextWeek: mondayIfCovered(shiftDateKey(week[0], 7)),
-    thisWeek:
-      thisMonday === null || thisMonday === week[0] ? null : mondayIfCovered(thisMonday),
+    thisWeek: thisMonday === week[0] ? null : mondayIfCovered(thisMonday),
   };
 }
 
@@ -409,19 +439,25 @@ export function buildCalendarView(
   // identity, which `layoutDay` preserves.
   const standIns = planned.map(asEvent);
   const isPlanned = new Set<CalEvent>(standIns);
-  const timed = [...data.events.filter((event) => !event.allDay), ...standIns];
+  const events = data.events.filter((event) => !event.allDay);
 
-  // Laid out first, measured second: the window has to make room for every chip
-  // before any of them can be turned into a fraction of it.
-  const placed = new Map<DateKey, TimedPlaced[]>();
+  // Laid out first, measured second: the window has to make room for every
+  // event before anything can be turned into a fraction of it. Measured on the
+  // EVENTS only (a laid out event's minutes do not depend on what it shares its
+  // column with), so a planned block can never move the window.
+  const laidOut = new Map<DateKey, TimedPlaced[]>();
   for (const date of data.week) {
-    placed.set(date, covered.has(date) ? layoutDay(timed, date, zone).timed : []);
+    laidOut.set(
+      date,
+      covered.has(date) ? layoutDay([...events, ...standIns], date, zone).timed : [],
+    );
   }
 
   let earliest = data.dayWindow.fromMinute;
   let latest = data.dayWindow.toMinute;
-  for (const day of placed.values()) {
+  for (const day of laidOut.values()) {
     for (const item of day) {
+      if (isPlanned.has(item.event)) continue;
       earliest = Math.min(earliest, item.startMinute);
       latest = Math.max(latest, item.endMinute);
     }
@@ -432,6 +468,32 @@ export function buildCalendarView(
     fromMinute + MINUTES_PER_HOUR,
   );
   const span = toMinute - fromMinute;
+
+  // A block wholly outside the window is not drawn, and it is taken out BEFORE
+  // the columns are dealt: left in, it would still take a column from an event
+  // it is never drawn beside. Only such a day is laid out again.
+  const placed = new Map<DateKey, TimedPlaced[]>();
+  for (const [date, items] of laidOut) {
+    const outside = new Set(
+      items
+        .filter(
+          (item) =>
+            isPlanned.has(item.event) &&
+            (item.endMinute <= fromMinute || item.startMinute >= toMinute),
+        )
+        .map((item) => item.event),
+    );
+    placed.set(
+      date,
+      outside.size === 0
+        ? items
+        : layoutDay(
+            [...events, ...standIns.filter((standIn) => !outside.has(standIn))],
+            date,
+            zone,
+          ).timed,
+    );
+  }
 
   // An all day event on no covered day is left out before the rows are stacked,
   // not after: dropping a span afterwards would leave an empty row behind it.
@@ -447,9 +509,12 @@ export function buildCalendarView(
     covered,
   );
 
-  const today = dayOfInstant(data.now, zone);
-  const todayIndex = today === null ? -1 : data.week.indexOf(today);
-  const nearFrom = todayIndex === -1 ? 0 : todayIndex;
+  const { today } = data;
+  const todayIndex = data.week.indexOf(today);
+  // Three days, all of them in the week: on a Saturday or a Sunday, starting at
+  // today would run off its end and show two days, then one.
+  const nearFrom =
+    todayIndex === -1 ? 0 : Math.min(todayIndex, data.week.length - NEAR_DAYS);
 
   const titlesByIndex = allDayTitles(spans, data.week.length);
   const days: CalendarDayView[] = data.week.map((date, index) => ({
@@ -459,7 +524,7 @@ export function buildCalendarView(
     covered: covered.has(date),
     near: index >= nearFrom && index < nearFrom + NEAR_DAYS,
     chips: (placed.get(date) ?? []).map((item) =>
-      chipOf(item, isPlanned.has(item.event), byId, { fromMinute, span }, zone),
+      chipOf(item, isPlanned.has(item.event), byId, { fromMinute, toMinute, span }, zone),
     ),
     // No guard for an uncovered day: the spans were cut to the covered days
     // above, so a title can only reach a day the source speaks for.
@@ -485,8 +550,8 @@ export function buildCalendarView(
     toMinute,
     hours: hourLines(fromMinute, toMinute),
     nowTop:
-      today !== null && covered.has(today)
-        ? nowTopOf(data.now, today, todayIndex, { fromMinute, span }, zone)
+      todayIndex !== -1 && covered.has(today)
+        ? nowTopOf(data.now, today, { fromMinute, span }, zone)
         : null,
     nowLabel: maybeInstantMs(data.now) === null ? "" : clockLabel(data.now, zone),
     legend: legendOf(drawnCalendarIds(data.week, placed, isPlanned, spans), data.calendars),
@@ -611,17 +676,26 @@ function allDayTitles(spans: readonly AllDayPlaced[], days: number): string[][] 
   return titles;
 }
 
+/**
+ * One laid out thing as a chip, cut to the window.
+ *
+ * Only a planned block is ever cut (the window was widened for every event), and
+ * a cut edge is flagged as running on past it, which is the same square edge the
+ * pane already draws for something that runs past midnight.
+ */
 function chipOf(
   item: TimedPlaced,
   planned: boolean,
   byId: Map<string, ScreenCalendar>,
-  window: { fromMinute: number; span: number },
+  window: { fromMinute: number; toMinute: number; span: number },
   timeZone: string,
 ): CalendarChip {
   const { event } = item;
   const calendar = planned ? undefined : byId.get(event.calendarId);
-  const top = Math.min(1, Math.max(0, (item.startMinute - window.fromMinute) / window.span));
-  const minutes = Math.max(item.endMinute - item.startMinute, MIN_EVENT_MINUTES);
+  const start = Math.max(item.startMinute, window.fromMinute);
+  const end = Math.min(item.endMinute, window.toMinute);
+  const top = Math.min(1, Math.max(0, (start - window.fromMinute) / window.span));
+  const minutes = Math.max(end - start, MIN_EVENT_MINUTES);
   return {
     id: event.id,
     kind: planned ? "planned" : "event",
@@ -636,8 +710,8 @@ function chipOf(
     height: Math.min(minutes / window.span, 1 - top),
     column: item.column,
     columnCount: item.columnCount,
-    continuesBefore: item.continuesBefore,
-    continuesAfter: item.continuesAfter,
+    continuesBefore: item.continuesBefore || item.startMinute < window.fromMinute,
+    continuesAfter: item.continuesAfter || item.endMinute > window.toMinute,
     recurring: event.recurring,
   };
 }
@@ -665,16 +739,23 @@ function hourLines(
   return lines;
 }
 
-/** Where now sits, or null when it is not on this screen at all. */
+/**
+ * Where now sits in today's column, or null when it is not on this screen.
+ *
+ * Only when the instant falls ON the day marked today. After midnight and before
+ * lights out the day still being lived is marked today, and its column has no
+ * place for 00:30 of the next morning: a line drawn there would put now on the
+ * wrong day. (Whether the calendar's day should run past midnight is an open
+ * question, so nothing here pretends it does.)
+ */
 function nowTopOf(
   now: Instant,
-  today: DateKey | null,
-  todayIndex: number,
+  today: DateKey,
   window: { fromMinute: number; span: number },
   timeZone: string,
 ): number | null {
   const ms = maybeInstantMs(now);
-  if (ms === null || today === null || todayIndex === -1) return null;
+  if (ms === null || zonedDateKey(ms, timeZone) !== today) return null;
   const minute = zonedClockMinutes(ms, timeZone);
   if (minute < window.fromMinute || minute > window.fromMinute + window.span) return null;
   return (minute - window.fromMinute) / window.span;

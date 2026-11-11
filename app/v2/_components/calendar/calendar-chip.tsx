@@ -29,10 +29,12 @@ export function calendarIdentity(
  * stop, so a keyboard walks the links and the scrollers and never a hundred
  * chips.
  *
- * A TOOLTIP IN THE GRID ONLY. A placed chip clips, so its whole text is in
- * `title` for a pointer. An agenda chip shows all of it, and a list item takes
- * its name from `title`, so there the tooltip would only make a screen reader
- * say the chip twice.
+ * A TOOLTIP IN THE GRID ONLY, AND NEVER ON THE LIST ITEM. A placed chip clips,
+ * so its whole text is a tooltip for a pointer. A `title` on the item itself
+ * made a screen reader say the chip twice, its words and then the tooltip, so
+ * the tooltip sits on one empty span that covers the chip and is hidden from the
+ * accessibility tree: a pointer anywhere on the chip still finds it, and nothing
+ * is named twice. An agenda chip shows all of its words and has no tooltip.
  *
  * The same element serves the agenda and the grid; the stylesheet decides
  * whether it flows or is placed, reading the four numbers below in the grid and
@@ -81,7 +83,6 @@ export function CalendarChipItem({
       data-before={chip.continuesBefore ? "" : undefined}
       data-after={chip.continuesAfter ? "" : undefined}
       style={style}
-      title={placed ? parts.map(([, text]) => text).join("\n") : undefined}
     >
       {parts.map(([className, text], index) => (
         <Fragment key={className}>
@@ -89,6 +90,13 @@ export function CalendarChipItem({
           <span className={className}>{text}</span>
         </Fragment>
       ))}
+      {placed && (
+        <span
+          className="v2-cal-chip-tip"
+          aria-hidden="true"
+          title={parts.map(([, text]) => text).join("\n")}
+        />
+      )}
     </li>
   );
 }

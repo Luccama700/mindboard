@@ -45,6 +45,14 @@ export interface ScreenCalendar {
 export interface CalendarScreenData {
   timeZone: string;
   now: Instant;
+  /**
+   * The day marked today: the PLANNING date, the day the Today screen plans for
+   * the same request, never the date the instant falls on. The planner keeps the
+   * previous day until lights out, which can be after midnight, and the calendar
+   * has to mark the day being lived. Which days are near and which week "This
+   * week" goes back to are both worked out from it.
+   */
+  today: DateKey;
   /** The seven days shown, Monday first. */
   week: DateKey[];
   /**

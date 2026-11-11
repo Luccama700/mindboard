@@ -22,10 +22,12 @@ import { describe, expect, test } from "vitest";
 
 import { MIN_EVENT_MINUTES, type CalEvent } from "@/app/lib/v2/calendar/types";
 import { weekOf } from "@/app/lib/v2/calendar/grid";
+import { parseRules } from "@/app/lib/v2/rules";
 import { timeRangeLabel, weekLabel } from "@/app/lib/v2/view/format";
 import {
   CALENDAR_COPY,
   buildCalendarView,
+  calendarScreenData,
   eventDays,
   type CalendarDayView,
   type PlannedBlock,
@@ -103,6 +105,7 @@ function data(over: Partial<CalendarScreenData> = {}): CalendarScreenData {
   return {
     timeZone: ZONE,
     now: NOW,
+    today: WEDNESDAY,
     week: [...WEEK],
     covered: [...WEEK],
     calendars: CALENDARS.map((calendar) => ({ ...calendar })),
@@ -336,7 +339,10 @@ describe("the week it draws", () => {
   });
 
   test("marks the first three days as near when today is elsewhere", () => {
-    const elsewhere = buildCalendarView(data({ now: at("10:20", "2026-05-20") }), []);
+    const elsewhere = buildCalendarView(
+      data({ now: at("10:20", "2026-05-20"), today: "2026-05-20" }),
+      [],
+    );
     expect(elsewhere.days.some((day) => day.isToday)).toBe(false);
     expect(elsewhere.days.filter((day) => day.near).map((day) => day.date)).toEqual(
       WEEK.slice(0, 3),
@@ -399,7 +405,10 @@ describe("the window it draws inside", () => {
     expect(view.nowTop).toBeCloseTo((620 - 480) / 960, 10);
     expect(view.nowLabel).toBe("10:20");
 
-    const elsewhere = buildCalendarView(data({ now: at("10:20", "2026-05-20") }), []);
+    const elsewhere = buildCalendarView(
+      data({ now: at("10:20", "2026-05-20"), today: "2026-05-20" }),
+      [],
+    );
     expect(elsewhere.nowTop).toBeNull();
   });
 
@@ -420,6 +429,221 @@ describe("the window it draws inside", () => {
     expect(dayOf(view, WEDNESDAY).covered).toBe(false);
     expect(view.nowTop).toBeNull();
     expect(view.nowLabel).toBe("10:20");
+  });
+});
+
+// The day the screen is living is the PLANNING date, which runs on past
+// midnight until lights out, and the calendar has to mark that day as today.
+// Read off the instant instead, at 00:30 the pane marked the next morning, the
+// three near days started there and hid the day still being lived, and on a
+// Sunday night the default week did not hold "today" at all.
+describe("the day it marks as today", () => {
+  /** Lights out at 01:30, so 00:30 still belongs to the day before. */
+  const LATE_RULES = parseRules({
+    timeZone: ZONE,
+    wakeByWeekday: ["07:30", "07:30", "07:30", "07:30", "07:30", "07:30", "07:30"],
+    lightsOut: "01:30",
+    noFocusBefore: "08:30",
+  });
+
+  /** What a source hands over: the planning date as the day it wants. */
+  const screenOn = (wanted: string, now: string) =>
+    calendarScreenData({
+      timeZone: ZONE,
+      now,
+      rules: LATE_RULES,
+      events: [SEMINAR, WORKSHOP, SHIFT],
+      calendars: CALENDARS,
+      range: { from: "2026-04-06", to: "2026-04-26" },
+      wanted,
+      weekParam: null,
+    });
+
+  const todays = (view: { days: CalendarDayView[] }) =>
+    view.days.filter((day) => day.isToday).map((day) => day.date);
+  const nears = (view: { days: CalendarDayView[] }) =>
+    view.days.filter((day) => day.near).map((day) => day.date);
+
+  test("is the day being lived at 00:30 on a weekday night, not the calendar date", () => {
+    const data = screenOn(WEDNESDAY, at("00:30", "2026-04-16"));
+    expect(data.today).toBe(WEDNESDAY);
+    const view = buildCalendarView(data, []);
+    expect(todays(view)).toEqual([WEDNESDAY]);
+    expect(nears(view)).toEqual([WEDNESDAY, "2026-04-16", "2026-04-17"]);
+  });
+
+  test("keeps a Sunday in its own week at 00:30 on the Monday, and marks it", () => {
+    const data = screenOn("2026-04-19", at("00:30", "2026-04-20"));
+    expect(data.week).toEqual(WEEK);
+    expect(data.today).toBe("2026-04-19");
+    // The week shown holds today, so there is no "This week" to go back to.
+    expect(data.thisWeek).toBeNull();
+    const view = buildCalendarView(data, []);
+    expect(todays(view)).toEqual(["2026-04-19"]);
+    expect(nears(view)).toEqual(WEEK.slice(4));
+  });
+
+  // Whether the calendar's day should run past midnight is an open question, so
+  // the line is only drawn where the instant really is: on the day marked today.
+  test("draws no now line after midnight, before lights out", () => {
+    expect(buildCalendarView(screenOn(WEDNESDAY, at("00:30", "2026-04-16")), []).nowTop).toBeNull();
+    // Even where the window reaches midnight, so 00:30 is inside it: the line
+    // would land in the next morning's column, which is not the day marked.
+    const view = buildCalendarView(
+      data({
+        now: at("00:30", "2026-04-16"),
+        today: WEDNESDAY,
+        events: [timed("ev-late", CAMPUS, at("23:00"), at("01:00", "2026-04-16"))],
+      }),
+      [],
+    );
+    expect(view.fromMinute).toBe(0);
+    expect(view.nowTop).toBeNull();
+  });
+
+  test("is the day it was handed, whatever the instant says", () => {
+    const view = buildCalendarView(data({ today: "2026-04-17" }), []);
+    expect(todays(view)).toEqual(["2026-04-17"]);
+    // Now is on the Wednesday, which is not the day marked, so no line.
+    expect(view.nowTop).toBeNull();
+  });
+});
+
+// Three near days, always three. Starting at today ran off the end of the week
+// on a Saturday and a Sunday, so the narrow grid showed two days and then one.
+describe("the near days", () => {
+  const nears = (today: string) =>
+    buildCalendarView(data({ today, now: at("10:20", today) }), [])
+      .days.filter((day) => day.near)
+      .map((day) => day.date);
+
+  test("are the last three of the week when today is the Saturday", () => {
+    expect(nears("2026-04-18")).toEqual(WEEK.slice(4));
+  });
+
+  test("are the last three of the week when today is the Sunday", () => {
+    expect(nears("2026-04-19")).toEqual(WEEK.slice(4));
+  });
+
+  test("are the first three when the week does not hold today", () => {
+    expect(nears("2026-05-20")).toEqual(WEEK.slice(0, 3));
+  });
+
+  test("start at today everywhere else", () => {
+    expect(nears("2026-04-13")).toEqual(WEEK.slice(0, 3));
+    expect(nears("2026-04-17")).toEqual(WEEK.slice(4));
+  });
+});
+
+// The window is the day's own hours and the calendar's events. A block the
+// planner placed is drawn inside it, never let to move it: one at 00:10 on the
+// morning after pulled the start of all seven columns back to midnight.
+describe("a planned block and the window", () => {
+  const LATE: PlannedBlock = {
+    id: "pb-late",
+    title: "Late block",
+    start: at("00:10", "2026-04-16"),
+    end: at("00:35", "2026-04-16"),
+  };
+
+  test("never widens it, and is not drawn when it lies wholly outside it", () => {
+    const without = buildCalendarView(quiet(), []);
+    const withLate = buildCalendarView(quiet(), [LATE]);
+    expect(withLate.fromMinute).toBe(without.fromMinute);
+    expect(withLate.toMinute).toBe(without.toMinute);
+    expect(withLate.hours).toEqual(without.hours);
+    // Every chip where it was, and the block on no day at all.
+    expect(withLate.days).toEqual(without.days);
+  });
+
+  test("is cut at the edge it runs past, still saying its own times", () => {
+    const early: PlannedBlock = {
+      id: "pb-early",
+      title: "Early block",
+      start: at("07:30"),
+      end: at("08:20"),
+    };
+    const view = buildCalendarView(quiet(), [early]);
+    expect(view.fromMinute).toBe(480);
+    const chip = chipOn(view, WEDNESDAY, "pb-early");
+    expect(chip.top).toBe(0);
+    // 08:00 to 08:20 is what the window holds of it.
+    expect(chip.height).toBeCloseTo(20 / 960, 10);
+    expect(chip.continuesBefore).toBe(true);
+    expect(chip.continuesAfter).toBe(false);
+    expect(chip.time).toBe("07:30 to 08:20");
+  });
+
+  test("is cut at the bottom as well", () => {
+    const late: PlannedBlock = {
+      id: "pb-night",
+      title: "Night block",
+      start: at("23:30"),
+      end: at("00:30", "2026-04-16"),
+    };
+    const view = buildCalendarView(quiet(), [late]);
+    expect(view.toMinute).toBe(1440);
+    const chip = chipOn(view, WEDNESDAY, "pb-night");
+    expect(chip.top).toBeCloseTo((1410 - 480) / 960, 10);
+    expect(chip.height).toBeCloseTo(30 / 960, 10);
+    expect(chip.continuesAfter).toBe(true);
+    // Thursday's half, 00:00 to 00:30, is outside the window and not drawn.
+    expect(chipIds(dayOf(view, "2026-04-16"))).toEqual([]);
+  });
+
+  test("still shares a column with an event it overlaps inside the window", () => {
+    const view = buildCalendarView(quiet(), [PLANNED, LATE]);
+    expect(chipOn(view, WEDNESDAY, "pb-notes").columnCount).toBe(3);
+  });
+});
+
+// The window starts at the wake target. Starting it at the later of wake and
+// "no focus before" left the now line off the grid for the first hour of the
+// day, which is exactly when the owner looks at it.
+describe("the window's start", () => {
+  test("is the wake, so the now line is there between waking and the first focus hour", () => {
+    const rules = parseRules({
+      timeZone: ZONE,
+      wakeByWeekday: ["07:30", "07:30", "07:30", "07:30", "07:30", "07:30", "07:30"],
+      lightsOut: "23:30",
+      noFocusBefore: "08:30",
+    });
+    const screen = calendarScreenData({
+      timeZone: ZONE,
+      now: at("07:45"),
+      rules,
+      events: [],
+      calendars: CALENDARS,
+      range: { from: WEEK[0], to: WEEK[6] },
+      wanted: WEDNESDAY,
+      weekParam: null,
+    });
+    expect(screen.dayWindow).toEqual({ fromMinute: 450, toMinute: 1410 });
+    const view = buildCalendarView(screen, []);
+    expect(view.fromMinute).toBe(420);
+    expect(view.hours[0].label).toBe("07:00");
+    expect(view.nowTop).toBeCloseTo((465 - 420) / (1440 - 420), 10);
+  });
+
+  test("is the earliest wake of the week when the weekdays differ", () => {
+    const rules = parseRules({
+      timeZone: ZONE,
+      // Sunday first: a later start at the weekend.
+      wakeByWeekday: ["09:15", "06:45", "07:30", "07:30", "07:30", "07:30", "09:15"],
+      lightsOut: "23:30",
+      noFocusBefore: "10:00",
+    });
+    const screen = calendarScreenData({
+      timeZone: ZONE,
+      now: NOW,
+      rules,
+      events: [],
+      calendars: CALENDARS,
+      range: { from: WEEK[0], to: WEEK[6] },
+      wanted: WEDNESDAY,
+      weekParam: null,
+    });
+    expect(screen.dayWindow.fromMinute).toBe(405);
   });
 });
 
@@ -831,6 +1055,7 @@ describe("a week the clocks change in", () => {
       {
         timeZone: NY,
         now,
+        today: now.slice(0, 10),
         week: SPRING,
         covered: SPRING,
         calendars: [{ id: CAMPUS, label: "Campus", color: "#7C9BFF", writable: true }],

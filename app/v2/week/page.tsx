@@ -6,17 +6,17 @@
 // before anything streams; the loopback check is the first statement of the
 // async child; and every read of the folder comes after it.
 //
-// Only the calendar is read here. The day and its planner belong to Today, so
-// this page plans nothing and shows no planned blocks.
+// Only the calendar is read here, with the one sentence that says what the data
+// is (the same notice Today shows, from the same place). The day and its planner
+// belong to Today, so this page plans nothing and shows no planned blocks.
 
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
+import { SAMPLE_NOTICE } from "@/app/lib/v2/fixtures/sample-day";
 import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
-import { loadLocalCalendar } from "@/app/lib/v2/local/calendar";
-import { LocalSnapshotError } from "@/app/lib/v2/local/snapshot";
+import { LocalSnapshotError, loadLocalWeek, type LocalWeek } from "@/app/lib/v2/local/snapshot";
 import { requireLoopback, screenSource, type ScreenSource } from "@/app/lib/v2/source";
-import type { CalendarScreenData } from "@/app/lib/v2/view/screen-data";
 import { SnapshotError } from "../_components/snapshot-error";
 import { WeekClient } from "./week-client";
 
@@ -65,33 +65,35 @@ async function WeekScreen({
   const asked = searchParams === undefined ? {} : await searchParams;
   const week = oneOf(asked.week);
 
-  if (source.kind === "sample") return <WeekClient calendar={sampleWeek(week)} />;
+  if (source.kind === "sample") {
+    return <WeekClient calendar={sampleWeek(week)} notice={SAMPLE_NOTICE} />;
+  }
 
-  const folder = await readCalendar(source.dir, week);
+  const folder = await readWeek(source.dir, week);
   if (folder.error !== undefined) return <SnapshotError message={folder.error} />;
 
-  // null is a folder with no calendar file, which the screen says in words.
-  return <WeekClient calendar={folder.calendar} />;
+  // A null calendar is a folder with no calendar file, which the screen says in
+  // words.
+  return <WeekClient calendar={folder.week.calendar} notice={folder.week.notice} />;
 }
 
 /**
  * The folder's week, or the one error it reports. A file that is missing or
  * cannot be read is something to go and fix, so it comes back as a value; any
- * other error still throws.
+ * other error still throws. That includes a bad `calendars.json`, which Today
+ * survives: there the day is still worth showing, and here the calendar is all
+ * the page has.
  *
  * Separate from the component because JSX must not be built inside a try, and
  * BELOW it on purpose, as Today's `readFolder` is: reading the file from the top
  * shows the awaited check before any read of the folder.
  */
-async function readCalendar(
+async function readWeek(
   dir: string,
   week: string | null,
-): Promise<
-  | { calendar: CalendarScreenData | null; error?: undefined }
-  | { calendar?: undefined; error: string }
-> {
+): Promise<{ week: LocalWeek; error?: undefined } | { week?: undefined; error: string }> {
   try {
-    return { calendar: await loadLocalCalendar(dir, new Date().toISOString(), week) };
+    return { week: await loadLocalWeek(dir, new Date().toISOString(), week) };
   } catch (error) {
     if (error instanceof LocalSnapshotError) return { error: error.message };
     throw error;

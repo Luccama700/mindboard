@@ -19,12 +19,8 @@ import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
-import {
-  LocalSnapshotError,
-  isLoopbackHost,
-  loadLocalToday,
-  localSnapshotDir,
-} from "@/app/lib/v2/local/snapshot";
+import { LocalSnapshotError, loadLocalToday, localSnapshotDir } from "@/app/lib/v2/local/snapshot";
+import { isLoopbackHost } from "@/app/lib/v2/loopback";
 import { wholeSecond } from "@/app/lib/v2/engine/tick";
 import { planDay } from "@/app/lib/v2/plan/planner";
 import { shiftDateKey } from "@/app/lib/v2/plan/day";

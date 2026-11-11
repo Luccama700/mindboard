@@ -24,7 +24,6 @@ import type { Metadata } from "next";
 
 import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";
 import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
-import { loadLocalCalendar } from "@/app/lib/v2/local/calendar";
 import { LocalSnapshotError, loadLocalToday } from "@/app/lib/v2/local/snapshot";
 import { requireLoopback, screenSource, type ScreenSource } from "@/app/lib/v2/source";
 import type { TodayScreenData } from "@/app/lib/v2/view/screen-data";
@@ -72,6 +71,12 @@ function oneOf(value: string | string[] | undefined): string | null {
  * Async, and the loopback check is the first thing in it: a request whose Host
  * is not this machine gets no data at all in snapshot mode. The sample is
  * invented and has no such check, so a Vercel preview can show it.
+ *
+ * THE SCREEN IS KEYED ON THE DAY IT PLANS. Its state is a plan for one day, and
+ * client state survives a navigation that changes only the search parameters.
+ * So a week link that comes back with another planned day (one pressed after the
+ * planning date rolled over) starts the screen again, while a week link on the
+ * same day keeps every press.
  */
 async function TodayScreen({
   source,
@@ -82,17 +87,42 @@ async function TodayScreen({
 }) {
   await requireLoopback(source);
   const asked = searchParams === undefined ? {} : await searchParams;
+  const date = oneOf(asked.date);
   const week = oneOf(asked.week);
 
   if (source.kind === "sample") {
     const data = sampleDay();
-    return <TodayClient data={week === null ? data : { ...data, calendar: sampleWeek(week) }} />;
+    return (
+      <TodayClient
+        key={data.input.date}
+        data={week === null ? data : { ...data, calendar: sampleWeek(week) }}
+        keep={keptDate(date, data)}
+      />
+    );
   }
 
-  const folder = await readFolder(source.dir, oneOf(asked.date), week);
+  const folder = await readFolder(source.dir, date, week);
   if (folder.data === undefined) return <SnapshotError message={folder.error} />;
 
-  return <TodayClient data={folder.data} />;
+  return (
+    <TodayClient key={folder.data.input.date} data={folder.data} keep={keptDate(date, folder.data)} />
+  );
+}
+
+/**
+ * What the calendar's week links carry back besides the week: the `date` this
+ * request asked for, when it is the day that was planned. A link that dropped it
+ * planned the clock's day instead, beside a screen still showing the other one.
+ *
+ * A date the source ignored (not a real day, too far off, or a sample that has
+ * only its own day) is not carried: it changed nothing, and the link would only
+ * repeat it.
+ */
+function keptDate(
+  date: string | null,
+  data: TodayScreenData,
+): Readonly<Record<string, string>> | undefined {
+  return date !== null && date === data.input.date ? { date } : undefined;
 }
 
 /**
@@ -104,8 +134,10 @@ async function TodayScreen({
  * renders an element after the function returns, so a catch around it would not
  * catch what it looks like it catches (react-hooks/error-boundaries).
  *
- * The clock is read once and used for both reads, so the day and the week beside
- * it cannot land on different sides of midnight.
+ * ONE CALL. The day and the week beside it come out of the same reads of the
+ * folder on the same clock, so they cannot land on different sides of midnight,
+ * and a `week` the folder cannot use falls back to the week of the day being
+ * shown rather than the week of the clock.
  *
  * IT LIVES BELOW `TodayScreen`, so reading the file from the top shows the
  * awaited loopback check before any read of the folder. That is for the reader:
@@ -119,13 +151,7 @@ async function readFolder(
   week: string | null,
 ): Promise<{ data: TodayScreenData; error?: undefined } | { data?: undefined; error: string }> {
   try {
-    const now = new Date().toISOString();
-    const data = await loadLocalToday(dir, now, date);
-    if (week === null) return { data };
-    // The calendar's own week links land here. The loader ignores a week the
-    // snapshot cannot speak for and answers its default week instead, so a stale
-    // or hand-typed link shows the week it has rather than an empty grid.
-    return { data: { ...data, calendar: await loadLocalCalendar(dir, now, week) } };
+    return { data: await loadLocalToday(dir, new Date().toISOString(), date, week) };
   } catch (error) {
     if (error instanceof LocalSnapshotError) return { error: error.message };
     throw error;

@@ -37,29 +37,39 @@ import { CalendarGrid } from "./calendar-grid";
  * navigation that changes only the search parameters keeps the page's client
  * state (Next 16 keys a page's state on its path, not its query), so the day's
  * presses survive it.
+ *
+ * A LINK KEEPS WHAT THE PAGE WAS GIVEN. Each one carries `keep` after the week:
+ * a link that dropped Today's `date` sent the page back to planning the clock's
+ * day, beside a screen still holding the plan of the other one.
  */
 export function CalendarPane({
   data,
   planned,
   basePath,
+  keep,
 }: {
   data: CalendarScreenData;
   /** Today's planned blocks, from the plan the screen is showing right now. */
   planned: readonly PlannedBlock[];
   /** The path the week links point at: "/v2/today" or "/v2/week". */
   basePath: string;
+  /** The page's other search parameters, carried on every week link after `week`. */
+  keep?: Readonly<Record<string, string>>;
 }) {
   const view = useMemo(() => buildCalendarView(data, planned), [data, planned]);
   const { tokens } = useAppearance();
   const headingId = useId();
 
+  // URLSearchParams encodes every name and value, so a kept value with an `&`,
+  // a `#` or a space in it comes back to the page exactly as it went out.
+  const hrefOf = (monday: DateKey) => {
+    const query = new URLSearchParams([["week", monday], ...Object.entries(keep ?? {})]);
+    return `${basePath}?${query.toString()}`;
+  };
+
   const link = (monday: DateKey | null, label: string, slot: string) =>
     monday === null ? null : (
-      <Link
-        className={`v2-cal-link v2-cal-${slot}`}
-        href={`${basePath}?week=${monday}`}
-        scroll={false}
-      >
+      <Link className={`v2-cal-link v2-cal-${slot}`} href={hrefOf(monday)} scroll={false}>
         {label}
       </Link>
     );

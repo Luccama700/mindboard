@@ -20,7 +20,8 @@ import type { FixedEvent, PlannerRules } from "@/app/lib/v2/types";
 
 /** A Wednesday, invented. The zone has no daylight saving, so offsets are stable. */
 export const SAMPLE_DATE = "2026-04-15";
-const ZONE = "America/Phoenix";
+/** The sample's own zone, chosen for having no daylight saving. Not the owner's. */
+export const SAMPLE_ZONE = "America/Phoenix";
 const OFFSET = "-07:00";
 /** Mid morning: the seminar is behind you and the day still has most of itself left. */
 export const SAMPLE_NOW = `${SAMPLE_DATE}T10:20:00${OFFSET}`;
@@ -36,7 +37,7 @@ const at = sampleInstant;
 
 export function sampleRules(): PlannerRules {
   return parseRules({
-    timeZone: ZONE,
+    timeZone: SAMPLE_ZONE,
     wakeByWeekday: ["07:30", "07:30", "07:30", "07:30", "07:30", "07:30", "07:30"],
     lightsOut: "23:30",
     noFocusBefore: "08:30",

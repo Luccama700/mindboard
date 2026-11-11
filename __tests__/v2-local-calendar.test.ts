@@ -22,12 +22,26 @@ import path from "node:path";
 
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 
+import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import { weekOf } from "@/app/lib/v2/calendar/grid";
+import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";
 import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
-import { loadLocalCalendar } from "@/app/lib/v2/local/calendar";
-import { LocalSnapshotError, loadLocalToday } from "@/app/lib/v2/local/snapshot";
+import { LocalSnapshotError, loadLocalToday, loadLocalWeek } from "@/app/lib/v2/local/snapshot";
+import { shiftDateKey } from "@/app/lib/v2/plan/day";
 import { buildCalendarView } from "@/app/lib/v2/view/calendar";
 import type { CalendarScreenData, TodayScreenData } from "@/app/lib/v2/view/screen-data";
+
+// Every file the loaders open, in order, so a test can count how often one
+// request reads the same file. The reader itself is the real one.
+const opened = vi.hoisted(() => ({ files: [] as string[] }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = (...args: unknown[]) => {
+    opened.files.push(String(args[0]));
+    return (actual.readFile as (...given: unknown[]) => unknown)(...args);
+  };
+  return { ...actual, readFile: readFile as typeof actual.readFile };
+});
 
 // The page's one child is stubbed: what is under test below is which week the
 // page asks for, not what the screen does with it.
@@ -228,16 +242,16 @@ async function load(
   overrides: Record<string, string | null> = {},
   weekParam: string | null = null,
 ): Promise<CalendarScreenData> {
-  const week = await loadLocalCalendar(await folder(overrides), NOW, weekParam);
-  if (week === null) throw new Error("the folder answered no calendar at all");
-  return week;
+  const { calendar } = await loadLocalWeek(await folder(overrides), NOW, weekParam);
+  if (calendar === null) throw new Error("the folder answered no calendar at all");
+  return calendar;
 }
 
 async function thrown(
   overrides: Record<string, string | null>,
 ): Promise<LocalSnapshotError> {
   try {
-    await loadLocalCalendar(await folder(overrides), NOW, null);
+    await loadLocalWeek(await folder(overrides), NOW, null);
   } catch (error) {
     if (error instanceof LocalSnapshotError) return error;
     throw error;
@@ -269,17 +283,20 @@ describe("the week it reads", () => {
     expect(week.timeZone).toBe(ZONE);
     expect(Date.parse(week.now)).toBe(Date.parse(NOW));
     // Sub-second precision is poison downstream, so it is floored.
-    const fuzzy = await loadLocalCalendar(await folder(), `${DAY}T10:20:00.750${OFFSET}`, null);
-    expect(Date.parse(String(fuzzy?.now)) % 1000).toBe(0);
+    const fuzzy = await loadLocalWeek(await folder(), `${DAY}T10:20:00.750${OFFSET}`, null);
+    expect(Date.parse(String(fuzzy.calendar?.now)) % 1000).toBe(0);
   });
 
   test("spans the hours the rules document says a day spans", async () => {
-    expect((await load()).dayWindow).toEqual({ fromMinute: 510, toMinute: 1410 });
+    // From the 07:30 wake, not the 08:30 before which nothing is planned, to
+    // lights out at 23:30.
+    expect((await load()).dayWindow).toEqual({ fromMinute: 450, toMinute: 1410 });
   });
 
   test("is nothing at all when the folder has no events file", async () => {
-    expect(await loadLocalCalendar(await folder({ "calendar-events.json": null }), NOW, null))
-      .toBeNull();
+    const week = await loadLocalWeek(await folder({ "calendar-events.json": null }), NOW, null);
+    expect(week.calendar).toBeNull();
+    expect(week.notice).toContain("Calendar not included.");
   });
 
   test("carries every event of the week and none from outside it", async () => {
@@ -505,9 +522,9 @@ describe("a copy whose weeks are all in the past", () => {
   const EARLIER = "2026-03-01T10:20:00-07:00";
 
   const weekAt = async (now: string, weekParam: string | null = null) => {
-    const week = await loadLocalCalendar(await folder(), now, weekParam);
-    if (week === null) throw new Error("the folder answered no calendar at all");
-    return week;
+    const { calendar } = await loadLocalWeek(await folder(), now, weekParam);
+    if (calendar === null) throw new Error("the folder answered no calendar at all");
+    return calendar;
   };
 
   test("opens on the last week it can speak for", async () => {
@@ -541,7 +558,7 @@ describe("a copy whose weeks are all in the past", () => {
 
   test("says nothing about any day when the copy's range is unknown", async () => {
     // No range to pull the day into: an empty events file knows nothing at all.
-    const week = await loadLocalCalendar(
+    const { calendar: week } = await loadLocalWeek(
       await folder({ "calendar-events.json": "[]" }),
       LATER,
       null,
@@ -741,6 +758,104 @@ describe("the day and the calendar beside it agree", () => {
   });
 });
 
+// The planner keeps the previous day as the planning date until lights out, and
+// the calendar marks THAT day as today. Both pages work it out from the same
+// folder and the same clock, so they must agree on the column.
+describe("today, after midnight and before lights out", () => {
+  const LATE_RULES = JSON.stringify({
+    ...RULES_DOC,
+    planner: { ...RULES_DOC.planner, lightsOut: "01:30" },
+  });
+
+  const known = <T>(value: T | null | undefined): T => {
+    if (value === null || value === undefined) throw new Error("no calendar where one was expected");
+    return value;
+  };
+  const marked = (data: CalendarScreenData) =>
+    buildCalendarView(data, [])
+      .days.filter((day) => day.isToday)
+      .map((day) => day.date);
+
+  test("is the same column on Today and on the Week page, on a weekday night", async () => {
+    const dir = await folder({ "rules.json": LATE_RULES });
+    const now = at("00:30", "2026-04-16");
+    const today = await loadLocalToday(dir, now, null);
+    const week = known((await loadLocalWeek(dir, now, null)).calendar);
+    const beside = known(today.calendar);
+
+    expect(today.input.date).toBe(DAY);
+    expect(beside.today).toBe(DAY);
+    expect(week.today).toBe(DAY);
+    expect(marked(beside)).toEqual([DAY]);
+    expect(marked(week)).toEqual([DAY]);
+    expect(buildCalendarView(week, []).nowTop).toBeNull();
+  });
+
+  test("is the same column on both pages on a Sunday night, in the Sunday's week", async () => {
+    const dir = await folder({ "rules.json": LATE_RULES });
+    const now = at("00:30", "2026-04-20");
+    const today = await loadLocalToday(dir, now, null);
+    const week = known((await loadLocalWeek(dir, now, null)).calendar);
+    const beside = known(today.calendar);
+
+    expect(today.input.date).toBe("2026-04-19");
+    for (const data of [beside, week]) {
+      expect(data.week).toEqual(WEEK);
+      expect(data.today).toBe("2026-04-19");
+      expect(data.thisWeek).toBeNull();
+      expect(marked(data)).toEqual(["2026-04-19"]);
+    }
+  });
+
+  test("follows the day the Today screen was asked to plan", async () => {
+    const today = await loadLocalToday(await folder(), NOW, "2026-04-17");
+    expect(today.calendar?.today).toBe("2026-04-17");
+    expect(marked(known(today.calendar))).toEqual(["2026-04-17"]);
+  });
+});
+
+// The calendar list is optional and the day never reads it, so a bad one must
+// not take the day down with it. The Week page has nothing else to show, so for
+// it the same file is still the error.
+describe("a calendar list that cannot be read", () => {
+  const BASE = "Your data as of Wednesday 15 April 09:05. A local copy: nothing you tap is saved.";
+
+  test("leaves the day standing, with no calendar, and says which file in the notice", async () => {
+    const today = await loadLocalToday(await folder({ "calendars.json": "{ not json" }), NOW, null);
+    expect(today.calendar).toBeNull();
+    expect(today.input.date).toBe(DAY);
+    expect(today.input.fixed.length).toBeGreaterThan(0);
+    expect(today.notice).toBe(`${BASE} calendars.json is not valid JSON.`);
+  });
+
+  test("names the file and the column, never a value or a path", async () => {
+    const dir = await folder({
+      "calendars.json": JSON.stringify([
+        { id: "cal-campus", label: "a-secret-name", color: "a-secret-colour" },
+      ]),
+    });
+    const today = await loadLocalToday(dir, NOW, null);
+    expect(today.calendar).toBeNull();
+    expect(today.notice?.startsWith(`${BASE} calendars.json `)).toBe(true);
+    expect(today.notice).toContain("color");
+    expect(today.notice).not.toContain("a-secret-name");
+    expect(today.notice).not.toContain("a-secret-colour");
+    expect(today.notice).not.toContain(dir);
+  });
+
+  test("still takes the day down when the events file is bad, which the day reads itself", async () => {
+    await expect(
+      loadLocalToday(await folder({ "calendar-events.json": "{ not json" }), NOW, null),
+    ).rejects.toThrow(LocalSnapshotError);
+  });
+
+  test("is still the error on the Week page, where the calendar is all there is", async () => {
+    await expect(
+      loadLocalWeek(await folder({ "calendars.json": "{ not json" }), NOW, null),
+    ).rejects.toThrow("calendars.json is not valid JSON.");
+  });
+});
+
 // The calendar's week links are plain links back to the page the pane is on, so
 // the page has to read `week`. Without this the Previous, Next and This week
 // links on the Today screen would be dead, and nothing on the screen would say
@@ -757,13 +872,27 @@ describe("the page hands the calendar the week it was asked for", () => {
   async function render(
     search: Record<string, string | string[]> = {},
   ): Promise<TodayScreenData> {
+    return (await element(search)).props.data;
+  }
+
+  /** The element the page's child returns: the screen, with its key and props. */
+  async function element(search: Record<string, string | string[]> = {}): Promise<{
+    key: string | null;
+    props: { data: TodayScreenData; keep?: Readonly<Record<string, string>> };
+  }> {
     const { default: TodayPage } = await import("@/app/v2/today/page");
     const outer = TodayPage({ searchParams: Promise.resolve(search) }) as unknown as {
-      type: (props: unknown) => Promise<{ props: { data: TodayScreenData } }>;
+      type: (props: unknown) => Promise<{
+        key: string | null;
+        props: { data: TodayScreenData; keep?: Readonly<Record<string, string>> };
+      }>;
       props: unknown;
     };
-    return (await outer.type(outer.props)).props.data;
+    return outer.type(outer.props);
   }
+
+  /** The day the page plans with no `date` parameter: the date in the zone. */
+  const plainDay = () => zonedDateKey(Date.now(), ZONE);
 
   async function local(overrides: Record<string, string | null> = {}) {
     vi.stubEnv("V2_FIXTURES", "");
@@ -816,6 +945,81 @@ describe("the page hands the calendar the week it was asked for", () => {
   test("shows the sample's own week with no parameter at all", async () => {
     sample();
     expect((await render()).calendar).toEqual(sampleWeek(null));
+  });
+
+  // One call into the folder, and the week asked for only when it is usable:
+  // otherwise the week of the day being SHOWN, which the `date` parameter may
+  // have moved. Reading the calendar a second time for the week used the clock's
+  // day instead, so `?date=X&week=junk` showed the week of now beside the day X.
+  test("shows the week of the day asked for when the week asked for is no use", async () => {
+    const asked = shiftDateKey(plainDay(), 10);
+    await local({
+      "snapshot.json": JSON.stringify({
+        ...SNAPSHOT,
+        calendarRange: { from: shiftDateKey(asked, -28), to: shiftDateKey(asked, 28) },
+      }),
+    });
+    const data = await render({ date: asked, week: "junk" });
+    expect(data.input.date).toBe(asked);
+    expect(data.calendar?.week).toEqual(weekOf(asked));
+    expect(data.calendar?.today).toBe(asked);
+  });
+
+  test("reads each calendar file once per request", async () => {
+    await local({ "calendars.json": JSON.stringify(CALENDAR_ROWS) });
+    const count = (name: string) =>
+      opened.files.filter((file) => path.basename(file) === name).length;
+    const searches: Array<Record<string, string>> = [
+      {},
+      { week: "2026-04-15" },
+      { week: "junk", date: plainDay() },
+    ];
+    for (const search of searches) {
+      opened.files.length = 0;
+      await render(search);
+      expect(count("calendar-events.json"), JSON.stringify(search)).toBe(1);
+      expect(count("calendars.json"), JSON.stringify(search)).toBe(1);
+    }
+  });
+
+  test("renders the day when the calendar list cannot be read, and says why", async () => {
+    await local({ "calendars.json": "{ not json" });
+    const data = await render();
+    expect(data.calendar).toBeNull();
+    expect(data.input.fixed).toBeDefined();
+    expect(data.notice).toContain("calendars.json is not valid JSON.");
+  });
+
+  // The screen's own state is a plan for one day. Keyed on that day, a page that
+  // now plans another (a week link from a moved day, or one pressed after the
+  // planning date rolled over) starts afresh instead of mixing the two.
+  test("keys the screen on the day it plans, in snapshot mode", async () => {
+    await local();
+    const tomorrow = shiftDateKey(plainDay(), 1);
+    const moved = await element({ date: tomorrow });
+    expect(moved.key).toBe(tomorrow);
+    const plain = await element();
+    expect(plain.key).toBe(plain.props.data.input.date);
+  });
+
+  test("keys the screen on the day it plans, in sample mode", async () => {
+    sample();
+    const shown = await element({ week: "2026-04-22" });
+    expect(shown.key).toBe(sampleDay().input.date);
+  });
+
+  // The week links lead back to this page. Without the `date` the page was
+  // given, a link from a moved day would plan the clock's day instead.
+  test("hands the week links a date the page really planned, and nothing else", async () => {
+    await local();
+    const tomorrow = shiftDateKey(plainDay(), 1);
+    expect((await element({ date: tomorrow })).props.keep).toEqual({ date: tomorrow });
+    expect((await element()).props.keep).toBeUndefined();
+    // A date the page ignored is not passed on as if it had been planned.
+    for (const date of ["junk", "2020-01-06", shiftDateKey(plainDay(), 30)]) {
+      expect((await element({ date })).props.keep, date).toBeUndefined();
+    }
+    expect((await element({ date: [tomorrow, tomorrow] })).props.keep).toBeUndefined();
   });
 });
 
@@ -880,7 +1084,7 @@ describe("it only ever reads, and only inside the folder", () => {
   test("leaves the folder exactly as it found it", async () => {
     const dir = await folder({ "calendars.json": JSON.stringify(CALENDAR_ROWS) });
     const before = (await readdir(dir)).sort();
-    await loadLocalCalendar(dir, NOW, null);
+    await loadLocalWeek(dir, NOW, null);
     expect((await readdir(dir)).sort()).toEqual(before);
   });
 

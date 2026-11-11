@@ -12,9 +12,10 @@
  *
  * SIZED BY ITS OWN WIDTH, NOT THE WINDOW'S. The pane is a container and its
  * three layouts are container queries on it: an agenda under 480px, the near
- * days from 480px, all seven from 760px. The same pane is one column beside
- * Today and the whole window on the Week page, so a media query would be wrong
- * in one place or the other.
+ * days from 480px, all seven from 760px, with no gap between them at a
+ * fractional width. The same pane is one column beside Today and the whole
+ * window on the Week page, so a media query would be wrong in one place or the
+ * other.
  *
  * QUIET, READ ONLY. Hour lines are hairlines that recede and the chips carry the
  * weight. Two places take the eye: the week label, and today's column (a quiet
@@ -540,6 +541,15 @@
   width: 100%;
 }
 
+/* The tooltip's carrier: empty, hidden from a screen reader, and laid over the
+   whole chip so a pointer anywhere on it finds the tooltip. Out of the flow, so
+   the wrap above never counts it as a line. */
+[data-v2-root] .v2-cal-col .v2-cal-chip > .v2-cal-chip-tip {
+  position: absolute;
+  inset: 0;
+  width: auto;
+}
+
 [data-v2-root] .v2-cal-col .v2-cal-chip-title {
   -webkit-line-clamp: 2;
   line-clamp: 2;
@@ -565,22 +575,24 @@
    which is what a size query reads: N lines of title (15px each) and the time
    (14px) need 15N + 14. So one line under 44px, two from 44 (the default
    above), three from 59, four from 74. No step lets a line be cut in half.
-   Under 29px there is no room for the time either, and the title is alone. */
-@container v2-chip (max-height: 43.98px) {
+   Under 29px there is no room for the time either, and the title is alone.
+   RANGE SYNTAX, because a height can be fractional: a step written as
+   "max-height: 43.98px" left a chip 43.99px tall in neither step. */
+@container v2-chip (height < 44px) {
   [data-v2-root] .v2-cal-col .v2-cal-chip-title {
     -webkit-line-clamp: 1;
     line-clamp: 1;
   }
 }
 
-@container v2-chip (min-height: 59px) {
+@container v2-chip (height >= 59px) {
   [data-v2-root] .v2-cal-col .v2-cal-chip-title {
     -webkit-line-clamp: 3;
     line-clamp: 3;
   }
 }
 
-@container v2-chip (min-height: 74px) {
+@container v2-chip (height >= 74px) {
   [data-v2-root] .v2-cal-col .v2-cal-chip-title {
     -webkit-line-clamp: 4;
     line-clamp: 4;
@@ -635,9 +647,14 @@
   white-space: nowrap;
 }
 
-/* ---- the pane's three layouts, by its own width ---- */
+/* ---- the pane's three layouts, by its own width ----
 
-@container v2-cal (min-width: 480px) {
+   RANGE SYNTAX, because a container's width can be fractional: written as
+   "max-width: 759.98px" and "min-width: 760px", a pane 759.99px wide was in
+   neither layout. Each threshold is one number, below it on one side and at or
+   above it on the other. */
+
+@container v2-cal (width >= 480px) {
   [data-v2-root] .v2-cal-agenda {
     display: none;
   }
@@ -647,15 +664,16 @@
   }
 }
 
-/* The near days: today and the two after it. The other days keep their column
-   lines at no width, and their columns, cells and bars are not drawn. */
-@container v2-cal (min-width: 480px) and (max-width: 759.98px) {
+/* The near days: three of them, from today (see `near` in the view). The other
+   days keep their column lines at no width, and their columns, cells and bars
+   are not drawn. */
+@container v2-cal (480px <= width < 760px) {
   [data-v2-root] .v2-cal-grid [data-near="no"] {
     display: none;
   }
 }
 
-@container v2-cal (min-width: 760px) {
+@container v2-cal (width >= 760px) {
   [data-v2-root] .v2-cal-grid {
     --v2-cal-tracks: var(--v2-cal-all);
   }
@@ -685,6 +703,13 @@
 
 [data-v2-root] .v2-week-main > .v2-cal {
   flex: 1;
+}
+
+/* What this data is: the notice Today shows under its date, here the one line
+   above the pane, at the pane's own spacing. */
+[data-v2-root] .v2-week-main > .v2-notice {
+  flex: none;
+  margin: 0 0 14px;
 }
 
 /* The framed tablet window: the root pads the page by 24px top and bottom. */

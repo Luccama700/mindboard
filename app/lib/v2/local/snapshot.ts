@@ -48,11 +48,16 @@ import type {
   PlannerRules,
 } from "@/app/lib/v2/types";
 import { clockLabel, dayLabel } from "@/app/lib/v2/view/format";
-import type { TaskTag, TodayScreenData } from "@/app/lib/v2/view/screen-data";
+import type {
+  CalendarScreenData,
+  TaskTag,
+  TodayScreenData,
+} from "@/app/lib/v2/view/screen-data";
 
-import { loadLocalCalendar } from "./calendar";
+import { localCalendarFrom, type FolderSoFar } from "./calendar";
 
 import {
+  LocalSnapshotError,
   isRealDateKey,
   readCalendarEvents,
   readGroupRows,
@@ -65,12 +70,6 @@ import {
 } from "./files";
 
 export { LocalSnapshotError, SNAPSHOT_FILES } from "./files";
-// The loopback speed bump is a leaf of its own now, because the gate
-// (app/lib/v2/source.ts) needs the same answer and this loader's callers have
-// always read it from here. Re-exported rather than moved outright, so there is
-// one function and nobody's import had to change; and read from the leaf rather
-// than from the gate, so this module never imports the module that imports it.
-export { isLoopbackHost } from "@/app/lib/v2/loopback";
 
 /** How far the `date` parameter may move the day, in either direction. */
 const DATE_PARAM_DAYS = 14;
@@ -245,12 +244,23 @@ function tagsFor(
   return tags;
 }
 
-/** One sentence: what this data is, and that nothing is saved. */
-function noticeFor(meta: SnapshotMeta, hasCalendar: boolean): string {
+/** What the notice adds when the folder holds no calendar file at all. */
+const NO_CALENDAR = "Calendar not included.";
+
+/**
+ * One sentence: what this data is, and that nothing is saved. Then, when the
+ * calendar is not on the screen, one more saying why: `calendarNote` is either
+ * NO_CALENDAR or the message of the file that could not be read, which names the
+ * file and never a value out of it (see LocalSnapshotError).
+ *
+ * Both pages build their notice here, so they cannot come to describe the same
+ * folder in two different ways.
+ */
+function noticeFor(meta: SnapshotMeta, calendarNote: string | null): string {
   const day = dayLabel(zonedDateKey(Date.parse(meta.takenAt), meta.timeZone));
   const when = `${day} ${clockLabel(meta.takenAt, meta.timeZone)}`;
   const notice = `Your data as of ${when}. A local copy: nothing you tap is saved.`;
-  return hasCalendar ? notice : `${notice} Calendar not included.`;
+  return calendarNote === null ? notice : `${notice} ${calendarNote}`;
 }
 
 /**
@@ -258,12 +268,24 @@ function noticeFor(meta: SnapshotMeta, hasCalendar: boolean): string {
  * floored to the whole second here, because sub-second precision is poison
  * downstream (see `wholeSecond`).
  *
+ * `weekParam` is the calendar's own `week` parameter. The calendar shows that
+ * week when it is one the folder can speak for, and otherwise the week of the
+ * PLANNED day, which the `date` parameter may have moved: a calendar showing a
+ * different week from the day next to it is worse than no calendar.
+ *
+ * Every file is read once. The calendar beside the day is built from the same
+ * reads, and only `calendars.json` is the calendar's own.
+ *
  * Throws only `LocalSnapshotError`, for a file that is missing or malformed.
+ * One file is the exception: `calendars.json` is optional and the day never
+ * reads it, so a bad one costs the day nothing. The day renders with no
+ * calendar and its notice names the file.
  */
 export async function loadLocalToday(
   dir: string,
   now: Instant,
   dateParam: string | null,
+  weekParam: string | null = null,
 ): Promise<TodayScreenData> {
   const meta = await readSnapshotMeta(dir);
   // The snapshot's zone wins over anything in the rules document, and the
@@ -327,13 +349,16 @@ export async function loadLocalToday(
     () => `energy-${date}`,
   );
 
-  // The week beside the day, from the same folder and the same clock. The
-  // PLANNED day is passed as the week asked for, not nothing: the `date`
-  // parameter can move the day into another week, and a calendar showing a
-  // different week from the day next to it is worse than no calendar. A week the
-  // folder cannot speak for falls back to the default week, which is exactly
-  // what the day does with the same parameter.
-  const calendar = await loadLocalCalendar(dir, at, date);
+  const beside =
+    calendarRows === null
+      ? { calendar: null, note: NO_CALENDAR }
+      : await calendarBeside(
+          dir,
+          { meta, planner, groups, rows: calendarRows },
+          at,
+          date,
+          weekParam,
+        );
 
   return {
     input,
@@ -346,7 +371,71 @@ export async function loadLocalToday(
     feedLabels: { ...document.feedLabels },
     openAsks: [ask],
     tags: tagsFor(candidates, tasks, groups),
-    notice: noticeFor(meta, calendarRows !== null),
-    calendar,
+    notice: noticeFor(meta, beside.note),
+    calendar: beside.calendar,
   };
+}
+
+/**
+ * The week beside the day, from the same reads and the same clock, with the
+ * PLANNED day as the day it wants (see `localCalendarFrom`).
+ *
+ * The one place a bad file does not take the day down: what can fail here is
+ * `calendars.json`, which the day never reads. It comes back as the sentence the
+ * notice adds instead, which is the error's own message: a literal file name
+ * and a fixed phrase. Anything else still throws.
+ */
+async function calendarBeside(
+  dir: string,
+  read: FolderSoFar,
+  at: Instant,
+  date: DateKey,
+  weekParam: string | null,
+): Promise<{ calendar: CalendarScreenData | null; note: string | null }> {
+  try {
+    return { calendar: await localCalendarFrom(dir, read, at, date, weekParam), note: null };
+  } catch (error) {
+    if (error instanceof LocalSnapshotError) return { calendar: null, note: error.message };
+    throw error;
+  }
+}
+
+/** What the Week page shows: the week, and the same notice Today gives. */
+export interface LocalWeek {
+  /** null when the folder holds no calendar file, which the page says in words. */
+  calendar: CalendarScreenData | null;
+  notice: string;
+}
+
+/**
+ * The Week page's data, from the folder: one week of calendar and the notice.
+ *
+ * The day marked today is the PLANNING date for `now`, the same day the Today
+ * screen plans for the same request, so the two pages agree on the column.
+ *
+ * Unlike Today, a bad calendar file is the page's error: the calendar is all
+ * this page has to show. Throws only `LocalSnapshotError`.
+ */
+export async function loadLocalWeek(
+  dir: string,
+  now: Instant,
+  weekParam: string | null,
+): Promise<LocalWeek> {
+  const meta = await readSnapshotMeta(dir);
+  const rows = await readCalendarEvents(dir);
+  if (rows === null) return { calendar: null, notice: noticeFor(meta, NO_CALENDAR) };
+
+  // The snapshot's zone wins over anything in the rules document, built in the
+  // one spelling where the two cannot disagree, exactly as the day is built.
+  const { planner } = await readRules(dir, meta.timeZone);
+  const groups = await readGroupRows(dir, meta.userId);
+  const at = wholeSecond(now);
+  const calendar = await localCalendarFrom(
+    dir,
+    { meta, planner, groups, rows },
+    at,
+    planningDate(at, planner),
+    weekParam,
+  );
+  return { calendar, notice: noticeFor(meta, null) };
 }

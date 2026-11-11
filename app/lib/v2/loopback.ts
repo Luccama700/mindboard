@@ -1,12 +1,12 @@
 // Does the Host header of this request name the machine the server runs on?
 //
-// A LEAF, AND THAT IS THE WHOLE POINT OF THE FILE. Two modules need this answer:
-// the gate (app/lib/v2/source.ts), which refuses a request that is not from this
-// machine, and the snapshot loader (app/lib/v2/local/snapshot.ts), whose callers
-// have always read it from there. With the function living in either of them,
-// the two imported each other, and a cycle held up by a comment is a trap for
-// whoever edits next. Here it is one function with no imports at all: nothing to
-// cycle with, and nothing server only pulled into anything that reads it.
+// A LEAF, AND THAT IS THE WHOLE POINT OF THE FILE. The gate
+// (app/lib/v2/source.ts) needs this answer to refuse a request that is not from
+// this machine. It used to live in the snapshot loader, and with it there the
+// gate and the loader imported each other, and a cycle held up by a comment is a
+// trap for whoever edits next. Here it is one function with no imports at all:
+// nothing to cycle with, and nothing server only pulled into anything that reads
+// it.
 
 /**
  * A SPEED BUMP, NOT A GATE, and the difference matters: a Host header is sent

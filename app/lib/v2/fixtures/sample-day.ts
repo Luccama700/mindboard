@@ -186,9 +186,10 @@ const FEED_LABELS: Record<string, string> = {
  *
  * It replaces the old fixed footer line. The screen no longer knows it is
  * looking at a sample: every source says what it is, so a real account is never
- * told its own day is invented.
+ * told its own day is invented. The Week page shows the same sentence, from here.
  */
-const NOTICE = "Sample day. Nothing here is connected and nothing you press is saved.";
+export const SAMPLE_NOTICE =
+  "Sample day. Nothing here is connected and nothing you press is saved.";
 
 /**
  * The sample day, as the one shape the Today screen takes from any source. A
@@ -225,7 +226,7 @@ export function sampleDay(): TodayScreenData {
     feedLabels: { ...FEED_LABELS },
     openAsks: [ask],
     tags: {},
-    notice: NOTICE,
+    notice: SAMPLE_NOTICE,
     // The week beside the day, built from the same fixed events and the same
     // rules (./sample-week.ts), so the two halves of the screen agree.
     calendar: sampleWeek(null),

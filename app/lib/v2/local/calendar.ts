@@ -22,25 +22,28 @@
 // It reads through the same door as the rest of the folder (./files.ts): one
 // read, every path built from the folder and a literal name, and no message ever
 // carrying a value out of a file.
+//
+// IT READS ONE FILE ITSELF, `calendars.json`. Everything else it needs, the
+// snapshot's description, the rules, the groups and the events, the two page
+// loaders in ./snapshot.ts have already read for their own reasons, and they hand
+// it over: reading them again here is how one request came to open the events
+// file three times.
 
 import { zonedDateKey } from "@/app/lib/snapshots/zoned-time";
 import { fromEngineEvent, type CalEvent } from "@/app/lib/v2/calendar/types";
 import { wholeSecond } from "@/app/lib/v2/engine/tick";
-import { dayDiff, maybeInstantMs, planningDate, shiftDateKey } from "@/app/lib/v2/plan/day";
-import type { DateKey, Instant } from "@/app/lib/v2/types";
+import { dayDiff, maybeInstantMs, shiftDateKey } from "@/app/lib/v2/plan/day";
+import type { DateKey, Instant, PlannerRules } from "@/app/lib/v2/types";
 import { normalizeHex } from "@/app/lib/v2/view/appearance";
 import { calendarScreenData, eventDays } from "@/app/lib/v2/view/calendar";
 import type { CalendarScreenData, ScreenCalendar } from "@/app/lib/v2/view/screen-data";
 
 import {
-  readCalendarEvents,
   readCalendars,
-  readGroupRows,
-  readRules,
-  readSnapshotMeta,
   type LocalCalendar,
   type LocalCalendarEvent,
   type LocalGroup,
+  type SnapshotMeta,
 } from "./files";
 
 /** What a calendar no group of this account is linked to is called. */
@@ -154,29 +157,42 @@ function rangeOfEvents(
 }
 
 /**
- * The snapshot's calendar for a week, or null when the folder has no events
- * file. Null is not an empty calendar: the screen says the calendar is not
- * included, and a week of empty columns would read as seven free days.
+ * What a page loader has already read from the folder when it asks for the week.
  *
- * `now` is the caller's clock and is floored to the whole second, as the day's
- * own loader floors it (see `wholeSecond`), so the two halves of the screen
- * agree about when now is.
- *
- * Throws only `LocalSnapshotError`, for a file that is missing or malformed.
+ * `rows` is `calendar-events.json`, present: a folder without one has no
+ * calendar at all, and the loader says so without coming here.
  */
-export async function loadLocalCalendar(
-  dir: string,
-  now: Instant,
-  weekParam: string | null,
-): Promise<CalendarScreenData | null> {
-  const rows = await readCalendarEvents(dir);
-  if (rows === null) return null;
+export interface FolderSoFar {
+  meta: SnapshotMeta;
+  /** Built in the snapshot's own zone, exactly as the day is built. */
+  planner: PlannerRules;
+  /** This account's groups, already scoped at the door. */
+  groups: readonly LocalGroup[];
+  rows: readonly LocalCalendarEvent[];
+}
 
-  const meta = await readSnapshotMeta(dir);
-  // The snapshot's zone wins over anything in the rules document, built in the
-  // one spelling where the two cannot disagree, exactly as the day is built.
-  const { planner } = await readRules(dir, meta.timeZone);
-  const [listed, groups] = await Promise.all([readCalendars(dir), readGroupRows(dir, meta.userId)]);
+/**
+ * The snapshot's calendar for a week, from what the caller has read so far.
+ *
+ * `wanted` is the PLANNING date, the day the Today screen plans for the same
+ * request: it is the day marked today, and the day whose week is shown when
+ * `weekParam` is no use. The caller works it out, because it is the caller that
+ * knows whether a `date` parameter moved the day.
+ *
+ * `now` is floored to the whole second, as the day's own loader floors it (see
+ * `wholeSecond`), so the two halves of the screen agree about when now is.
+ *
+ * Throws only `LocalSnapshotError`, for a `calendars.json` that is malformed.
+ */
+export async function localCalendarFrom(
+  dir: string,
+  read: FolderSoFar,
+  now: Instant,
+  wanted: DateKey,
+  weekParam: string | null,
+): Promise<CalendarScreenData> {
+  const { meta, planner, groups, rows } = read;
+  const listed = await readCalendars(dir);
 
   const zone = planner.timeZone;
   const calendars: ScreenCalendar[] =
@@ -200,15 +216,14 @@ export async function loadLocalCalendar(
     }),
   );
 
-  const at = wholeSecond(now);
   return calendarScreenData({
     timeZone: zone,
-    now: at,
+    now: wholeSecond(now),
     rules: planner,
     events,
     calendars,
     range: meta.calendarRange ?? rangeOfEvents(events, zone),
-    wanted: planningDate(at, planner),
+    wanted,
     weekParam,
   });
 }

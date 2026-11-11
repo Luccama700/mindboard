@@ -382,8 +382,6 @@ export const TODAY_COPY = {
   // looking at a sample and the sample still says so.
   navLabel: "Main",
   nav: NAV,
-  /** The same four, in the order the rail shows them. */
-  navItems: [NAV.today, NAV.week, NAV.quests, NAV.money],
   feedState: {
     alive: "Alive",
     late: "Late",

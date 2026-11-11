@@ -15,6 +15,7 @@
 import { describe, expect, test } from "vitest";
 
 import { weekOf } from "@/app/lib/v2/calendar/grid";
+import { SAMPLE_ZONE } from "@/app/lib/v2/fixtures/sample-base";
 import { sampleDay } from "@/app/lib/v2/fixtures/sample-day";
 import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
 import { buildCalendarView } from "@/app/lib/v2/view/calendar";
@@ -51,8 +52,18 @@ describe("the sample week is the sample day's own week", () => {
   });
 
   test("spans the hours the sample day's rules span", () => {
-    // 07:30 wake, 08:30 before which nothing the planner owns starts, 23:30 out.
-    expect(week().dayWindow).toEqual({ fromMinute: 510, toMinute: 1410 });
+    // From the 07:30 wake to lights out at 23:30. Not from 08:30, before which
+    // nothing the planner owns starts: the day has begun by then.
+    expect(week().dayWindow).toEqual({ fromMinute: 450, toMinute: 1410 });
+  });
+
+  // The day marked today is the day the sample plans, and the sample's Today
+  // and Week pages agree on it whatever week is shown.
+  test("marks the sample day as today, on every week it shows", () => {
+    const planned = sampleDay().input.date;
+    expect(week().today).toBe(planned);
+    expect(sampleDay().calendar?.today).toBe(planned);
+    expect(sampleWeek("2026-04-22").today).toBe(planned);
   });
 
   test("is what the sample day hands the screen", () => {
@@ -254,9 +265,8 @@ describe("the copy rules", () => {
   });
 
   test("is invented, not anybody's", () => {
-    const everywhere = everything.join("|");
-    expect(week().timeZone).not.toBe("America/Vancouver");
-    expect(everywhere).not.toContain("Vancouver");
-    expect(everywhere).not.toContain("@");
+    // The sample's own zone, read from the sample's own constant.
+    expect(week().timeZone).toBe(SAMPLE_ZONE);
+    expect(everything.join("|")).not.toContain("@");
   });
 });

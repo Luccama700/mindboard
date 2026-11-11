@@ -21,6 +21,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { TodayClient } from "@/app/v2/today/today-client";
 import { planReference } from "@/app/lib/v2/plan/day";
 import { planDay } from "@/app/lib/v2/plan/planner";
+import { SAMPLE_ZONE } from "@/app/lib/v2/fixtures/sample-base";
 import { fixturesEnabled, sampleDay } from "@/app/lib/v2/fixtures/sample-day";
 import { sampleWeek } from "@/app/lib/v2/fixtures/sample-week";
 import { CALENDAR_COPY, buildCalendarView } from "@/app/lib/v2/view/calendar";
@@ -116,7 +117,8 @@ describe("the sample day is a real plan input", () => {
 
   test("runs in a zone of its own, never the owner's", () => {
     const { input } = sampleDay();
-    expect(input.rules.timeZone).not.toBe("America/Vancouver");
+    // The sample's own invented zone, read from the sample's own constant.
+    expect(input.rules.timeZone).toBe(SAMPLE_ZONE);
     expect(() => new Intl.DateTimeFormat("en-US", { timeZone: input.rules.timeZone })).not.toThrow();
   });
 

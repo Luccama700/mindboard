@@ -17,13 +17,8 @@ import path from "node:path";
 import ts from "typescript";
 import { describe, expect, test, vi } from "vitest";
 
-import {
-  isLoopbackHost,
-  requireLoopback,
-  screenSource,
-  type ScreenSource,
-} from "@/app/lib/v2/source";
-import { isLoopbackHost as reExported } from "@/app/lib/v2/local/snapshot";
+import { isLoopbackHost } from "@/app/lib/v2/loopback";
+import { requireLoopback, screenSource, type ScreenSource } from "@/app/lib/v2/source";
 
 // There is no request in a test, so the one header the gate reads is stood in
 // for. `sentHost` is what the client claimed to have asked for, and `asked`
@@ -161,13 +156,9 @@ describe("requireLoopback", () => {
   });
 });
 
-// The function moved here from the snapshot loader, which re-exports it so the
-// loader's own callers did not have to change. One function, not two.
+// The function lives in a leaf of its own (app/lib/v2/loopback.ts), which the
+// gate reads. One function, not two.
 describe("isLoopbackHost", () => {
-  test("is the very same function the snapshot loader exports", () => {
-    expect(reExported).toBe(isLoopbackHost);
-  });
-
   test("knows the three spellings, with or without a port", () => {
     for (const host of [
       "localhost",
@@ -2078,10 +2069,11 @@ describe("the calendar engine's boundary", () => {
 describe("no import cycles", () => {
   const imports = (file: string) => specifiersOf(file, sourceOf(file));
 
-  test("the loopback check is a leaf, and both sides read it from there", () => {
+  // The snapshot loader used to re-export it as well, for callers nobody had any
+  // more but tests. It no longer imports it at all, so the gate is the one side.
+  test("the loopback check is a leaf, and the gate reads it from there", () => {
     expect(imports("app/lib/v2/loopback.ts")).toEqual([]);
     expect(imports("app/lib/v2/source.ts")).toContain("@/app/lib/v2/loopback");
-    expect(imports("app/lib/v2/local/snapshot.ts")).toContain("@/app/lib/v2/loopback");
   });
 
   test("the gate reads the folder's rules and the folder never reads the gate", () => {

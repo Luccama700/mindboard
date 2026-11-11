@@ -23,13 +23,26 @@ const NONE: readonly PlannedBlock[] = [];
  *
  * The page's h1 is read, not seen: it names the page with the rail's own word
  * for it, so the heading order is h1, then the pane's h2, as on Today.
+ *
+ * WHAT THIS DATA IS comes first, as one quiet line: the source's own notice,
+ * the same sentence Today shows under its date (a sample, or a local copy as of
+ * a time). Above the pane rather than inside it, so the pane stays the one
+ * component both pages draw.
  */
-export function WeekClient({ calendar }: { calendar: CalendarScreenData | null }) {
+export function WeekClient({
+  calendar,
+  notice,
+}: {
+  calendar: CalendarScreenData | null;
+  /** One plain sentence saying what this data is, or null. */
+  notice: string | null;
+}) {
   return (
     <div className="v2-week">
       <NavBar current="/v2/week" />
       <main className="v2-week-main">
         <h1 className="v2-hidden">{TODAY_COPY.nav.week}</h1>
+        {notice !== null && <p className="v2-notice">{notice}</p>}
         {calendar === null ? (
           <p className="v2-empty">{CALENDAR_COPY.noCalendar}</p>
         ) : (

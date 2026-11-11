@@ -47,10 +47,10 @@
 //
 // WHICH WAY THE IMPORTS RUN. This module reads `localSnapshotDir` from the
 // snapshot loader, where the rest of the folder's rules live, and the loader
-// never reads anything from here. The loopback check that both of them need is a
-// leaf of its own (./loopback.ts), re-exported from both, because when it lived
-// in either the two imported each other, and a cycle held up by a comment is a
-// trap for whoever edits next. A test pins the direction.
+// never reads anything from here. The loopback check is a leaf of its own
+// (./loopback.ts), because when it lived in either of the two they imported each
+// other, and a cycle held up by a comment is a trap for whoever edits next. A
+// test pins the direction.
 
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
@@ -58,9 +58,6 @@ import { notFound } from "next/navigation";
 import { fixturesEnabled } from "@/app/lib/v2/fixtures/sample-day";
 import { localSnapshotDir } from "@/app/lib/v2/local/snapshot";
 import { isLoopbackHost } from "@/app/lib/v2/loopback";
-
-// Re-exported so the gate is still one import for a caller that needs both.
-export { isLoopbackHost };
 
 /** Where a v2 page's data comes from. There is no third one on this branch. */
 export type ScreenSource = { kind: "sample" } | { kind: "local"; dir: string };

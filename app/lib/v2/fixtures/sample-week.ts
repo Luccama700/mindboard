@@ -105,7 +105,8 @@ function fromFixed(fixed: OnCalendar, timeZone: string, writable: boolean): CalE
     etag: null,
     editable: writable,
     // Nothing on the sample day is one occurrence of a series. The week has one
-    // of its own, below, so the pane's repeating mark has something to sit on.
+    // of its own, below. Nothing draws the flag in this read only stage: it is
+    // carried for the editing stage, which needs it.
     recurring: false,
   };
 }

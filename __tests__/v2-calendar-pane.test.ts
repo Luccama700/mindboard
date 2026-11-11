@@ -237,15 +237,34 @@ describe("the pane reads in order", () => {
     );
   });
 
-  // A list item takes its name from `title`, so a tooltip on a chip that shows
-  // all its words makes a screen reader say the chip twice. Only the grid's
-  // chips clip, so only they carry one.
+  // Only the grid's chips clip, so only they carry a tooltip, and it is on a
+  // child the accessibility tree never sees: a `title` on the list item made a
+  // screen reader say the chip twice, its words and then the tooltip.
   test("gives a tooltip to a chip in the grid, which clips, and not in the agenda", () => {
     paneOf();
-    expect(chipTitled(gridDay("Wednesday 15 April"), "Morning seminar").title).toBe(
-      "Morning seminar\n09:00 to 10:15\nCampus\nHall B",
+    const tip = chipTitled(gridDay("Wednesday 15 April"), "Morning seminar").querySelector(
+      ".v2-cal-chip-tip",
     );
-    for (const chip of chipsIn(agenda())) expect(chip.hasAttribute("title")).toBe(false);
+    expect(tip?.getAttribute("title")).toBe("Morning seminar\n09:00 to 10:15\nCampus\nHall B");
+    for (const chip of chipsIn(agenda())) expect(chip.querySelector("[title]")).toBeNull();
+  });
+
+  test("puts no tooltip on any list item, so nothing is named twice", () => {
+    const { container } = paneOf();
+    expect(container.querySelectorAll("li").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll("li[title]")).toHaveLength(0);
+    const chips = chipsIn(grid());
+    expect(chips.length).toBeGreaterThan(0);
+    for (const chip of chips) {
+      const hidden = Array.from(chip.children).filter(
+        (child) => child.getAttribute("aria-hidden") === "true",
+      );
+      expect(hidden, titleOf(chip)).toHaveLength(1);
+      expect(hidden[0].getAttribute("title"), titleOf(chip)).toBeTruthy();
+      // Empty, so it adds nothing to what the chip says.
+      expect(hidden[0].textContent).toBe("");
+      expect(chip.querySelectorAll("[title]"), titleOf(chip)).toHaveLength(1);
+    }
   });
 
   test("reads a planned chip as Planned where a calendar would be named", () => {
@@ -522,6 +541,54 @@ describe("the week links", () => {
     expect(region().textContent).toContain("20 to 26 April");
     expect(gridDay("Monday 20 April").textContent).toContain("Print shop shift");
   });
+
+  // A week link leads back to the page it is on, and a page that was given a
+  // `date` plans that day: a link that dropped it planned another day instead.
+  test("carry the other parameters the page was given, after the week", () => {
+    render(
+      createElement(CalendarPane, {
+        data: sampleWeek("2026-04-22"),
+        planned: [],
+        basePath: "/v2/today",
+        keep: { date: "2026-04-17" },
+      }),
+    );
+    expect(hrefs()).toEqual([
+      [CALENDAR_COPY.previous, "/v2/today?week=2026-04-13&date=2026-04-17"],
+      [CALENDAR_COPY.thisWeek, "/v2/today?week=2026-04-13&date=2026-04-17"],
+    ]);
+  });
+
+  test("encode a kept value that needs it, so it comes back exactly", () => {
+    const odd = "a b&c=d#e/f?g";
+    render(
+      createElement(CalendarPane, {
+        data: sampleWeek(null),
+        planned: [],
+        basePath: "/v2/today",
+        keep: { date: odd },
+      }),
+    );
+    const href = document.querySelector(".v2-cal a")?.getAttribute("href") ?? "";
+    for (const raw of [" ", "#", "&c", "=d", "?g"]) expect(href).not.toContain(raw);
+    const url = new URL(href, "http://127.0.0.1");
+    expect(url.pathname).toBe("/v2/today");
+    expect([...url.searchParams.keys()]).toEqual(["week", "date"]);
+    expect(url.searchParams.get("week")).toBe("2026-04-20");
+    expect(url.searchParams.get("date")).toBe(odd);
+  });
+
+  test("carry nothing but the week when there is nothing to keep", () => {
+    render(createElement(TodayClient, { data: sampleDay() }));
+    expect(hrefs()).toEqual([[CALENDAR_COPY.next, "/v2/today?week=2026-04-20"]]);
+  });
+
+  test("on Today, carry the date the page planned", () => {
+    render(createElement(TodayClient, { data: sampleDay(), keep: { date: WEDNESDAY } }));
+    expect(hrefs()).toEqual([
+      [CALENDAR_COPY.next, `/v2/today?week=2026-04-20&date=${WEDNESDAY}`],
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -569,6 +636,10 @@ describe("the pane on Today", () => {
       .filter((chip) => chip.getAttribute("data-kind") === "planned")
       .map(titleOf)
       .sort();
+
+  /** The screen as the page renders it: keyed on the day it plans. */
+  const screenOf = (data: TodayScreenData) =>
+    createElement(TodayClient, { key: data.input.date, data });
 
   const press = async (name: string) => {
     const button = screen.getByRole("button", { name });
@@ -622,15 +693,18 @@ describe("the pane on Today", () => {
   // What a week link does to Today: the page re-renders with the calendar of
   // another week and the same client component gets the new data. The day's
   // presses live in that component's state, so they have to survive it.
+  //
+  // The page keys the screen on the day it plans (`key={data.input.date}`), so
+  // the keys below are the ones the page would give: the same day here.
   test("keeps the day's presses when the calendar beside it changes week", async () => {
     const data = sampleDay();
-    const { rerender } = render(createElement(TodayClient, { data }));
+    const { rerender } = render(screenOf(data));
     await press(TODAY_COPY.notToday);
     const said = document.querySelector('[role="status"]')?.textContent ?? "";
     const planned = drawnPlanned();
     expect(said).toContain(TODAY_COPY.acted.skipped);
 
-    rerender(createElement(TodayClient, { data: { ...data, calendar: sampleWeek("2026-04-22") } }));
+    rerender(screenOf({ ...data, calendar: sampleWeek("2026-04-22") }));
 
     expect(document.querySelector('[role="status"]')?.textContent).toBe(said);
     expect(screen.getByRole("region", { name: CALENDAR_NAME }).textContent).toContain(
@@ -639,8 +713,29 @@ describe("the pane on Today", () => {
     // The blocks are today's, and today is not in that week: nothing to draw.
     expect(drawnPlanned()).toEqual([]);
 
-    rerender(createElement(TodayClient, { data }));
+    rerender(screenOf(data));
     expect(drawnPlanned()).toEqual(planned);
+  });
+
+  // A page that now plans ANOTHER day hands the screen another key, and the
+  // presses made on the first day go with it. Kept, they were a plan for one day
+  // drawn beside the header and the replans of another.
+  test("starts afresh when the page plans another day", async () => {
+    const dayA = sampleDay();
+    const dayB: TodayScreenData = { ...dayA, input: { ...dayA.input, date: THURSDAY } };
+    const status = () => document.querySelector('[role="status"]')?.textContent ?? "";
+
+    const { rerender } = render(screenOf(dayA));
+    await press(TODAY_COPY.notToday);
+    expect(status()).toContain(TODAY_COPY.acted.skipped);
+
+    rerender(screenOf(dayB));
+    expect(status()).not.toContain(TODAY_COPY.acted.skipped);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Thursday 16 April");
+    // The line and the calendar are Thursday's own plan, with nothing skipped.
+    const fresh = planDay(dayB.input);
+    expect(fresh.blocks.every((block) => block.state === "planned")).toBe(true);
+    expect(drawnPlanned()).toEqual(expectedPlanned(dayB, fresh).titles);
   });
 
   test("draws no pane at all when the source has no calendar", () => {
@@ -673,7 +768,12 @@ describe("the rail", () => {
       { text: "Quests", tag: "BUTTON", href: null, current: null, disabled: true },
       { text: "Money", tag: "BUTTON", href: null, current: null, disabled: true },
     ]);
-    expect(TODAY_COPY.navItems).toEqual(["Today", "Week", "Quests", "Money"]);
+    expect(TODAY_COPY.nav).toEqual({
+      today: "Today",
+      week: "Week",
+      quests: "Quests",
+      money: "Money",
+    });
   });
 
   test("marks Week when it is on the Week page", () => {
@@ -682,13 +782,17 @@ describe("the rail", () => {
     expect(current.map((item) => item.text)).toEqual(["Week"]);
   });
 
-  // The rail and the Week page's heading read the four by name, and the list
-  // the rail shows is built from the same names, so the two cannot drift.
+  // The rail and the Week page's heading read the four by name, so the two
+  // cannot drift.
   test("names its four destinations, and lists them in the rail's order", () => {
     const { nav } = TODAY_COPY;
-    expect(TODAY_COPY.navItems).toEqual([nav.today, nav.week, nav.quests, nav.money]);
     render(createElement(NavBar, { current: "/v2/today" }));
-    expect(items().map((item) => item.text)).toEqual([...TODAY_COPY.navItems]);
+    expect(items().map((item) => item.text)).toEqual([
+      nav.today,
+      nav.week,
+      nav.quests,
+      nav.money,
+    ]);
   });
 
   // A working link and a placeholder that does nothing used to look the same.
@@ -741,12 +845,99 @@ describe("calendar.css", () => {
     return found;
   }
 
-  const AT_480 = "@container v2-cal (min-width: 480px)";
-  const AT_3_DAYS = "@container v2-cal (min-width: 480px) and (max-width: 759.98px)";
-  const AT_760 = "@container v2-cal (min-width: 760px)";
+  /**
+   * A container query's condition as a test on one size, read the way a browser
+   * reads it: the `min-`/`max-` spelling and the range spelling both, parts
+   * joined by `and`. So what is pinned below is where each threshold is and
+   * which side of it a layout takes, never how the stylesheet spells it, and a
+   * gap at a fractional size fails whichever spelling leaves it.
+   */
+  function sizeTest(condition: string, feature: string): (size: number) => boolean {
+    const px = (text: string) => {
+      const length = /^([\d.]+)px$/.exec(text.trim());
+      if (length === null) throw new Error(`not a length in px: ${text}`);
+      return Number(length[1]);
+    };
+    const holds = (op: string, a: number, b: number) => {
+      if (op === "<") return a < b;
+      if (op === "<=") return a <= b;
+      if (op === ">") return a > b;
+      if (op === ">=") return a >= b;
+      throw new Error(`not a comparison: ${op}`);
+    };
+    const named = (name: string) => {
+      if (name !== feature) throw new Error(`a query on ${name}, not ${feature}`);
+    };
+    const parts = condition
+      .trim()
+      .split(/\)\s+and\s+\(/)
+      .map((part) => part.replace(/^\(/, "").replace(/\)$/, "").trim());
+    const tests = parts.map((part): ((size: number) => boolean) => {
+      const legacy = /^(min|max)-([a-z]+):\s*(\S+)$/.exec(part);
+      if (legacy !== null) {
+        named(legacy[2]);
+        const limit = px(legacy[3]);
+        return legacy[1] === "min" ? (size) => size >= limit : (size) => size <= limit;
+      }
+      const between = /^(\S+)\s*(<=?|>=?)\s*([a-z]+)\s*(<=?|>=?)\s*(\S+)$/.exec(part);
+      if (between !== null) {
+        named(between[3]);
+        const [low, high] = [px(between[1]), px(between[5])];
+        return (size) => holds(between[2], low, size) && holds(between[4], size, high);
+      }
+      const one = /^([a-z]+)\s*(<=?|>=?)\s*(\S+)$/.exec(part);
+      if (one !== null) {
+        named(one[1]);
+        const limit = px(one[3]);
+        return (size) => holds(one[2], size, limit);
+      }
+      throw new Error(`a condition this test cannot read: ${part}`);
+    });
+    return (size) => tests.every((test) => test(size));
+  }
 
-  test("parses", () => {
-    expect(sheet.nodes.length).toBeGreaterThan(0);
+  /**
+   * Every value a container query of `container` gives one selector's property,
+   * in the stylesheet's order, each with the test on the size it applies at.
+   */
+  function queried(container: string, feature: string, selector: string, prop: string) {
+    const found: Array<{ holds: (size: number) => boolean; value: string }> = [];
+    sheet.walkAtRules("container", (at) => {
+      const head = /^([\w-]+)\s+(\(.*\))$/.exec(at.params.trim());
+      if (head === null || head[1] !== container) return;
+      const holds = sizeTest(head[2], feature);
+      at.walkRules((rule) => {
+        if (!rule.selectors.map((one) => one.trim()).includes(`[data-v2-root] ${selector}`)) return;
+        rule.walkDecls(prop, (decl) => {
+          found.push({ holds, value: decl.value });
+        });
+      });
+    });
+    return found;
+  }
+
+  /** Every size, in hundredths of a pixel, where `actual` and `expected` part. */
+  function misses(
+    from: number,
+    to: number,
+    actual: (size: number) => unknown,
+    expected: (size: number) => unknown,
+  ): number[] {
+    const found: number[] = [];
+    for (let hundredths = from * 100; hundredths <= to * 100; hundredths += 1) {
+      const size = hundredths / 100;
+      if (actual(size) !== expected(size)) found.push(size);
+    }
+    return found;
+  }
+
+  test("reads every spelling of a size query the same way", () => {
+    const legacy = sizeTest("(min-width: 480px) and (max-width: 759.98px)", "width");
+    const range = sizeTest("(480px <= width < 760px)", "width");
+    expect([479.99, 480, 759.98, 759.99, 760].map(legacy)).toEqual([false, true, true, false, false]);
+    expect([479.99, 480, 759.98, 759.99, 760].map(range)).toEqual([false, true, true, true, false]);
+    expect(sizeTest("(height < 44px)", "height")(43.99)).toBe(true);
+    expect(sizeTest("(height >= 59px)", "height")(58.99)).toBe(false);
   });
 
   test("sizes the pane by its own width: a named inline size container", () => {
@@ -762,20 +953,31 @@ describe("calendar.css", () => {
     });
   });
 
+  // At every width to the hundredth of a pixel, because a container's width can
+  // be fractional: a pane 759.99px wide was once in neither layout.
   test("is an agenda under 480, and the grid from there, never both", () => {
     expect(declOf(".v2-cal-grid", "display")).toBe("none");
     expect(declOf(".v2-cal-agenda", "display")).not.toBe("none");
-    expect(declOf(".v2-cal-agenda", "display", AT_480)).toBe("none");
-    expect(declOf(".v2-cal-grid", "display", AT_480)).toBe("flex");
+    const agendaOff = queried("v2-cal", "width", ".v2-cal-agenda", "display");
+    const gridOn = queried("v2-cal", "width", ".v2-cal-grid", "display");
+    expect(agendaOff.map((one) => one.value)).toEqual(["none"]);
+    expect(gridOn.map((one) => one.value)).toEqual(["flex"]);
+    expect(misses(0, 1200, agendaOff[0].holds, (width) => width >= 480)).toEqual([]);
+    expect(misses(0, 1200, gridOn[0].holds, (width) => width >= 480)).toEqual([]);
   });
 
-  test("shows only the near days from 480, and all seven from 760", () => {
+  test("shows only the near days from 480, and all seven from 760, with no width in neither", () => {
     expect(declOf(".v2-cal-grid", "--v2-cal-tracks")).toBe("var(--v2-cal-near)");
-    expect(declOf('.v2-cal-grid [data-near="no"]', "display", AT_3_DAYS)).toBe("none");
-    expect(declOf(".v2-cal-grid", "--v2-cal-tracks", AT_760)).toBe("var(--v2-cal-all)");
-    // The near-only rule must not reach past 760.
-    expect(declOf('.v2-cal-grid [data-near="no"]', "display", AT_480)).toBeNull();
+    // The near-only rule is a query's alone, never the default.
     expect(declOf('.v2-cal-grid [data-near="no"]', "display")).toBeNull();
+    const nearOnly = queried("v2-cal", "width", '.v2-cal-grid [data-near="no"]', "display");
+    const allSeven = queried("v2-cal", "width", ".v2-cal-grid", "--v2-cal-tracks");
+    expect(nearOnly.map((one) => one.value)).toEqual(["none"]);
+    expect(allSeven.map((one) => one.value)).toEqual(["var(--v2-cal-all)"]);
+    expect(
+      misses(0, 1200, nearOnly[0].holds, (width) => width >= 480 && width < 760),
+    ).toEqual([]);
+    expect(misses(0, 1200, allSeven[0].holds, (width) => width >= 760)).toEqual([]);
   });
 
   test("never lets an hour be shorter than 28px, and scrolls inside the pane", () => {
@@ -832,8 +1034,9 @@ describe("calendar.css", () => {
   // and a title cut to two words is no use. The title takes the chip's height
   // first, as many lines as fit with the time still whole under it, up to four;
   // the calendar and the place get whatever whole lines are left. Worked out
-  // from the stylesheet's own line heights, at every half pixel, so a step that
-  // let a line be cut in half, or kept a line the chip had room for, fails.
+  // from the stylesheet's own line heights, at every hundredth of a pixel, so a
+  // step that let a line be cut in half, kept a line the chip had room for, or
+  // left a fractional height in no step at all, fails.
   test("gives the title as many lines as fit with the time under it, up to four", () => {
     const px = (value: string | null) => Number.parseFloat(value ?? "NaN");
     const title = px(declOf(".v2-cal-col .v2-cal-chip-title", "line-height"));
@@ -843,31 +1046,16 @@ describe("calendar.css", () => {
     const base = Number(declOf(".v2-cal-col .v2-cal-chip-title", "line-clamp"));
     expect([title, line, base]).toEqual([15, 14, 2]);
 
-    const steps: Array<{ kind: string; limit: number; lines: number }> = [];
-    sheet.walkAtRules("container", (at) => {
-      const match = /^v2-chip \((min|max)-height: ([\d.]+)px\)$/.exec(at.params);
-      if (match === null) return;
-      let lines = Number.NaN;
-      at.walkDecls("line-clamp", (decl) => {
-        lines = Number(decl.value);
-      });
-      steps.push({ kind: match[1], limit: Number(match[2]), lines });
-    });
+    const steps = queried("v2-chip", "height", ".v2-cal-col .v2-cal-chip-title", "line-clamp");
     expect(steps.length).toBeGreaterThanOrEqual(3);
 
     // What a size query reads is the chip's content box, which is `height` here.
+    // The last step that holds wins, as the later rule does in the cascade.
     const linesAt = (height: number) =>
-      steps.reduce(
-        (lines, step) =>
-          (step.kind === "min" ? height >= step.limit : height <= step.limit)
-            ? step.lines
-            : lines,
-        base,
-      );
-    for (let height = 8; height <= 160; height += 0.5) {
-      const expected = Math.min(4, Math.max(1, Math.floor((height - line) / title)));
-      expect(linesAt(height), `${height}px`).toBe(expected);
-    }
+      steps.reduce((lines, step) => (step.holds(height) ? Number(step.value) : lines), base);
+    const fit = (height: number) =>
+      Math.min(4, Math.max(1, Math.floor((height - line) / title)));
+    expect(misses(8, 160, linesAt, fit)).toEqual([]);
     // The agenda shows a chip whole, so it keeps its own three lines.
     expect(declOf(".v2-cal-chip-title", "line-clamp")).toBe("3");
   });
