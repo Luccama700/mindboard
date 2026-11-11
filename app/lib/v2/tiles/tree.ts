@@ -35,12 +35,17 @@ import type {
   Zone,
 } from "./types";
 
-/** The narrowest and widest share a split may store. */
-const RATIO_MIN = 0.05;
-const RATIO_MAX = 0.95;
+/**
+ * The narrowest and widest share a split may store. Exported because the store
+ * holds a remembered ratio to the same range and there must be one definition
+ * of it: two copies drifting apart would put a value in storage that a load
+ * then changes, which is the one thing the round trip cannot survive.
+ */
+export const RATIO_MIN = 0.05;
+export const RATIO_MAX = 0.95;
 
 /** What a fresh split takes, and what `equalize` sets. */
-const EVEN_RATIO = 0.5;
+export const EVEN_RATIO = 0.5;
 
 /**
  * How much wider than tall the largest leaf has to be before a pane with no
@@ -59,7 +64,8 @@ function clamp(value: number, low: number, high: number): number {
   return Math.max(low, Math.min(high, value));
 }
 
-function normalizeRatio(value: number): number {
+/** A share held inside the range a split may store. */
+export function normalizeRatio(value: number): number {
   return Number.isFinite(value) ? clamp(value, RATIO_MIN, RATIO_MAX) : EVEN_RATIO;
 }
 
@@ -124,10 +130,29 @@ export function signature(node: TileNode | null): string {
 
 const ID_SHAPE = /^[ls][0-9]+$/;
 
+/**
+ * The largest number an id may carry, and the reason it is nothing like
+ * Number.MAX_SAFE_INTEGER.
+ *
+ * Ids are a function of the tree, so the next one is read off the largest
+ * already in it. That only works while every id in the tree can be READ. A
+ * hand edited `l9007199254740991` used to pass as sound; the next move then
+ * minted `...992`, which no longer parses as a safe integer, so the move after
+ * that read the largest number as zero and minted `...992` a second time. Two
+ * nodes with one id are rewritten together by `mapNode`, which corrupts the
+ * tree.
+ *
+ * A billion is eight orders of magnitude past anything the engine can reach
+ * (one move mints one id) and far enough below the safe integer ceiling that
+ * arithmetic on it is exact. Anything above it is not a sound id, so the store
+ * renumbers the whole tree on load instead of trusting it.
+ */
+const MAX_ID_NUMBER = 1_000_000_000;
+
 function idNumber(id: string): number | null {
   if (!ID_SHAPE.test(id)) return null;
   const parsed = Number.parseInt(id.slice(1), 10);
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  return Number.isSafeInteger(parsed) && parsed <= MAX_ID_NUMBER ? parsed : null;
 }
 
 function highestIdNumber(node: TileNode | null): number {
@@ -242,6 +267,84 @@ function mapNode(
   return { kind: "split", id: node.id, dir: node.dir, ratio: node.ratio, first, second };
 }
 
+function withActiveTab(tree: TileNode, leafId: string, pane: PaneId): TileNode {
+  return mapNode(tree, leafId, (found) =>
+    found.kind === "leaf"
+      ? { kind: "leaf", id: found.id, tabs: [...found.tabs], active: pane }
+      : found,
+  );
+}
+
+// ------------------------------------------------- what is focused can be seen
+
+/**
+ * BEHAVIOUR 18, IN ONE PLACE. The first review of this engine found four
+ * operations that could each leave `focus` on a pane nobody could see: behind
+ * another tab of its own leaf, or in a leaf that a maximized pane had covered
+ * over. Four separate patches would have been four chances to miss the fifth,
+ * so the rule is enforced once, here, and every operation's result passes
+ * through it:
+ *
+ *   `focus`, when it is not null, is the active tab of its leaf, and when
+ *   `maximized` is not null, `focus` is that same pane.
+ *
+ * FOCUS IS THE AUTHORITY, which is what makes one function enough. Each
+ * operation says where the focus went and this decides the rest: the focused
+ * pane comes to the front of its own leaf, a maximize in that same leaf follows
+ * the focus onto the new tab (the full size leaf is now showing it), and a
+ * maximize anywhere else is dropped (it was covering the pane the user just
+ * asked for). So `activateTab` inside the maximized leaf moves the maximize and
+ * outside it clears the maximize, without either case being written down twice.
+ *
+ * A null `focus` stays null. The rule allows it, and an arrangement nobody has
+ * focused yet should not have a pane picked for it.
+ */
+function settled(next: Arrangement): Arrangement {
+  const tree = next.tree;
+  if (tree === null) {
+    if (next.maximized === null && next.focus === null) return next;
+    return { tree: null, maximized: null, focus: null, lastSpot: next.lastSpot };
+  }
+  const held = next.focus;
+  if (held === null) {
+    if (next.maximized === null) return next;
+    return { ...next, maximized: null };
+  }
+  const heldLeaf = leafOf(tree, held);
+  const leaf = heldLeaf ?? leavesOf(tree)[0];
+  const focus = heldLeaf === null ? leaf.active : held;
+  const maximizedLeaf = next.maximized === null ? null : leafOf(tree, next.maximized);
+  const maximized = maximizedLeaf !== null && maximizedLeaf.id === leaf.id ? focus : null;
+  const inFront = leaf.active === focus;
+  if (inFront && focus === next.focus && maximized === next.maximized) return next;
+  return {
+    tree: inFront ? tree : withActiveTab(tree, leaf.id, focus),
+    maximized,
+    focus,
+    lastSpot: next.lastSpot,
+  };
+}
+
+function sameArrangement(a: Arrangement, b: Arrangement): boolean {
+  return (
+    a.tree === b.tree &&
+    a.maximized === b.maximized &&
+    a.focus === b.focus &&
+    a.lastSpot === b.lastSpot
+  );
+}
+
+/**
+ * What every operation returns: the arrangement it built, put through the rule
+ * above, and then the ORIGINAL when the rule left it identical to what came in.
+ * That is the second contract of this module in the same place as the first, so
+ * no operation can keep one and lose the other.
+ */
+function result(from: Arrangement, next: Arrangement): Arrangement {
+  const out = settled(next);
+  return sameArrangement(from, out) ? from : out;
+}
+
 function withoutTab(leaf: Leaf, pane: PaneId): Leaf {
   const tabs = leaf.tabs.filter((tab) => tab !== pane);
   return {
@@ -321,12 +424,12 @@ export function movePane(
     };
   });
 
-  return {
+  return result(arrangement, {
     tree: normalize(docked),
     maximized: null,
     focus: pane,
     lastSpot: arrangement.lastSpot,
-  };
+  });
 }
 
 /**
@@ -377,7 +480,7 @@ export function closePane(
   );
   const next = normalize(trimmed);
   const first = leavesOf(next)[0];
-  return {
+  return result(arrangement, {
     tree: next,
     maximized: arrangement.maximized === pane ? null : arrangement.maximized,
     focus:
@@ -387,7 +490,7 @@ export function closePane(
           : first.active
         : arrangement.focus,
     lastSpot: spot === null ? arrangement.lastSpot : { ...arrangement.lastSpot, [pane]: spot },
-  };
+  });
 }
 
 function ownSpot(spots: Record<PaneId, Spot>, pane: PaneId): Spot | null {
@@ -435,12 +538,12 @@ export function openPane(
   const tree = arrangement.tree;
   if (tree !== null && leafOf(tree, pane) !== null) return arrangement;
   if (tree === null) {
-    return {
+    return result(arrangement, {
       tree: { kind: "leaf", id: `l${nextIdNumber(null)}`, tabs: [pane], active: pane },
       maximized: null,
       focus: pane,
       lastSpot: arrangement.lastSpot,
-    };
+    });
   }
 
   const spot = ownSpot(arrangement.lastSpot, pane);
@@ -452,12 +555,12 @@ export function openPane(
     const landed = leafOf(moved.tree, pane);
     const parent = landed === null ? null : parentOf(moved.tree, landed.id);
     if (parent === null) return moved;
-    return {
+    return result(arrangement, {
       ...moved,
       tree: mapNode(moved.tree, parent.id, (found) =>
         found.kind === "split" ? { ...found, ratio: normalizeRatio(ratio) } : found,
       ),
-    };
+    });
   }
 
   const target = dockTarget(tree, rects);
@@ -488,12 +591,12 @@ export function setRatio(
   const [low, high] = shareLimits(split, size, specs);
   const next = normalizeRatio(clamp(ratio, low, high));
   if (next === split.ratio) return arrangement;
-  return {
+  return result(arrangement, {
     ...arrangement,
     tree: mapNode(tree, splitId, (found) =>
       found.kind === "split" ? { ...found, ratio: next } : found,
     ),
-  };
+  });
 }
 
 /** Give both sides of one divider the same share. */
@@ -502,12 +605,12 @@ export function equalize(arrangement: Arrangement, splitId: string): Arrangement
   if (tree === null) return arrangement;
   const split = splitById(tree, splitId);
   if (split === null || split.ratio === EVEN_RATIO) return arrangement;
-  return {
+  return result(arrangement, {
     ...arrangement,
     tree: mapNode(tree, splitId, (found) =>
       found.kind === "split" ? { ...found, ratio: EVEN_RATIO } : found,
     ),
-  };
+  });
 }
 
 /**
@@ -531,7 +634,7 @@ export function swapLeaves(
     tabs: [...b.tabs],
     active: b.active,
   }));
-  return {
+  return result(arrangement, {
     ...arrangement,
     tree: mapNode(withA, leafIdB, () => ({
       kind: "leaf",
@@ -539,27 +642,21 @@ export function swapLeaves(
       tabs: [...a.tabs],
       active: a.active,
     })),
-  };
+  });
 }
 
 // ----------------------------------------------------------- tabs and size
 
-/** Bring a tab to the front of its leaf and focus it. */
+/**
+ * Bring a tab to the front of its leaf and focus it. A maximize in that same
+ * leaf follows onto the new tab; a maximize anywhere else is cleared, because
+ * it was covering the pane that was just asked for. Both come from `settled`.
+ */
 export function activateTab(arrangement: Arrangement, pane: PaneId): Arrangement {
   const tree = arrangement.tree;
   if (tree === null) return arrangement;
-  const leaf = leafOf(tree, pane);
-  if (leaf === null) return arrangement;
-  if (leaf.active === pane && arrangement.focus === pane) return arrangement;
-  const next =
-    leaf.active === pane
-      ? tree
-      : mapNode(tree, leaf.id, (found) =>
-          found.kind === "leaf"
-            ? { kind: "leaf", id: found.id, tabs: [...found.tabs], active: pane }
-            : found,
-        );
-  return { ...arrangement, tree: next, focus: pane };
+  if (leafOf(tree, pane) === null) return arrangement;
+  return result(arrangement, { ...arrangement, focus: pane });
 }
 
 /**
@@ -582,9 +679,16 @@ export function cycleTab(arrangement: Arrangement, step: 1 | -1): Arrangement {
  * cannot be maximized; naming a pane while a different one is maximized moves
  * the maximize to it rather than only clearing it, so one call can always
  * answer "show me this one alone".
+ *
+ * Maximizing also brings the pane to the front of its leaf and focuses it,
+ * because a full size leaf showing a different tab is a pane filling the
+ * workspace with something nobody asked for.
  */
 export function toggleMaximize(arrangement: Arrangement, pane: PaneId): Arrangement {
   const tree = arrangement.tree;
   if (tree === null || leafOf(tree, pane) === null) return arrangement;
-  return { ...arrangement, maximized: arrangement.maximized === pane ? null : pane };
+  if (arrangement.maximized === pane) {
+    return result(arrangement, { ...arrangement, maximized: null });
+  }
+  return result(arrangement, { ...arrangement, maximized: pane, focus: pane });
 }

@@ -35,12 +35,13 @@
 
 import { ARRANGEMENTS, PANES, defaultArrangement, defaultTree } from "./catalog";
 import {
+  EVEN_RATIO,
   hasSoundIds,
   leafOf,
   leavesOf,
   normalize,
+  normalizeRatio,
   openPane,
-  openPanes,
   signature,
   withCanonicalIds,
 } from "./tree";
@@ -77,10 +78,10 @@ const ARRANGEMENT_NAMES: readonly string[] = ARRANGEMENTS.map((entry) => entry.n
  */
 const MAX_TREE_DEPTH = 12;
 
-/** The range a stored ratio is held in, the same one normalize uses. */
-const RATIO_MIN = 0.05;
-const RATIO_MAX = 0.95;
-const EVEN_RATIO = 0.5;
+// The range a stored ratio is held in, and the share a split falls back to, are
+// imported from tree.ts rather than repeated here. Two copies could drift, and
+// a stored value outside the engine's own range is exactly the thing a load
+// would silently change.
 
 export const EMPTY_TILE_SET: TileSet = Object.freeze({
   version: TILE_SET_VERSION,
@@ -109,9 +110,10 @@ function record(value: unknown): Record<string, unknown> | null {
   return plain(value);
 }
 
+/** A stored ratio, or null when there is no usable number there at all. */
 function heldRatio(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  return Math.max(RATIO_MIN, Math.min(RATIO_MAX, value));
+  return normalizeRatio(value);
 }
 
 function arrangementName(value: unknown): string | null {
@@ -228,14 +230,19 @@ function parseClassState(value: unknown, cls: ScreenClass): ClassState | null {
   const working = plain(stored.working);
   const lastSpot = parseLastSpot(working === null ? null : working.lastSpot);
   const tree = repairedTree(working === null ? null : working.tree, cls, current, lastSpot);
-  const open = openPanes(tree);
-
+  // Behaviour 18, on the way in. A stored focus is honoured only as far as the
+  // tree allows: a pane that is not open, or one sitting behind another tab,
+  // becomes the tab that leaf is actually showing. The tree itself is not
+  // rewritten to suit the focus, because which tab is in front is part of what
+  // the user saved. A maximize survives only if it IS the focus, which is why
+  // saving it is safe at all: a maximize that named a hidden pane would come
+  // back covering the workspace with it.
+  const storedFocus = working === null ? null : working.focus;
+  const held = typeof storedFocus === "string" ? leafOf(tree, storedFocus) : null;
+  const focus = held === null ? (leavesOf(tree)[0]?.active ?? null) : held.active;
   const storedMaximized = working === null ? null : working.maximized;
   const maximized =
-    typeof storedMaximized === "string" && open.includes(storedMaximized) ? storedMaximized : null;
-  const storedFocus = working === null ? null : working.focus;
-  const focus =
-    typeof storedFocus === "string" && open.includes(storedFocus) ? storedFocus : (open[0] ?? null);
+    typeof storedMaximized === "string" && storedMaximized === focus ? storedMaximized : null;
 
   const saved: Record<string, TileNode> = {};
   const storedSaved = plain(stored.saved);
@@ -371,10 +378,15 @@ export function applyArrangement(
   const known = arrangementName(name);
   if (known === null) return state;
   const tree = own(state.saved, known) ? state.saved[known] : defaultTree(cls, known);
-  const open = openPanes(tree);
+  // Behaviour 18. The focus is carried over only as far as the new tree allows:
+  // the pane itself when that tree shows it in front, otherwise whichever tab
+  // the leaf holding it IS showing, and the first leaf's front tab when the
+  // pane is not in this arrangement at all. The tree is never altered to suit
+  // the focus, because it is an arrangement the user saved and loading one
+  // should not quietly edit it.
   const held = state.working.focus;
-  const focus =
-    held !== null && open.includes(held) ? held : (leavesOf(tree)[0]?.active ?? null);
+  const heldLeaf = held === null ? null : leafOf(tree, held);
+  const focus = heldLeaf === null ? (leavesOf(tree)[0]?.active ?? null) : heldLeaf.active;
   return {
     current: known,
     working: { tree, maximized: null, focus, lastSpot: state.working.lastSpot },

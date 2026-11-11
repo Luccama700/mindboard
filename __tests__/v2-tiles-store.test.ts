@@ -46,6 +46,7 @@ import {
   closePane,
   cycleTab,
   equalize,
+  leafOf,
   leavesOf,
   movePane,
   normalize,
@@ -72,6 +73,13 @@ const CLASSES: ScreenClass[] = ["regular", "wide"];
 const ZONES: Zone[] = ["left", "right", "top", "bottom", "centre"];
 const PANE_IDS: PaneId[] = PANES.map((pane) => pane.id);
 const ID_SHAPE = /^[ls][0-9]+$/;
+
+// Built from their code points, not typed in. The walk below covers the six
+// engine sources rather than this file, so nothing would have caught a dash
+// here: a file whose job is to find a character is the last place that should
+// contain one.
+const EM_DASH = String.fromCharCode(0x2014);
+const EN_DASH = String.fromCharCode(0x2013);
 
 const ROOT = path.resolve(__dirname, "..");
 const SOURCE_DIR = "app/lib/v2/tiles";
@@ -400,7 +408,11 @@ describe("parseTileSet cannot return a broken screen", () => {
     };
     const state = classState(parseTileSet(stored), "regular");
     expect(openPanes(state.working.tree)).toEqual(["calendar", "status", "today"]);
-    expect(state.working.focus).toBe("calendar");
+    // Putting `today` back made it the front tab of that leaf, and behaviour 18
+    // puts the focus on whatever the leaf is showing. The stored focus of
+    // `calendar` is behind it now, so it cannot keep the focus.
+    expect((state.working.tree as Leaf).active).toBe("today");
+    expect(state.working.focus).toBe("today");
   });
 
   test("the pane that cannot be closed is put back even with nothing remembered", () => {
@@ -444,14 +456,14 @@ describe("parseTileSet cannot return a broken screen", () => {
     expect(state.working.focus).toBe("today");
   });
 
-  test("keeps a maximized pane and a focus that are open", () => {
+  test("keeps a maximized pane and a focus that agree with the tree", () => {
     const stored = {
       version: 1,
       classes: {
         regular: {
           current: "plan",
           working: {
-            tree: { kind: "leaf", id: "l1", tabs: ["today", "status"], active: "today" },
+            tree: { kind: "leaf", id: "l1", tabs: ["today", "status"], active: "status" },
             maximized: "status",
             focus: "status",
             lastSpot: {},
@@ -463,6 +475,104 @@ describe("parseTileSet cannot return a broken screen", () => {
     const state = classState(parseTileSet(stored), "regular");
     expect(state.working.maximized).toBe("status");
     expect(state.working.focus).toBe("status");
+  });
+
+  test("a stored focus behind another tab becomes the tab that leaf is showing", () => {
+    const state = classState(
+      parseTileSet({
+        version: 1,
+        classes: {
+          regular: {
+            current: "plan",
+            working: {
+              tree: { kind: "leaf", id: "l1", tabs: ["today", "status"], active: "today" },
+              maximized: null,
+              focus: "status",
+              lastSpot: {},
+            },
+            saved: {},
+          },
+        },
+      }),
+      "regular",
+    );
+    // The tree is not rewritten to suit the stored focus: which tab is in front
+    // is part of what the user saved.
+    expect((state.working.tree as Leaf).active).toBe("today");
+    expect(state.working.focus).toBe("today");
+  });
+
+  test("a focus that is not open becomes the first leaf's front tab, not its first tab", () => {
+    // Behaviour 13 said "the first open pane", which is the first TAB of the
+    // first leaf. Behaviour 18 needs the tab that leaf is SHOWING, and the two
+    // differ exactly when the first leaf opens on something other than its
+    // first tab, as every saved arrangement eventually does.
+    const state = classState(
+      parseTileSet({
+        version: 1,
+        classes: {
+          regular: {
+            current: "today",
+            working: {
+              tree: {
+                kind: "leaf",
+                id: "l1",
+                tabs: ["today", "status", "calendar"],
+                active: "calendar",
+              },
+              maximized: null,
+              focus: "ghost",
+              lastSpot: {},
+            },
+            saved: {},
+          },
+        },
+      }),
+      "regular",
+    );
+    expect(openPanes(state.working.tree)[0]).toBe("today");
+    expect(state.working.focus).toBe("calendar");
+  });
+
+  test("a stored maximized pane that is not the focus is dropped", () => {
+    const read = (maximized: string, focus: string, active: string) =>
+      classState(
+        parseTileSet({
+          version: 1,
+          classes: {
+            wide: {
+              current: "today",
+              working: {
+                tree: {
+                  kind: "split",
+                  id: "s1",
+                  dir: "h",
+                  ratio: 0.5,
+                  first: { kind: "leaf", id: "l2", tabs: ["today", "status"], active },
+                  second: { kind: "leaf", id: "l3", tabs: ["calendar"], active: "calendar" },
+                },
+                maximized,
+                focus,
+                lastSpot: {},
+              },
+              saved: {},
+            },
+          },
+        }),
+        "wide",
+      ).working;
+
+    // Maximized in one leaf, focus in another: the maximize was covering the
+    // pane the focus names, so the maximize goes.
+    const split = read("calendar", "today", "today");
+    expect(split.focus).toBe("today");
+    expect(split.maximized).toBeNull();
+
+    // Maximized on a tab that is not the one its leaf is showing: the focus
+    // follows the front tab, so the maximize is not the focus and goes too.
+    const hidden = read("status", "status", "today");
+    expect(hidden.focus).toBe("today");
+    expect(hidden.maximized).toBeNull();
   });
 
   test("saved trees go through the same repair, and an unlisted name is dropped", () => {
@@ -715,8 +825,15 @@ describe("saving and loading", () => {
       working = closePane(working, "past-due", PANES);
       working = movePane(working, "calendar", leavesOf(working.tree)[0].id, "top");
       working = openPane(working, "status", layoutTree(working, { width: 1200, height: 800 }, PANES));
-      working = toggleMaximize(working, "status");
+      // The order matters: activating a tab in another leaf clears the
+      // maximize, so maximizing LAST is what gets a maximized state into the
+      // fixture. The earlier spelling of these two lines built a state with the
+      // focus outside the maximized leaf, which behaviour 18 now forbids, and
+      // the round trip was asserting that the engine preserved it.
       working = activateTab(working, "today");
+      working = toggleMaximize(working, "status");
+      expect(working.maximized).toBe("status");
+      expect(working.focus).toBe("status");
       state = { ...state, working };
       state = saveOver(state, "plan");
       const set = withClassState(EMPTY_TILE_SET, cls, state);
@@ -762,13 +879,90 @@ describe("the named arrangements", () => {
     expect(applyArrangement(state, "regular", "mine")).toBe(state);
   });
 
-  test("applyArrangement leaves focus on a pane that is open", () => {
+  test("applyArrangement leaves focus on a pane the new tree shows in front", () => {
     const start = stateOf("wide", "today");
     const state: ClassState = { ...start, working: { ...start.working, focus: "calendar" } };
     expect(applyArrangement(state, "wide", "plan").working.focus).toBe("calendar");
     const stale: ClassState = { ...start, working: { ...start.working, focus: "ghost" } };
     const out = applyArrangement(stale, "wide", "plan");
     expect(openPanes(out.working.tree)).toContain(out.working.focus);
+  });
+
+  test("applyArrangement moves a focus the new tree keeps behind another tab", () => {
+    // `today` is the front tab in regular today and a background tab in regular
+    // plan, where the stack opens on `not-today`.
+    const start = stateOf("regular", "today");
+    expect(start.working.focus).toBe("today");
+    const out = applyArrangement(start, "regular", "plan");
+    expect(out.working.focus).toBe("not-today");
+    // The arrangement that was loaded is not edited to suit the focus.
+    expect(out.working.tree).toEqual(defaultTree("regular", "plan"));
+  });
+
+  test("applyArrangement falls back to the first leaf's front tab when the focus is not open", () => {
+    const narrow: TileNode = {
+      kind: "leaf",
+      id: "l1",
+      tabs: ["today", "status"],
+      active: "today",
+    };
+    const base = stateOf("regular", "today");
+    const state: ClassState = {
+      current: "today",
+      working: { ...base.working, focus: "calendar" },
+      saved: { backlog: narrow },
+    };
+    const out = applyArrangement(state, "regular", "backlog");
+    expect(out.working.focus).toBe("today");
+    expect(out.working.maximized).toBeNull();
+    // The saved tree is handed back by reference, not rebuilt.
+    expect(out.working.tree).toBe(narrow);
+  });
+
+  test("an id too large to count past is renumbered on load", () => {
+    const huge = "l9007199254740991";
+    const state = classState(
+      parseTileSet({
+        version: 1,
+        classes: {
+          regular: {
+            current: "today",
+            working: {
+              tree: {
+                kind: "split",
+                id: "s1",
+                dir: "h",
+                ratio: 0.5,
+                first: { kind: "leaf", id: huge, tabs: ["today"], active: "today" },
+                second: { kind: "leaf", id: "l2", tabs: ["calendar"], active: "calendar" },
+              },
+              maximized: null,
+              focus: "today",
+              lastSpot: {},
+            },
+            saved: {},
+          },
+        },
+      }),
+      "regular",
+    );
+    expect(allIds(state.working.tree)).not.toContain(huge);
+
+    // The point of the cap: an id the engine cannot count past would make the
+    // next two moves mint the same number twice, and `mapNode` rewrites two
+    // nodes with one id together.
+    const first = movePane(state.working, "status", leavesOf(state.working.tree)[0].id, "right");
+    const second = movePane(first, "past-due", leavesOf(first.tree)[0].id, "bottom");
+    const minted = (before: string[], after: string[]) =>
+      after.filter((id) => !before.includes(id));
+    const one = minted(allIds(state.working.tree), allIds(first.tree));
+    const two = minted(allIds(first.tree), allIds(second.tree));
+    expect(one.length).toBeGreaterThan(0);
+    expect(two.length).toBeGreaterThan(0);
+    for (const id of one) expect(two).not.toContain(id);
+    const all = allIds(second.tree);
+    expect(new Set(all).size).toBe(all.length);
+    for (const id of all) expect(ID_SHAPE.test(id)).toBe(true);
   });
 
   test("saveOver stores the working tree under a name and makes it current", () => {
@@ -860,11 +1054,23 @@ function expectSound(arrangement: Arrangement, label: string): void {
   expectShape(tree);
 
   expect(normalize(tree), `${label}: already normal`).toBe(tree);
-  if (arrangement.maximized !== null) {
-    expect(open, `${label}: a maximized pane is open`).toContain(arrangement.maximized);
-  }
+
+  // Behaviour 18, both halves. The focused pane is the one in front of its own
+  // leaf, and a maximized pane IS the focused one, so the pane the keyboard is
+  // pointed at is always a pane on screen.
   if (arrangement.focus !== null) {
     expect(open, `${label}: a focused pane is open`).toContain(arrangement.focus);
+    const focusLeaf = leafOf(tree, arrangement.focus);
+    expect(
+      focusLeaf === null ? null : focusLeaf.active,
+      `${label}: the focused pane is the front tab of its leaf`,
+    ).toBe(arrangement.focus);
+  }
+  if (arrangement.maximized !== null) {
+    expect(open, `${label}: a maximized pane is open`).toContain(arrangement.maximized);
+    expect(arrangement.maximized, `${label}: the maximized pane is the focused one`).toBe(
+      arrangement.focus,
+    );
   }
   for (const value of numbersIn(arrangement)) {
     expect(Number.isFinite(value), `${label}: every number is a number`).toBe(true);
@@ -902,6 +1108,13 @@ describe("four hundred operations from every default", () => {
         // refusals would pass every invariant and prove nothing, so the counts
         // are asserted at the end.
         const reached = { changed: 0, closed: 0, whole: 0, maximized: 0, stacked: 0 };
+        const zoneMoves: Record<Zone, number> = {
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: 0,
+          centre: 0,
+        };
         expectSound(state.working, `${cls} ${entry.name} step 0`);
 
         for (let step = 1; step <= STEPS; step += 1) {
@@ -919,9 +1132,12 @@ describe("four hundred operations from every default", () => {
             case 1:
               next = openPane(working, pick(PANE_IDS), random() < 0.2 ? null : rects);
               break;
-            case 2:
-              next = movePane(working, pick(PANE_IDS), pick(leafIds), pick(ZONES));
+            case 2: {
+              const zone = pick(ZONES);
+              next = movePane(working, pick(PANE_IDS), pick(leafIds), zone);
+              if (next.tree !== working.tree) zoneMoves[zone] += 1;
               break;
+            }
             case 3:
               next =
                 splits.length === 0
@@ -976,6 +1192,11 @@ describe("four hundred operations from every default", () => {
         expect(reached.whole).toBeGreaterThan(0);
         expect(reached.maximized).toBeGreaterThan(0);
         expect(reached.stacked).toBeGreaterThan(0);
+        // Behaviour 16: a move into each of the five zones changed the tree at
+        // least once, so no zone's docking maths went unexercised.
+        for (const zone of ZONES) {
+          expect(zoneMoves[zone], `${cls} ${entry.name}: moves into ${zone}`).toBeGreaterThan(0);
+        }
       });
     }
   }
@@ -1040,8 +1261,8 @@ describe("the engine is pure", () => {
   test("has no em dash and no en dash anywhere in it", () => {
     for (const name of SOURCES) {
       const source = read(name);
-      expect(source.includes("—"), `${name} has an em dash`).toBe(false);
-      expect(source.includes("–"), `${name} has an en dash`).toBe(false);
+      expect(source.includes(EM_DASH), `${name} has an em dash`).toBe(false);
+      expect(source.includes(EN_DASH), `${name} has an en dash`).toBe(false);
     }
   });
 });

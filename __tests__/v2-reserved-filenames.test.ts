@@ -22,7 +22,29 @@ import path from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-/** The basenames Next claims. A file called any of these is a route file. */
+/**
+ * The basenames Next claims inside `app/`, read off its own docs in
+ * `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/`
+ * rather than from memory.
+ *
+ * The first group is the route files (one doc each in that folder). The second
+ * is the metadata files from `01-metadata/`, which are route handlers Next
+ * generates a response from: `app-icons.md` gives `icon` and `apple-icon`,
+ * `opengraph-image.md` gives `opengraph-image` and `twitter-image`, and
+ * `manifest.md`, `robots.md` and `sitemap.md` give the rest. Each of those docs
+ * states the code extensions it accepts (`.js`, `.ts`, and `.tsx` for the
+ * image ones).
+ *
+ * `favicon` is deliberately NOT here: app-icons.md says in as many words that
+ * you cannot generate a favicon with code, so only an image file by that name
+ * means anything and a module could never collide with it.
+ *
+ * Nor are `proxy`, `instrumentation`, `instrumentation-client` or
+ * `mdx-components`: their docs put them in the project root or `src`, at the
+ * same level as `app`, so they cannot collide with anything under `app/lib`.
+ * `middleware` is the same: its doc says it is deprecated in Next 16 and
+ * renamed to `proxy`, with the functionality unchanged.
+ */
 const RESERVED = [
   "page",
   "layout",
@@ -35,6 +57,13 @@ const RESERVED = [
   "default",
   "forbidden",
   "unauthorized",
+  "icon",
+  "apple-icon",
+  "opengraph-image",
+  "twitter-image",
+  "manifest",
+  "robots",
+  "sitemap",
 ];
 
 /** The extensions Next resolves a route file at. */
@@ -73,24 +102,34 @@ describe("no plain module is named after a Next file convention", () => {
     expect(reservedFilenames(files)).toEqual([]);
   });
 
-  test("the rule catches a reserved name at any depth", () => {
-    expect(
-      reservedFilenames([
-        "app/lib/x/layout.ts",
-        "app/lib/x/y/route.tsx",
-        "app/lib/page.js",
-        "app/lib/a/b/c/not-found.mdx",
-        "app/lib/a/global-error.jsx",
-        "app/lib/a/default.mjs",
-      ]),
-    ).toEqual([
+  test("the rule catches a route filename at any depth", () => {
+    const bad = [
       "app/lib/x/layout.ts",
       "app/lib/x/y/route.tsx",
       "app/lib/page.js",
       "app/lib/a/b/c/not-found.mdx",
       "app/lib/a/global-error.jsx",
       "app/lib/a/default.mjs",
-    ]);
+      "app/lib/a/template.ts",
+      "app/lib/a/loading.ts",
+      "app/lib/a/error.ts",
+      "app/lib/a/forbidden.ts",
+      "app/lib/a/unauthorized.ts",
+    ];
+    expect(reservedFilenames(bad)).toEqual(bad);
+  });
+
+  test("the rule catches a metadata filename too", () => {
+    const bad = [
+      "app/lib/x/icon.ts",
+      "app/lib/x/apple-icon.tsx",
+      "app/lib/x/opengraph-image.tsx",
+      "app/lib/x/twitter-image.tsx",
+      "app/lib/x/manifest.ts",
+      "app/lib/x/robots.ts",
+      "app/lib/y/sitemap.ts",
+    ];
+    expect(reservedFilenames(bad)).toEqual(bad);
   });
 
   test("the rule leaves ordinary names, other trees and other extensions alone", () => {
@@ -103,8 +142,25 @@ describe("no plain module is named after a Next file convention", () => {
         "app/lib/x/my-layout.ts",
         "app/lib/x/layout.css",
         "app/lib/x/layout.json",
+        // One near miss per metadata name, so the rule cannot quietly widen
+        // into every file with one of those words in it.
+        "app/lib/x/icons.ts",
+        "app/lib/x/inventory-icon.ts",
+        "app/lib/x/apple-icons.ts",
+        "app/lib/x/opengraph-images.ts",
+        "app/lib/x/twitter-image-url.ts",
+        "app/lib/x/manifests.ts",
+        "app/lib/x/robots-txt.ts",
+        "app/lib/x/sitemaps.ts",
+        "app/lib/x/manifest.json",
+        // Root level conventions, which live beside `app` and not under it.
+        "proxy.ts",
+        "instrumentation.ts",
+        "mdx-components.tsx",
+        // Real route files, which are allowed to be called these things.
         "app/v2/today/page.tsx",
         "app/finance/layout.tsx",
+        "app/icon.tsx",
         "__tests__/layout.test.ts",
       ]),
     ).toEqual([]);

@@ -546,6 +546,10 @@ describe("equalize and swapLeaves", () => {
   });
 
   test("swapLeaves exchanges the tabs and the front tab, and nothing else", () => {
+    // The focus is on the front tab of its leaf and the maximize is on the
+    // focus, because behaviour 18 says every arrangement the engine is given
+    // back looks like that, and a fixture that did not would be testing a state
+    // the engine cannot produce.
     const start = arrangement(
       split(
         "s1",
@@ -554,7 +558,7 @@ describe("equalize and swapLeaves", () => {
         activeLeaf("l2", "status", "today", "status"),
         leaf("l3", "calendar", "past-due"),
       ),
-      { maximized: "today", focus: "today" },
+      { maximized: "status", focus: "status" },
     );
     const out = swapLeaves(start, "l2", "l3");
     const root = out.tree as Split;
@@ -562,8 +566,10 @@ describe("equalize and swapLeaves", () => {
     expect(root.id).toBe("s1");
     expect(root.first).toEqual(leaf("l2", "calendar", "past-due"));
     expect(root.second).toEqual(activeLeaf("l3", "status", "today", "status"));
-    expect(out.maximized).toBe("today");
-    expect(out.focus).toBe("today");
+    // The panes travelled to the other leaf and the maximize travelled with
+    // them, so the workspace still shows the pane the user was looking at.
+    expect(out.maximized).toBe("status");
+    expect(out.focus).toBe("status");
   });
 
   test("swapLeaves refuses one leaf with itself and a leaf that does not exist", () => {
@@ -631,6 +637,144 @@ describe("the tab and maximize operations", () => {
   test("toggleMaximize moves the maximized pane rather than only clearing it", () => {
     const start = arrangement(stackedPair(), { maximized: "today", focus: "today" });
     expect(toggleMaximize(start, "calendar").maximized).toBe("calendar");
+  });
+});
+
+// ------------------------------------------------ what is focused can be seen
+
+/** Behaviour 18, both halves, for one arrangement. */
+function expectVisible(arr: Arrangement, label: string): void {
+  if (arr.focus !== null) {
+    const focusLeaf = leafOf(arr.tree, arr.focus);
+    expect(focusLeaf === null ? null : focusLeaf.active, `${label}: focus is in front`).toBe(
+      arr.focus,
+    );
+  }
+  if (arr.maximized !== null) {
+    expect(arr.maximized, `${label}: the maximized pane is the focused one`).toBe(arr.focus);
+  }
+}
+
+describe("what is focused can be seen", () => {
+  /** stackedPair with `today` maximized: the state every case below starts from. */
+  function maximizedToday(): Arrangement {
+    const start = arrangement(stackedPair(), { focus: "today" });
+    const out = toggleMaximize(start, "today");
+    expect(out.maximized).toBe("today");
+    expect(out.focus).toBe("today");
+    return out;
+  }
+
+  test("toggleMaximize on a pane that is neither focused nor in front brings it forward", () => {
+    const start = arrangement(stackedPair(), { focus: "calendar" });
+    const out = toggleMaximize(start, "status");
+    expect(out.maximized).toBe("status");
+    expect(out.focus).toBe("status");
+    expect((leafOf(out.tree, "status") as Leaf).active).toBe("status");
+    expectVisible(out, "toggleMaximize on a background tab");
+  });
+
+  test("activateTab inside the maximized leaf moves the maximize to that tab", () => {
+    const out = activateTab(maximizedToday(), "past-due");
+    expect(out.focus).toBe("past-due");
+    expect(out.maximized).toBe("past-due");
+    expect((leafOf(out.tree, "past-due") as Leaf).active).toBe("past-due");
+    expectVisible(out, "activateTab inside the maximized leaf");
+  });
+
+  test("activateTab on any other leaf clears the maximize", () => {
+    const out = activateTab(maximizedToday(), "calendar");
+    expect(out.focus).toBe("calendar");
+    expect(out.maximized).toBeNull();
+    expectVisible(out, "activateTab outside the maximized leaf");
+  });
+
+  test("cycleTab carries the maximize round the leaf it is walking", () => {
+    let arr = maximizedToday();
+    for (const expected of ["status", "past-due", "not-today", "today"]) {
+      arr = cycleTab(arr, 1);
+      expect(arr.focus).toBe(expected);
+      expect(arr.maximized).toBe(expected);
+      expectVisible(arr, `cycleTab to ${expected}`);
+    }
+    expect(cycleTab(arr, -1).maximized).toBe("not-today");
+  });
+
+  test("cycleTab clears a maximize that was never in the leaf it walks", () => {
+    // From a conforming state cycleTab cannot leave the maximized leaf, because
+    // the focus and the maximize are in the same one. This is the state
+    // behaviour 18 was added to rule out, built by hand: the maximize is on
+    // `calendar` while the focus is on `today` in another leaf. The first cycle
+    // repairs it rather than walking a hidden leaf's tabs.
+    const start = arrangement(stackedPair(), { maximized: "calendar", focus: "today" });
+    const out = cycleTab(start, 1);
+    expect(out.focus).toBe("status");
+    expect(out.maximized).toBeNull();
+    expectVisible(out, "cycleTab out of a stale maximize");
+  });
+
+  test("closing the focused pane while it is maximized clears the maximize", () => {
+    const start = toggleMaximize(arrangement(stackedPair(), { focus: "calendar" }), "calendar");
+    expect(start.maximized).toBe("calendar");
+    const out = closePane(start, "calendar", SPECS);
+    expect(out.maximized).toBeNull();
+    expect(out.focus).toBe("today");
+    expectVisible(out, "closePane of the maximized pane");
+  });
+
+  test("closing a tab mate of the maximized pane leaves the maximize alone", () => {
+    const out = closePane(maximizedToday(), "status", SPECS);
+    expect(out.maximized).toBe("today");
+    expect(out.focus).toBe("today");
+    expect((leafOf(out.tree, "today") as Leaf).tabs).toEqual(["today", "past-due", "not-today"]);
+    expectVisible(out, "closePane of a tab mate");
+  });
+
+  test("opening a pane while something is maximized clears the maximize", () => {
+    const start = toggleMaximize(arrangement(fourWay(), { focus: "today" }), "today");
+    expect(start.maximized).toBe("today");
+    const out = openPane(start, "calendar", null);
+    expect(out.maximized).toBeNull();
+    expect(out.focus).toBe("calendar");
+    expectVisible(out, "openPane while maximized");
+  });
+
+  test("every operation keeps the rule, from a maximized start", () => {
+    const start = maximizedToday();
+    const leafIds = leavesOf(start.tree).map((found) => found.id);
+    const outputs: Array<[string, Arrangement]> = [
+      ["movePane centre", movePane(start, "calendar", leafIds[0], "centre")],
+      ["movePane left", movePane(start, "calendar", leafIds[0], "left")],
+      ["movePane split off", movePane(start, "status", leafIds[0], "right")],
+      ["closePane", closePane(start, "not-today", SPECS)],
+      ["openPane", openPane(start, "nothing-yet", null)],
+      ["setRatio", setRatio(start, "s1", 0.42, 1472, SPECS)],
+      ["equalize", equalize(arrangement(stackedPair(), { focus: "today" }), "s1")],
+      ["swapLeaves", swapLeaves(start, leafIds[0], leafIds[1])],
+      ["activateTab", activateTab(start, "status")],
+      ["cycleTab", cycleTab(start, -1)],
+      ["toggleMaximize off", toggleMaximize(start, "today")],
+      ["toggleMaximize elsewhere", toggleMaximize(start, "calendar")],
+    ];
+    for (const [label, out] of outputs) expectVisible(out, label);
+  });
+
+  test("a focus that names a pane nobody has open is replaced", () => {
+    const out = setRatio(arrangement(stackedPair(), { focus: "ghost" }), "s1", 0.4, 1472, SPECS);
+    expect(out.focus).toBe("today");
+    expectVisible(out, "setRatio with a stale focus");
+  });
+
+  test("a maximize with no focus at all cannot survive", () => {
+    const out = setRatio(
+      arrangement(stackedPair(), { focus: null, maximized: "today" }),
+      "s1",
+      0.4,
+      1472,
+      SPECS,
+    );
+    expect(out.focus).toBeNull();
+    expect(out.maximized).toBeNull();
   });
 });
 

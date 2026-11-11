@@ -52,8 +52,10 @@ const REFERENCE: Record<ScreenClass, Workspace> = {
   wide: { width: 1472, height: 700 },
 };
 
-const EM_DASH = "—";
-const EN_DASH = "–";
+// Built from their code points rather than typed in, so this file does not
+// itself contain the characters it is looking for.
+const EM_DASH = String.fromCharCode(0x2014);
+const EN_DASH = String.fromCharCode(0x2013);
 
 function leaf(id: string, ...tabs: PaneId[]): Leaf {
   return { kind: "leaf", id, tabs: [...tabs], active: tabs[0] };
