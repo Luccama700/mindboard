@@ -9,6 +9,7 @@ import {
 } from "@/utils/google/calendar";
 import type { FinanceChange } from "@/app/_components/dashboard-calendar";
 import type { TaskWithGroup } from "@/app/_components/types";
+import type { AiState } from "@/app/lib/mcp/validate";
 import type { TaskRecurrence } from "@/app/lib/recurrence";
 import type { RecurringSlotRow } from "@/app/lib/data/recurring-tasks";
 import { todayISO } from "@/app/_components/date-utils";
@@ -46,7 +47,7 @@ type RawTask = {
   estimated_minutes: number | null;
   status: "todo" | "doing" | "done" | "missed";
   priority: "low" | "med" | "high";
-  ai_state: "planned" | "approved" | "building" | "built" | "failed" | null;
+  ai_state: AiState | null;
   notes: string | null;
   group_id: string | null;
   created_at: string;
