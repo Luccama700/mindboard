@@ -579,6 +579,7 @@ export function BalanceUpdatePanel({
           id={`date-${account.id}`}
           type="date"
           value={occurredAt}
+          max={today}
           onChange={(e) => setOccurredAt(e.target.value || today)}
           className="w-full bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg text-sm px-3 py-2 focus:outline-none transition-colors"
         />

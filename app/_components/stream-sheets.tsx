@@ -264,7 +264,7 @@ export function SpendSheet({
     startTransition(async () => {
       const result = await recordBalanceChange({
         accountId: account.id,
-        newBalance: account.balance - parsed,
+        spent: parsed,
         categoryId: categoryId || null,
         note: billName,
       });
