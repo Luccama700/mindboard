@@ -58,9 +58,22 @@ export function ApprovalsClient({ items }: { items: PendingProposal[] }) {
     setStates((prev) => ({ ...prev, [id]: next }));
   }
 
+  // A server action can throw (a dropped connection, a database error) rather
+  // than return { error }; without this the row sat on "…" until a reload.
+  // Retrying is safe: the claim on status='proposed' stops a double execute.
+  async function settle<T>(id: string, call: () => Promise<T>): Promise<T | null> {
+    try {
+      return await call();
+    } catch {
+      set(id, { kind: "failed", error: "couldn't reach the server. try again." });
+      return null;
+    }
+  }
+
   async function approve(item: PendingProposal) {
     set(item.id, { kind: "working" });
-    const result = await confirmProposal(item.id);
+    const result = await settle(item.id, () => confirmProposal(item.id));
+    if (result === null) return;
     if (!result.error) {
       set(item.id, { kind: "approved", preview: result.preview ?? item.preview });
       return;
@@ -75,7 +88,8 @@ export function ApprovalsClient({ items }: { items: PendingProposal[] }) {
 
   async function reject(item: PendingProposal) {
     set(item.id, { kind: "working" });
-    const result = await cancelProposal(item.id);
+    const result = await settle(item.id, () => cancelProposal(item.id));
+    if (result === null) return;
     if (!result.error) {
       set(item.id, { kind: "rejected" });
       return;

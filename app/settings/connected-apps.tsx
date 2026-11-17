@@ -1,10 +1,11 @@
 import { revokeAllConnections, revokeConnection } from "@/app/actions/oauth-grants";
 import { buttonClass } from "@/app/_components/ui";
 import { listConnectedApps } from "@/app/lib/mcp/oauth-store";
+import { RevokeForm } from "./revoke-form";
 
 // Every app that holds a live OAuth grant on this account, and the way to cut
-// one off. Server component with plain <form action> submits — no client JS,
-// the same shape as the sign-out button further down the page.
+// one off. Server component; each revoke button is a small client island
+// (RevokeForm) so a failed revoke can say so.
 //
 // The redirect host leads because it is the only part a registration cannot
 // lie about: it had to pass the host allow-list, and the authorization code
@@ -56,22 +57,22 @@ export async function ConnectedApps({ userId }: { userId: string }) {
                 ? `last active ${app.lastUsedAt.slice(0, 10)}`
                 : "not used yet"}
             </span>
-            <form action={revokeConnection}>
-              <input type="hidden" name="id" value={app.id} />
-              <button type="submit" className={buttonClass("danger")}>
-                revoke
-              </button>
-            </form>
+            <RevokeForm
+              action={revokeConnection}
+              id={app.id}
+              label="revoke"
+              className={buttonClass("danger")}
+            />
           </div>
         </div>
       ))}
 
       {apps.length > 1 && (
-        <form action={revokeAllConnections}>
-          <button type="submit" className={buttonClass("quiet")}>
-            revoke all
-          </button>
-        </form>
+        <RevokeForm
+          action={revokeAllConnections}
+          label="revoke all"
+          className={buttonClass("quiet")}
+        />
       )}
     </div>
   );

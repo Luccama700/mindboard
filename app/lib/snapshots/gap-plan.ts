@@ -11,6 +11,7 @@
 
 import type { CalendarItem } from "@/app/_components/calendar-types";
 import type { FreeInterval, ScheduleEvent } from "@/app/lib/snapshots/schedule";
+import { zonedWallTimeToUtcMs } from "@/app/lib/snapshots/zoned-time";
 
 const DEFAULT_MINUTES = 30;
 const QUARTER = 15;
@@ -48,12 +49,9 @@ function timeToMinutes(time: string): number {
 }
 
 // Mirrors week-view's minutesToTime: clamped to a same-day clock so the busy
-// strings match the underlay exactly.
-function minutesToTime(minutes: number): string {
-  const clamped = Math.max(0, Math.min(minutes, 23 * 60 + 45));
-  const hh = String(Math.floor(clamped / 60)).padStart(2, "0");
-  const mm = String(clamped % 60).padStart(2, "0");
-  return `${hh}:${mm}`;
+// blocks match the underlay exactly.
+function clampToDay(minutes: number): number {
+  return Math.max(0, Math.min(minutes, 23 * 60 + 45));
 }
 
 // First-fit soft placement of untimed occurrences into a day's free intervals.
@@ -132,10 +130,23 @@ export function rtaskEffectiveTiming(
 // tasks (due_time), and committed recurring occurrences (TIMED, or with an
 // approved slot). Untimed rules — including soft-placed ghosts — contribute
 // nothing.
+//
+// Task and routine times are wall-clock times in the user's zone, so they are
+// turned into real instants here. A zone-less "YYYY-MM-DDTHH:MM:00" string was
+// read by `new Date` as UTC on the server and as device time in the browser,
+// which disagreed by the offset and broke hydration. `timeZone` null means the
+// device's zone, as everywhere else.
 export function busyFromDayItems(
   dateKey: string,
   items: CalendarItem[],
+  timeZone: string | null = null,
 ): ScheduleEvent[] {
+  const at = (minutes: number) => {
+    const clamped = clampToDay(minutes);
+    return new Date(
+      zonedWallTimeToUtcMs(dateKey, Math.floor(clamped / 60), clamped % 60, timeZone),
+    ).toISOString();
+  };
   const busy: ScheduleEvent[] = [];
   for (const item of items) {
     if (item.kind === "event") {
@@ -152,8 +163,8 @@ export function busyFromDayItems(
       const end = start + (item.durationMin ?? DEFAULT_MINUTES);
       busy.push({
         summary: item.title,
-        start: `${dateKey}T${minutesToTime(start)}:00`,
-        end: `${dateKey}T${minutesToTime(end)}:00`,
+        start: at(start),
+        end: at(end),
         allDay: false,
       });
     } else if (item.kind === "rtask") {
@@ -163,8 +174,8 @@ export function busyFromDayItems(
       const end = start + timing.minutes;
       busy.push({
         summary: item.title,
-        start: `${dateKey}T${minutesToTime(start)}:00`,
-        end: `${dateKey}T${minutesToTime(end)}:00`,
+        start: at(start),
+        end: at(end),
         allDay: false,
       });
     }

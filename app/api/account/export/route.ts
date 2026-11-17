@@ -51,6 +51,12 @@ export async function GET() {
         }
         if (page.length < PAGE) break;
       }
+      // Hitting the cap must not look like a complete copy: someone may
+      // download this and then delete their account.
+      if (rows.length >= MAX_ROWS_PER_TABLE) {
+        problems[table] =
+          `truncated: only the first ${MAX_ROWS_PER_TABLE} rows are included, there may be more`;
+      }
       tables[table] = rows;
     }),
   );

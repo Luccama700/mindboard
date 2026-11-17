@@ -363,7 +363,7 @@ export function DashboardCalendar({
         );
         if (untimed.length === 0) continue;
         const intervals = freeIntervalsForDay({
-          events: busyFromDayItems(key, dayItems),
+          events: busyFromDayItems(key, dayItems, timeZone),
           dateKey: key,
           now,
           wakeStartHour,

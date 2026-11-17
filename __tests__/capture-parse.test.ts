@@ -52,6 +52,22 @@ describe("parseCapture — mode routing", () => {
     });
   });
 
+  test("$ with thousands separators reads the whole amount", () => {
+    expect(parseCapture("$1,200 rent", [])).toMatchObject({ amount: 1200, description: "rent" });
+    expect(parseCapture("$1,250.50 laptop", [])).toMatchObject({
+      amount: 1250.5,
+      description: "laptop",
+    });
+    expect(parseCapture("$12,345,678", [])).toMatchObject({ amount: 12345678, description: "" });
+    // A one or two digit tail after a comma is still a decimal comma.
+    expect(parseCapture("$12,5 coffee", [])).toMatchObject({ amount: 12.5, description: "coffee" });
+  });
+
+  test("$ with digits running past the amount is no amount, not a truncated one", () => {
+    expect(parseCapture("$1200.999 x", [])).toMatchObject({ mode: "spend", amount: null });
+    expect(parseCapture("$1,2000", [])).toMatchObject({ mode: "spend", amount: null });
+  });
+
   test("$ without a valid amount yields amount null (never a silent guess)", () => {
     expect(parseCapture("$ lunch", [])).toEqual({
       mode: "spend",
