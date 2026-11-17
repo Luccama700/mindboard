@@ -110,7 +110,7 @@ export default async function TasksPage({
             {agentServiced && <AgentRunButton />}
             <Link
               href="/tasks/history"
-              className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors whitespace-nowrap"
+              className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors whitespace-nowrap"
             >
               history →
             </Link>

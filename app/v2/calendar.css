@@ -690,7 +690,11 @@
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  padding: 20px var(--v2-gutter) calc(76px + env(safe-area-inset-bottom));
+  /* Top and bottom both take the device's inset: the pane starts below the
+     status bar in the installed app, as it already ended above the home
+     indicator. 0 in a browser tab. */
+  padding: calc(20px + env(safe-area-inset-top)) var(--v2-gutter)
+    calc(76px + env(safe-area-inset-bottom));
 }
 
 [data-v2-root] .v2-week-main {

@@ -7,7 +7,7 @@ import {
   formatMonthYear,
   formatWeekdayMonthDay,
 } from "./date-utils";
-import { formatMoney } from "./money";
+import { formatMoney, formatMoneyCompact } from "./money";
 import {
   addDaysKey,
   buildDayRows,
@@ -32,6 +32,16 @@ import type {
 type GoogleStatus = "connected" | "connect" | "error";
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+// A figure in a day cell: compact below md, the full currency string from md.
+function CellMoney({ amount, currency }: { amount: number; currency: string }) {
+  return (
+    <>
+      <span className="md:hidden">{formatMoneyCompact(amount)}</span>
+      <span className="hidden md:inline">{formatMoney(amount, currency)}</span>
+    </>
+  );
+}
 
 function toDateKey(date: Date) {
   const year = date.getFullYear();
@@ -253,7 +263,7 @@ export function FinanceCalendar({
               key={row.dateKey}
               type="button"
               onClick={() => setSelected(row.dateKey)}
-              className={`min-h-24 bg-page p-1.5 text-left transition-colors ${
+              className={`min-h-24 min-w-0 overflow-hidden bg-page p-1 md:p-1.5 text-left transition-colors ${
                 isSelected ? "outline outline-1 outline-accent-ink" : ""
               } ${row.inMonth ? "text-fg" : "text-line-subtle"}`}
             >
@@ -267,28 +277,41 @@ export function FinanceCalendar({
                 </span>
               </div>
 
+              {/* Two renderings of every figure: the full currency string
+                  from md up, where a cell has room for it, and the compact
+                  one below, where it does not ("CA$6,166.08" in a 34px cell
+                  used to be clipped to "CA$6,1"). */}
               <p
                 className={`mt-1 text-[11px] font-bold tabular-nums leading-tight ${
                   row.inMonth ? "text-fg" : "text-line-subtle"
                 }`}
               >
-                {formatMoney(row.runningTotal, currency)}
+                <span className="md:hidden">
+                  {formatMoneyCompact(row.runningTotal)}
+                </span>
+                <span className="hidden md:inline">
+                  {formatMoney(row.runningTotal, currency)}
+                </span>
               </p>
 
               <div className="mt-1 space-y-0.5">
                 {row.inflow > 0 && (
                   <p className="text-[10px] tabular-nums text-accent-ink leading-tight">
-                    +{formatMoney(row.inflow, currency)}
+                    +<CellMoney amount={row.inflow} currency={currency} />
                   </p>
                 )}
                 {row.outflow > 0 && (
                   <p className="text-[10px] tabular-nums text-danger leading-tight">
-                    −{formatMoney(row.outflow, currency)}
+                    −<CellMoney amount={row.outflow} currency={currency} />
                   </p>
                 )}
                 {row.estimatedOutflow > 0 && (
                   <p className="text-[10px] tabular-nums text-muted leading-tight">
-                    ~−{formatMoney(row.estimatedOutflow, currency)}
+                    ~−
+                    <CellMoney
+                      amount={row.estimatedOutflow}
+                      currency={currency}
+                    />
                   </p>
                 )}
                 {row.estimatedGroceries > 0 && (
@@ -296,7 +319,11 @@ export function FinanceCalendar({
                     className="text-[10px] tabular-nums text-muted leading-tight"
                     title="projected grocery trip"
                   >
-                    ≈−{formatMoney(row.estimatedGroceries, currency)}
+                    ≈−
+                    <CellMoney
+                      amount={row.estimatedGroceries}
+                      currency={currency}
+                    />
                   </p>
                 )}
               </div>
@@ -377,7 +404,7 @@ function EverydaySpendRow({
             setDraft(manual !== null ? String(manual) : "");
             setEditing(true);
           }}
-          className="text-[10px] tracking-widest uppercase text-muted hover:text-accent-ink transition-colors py-2"
+          className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-accent-ink transition-colors py-2"
         >
           {manual !== null ? "edit" : "set estimate"}
         </button>
@@ -409,7 +436,7 @@ function EverydaySpendRow({
       <button
         type="submit"
         disabled={isPending}
-        className="text-[10px] tracking-widest uppercase text-fg border border-fg px-3 py-2 hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
+        className="min-h-11 text-[10px] tracking-widest uppercase text-fg border border-fg px-3 py-2 hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
       >
         save
       </button>
@@ -418,7 +445,7 @@ function EverydaySpendRow({
           type="button"
           disabled={isPending}
           onClick={() => save(null)}
-          className="text-[10px] tracking-widest uppercase text-muted hover:text-danger transition-colors px-2 py-2 disabled:opacity-50"
+          className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-danger transition-colors px-2 py-2 disabled:opacity-50"
         >
           clear
         </button>
@@ -426,7 +453,7 @@ function EverydaySpendRow({
       <button
         type="button"
         onClick={() => setEditing(false)}
-        className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors px-2 py-2"
+        className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors px-2 py-2"
       >
         cancel
       </button>
@@ -480,7 +507,7 @@ function FutureSpendSlider({
               setDraft(baseline);
               onSet(dateKey, null);
             }}
-            className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors py-1"
+            className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors py-1"
           >
             reset
           </button>
@@ -503,7 +530,7 @@ function FutureSpendSlider({
                   if (override !== value) onSet(dateKey, value);
                 }}
                 aria-label={`pin expected spend on ${dateKey} at ${multiplier}× the estimate`}
-                className={`min-h-9 flex-1 border px-1 text-[10px] tabular-nums transition-colors ${
+                className={`min-h-11 flex-1 border px-1 text-[10px] tabular-nums transition-colors ${
                   active
                     ? "border-accent text-accent-ink"
                     : "border-line-strong text-muted hover:border-fg hover:text-fg"

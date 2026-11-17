@@ -21,7 +21,7 @@ export function WhatsNewPanel({ onClose }: { onClose: () => void }) {
       <div
         role="dialog"
         aria-label="what's new"
-        className="absolute right-0 top-full mt-1 max-h-[70vh] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto glass-pop glass-rise rounded-pop p-3"
+        className="absolute right-0 top-full mt-1 max-h-[70dvh] w-[min(20rem,calc(100vw-1rem))] overflow-y-auto overscroll-contain glass-pop glass-rise rounded-pop p-3"
       >
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-meta lowercase text-muted">

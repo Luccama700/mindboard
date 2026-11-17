@@ -47,16 +47,23 @@ function RuleRow({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full min-h-11 items-center gap-3 rounded-lg px-1 py-2 text-left hover:bg-card transition-colors"
+        className="flex w-full min-h-11 items-baseline gap-3 rounded-lg px-1 py-2 text-left hover:bg-card transition-colors"
       >
         <span className="text-muted" aria-hidden>
           ↻
         </span>
-        <span className="flex-1 min-w-0 truncate text-sm text-fg">
-          {rule.title}
-        </span>
-        <span className="text-meta text-muted shrink-0">
-          {scheduleLabel(rule)}
+        {/* Title and schedule share a wrapping row: side by side with the
+            schedule pushed right when both fit, the schedule on its own line
+            when they do not. It used to be shrink-0 beside the title, so a
+            long one ("mon/wed/fri · 17:30 · 30m · group") pushed the row
+            wider than a phone and the whole page scrolled sideways. */}
+        <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <span className="min-w-0 max-w-full flex-auto truncate text-sm text-fg">
+            {rule.title}
+          </span>
+          <span className="min-w-0 max-w-full truncate text-meta text-muted">
+            {scheduleLabel(rule)}
+          </span>
         </span>
       </button>
 

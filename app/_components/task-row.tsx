@@ -136,7 +136,7 @@ export function TaskRow({
         <button
           onClick={() => onToggle(task)}
           aria-label={isDone ? "mark as todo" : "mark as done"}
-          className={`press flex-shrink-0 w-7 h-7 border-2 rounded-full transition-all flex items-center justify-center ${
+          className={`press tap-44 flex-shrink-0 w-7 h-7 border-2 rounded-full transition-all flex items-center justify-center ${
             isDone
               ? "bg-accent border-accent"
               : isOverdue
@@ -168,7 +168,7 @@ export function TaskRow({
 
         <button
           onClick={toggleOpen}
-          className="flex-1 min-w-0 text-left py-1"
+          className="tap-y flex-1 min-w-0 text-left py-1"
         >
           <p
             className={`text-base truncate transition-colors ${
@@ -191,11 +191,14 @@ export function TaskRow({
             {task.title}
           </p>
           {showSubtitle && !isDone && (
-            <p className="text-[10px] tracking-widest uppercase mt-0.5 flex items-center gap-1.5">
+            // Wraps between facts, never inside one: as a single flex line
+            // each span broke on its own on a phone ("ceramics studio /
+            // project", "due / today"), which read as columns of fragments.
+            <p className="text-[10px] tracking-widest uppercase mt-0.5 flex flex-wrap items-center gap-x-1.5 whitespace-nowrap">
               {hasGroupInfo && (
                 <span
                   style={{ color: groupColor ?? "var(--muted)" }}
-                  className={!groupName ? "italic" : ""}
+                  className={`min-w-0 max-w-full truncate ${!groupName ? "italic" : ""}`}
                 >
                   {groupName ?? "inbox"}
                 </span>
@@ -412,7 +415,7 @@ function EditPanel({
         <button
           type="button"
           onClick={() => onUpdate(task.id, { dueDate: isToday ? null : today })}
-          className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
+          className={`inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
             isToday
               ? "bg-accent text-accent-fg border-accent"
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -424,7 +427,7 @@ function EditPanel({
         <button
           type="button"
           onClick={openDatePicker}
-          className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
+          className={`inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
             isCustomDate
               ? "bg-accent text-accent-fg border-accent"
               : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -505,7 +508,7 @@ function EditPanel({
                       );
                     })
                   }
-                  className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                  className="inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
                 >
                   {pushing ? "pushing…" : "→ calendar event"}
                 </button>
@@ -527,7 +530,7 @@ function EditPanel({
             key={p}
             type="button"
             onClick={() => onUpdate(task.id, { priority: p })}
-            className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
+            className={`inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
               task.priority === p
                 ? p === "high"
                   ? "bg-danger text-white border-danger"
@@ -555,7 +558,7 @@ function EditPanel({
               onClick={() =>
                 onUpdate(task.id, { estimatedMinutes: active ? null : m })
               }
-              className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
+              className={`inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
                 active
                   ? "bg-accent text-accent-fg border-accent"
                   : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -599,7 +602,7 @@ function EditPanel({
                 setFollowupOpen((v) => !v);
               }}
               aria-expanded={followupOpen}
-              className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors disabled:opacity-50 ${
+              className={`inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors disabled:opacity-50 ${
                 followupOpen
                   ? "bg-accent text-accent-fg border-accent"
                   : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -610,7 +613,7 @@ function EditPanel({
             <button
               type="button"
               onClick={() => setDispatchOpen(true)}
-              className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors"
+              className="inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors"
             >
               ✦ do it
             </button>
@@ -653,7 +656,7 @@ function EditPanel({
                   type="button"
                   disabled={followupPending}
                   onClick={() => setFollowupOpen(false)}
-                  className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                  className="inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
                 >
                   cancel
                 </button>
@@ -661,7 +664,7 @@ function EditPanel({
                   type="button"
                   disabled={followupPending || !followupDraft.trim()}
                   onClick={sendFollowup}
-                  className="inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
+                  className="inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
                 >
                   {followupPending ? "queuing…" : "send to claude"}
                 </button>
@@ -695,7 +698,7 @@ function EditPanel({
                 type="button"
                 disabled={aiPending}
                 onClick={() => changeAiState("approved")}
-                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
+                className="min-h-11 text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full bg-accent text-accent-fg border-accent transition-colors disabled:opacity-50"
               >
                 approve
               </button>
@@ -703,7 +706,7 @@ function EditPanel({
                 type="button"
                 disabled={aiPending}
                 onClick={() => changeAiState(null)}
-                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                className="min-h-11 text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
               >
                 dismiss
               </button>
@@ -714,7 +717,7 @@ function EditPanel({
               type="button"
               disabled={aiPending}
               onClick={() => changeAiState("planned")}
-              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              className="min-h-11 text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
             >
               un-approve
             </button>
@@ -724,7 +727,7 @@ function EditPanel({
               type="button"
               disabled={aiPending}
               onClick={() => changeAiState("approved")}
-              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              className="min-h-11 text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
             >
               retry tonight
             </button>
@@ -738,7 +741,7 @@ function EditPanel({
                 type="button"
                 disabled={aiPending}
                 onClick={() => changeAiState(null)}
-                className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                className="min-h-11 text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
               >
                 clear
               </button>
@@ -749,7 +752,7 @@ function EditPanel({
               type="button"
               disabled={aiPending}
               onClick={() => changeAiState(null)}
-              className="text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+              className="min-h-11 text-[10px] tracking-widest uppercase px-2.5 py-1.5 border rounded-full border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
             >
               clear
             </button>

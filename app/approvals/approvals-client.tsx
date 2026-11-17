@@ -121,7 +121,7 @@ export function ApprovalsClient({ items }: { items: PendingProposal[] }) {
               </span>
             </div>
 
-            <p className="text-body text-fg leading-relaxed whitespace-pre-wrap">
+            <p className="text-body text-fg leading-relaxed whitespace-pre-wrap break-words">
               {state.kind === "approved" ? state.preview : item.preview}
             </p>
 

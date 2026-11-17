@@ -199,7 +199,7 @@ export function CourseChatClient({
                 {message.content}
               </p>
             ) : (
-              <div className="text-body text-fg/90 whitespace-pre-wrap leading-relaxed">
+              <div className="text-body text-fg/90 whitespace-pre-wrap break-words leading-relaxed">
                 {message.content}
                 {busy && index === messages.length - 1 && (
                   <span className="text-accent">▮</span>
@@ -210,7 +210,7 @@ export function CourseChatClient({
               <div className="space-y-1 pt-1">
                 {message.citations.map((citation) => (
                   <details key={citation.n} className="text-meta text-muted">
-                    <summary className="cursor-pointer list-none min-h-6">
+                    <summary className="cursor-pointer list-none py-3">
                       <span className="text-accent">[{citation.n}]</span>{" "}
                       {citation.href ? (
                         <Link

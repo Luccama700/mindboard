@@ -365,7 +365,7 @@ function IncomeForm({
         className="w-full bg-transparent text-fg placeholder-muted text-base font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
       />
 
-      <label className="flex min-h-9 items-center gap-2 text-[10px] tracking-widest uppercase text-muted cursor-pointer">
+      <label className="flex min-h-11 items-center gap-2 text-[10px] tracking-widest uppercase text-muted cursor-pointer">
         <input
           type="checkbox"
           checked={fixed}
@@ -625,7 +625,7 @@ function IncomeRow({
             className="w-full bg-transparent text-fg text-base font-bold focus:outline-none border-b border-line-strong focus:border-accent pb-2 transition-colors"
           />
 
-          <label className="flex min-h-9 items-center gap-2 text-[10px] tracking-widest uppercase text-muted cursor-pointer">
+          <label className="flex min-h-11 items-center gap-2 text-[10px] tracking-widest uppercase text-muted cursor-pointer">
             <input
               type="checkbox"
               checked={isFixed}
@@ -715,7 +715,7 @@ function IncomeRow({
                 setEditOpen(false);
                 onArchive(source.id);
               }}
-              className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
+              className="tap-y text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
             >
               delete
             </button>

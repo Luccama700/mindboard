@@ -246,7 +246,7 @@ export function PeopleClient({
             );
           }}
         >
-          <pre className="whitespace-pre-wrap font-mono text-body text-fg">
+          <pre className="whitespace-pre-wrap break-words font-mono text-body text-fg">
             {pendingProposal.receipt}
           </pre>
         </ProposalCard>
@@ -324,7 +324,7 @@ export function PeopleClient({
                           else router.refresh();
                         });
                       }}
-                      className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11"
+                      className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11 min-w-11"
                     >
                       restore
                     </button>
@@ -366,7 +366,7 @@ export function PeopleClient({
                             }
                           });
                         }}
-                        className="text-label uppercase text-muted hover:text-danger transition-colors min-h-11"
+                        className="text-label uppercase text-muted hover:text-danger transition-colors min-h-11 min-w-11"
                       >
                         delete forever
                       </button>
@@ -553,10 +553,17 @@ function RosterRow({
 
   const row = (
     <>
-      <span className="flex min-w-0 items-baseline gap-3">
-        <span className="text-body text-fg lowercase shrink-0">{entry.name}</span>
+      {/* The name keeps its width and the intro takes what is left; a name
+          longer than the row truncates instead of pushing the page wider
+          than the screen (it used to be shrink-0). */}
+      <span className="flex min-w-0 flex-1 items-baseline gap-3">
+        <span className="min-w-0 truncate text-body text-fg lowercase">
+          {entry.name}
+        </span>
         {entry.intro && (
-          <span className="text-meta text-muted truncate">{entry.intro}</span>
+          <span className="min-w-0 flex-1 basis-0 truncate text-meta text-muted">
+            {entry.intro}
+          </span>
         )}
       </span>
       {band && <span className="text-meta text-muted shrink-0">{band}</span>}

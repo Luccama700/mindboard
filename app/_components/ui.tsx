@@ -7,7 +7,7 @@ import type { ButtonHTMLAttributes } from "react";
 type ButtonVariant = "outline" | "accent" | "quiet" | "danger";
 
 const BUTTON_BASE =
-  "inline-flex items-center justify-center gap-1.5 min-h-11 px-4 text-action lowercase border rounded-full transition-[color,background-color,border-color,transform,opacity] duration-150 active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none";
+  "inline-flex items-center justify-center gap-1.5 min-h-11 min-w-11 px-4 text-action lowercase border rounded-full transition-[color,background-color,border-color,transform,opacity] duration-150 active:scale-[.98] disabled:opacity-50 disabled:pointer-events-none";
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   outline:
@@ -39,7 +39,7 @@ export function Button({
 // The input recipe (the capture field's): recessed glass well, hairline
 // border, accent focus ring — the app's one text-entry look.
 export const INPUT_CLASS =
-  "w-full min-w-0 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-body px-3 py-2 focus:outline-none transition-colors font-mono";
+  "w-full min-w-0 min-h-11 bg-glass-well rounded-field border border-line-strong focus:border-accent text-fg placeholder-muted text-body px-3 py-2 focus:outline-none transition-colors font-mono";
 
 export function SectionRuler({
   label,

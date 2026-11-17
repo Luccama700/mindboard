@@ -163,7 +163,7 @@ export function LogControl({
                         setEditingId(row.id);
                         setEditSummary(row.summary ?? "");
                       }}
-                      className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11"
+                      className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11 min-w-11"
                     >
                       edit
                     </button>
@@ -172,7 +172,7 @@ export function LogControl({
                       onClick={() => {
                         void deleteInteraction(row.id).then(() => router.refresh());
                       }}
-                      className="text-label uppercase text-muted hover:text-danger transition-colors min-h-11"
+                      className="text-label uppercase text-muted hover:text-danger transition-colors min-h-11 min-w-11"
                     >
                       delete
                     </button>

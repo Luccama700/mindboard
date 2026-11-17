@@ -34,11 +34,13 @@ export default async function BrainGraphPage() {
   }
 
   return (
-    <main className="h-dvh flex flex-col">
-      <header className="flex items-center justify-between px-5 pt-8 pb-6 shrink-0">
+    // The shell pads the body by --app-top (status bar + chrome row), so a
+    // full-height page has to give that back or it scrolls by exactly one band.
+    <main className="h-[calc(100dvh-var(--app-top,0px))] flex flex-col">
+      <header className="flex items-center justify-between px-5 pt-3 pb-4 shrink-0 lg:pt-8 lg:pb-6">
         <Link
           href="/brain"
-          className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
+          className="tap-y text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
         >
           ← brain
         </Link>

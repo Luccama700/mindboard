@@ -147,7 +147,7 @@ export function RecurringEditPanel({
   }
 
   const chipBase =
-    "inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors";
+    "inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors";
   const chipOn = "bg-accent text-accent-fg border-accent";
   const chipOff = "border-line-strong text-muted hover:border-fg hover:text-fg";
 
@@ -327,7 +327,7 @@ export function RecurringEditPanel({
             key={p}
             type="button"
             onClick={() => onUpdate({ priority: p })}
-            className={`inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
+            className={`inline-flex items-center justify-center min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-2.5 border rounded-full transition-colors ${
               rule.priority === p
                 ? p === "high"
                   ? "bg-danger text-white border-danger"

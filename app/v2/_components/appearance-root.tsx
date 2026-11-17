@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -193,6 +194,37 @@ export function AppearanceRoot({
     () => ({ appearance, tokens, choose, openPanel }),
     [appearance, tokens, choose, openPanel],
   );
+
+  /**
+   * The page colour, lent to the document while a v2 screen is mounted.
+   *
+   * This root paints its own background because it cannot style the elements
+   * above it, and that holds for everything a stylesheet can reach. What it
+   * leaves out is the two places a phone shows the colour BEHIND the page:
+   * the strip an overscroll bounce pulls into view above and below it, and the
+   * browser chrome tinted from `theme-color`. Both come from <html>, which
+   * carries the old app's theme, so a Paper scheme bounced to reveal a
+   * near-black band and a black scheme sat under a cream one. Lent, not
+   * taken: both are put back exactly as they were found on the way out.
+   */
+  useEffect(() => {
+    const page = tokens["--v2-page"];
+    if (!page) return;
+    const html = document.documentElement;
+    const before = html.style.backgroundColor;
+    html.style.backgroundColor = page;
+    const metas = Array.from(
+      document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
+    );
+    const tints = metas.map((meta) => meta.content);
+    for (const meta of metas) meta.content = page;
+    return () => {
+      html.style.backgroundColor = before;
+      metas.forEach((meta, index) => {
+        meta.content = tints[index];
+      });
+    };
+  }, [tokens]);
 
   return (
     <div

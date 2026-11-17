@@ -84,13 +84,18 @@ export function HistoryClient({
                   {e.title}
                 </span>
                 {e.group_name && (
-                  <span className="inline-flex items-center gap-1.5 flex-shrink-0 text-[10px] tracking-widest uppercase">
+                  // Capped, so a long group name truncates itself instead of
+                  // squeezing the title down to a word on a phone.
+                  <span className="inline-flex min-w-0 max-w-[38%] items-center gap-1.5 flex-shrink-0 text-[10px] tracking-widest uppercase">
                     <span
-                      className="h-2 w-2 rounded-full"
+                      className="h-2 w-2 flex-shrink-0 rounded-full"
                       style={{ backgroundColor: e.group_color ?? "var(--muted)" }}
                       aria-hidden
                     />
-                    <span style={{ color: e.group_color ?? "var(--muted)" }}>
+                    <span
+                      className="truncate"
+                      style={{ color: e.group_color ?? "var(--muted)" }}
+                    >
                       {e.group_name}
                     </span>
                   </span>
@@ -102,7 +107,7 @@ export function HistoryClient({
                   <button
                     type="button"
                     onClick={() => onReopen(e.id)}
-                    className="press flex-shrink-0 inline-flex items-center min-h-11 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+                    className="press flex-shrink-0 inline-flex items-center min-h-11 min-w-11 justify-end text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
                   >
                     reopen
                   </button>

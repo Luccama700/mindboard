@@ -169,15 +169,19 @@ export function NoteView({
   ];
 
   return (
-    <article>
+    // break-words: a pasted URL or a long_snake_case_identifier in a note is
+    // one unbreakable word, and without it that one word sets the page's
+    // width on a phone. Code blocks and tables are unaffected: they scroll
+    // inside their own overflow-x wrappers.
+    <article className="min-w-0 break-words">
       {metaEntries.length > 0 && (
         <dl className="flex flex-wrap gap-x-5 gap-y-1 mb-6 glass-panel px-4 py-3">
           {metaEntries.map(([key, value]) => (
-            <div key={key} className="flex items-baseline gap-2">
-              <dt className="text-[10px] tracking-widest uppercase text-muted">
+            <div key={key} className="flex min-w-0 max-w-full items-baseline gap-2">
+              <dt className="shrink-0 text-[10px] tracking-widest uppercase text-muted">
                 {key}
               </dt>
-              <dd className="text-xs">{value}</dd>
+              <dd className="min-w-0 text-xs">{value}</dd>
             </div>
           ))}
         </dl>

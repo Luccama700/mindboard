@@ -1040,7 +1040,7 @@ export function InventoryClient({
             pending={proposalPending}
             error={proposalError}
           >
-            <pre className="whitespace-pre-wrap text-sm text-fg leading-relaxed">
+            <pre className="whitespace-pre-wrap break-words text-sm text-fg leading-relaxed">
               {proposal.preview}
             </pre>
           </ProposalCard>
@@ -1283,7 +1283,7 @@ export function InventoryClient({
         </details>
 
         {(actionError || selectMode) && (
-          <div className="sticky bottom-64 z-50 lg:bottom-52 space-y-2">
+          <div className="sticky bottom-[calc(var(--dock-clear)+0.75rem)] z-50 lg:bottom-52 space-y-2">
             {actionError && (
               <button
                 type="button"
@@ -1562,7 +1562,7 @@ function GroupEditPanel({
       <div className="flex justify-end pt-2">
         <button
           onClick={() => onDelete(group.id)}
-          className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
+          className="tap-y text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
         >
           delete group
         </button>
@@ -1734,25 +1734,32 @@ function ItemRow({
               </span>
             )}
           </span>
-          <span
-            className={`flex-1 min-w-0 truncate text-sm ${out ? "text-muted" : "text-fg"}`}
-          >
-            {item.name}
-            {item.priority === "high" && (
-              <span className="ml-2 text-[10px] text-danger" aria-label="high priority">
-                !!!
+          {/* On a phone the stepper takes 152px of the row, and with the
+              status beside the name ("≈ nov 27") the name was left about
+              five letters ("Coffe…"). Below sm the status sits under the
+              name, so each gets the full width; from sm they are side by
+              side as before. */}
+          <span className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-center sm:gap-3">
+            <span
+              className={`min-w-0 truncate text-sm sm:flex-1 ${out ? "text-muted" : "text-fg"}`}
+            >
+              {item.name}
+              {item.priority === "high" && (
+                <span className="ml-2 text-[10px] text-danger" aria-label="high priority">
+                  !!!
+                </span>
+              )}
+            </span>
+            {statusLabel !== null && (
+              <span
+                className={`min-w-0 truncate text-meta sm:max-w-[45%] sm:flex-shrink-0 ${
+                  hint.status !== "ok" ? "text-danger" : "text-muted"
+                }`}
+              >
+                {statusLabel}
               </span>
             )}
           </span>
-          {statusLabel !== null && (
-            <span
-              className={`flex-shrink-0 max-w-[45%] truncate text-meta ${
-                hint.status !== "ok" ? "text-danger" : "text-muted"
-              }`}
-            >
-              {statusLabel}
-            </span>
-          )}
         </button>
         {!selectMode && (
           <button
@@ -2324,7 +2331,7 @@ function ItemDetail({
                 type="button"
                 onClick={onGenerate}
                 disabled={busy}
-                className="text-[10px] tracking-widest uppercase px-3 py-2 rounded-full border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
+                className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 rounded-full border border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
               >
                 {busy ? "working…" : "generate"}
               </button>
@@ -2332,7 +2339,7 @@ function ItemDetail({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={busy}
-                className="text-[10px] tracking-widest uppercase px-3 py-2 rounded-full border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
+                className="min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 rounded-full border border-line-strong text-muted hover:border-fg hover:text-fg transition-colors disabled:opacity-50"
               >
                 upload
               </button>
@@ -2341,7 +2348,7 @@ function ItemDetail({
                   type="button"
                   onClick={() => onUpdate(item.id, { image_url: null })}
                   disabled={busy}
-                  className="text-[10px] tracking-widest uppercase px-3 py-2 text-danger hover:text-danger-hover transition-colors disabled:opacity-50"
+                  className="tap-y text-[10px] tracking-widest uppercase px-3 py-2 text-danger hover:text-danger-hover transition-colors disabled:opacity-50"
                 >
                   remove
                 </button>
@@ -2693,7 +2700,7 @@ function ShoppingListPanel({
               <button
                 type="button"
                 onClick={() => onOpenItem(entry.id)}
-                className="flex-1 min-w-0 text-left truncate text-sm text-fg hover:underline"
+                className="flex-1 min-w-0 py-3 -my-3 text-left truncate text-sm text-fg hover:underline"
               >
                 {entry.name}
                 <span className="ml-2 text-meta text-muted tabular-nums">
@@ -2723,7 +2730,7 @@ function ShoppingListPanel({
                   type="button"
                   onClick={() => onUpdateItem(entry.id, { shopping_pinned: false })}
                   aria-label={`remove ${entry.name} from shopping list`}
-                  className="min-h-9 px-2 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+                  className="min-h-11 px-2 text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
                 >
                   unpin
                 </button>
@@ -2747,7 +2754,7 @@ function ShoppingListPanel({
             type="button"
             onClick={refreshPrices}
             disabled={lookingUp}
-            className="ml-auto min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-50"
+            className="min-h-11 ml-auto px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors disabled:opacity-50"
           >
             {lookingUp ? "looking up…" : "look up prices"}
           </button>
@@ -2767,7 +2774,7 @@ function ShoppingListPanel({
           />
           <button
             type="submit"
-            className="min-h-9 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
+            className="min-h-11 px-3 rounded-full text-[10px] tracking-widest uppercase border border-line-strong text-fg hover:border-accent transition-colors"
           >
             pin
           </button>
@@ -2913,7 +2920,7 @@ function RowPrice({
         setEditing(true);
       }}
       aria-label={`edit price for ${entry.name}`}
-      className={`min-h-9 px-2 text-sm tabular-nums transition-colors ${
+      className={`min-h-11 px-2 text-sm tabular-nums transition-colors ${
         entry.estPrice === null
           ? "text-muted hover:text-fg"
           : entry.priceSource === "ai"

@@ -192,7 +192,7 @@ function CategoryRow({
                 setEditOpen(false);
                 onArchive(category.id);
               }}
-              className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
+              className="tap-y text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
             >
               archive
             </button>

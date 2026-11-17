@@ -783,7 +783,7 @@ export function DashboardCalendar({
             type="button"
             onClick={() => setErrorMessage(null)}
             aria-label="dismiss"
-            className="text-danger hover:text-danger-hover text-lg leading-none"
+            className="text-danger hover:text-danger-hover text-lg leading-none tap-44"
           >
             ×
           </button>

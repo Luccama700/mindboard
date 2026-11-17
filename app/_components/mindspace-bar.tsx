@@ -15,7 +15,7 @@ export function MindspaceBar({
     <Link
       href="/mindspace"
       aria-label="mindspace attention"
-      className="press block py-2 -my-1"
+      className="press block py-[19px] -my-[15px]"
     >
       <div
         className="flex h-1.5 rounded-full overflow-hidden ring-1 ring-hairline"

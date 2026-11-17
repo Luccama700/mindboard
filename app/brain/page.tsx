@@ -89,7 +89,7 @@ export default async function BrainPage() {
         <header className="flex items-center justify-between mb-10">
           <Link
             href="/"
-            className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
+            className="tap-y text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
           >
             ← mindboard
           </Link>
@@ -122,10 +122,10 @@ export default async function BrainPage() {
 
   return (
     <main className="min-h-screen px-5 pt-8 pb-64 max-w-2xl mx-auto">
-      <header className="flex items-center justify-between mb-10 pr-10 lg:pr-0">
+      <header className="flex items-center justify-between mb-10">
         <Link
           href="/"
-          className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
+          className="tap-y text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
         >
           ← mindboard
         </Link>

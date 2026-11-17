@@ -103,16 +103,28 @@ export function Sheet({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="absolute left-0 right-0 bottom-0 glass rounded-t-sheet rounded-b-none border-b-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)] max-h-[80vh] overflow-y-auto focus:outline-none lg:left-1/2 lg:right-auto lg:w-[28rem] lg:-translate-x-1/2"
+        // dvh, not vh: in a Safari tab 80vh is measured against the viewport
+        // with the toolbars retracted, so the sheet's top (its title and the
+        // close button) could sit above what is actually on screen.
+        // overscroll-contain keeps a flick at the end of the sheet from
+        // scrolling the dashboard behind the scrim.
+        className="absolute left-0 right-0 bottom-0 glass rounded-t-sheet rounded-b-none border-b-0 p-4 pt-2 pb-[max(env(safe-area-inset-bottom),1rem)] max-h-[85dvh] overflow-y-auto overscroll-contain focus:outline-none lg:left-1/2 lg:right-auto lg:w-[28rem] lg:-translate-x-1/2 lg:pt-4"
       >
         <div className="sheet-rise">
+          {/* The grabber every iOS sheet has. Decorative here (the sheet
+              closes from the scrim, the × or Escape), it is what makes the
+              panel read as a sheet rather than a second page. */}
+          <div
+            aria-hidden="true"
+            className="mx-auto mb-1 h-1 w-9 rounded-full bg-line-subtle lg:hidden"
+          />
           <div className="flex items-center justify-between mb-4">
             <p className="text-label uppercase text-muted">{title}</p>
             <button
               type="button"
               onClick={onClose}
               aria-label="close sheet"
-              className="min-h-11 px-3 text-muted hover:text-fg transition-colors text-lg leading-none"
+              className="-mr-2 min-h-11 min-w-11 px-3 text-muted hover:text-fg transition-colors text-lg leading-none"
             >
               ×
             </button>
