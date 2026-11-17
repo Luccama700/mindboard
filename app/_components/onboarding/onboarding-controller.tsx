@@ -199,6 +199,9 @@ export function OnboardingController({
               </button>
             </div>
           )}
+          {/* The three controls float over the page once it scrolls, so each
+              carries its own backing: a row of bare outlines over a line of
+              text read as a typo in the text. */}
           <div className="flex h-[var(--chrome-top)] items-center">
             {/* Mobile-only: desktop already shows the week pane beside the
                 stream, so the shortcut would be a dead-end there. */}
@@ -209,7 +212,7 @@ export function OnboardingController({
             >
               <span
                 aria-hidden
-                className="flex h-6 w-6 items-center justify-center rounded-full border border-line-strong text-meta"
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-line-strong bg-page/80 text-meta backdrop-blur-sm"
               >
                 ▦
               </span>
@@ -226,7 +229,7 @@ export function OnboardingController({
             >
               <span
                 aria-hidden
-                className="relative flex h-6 w-6 items-center justify-center rounded-full border border-line-strong text-meta"
+                className="relative flex h-6 w-6 items-center justify-center rounded-full border border-line-strong bg-page/80 text-meta backdrop-blur-sm"
               >
                 ※
                 {newsUnread && (
@@ -249,7 +252,7 @@ export function OnboardingController({
             >
               <span
                 aria-hidden
-                className="flex h-6 w-6 items-center justify-center rounded-full border border-line-strong text-meta"
+                className="flex h-6 w-6 items-center justify-center rounded-full border border-line-strong bg-page/80 text-meta backdrop-blur-sm"
               >
                 ?
               </span>
