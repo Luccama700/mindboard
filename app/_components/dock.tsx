@@ -29,7 +29,7 @@ import { PeopleGroupsManager } from "./people-groups-manager";
 import type { PersonGroup } from "./people-types";
 import { formatMoney } from "./money";
 import { ProposalCard } from "./proposal-card";
-import { emitTaskOptimistic, emitTaskReplace } from "./capture-bus";
+import { emitTaskOptimistic, emitTaskRemove, emitTaskReplace } from "./capture-bus";
 import { formatDue } from "./date-utils";
 import type { Task } from "./types";
 
@@ -123,6 +123,16 @@ export function Dock({
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [dueDate, setDueDate] = useState<string | null>(() => today);
+  // The chip is "today" as an intent. When the server hands down a new day
+  // (the app left open past midnight), a chip still on the old day moves with
+  // it; a date the user picked stays.
+  const [dueDateDay, setDueDateDay] = useState(today);
+  if (dueDateDay !== today) {
+    setDueDateDay(today);
+    if (dueDate === dueDateDay) setDueDate(today);
+  }
+  // A task or routine that did not save: said here, with the title put back.
+  const [captureError, setCaptureError] = useState<string | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [priority, setPriority] = useState<"low" | "med" | "high">("med");
   const [groupOpen, setGroupOpen] = useState(false);
@@ -318,7 +328,7 @@ export function Dock({
     setSpendError(null);
     void recordBalanceChange({
       accountId: account.id,
-      newBalance: account.balance - draft.amount,
+      spent: draft.amount,
       categoryId: draft.categoryId,
       note: draft.description || null,
     }).then((result) => {
@@ -391,7 +401,10 @@ export function Dock({
       const rule = effectiveRule;
       if (!rt || busy) return;
 
+      const typed = title;
+      const typedNotes = notes;
       setBusy(true);
+      setCaptureError(null);
       setTitle("");
       setNotes("");
       setTimeDisabledFor(null);
@@ -400,21 +413,34 @@ export function Dock({
       setDraftDays([]);
       setRepeatOpen(false);
 
-      await createRecurringTask({
-        title: rt,
-        groupId: selectedGroupId,
-        notes: notes.trim() || null,
-        priority,
-        frequency: rule.frequency,
-        weekdays: rule.weekdays,
-        dayOfMonth: rule.day_of_month,
-        intervalDays: rule.interval_days,
-        startDate: rule.start_date,
-        dueTime: parsedTime?.time ?? null,
-      });
+      let failed: string | null = null;
+      try {
+        const result = await createRecurringTask({
+          title: rt,
+          groupId: selectedGroupId,
+          notes: typedNotes.trim() || null,
+          priority,
+          frequency: rule.frequency,
+          weekdays: rule.weekdays,
+          dayOfMonth: rule.day_of_month,
+          intervalDays: rule.interval_days,
+          startDate: rule.start_date,
+          dueTime: parsedTime?.time ?? null,
+        });
+        failed = result?.error ?? null;
+      } catch {
+        failed = "couldn't reach the server";
+      } finally {
+        setBusy(false);
+      }
 
-      setPriority("med");
-      setBusy(false);
+      if (failed) {
+        setTitle(typed);
+        setNotes(typedNotes);
+        setCaptureError(`not saved: ${failed}`);
+      } else {
+        setPriority("med");
+      }
       inputRef.current?.focus();
       return;
     }
@@ -431,7 +457,9 @@ export function Dock({
     const markdownNotes = notes.trim() || null;
     if (!t || busy) return;
 
+    const typed = title;
     setBusy(true);
+    setCaptureError(null);
     setTitle("");
     setNotes("");
     setTimeDisabledFor(null);
@@ -460,21 +488,35 @@ export function Dock({
     emitTaskOptimistic(optimisticTask);
     setPriority("med");
 
-    const result = await createTask({
-      title: t,
-      groupId: selectedGroupId,
-      dueDate,
-      dueTime,
-      notes: markdownNotes,
-      priority,
-      estimatedMinutes,
-    });
-
-    if (!result.error && result.task) {
-      emitTaskReplace(tempId, result.task as Task);
+    let failed: string | null = null;
+    try {
+      const result = await createTask({
+        title: t,
+        groupId: selectedGroupId,
+        dueDate,
+        dueTime,
+        notes: markdownNotes,
+        priority,
+        estimatedMinutes,
+      });
+      if (!result.error && result.task) {
+        emitTaskReplace(tempId, result.task as Task);
+      } else {
+        failed = result.error ?? "something went wrong";
+      }
+    } catch {
+      failed = "couldn't reach the server";
+    } finally {
+      setBusy(false);
     }
 
-    setBusy(false);
+    if (failed) {
+      // Nothing was saved: drop the stand-in card and give the words back.
+      emitTaskRemove(tempId);
+      setTitle(typed);
+      setNotes(markdownNotes ?? "");
+      setCaptureError(`not saved: ${failed}`);
+    }
     inputRef.current?.focus();
   }
 
@@ -735,6 +777,12 @@ export function Dock({
             </div>
           </ProposalCard>
         </div>
+      )}
+
+      {captureError && !spendDraft && !planMode && capture.mode === "task" && (
+        <p role="alert" className="mb-2 text-meta text-danger">
+          {captureError}
+        </p>
       )}
 
       {!spendDraft && (planMode || capture.mode !== "task") && (

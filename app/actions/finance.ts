@@ -256,9 +256,17 @@ export async function archiveAccount(id: string) {
 // stamp a reconciliation anchor at the new balance (the anchor — not the rows —
 // is what pins the derived balance; any drift is absorbed by it). A decrease
 // ('out') carries a spending category; an increase ('in') is recorded silently.
+//
+// SPENT, NOT A BALANCE. A capture surface (the dock, a bill sheet) knows what
+// was spent, not what the balance is now: its copy of the balance can be stale
+// behind another tab, the phone or an MCP write. It sends `spent` and the new
+// balance is worked out here from the stored one. Sending a stale `newBalance`
+// instead recorded the difference as a wrong amount, even as income. Exactly
+// one of the two must be given; `newBalance` stays for "set the balance to X".
 export async function recordBalanceChange(input: {
   accountId: string;
-  newBalance: number;
+  newBalance?: number;
+  spent?: number;
   occurredAt?: string | null;
   categoryId?: string | null;
   // For a decrease, the spent amount may be split across several categories
@@ -268,8 +276,14 @@ export async function recordBalanceChange(input: {
   allocations?: { categoryId: string | null; amount: number }[];
   note?: string | null;
 }) {
-  const newBalance = toCents(input.newBalance);
-  if (newBalance === null) return { error: "invalid balance" };
+  const bySpend = input.spent !== undefined && input.spent !== null;
+  if (bySpend === (input.newBalance !== undefined && input.newBalance !== null)) {
+    return { error: "give either a new balance or an amount spent" };
+  }
+  const spent = bySpend ? toCents(input.spent as number) : null;
+  if (bySpend && (spent === null || spent <= 0)) return { error: "invalid amount" };
+  const givenBalance = bySpend ? null : toCents(input.newBalance as number);
+  if (!bySpend && givenBalance === null) return { error: "invalid balance" };
 
   // Reject a malformed explicit date up front (zone-independent), preserving
   // the original error precedence; a missing date still defaults to the
@@ -293,6 +307,10 @@ export async function recordBalanceChange(input: {
   const today = await todayKey(supabase, user.id);
   const occurredAt = normalizeOccurredAt(input.occurredAt, today);
   if (occurredAt === null) return { error: "invalid date" };
+  // The reconciliation anchor below is stamped `today`; a row dated after it
+  // sits outside the anchor and is subtracted a second time on the next
+  // recompute. A change that has not happened yet is not a balance change.
+  if (occurredAt > today) return { error: "that date is in the future" };
 
   const { data: account, error: loadError } = await supabase
     .from("accounts")
@@ -304,6 +322,9 @@ export async function recordBalanceChange(input: {
   if (!account) return { error: "account not found" };
 
   const current = toCents(Number(account.balance)) ?? 0;
+  const newBalance = (
+    spent !== null ? toCents(current - spent) : givenBalance
+  ) as number;
   const delta = toCents(newBalance - current) ?? 0;
   if (delta === 0)
     return { error: null, change: null, changes: [], newBalance };

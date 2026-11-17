@@ -55,11 +55,14 @@ export async function deleteMyAccount(input: {
     return { error: "account deletion is not configured on this deployment" };
   }
 
+  // List every bucket first, then remove. Listing and removing one bucket at a
+  // time meant a listing failure in a later bucket said "nothing was deleted"
+  // after earlier buckets had already been emptied.
+  const listed: { bucket: string; paths: string[] }[] = [];
   for (const bucket of USER_STORAGE_BUCKETS) {
     const store = service.storage.from(bucket);
-    let paths: string[];
     try {
-      paths = await collectObjectPaths(
+      const paths = await collectObjectPaths(
         async (prefix, offset, limit) => {
           const { data, error } = await store.list(prefix, { offset, limit });
           if (error) throw new Error(error.message);
@@ -70,19 +73,29 @@ export async function deleteMyAccount(input: {
         },
         user.id,
       );
+      listed.push({ bucket, paths });
     } catch {
       return {
         error: `could not list your files in ${bucket} — nothing was deleted. try again in a minute.`,
       };
     }
+  }
 
+  let removed = 0;
+  for (const { bucket, paths } of listed) {
+    const store = service.storage.from(bucket);
     for (const batch of chunk(paths, REMOVE_BATCH)) {
       const { error } = await store.remove(batch);
       if (error) {
+        const already =
+          removed === 0
+            ? "no files were removed"
+            : `${removed} of your files were already removed`;
         return {
-          error: `could not remove your files in ${bucket} — your account was NOT deleted. try again in a minute.`,
+          error: `could not remove your files in ${bucket} — ${already} and your account was NOT deleted. try again in a minute.`,
         };
       }
+      removed += batch.length;
     }
   }
 

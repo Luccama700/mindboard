@@ -751,6 +751,8 @@ export function StreamClient({
               : c,
           ),
         ),
+      onRemove: (tempId) =>
+        setExtraNext((cards) => cards.filter((c) => c.id !== `task:${tempId}`)),
     });
     // `today` decides whether an optimistically captured task belongs in this
     // stream at all, so the subscription has to be rebuilt if the server hands
@@ -760,6 +762,7 @@ export function StreamClient({
   // Resolution is scoped to the section a card left from, so the same entity
   // legitimately reappearing in another section (snooze -> LATER) still shows.
   // The "missed" variant sinks slower (400ms exit, 450ms hide) than "done".
+  const hideTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   function resolve(
     section: SectionKey,
     cardId: string,
@@ -767,12 +770,49 @@ export function StreamClient({
   ) {
     const key = `${section}:${cardId}`;
     setLeaving((prev) => new Map(prev).set(key, variant));
-    setTimeout(
-      () => {
-        setHidden((prev) => new Set(prev).add(key));
-      },
-      variant === "missed" ? 450 : 300,
+    hideTimers.current.set(
+      key,
+      setTimeout(
+        () => {
+          hideTimers.current.delete(key);
+          setHidden((prev) => new Set(prev).add(key));
+        },
+        variant === "missed" ? 450 : 300,
+      ),
     );
+  }
+
+  // The save behind a resolve failed (an error result, or a throw): the card
+  // comes back and the strip says so. Before this the card vanished and the
+  // task stayed open in the database with nothing said, e.g. a routine card
+  // from yesterday tapped done after midnight.
+  async function settle(
+    section: SectionKey,
+    card: StreamCard,
+    save: () => Promise<{ error?: string | null } | undefined>,
+  ) {
+    let error: string | null = null;
+    try {
+      error = (await save())?.error ?? null;
+    } catch {
+      error = "couldn't reach the server";
+    }
+    if (!error) return;
+    const key = `${section}:${card.id}`;
+    const timer = hideTimers.current.get(key);
+    if (timer) clearTimeout(timer);
+    hideTimers.current.delete(key);
+    setLeaving((prev) => {
+      const next = new Map(prev);
+      next.delete(key);
+      return next;
+    });
+    setHidden((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    setStepError(`couldn't save ${card.fact}: ${error}`);
   }
 
   function onDone(section: SectionKey) {
@@ -781,7 +821,7 @@ export function StreamClient({
         const { ruleId, dateKey } = card.entity;
         resolve(section, card.id);
         startTransition(async () => {
-          await completeRecurringOccurrence(ruleId, dateKey);
+          await settle(section, card, () => completeRecurringOccurrence(ruleId, dateKey));
         });
         return;
       }
@@ -789,7 +829,7 @@ export function StreamClient({
       const task = card.entity.task;
       resolve(section, card.id);
       startTransition(async () => {
-        await toggleTaskStatus(task.id, task.status);
+        await settle(section, card, () => toggleTaskStatus(task.id, task.status));
       });
     };
   }
@@ -800,7 +840,7 @@ export function StreamClient({
       const task = card.entity.task;
       resolve(section, card.id, "missed");
       startTransition(async () => {
-        await markTaskMissed(task.id);
+        await settle(section, card, () => markTaskMissed(task.id));
       });
     };
   }
@@ -811,7 +851,9 @@ export function StreamClient({
       const task = card.entity.task;
       resolve(section, card.id);
       startTransition(async () => {
-        await updateTask({ id: task.id, dueDate: dateKey, dueTime: null });
+        await settle(section, card, () =>
+          updateTask({ id: task.id, dueDate: dateKey, dueTime: null }),
+        );
       });
     };
   }
