@@ -77,6 +77,7 @@ import {
   proposeUpsertGoal,
   updateTaskDispatch,
 } from "@/app/lib/mcp/writes";
+import { AGENT_AI_STATES, AI_STATE_FILTERS } from "@/app/lib/mcp/validate";
 import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
 import { MAX_PEOPLE_OPS } from "@/app/lib/mcp/people-ops";
 import { MAX_FINANCE_OPS } from "@/app/lib/mcp/finance-ops";
@@ -227,9 +228,7 @@ const mcpHandler = createMcpHandler(
         description:
           "Open tasks in the user's 'mindboard' group — app-improvement ideas the overnight agent plans and builds. Each carries ai_state (null=untouched, planned=plan in notes awaiting approval, approved=cleared to build, building, built, failed, declined) plus the notes holding the plan. Filter with aiState ('none' = untouched). Advance states via update_task's aiState field — EXCEPT 'approved', which is the user's own build-approval tap in the app (the 'approve' button on the task) and is refused to every AI client.",
         inputSchema: {
-          aiState: z
-            .enum(["none", "planned", "approved", "building", "built", "failed", "declined"])
-            .optional(),
+          aiState: z.enum(AI_STATE_FILTERS).optional(),
         },
       },
       (args, extra) => guard(async () => ok(await listCodeTasks(uid(extra), args))),
@@ -578,7 +577,7 @@ const mcpHandler = createMcpHandler(
           priority: z.enum(["low", "med", "high"]).optional(),
           pushToCalendar: z.boolean().optional(),
           aiState: z
-            .enum(["planned", "building", "built", "failed", "declined"])
+            .enum(AGENT_AI_STATES)
             .nullish()
             .describe(
               "Overnight-agent lifecycle (see list_code_tasks); null clears it. 'approved' is deliberately absent: it is the human build-approval gate (it sends the plan to the user's PC to be built and run) and is refused even if sent — the user grants it with the 'approve' button on the task, or at /approvals.",

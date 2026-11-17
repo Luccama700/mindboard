@@ -269,9 +269,28 @@ export type UpdateTaskInput = {
   aiState?: AiState | null;
 };
 
-// Overnight-agent lifecycle states (docs/overnight-agent-plan.md).
+// Overnight-agent lifecycle states (docs/overnight-agent-plan.md). This list is
+// the single source of truth: it mirrors the tasks_ai_state_check constraint in
+// the latest migration that defines it (supabase/migrations/0052_ai_state_declined.sql),
+// and every zod enum / filter type in the MCP layer derives from it. A
+// hand-copied enum in the update_task tool schema is exactly how 'declined'
+// stayed unreachable for a month after 0052 added it — the overnight triage's
+// verdicts were rejected with invalid_enum_value every night. See
+// __tests__/mcp-ai-state-enum.test.ts.
 export const AI_STATES = ["planned", "approved", "building", "built", "failed", "declined"] as const;
 export type AiState = (typeof AI_STATES)[number];
+
+// The states an AI client may set. 'approved' is the human approval gate
+// (rejected below), so it is subtracted from the canonical list rather than
+// re-listed by hand.
+export type AgentAiState = Exclude<AiState, "approved">;
+export const AGENT_AI_STATES = AI_STATES.filter(
+  (state): state is AgentAiState => state !== "approved",
+) as [AgentAiState, ...AgentAiState[]];
+
+// list_code_tasks' filter: any lifecycle state, plus "none" for ai_state null.
+export const AI_STATE_FILTERS = ["none", ...AI_STATES] as const;
+export type AiStateFilter = (typeof AI_STATE_FILTERS)[number];
 
 export function validateUpdateTask(raw: Record<string, unknown>): Result<UpdateTaskInput> {
   if (typeof raw.taskId !== "string" || !raw.taskId) {
