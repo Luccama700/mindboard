@@ -110,7 +110,14 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 12px;
-  padding: 24px;
+  /* The gallery is the scroller, not the document. A box wider than a phone
+     (the default is 464px) used to widen the page itself, and a phone answers
+     a page wider than its screen by zooming the whole thing out, so the box
+     was no longer the size being looked at. Scrolling inside this element
+     keeps the page at the screen's width and the box at its own. */
+  max-width: 100vw;
+  overflow-x: auto;
+  padding: calc(24px + env(safe-area-inset-top)) 24px 24px;
 }
 
 [data-v2-root] .v2-gallery-line {

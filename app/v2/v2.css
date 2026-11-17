@@ -167,6 +167,8 @@
  * and the order the two stylesheets are injected in is not ours to decide.
  */
 body:has([data-v2-root]) [data-capture-dock],
+body:has([data-v2-root]) [data-dock-fade],
+body:has([data-v2-root]) [data-status-scrim],
 body:has([data-v2-root]) [data-chrome-top] {
   display: none !important;
 }
@@ -197,7 +199,31 @@ body:has([data-v2-root]) {
     min-height: 100dvh;
     margin: 0 auto;
     overflow: hidden;
-    padding-bottom: 92px;
+    /* The installed app draws under the status bar and over the home
+       indicator (the root layout's viewport-fit is cover), so the frame takes
+       both insets: the date starts below the clock, and the room kept for
+       the pinned bar grows by exactly what the bar itself adds for the
+       indicator. Without the second, the bar covered the last row of the day
+       by a few pixels on every phone that has an indicator. Both are 0 in a
+       browser tab. */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+
+  /* The status bar is translucent in the installed app, so a scrolled day
+     would slide under the clock and the two would overprint. A strip of the
+     page colour the height of the inset, pinned over the frame. No height at
+     all in a browser tab. */
+  [data-v2-root] .v2-shell::before {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 9;
+    height: env(safe-area-inset-top);
+    background: var(--v2-page);
+    pointer-events: none;
   }
 
   /* The phone's own reading order, restored over the document's rail, main,
@@ -313,9 +339,22 @@ body:has([data-v2-root]) {
   justify-content: center;
   /* 44px of target in the direction the brief measures, and as little width as
      the swatch needs, so the date keeps its line. */
+  position: relative;
   width: 30px;
   height: 44px;
   border-radius: 10px;
+}
+
+/* The other direction, without taking the width back from the date: the box
+   stays 30px and the part of it that takes a finger reaches 7px past each
+   side, into the gap before the feed dots and into the page gutter. */
+[data-v2-root] .v2-appearance-dot::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -7px;
+  right: -7px;
 }
 
 [data-v2-root] .v2-appearance-dot span {
@@ -336,7 +375,7 @@ body:has([data-v2-root]) {
 }
 
 [data-v2-root] .v2-allday-label {
-  font: 500 10px/14px var(--v2-display);
+  font: 500 11px/14px var(--v2-display);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--v2-ink-3);
