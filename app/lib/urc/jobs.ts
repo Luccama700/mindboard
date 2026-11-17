@@ -34,7 +34,7 @@ const DEVICE_COLUMNS =
   "id, user_id, name, folder_keys, folder_labels, bypass_permissions, last_seen";
 
 const JOB_COLUMNS =
-  "id, user_id, device_id, folder_key, label, status, session_url, error, bypass_permissions, created_at, expires_at, claimed_at, started_at, stop_requested_at, stopped_at";
+  "id, user_id, device_id, folder_key, label, status, session_url, error, bypass_permissions, confirmed_auth, created_at, expires_at, claimed_at, started_at, stop_requested_at, stopped_at";
 
 export type UrcDeviceRow = {
   id: string;
@@ -63,6 +63,8 @@ export type UrcJobRow = {
   stop_requested_at: string | null;
   stopped_at: string | null;
   bypass_permissions: boolean | null;
+  // "oauth:<client>": which credential confirmed the spawn.
+  confirmed_auth?: string | null;
 };
 
 export type UrcProposal = { proposalId: string; preview: string };
@@ -303,7 +305,6 @@ export async function proposeSpawnUrc(
   });
 
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "spawn_urc",
     { folder: folder.value, deviceId: resolved.value.device.id, name: label.value },
@@ -450,8 +451,13 @@ export async function getUrcStatus(
       // What the PC reported it actually started with (null before it starts).
       bypassPermissions: job.bypass_permissions,
       // The link is a live handle to a session on Lucca's PC, so it is returned
-      // only while there is a session to open.
-      sessionUrl: status === "running" ? job.session_url : null,
+      // only while there is a session to open, and only to the OAuth client that
+      // confirmed the spawn (another connected client of the same account gets
+      // the status but not the handle).
+      sessionUrl:
+        status === "running" && job.confirmed_auth === auth.value.confirmedAuth
+          ? job.session_url
+          : null,
     },
   };
 }

@@ -456,7 +456,9 @@ async function spawnSession(config, folders, job, folder, state) {
       },
     ],
   };
-  log(`STARTED ${plan.sessionName} pid ${entry.pid} (parent ${parentPid ?? "?"}) ${sessionUrl}`);
+  // The link is a live handle to the session; it goes to the server once and
+  // is never written to the log (audit 2026-10-26 M8).
+  log(`STARTED ${plan.sessionName} pid ${entry.pid} (parent ${parentPid ?? "?"}) job ${job.id}`);
   const reported = await report(config, "started", {
     job_id: job.id,
     session_url: sessionUrl,
@@ -468,7 +470,9 @@ async function spawnSession(config, folders, job, folder, state) {
   next = {
     ...next,
     sessions: next.sessions.map((session) =>
-      session.jobId === job.id ? { ...session, startedReported: reported } : session,
+      session.jobId === job.id
+        ? { ...session, startedReported: reported, sessionUrl: reported ? undefined : session.sessionUrl }
+        : session,
     ),
   };
   writeState(next);
@@ -510,6 +514,8 @@ async function retryStarts(config, state) {
             ...entry,
             startedReported: outcome.get(entry.jobId) === true,
             startedAttempts: (entry.startedAttempts ?? 1) + 1,
+            // Kept on disk only until the server has it.
+            sessionUrl: outcome.get(entry.jobId) === true ? undefined : entry.sessionUrl,
           }
         : entry,
     ),

@@ -55,6 +55,7 @@ import {
   resolveProposal,
   type ExecutorContext,
 } from "./audit";
+import { appApprovalMessage, editsApprovedBuildPlan, requiresAppApproval } from "./approval";
 import { executeSpawnUrc } from "@/app/lib/urc/jobs";
 import {
   renderStockReceipt,
@@ -156,7 +157,6 @@ export async function proposeCreateTask(userId: string, raw: unknown): Promise<R
 
   const summary = summarizeCreateTask(parsed.value, groupName);
   const proposalId = await recordProposal(
-    supabase,
     ownerId,
     "create_task",
     parsed.value as unknown as Record<string, unknown>,
@@ -187,7 +187,7 @@ export async function proposeCompleteTask(userId: string, raw: unknown): Promise
   }
 
   const summary = `Mark task "${task.title}" as done.`;
-  const proposalId = await recordProposal(supabase, ownerId, "complete_task", { taskId }, summary);
+  const proposalId = await recordProposal(ownerId, "complete_task", { taskId }, summary);
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
@@ -216,7 +216,7 @@ export async function proposeMissTask(userId: string, raw: unknown): Promise<Res
   }
 
   const summary = `Mark task "${task.title}" as missed.`;
-  const proposalId = await recordProposal(supabase, ownerId, "miss_task", { taskId }, summary);
+  const proposalId = await recordProposal(ownerId, "miss_task", { taskId }, summary);
   return { ok: true, value: { proposalId, preview: summary } };
 }
 
@@ -262,7 +262,6 @@ export async function proposeLogSpend(userId: string, raw: unknown): Promise<Res
       categoryName,
     }) + warningBlock;
   const proposalId = await recordProposal(
-    supabase,
     ownerId,
     "log_spend",
     parsed.value as unknown as Record<string, unknown>,
@@ -386,7 +385,6 @@ export async function proposeCreateRecurringTaskFor(
     await todayKey(supabase, userId),
   );
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "create_recurring_task",
     parsed.value as unknown as Record<string, unknown>,
@@ -435,7 +433,6 @@ export async function proposeArchiveRecurringTaskFor(
 
   const summary = `Stop repeating "${rule.title}" (${formatRecurrence(rule)}).`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "archive_recurring_task",
     { ruleId },
@@ -481,7 +478,6 @@ export async function proposeUpdateStockFor(
 
   const preview = renderStockReceipt(resolved.value);
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "update_stock",
     { operations: resolved.value } as unknown as Record<string, unknown>,
@@ -527,7 +523,6 @@ export async function proposePeopleUpdateFor(
 
   const preview = renderPeopleReceipt(resolved.value);
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "update_people",
     { operations: resolved.value } as unknown as Record<string, unknown>,
@@ -664,7 +659,6 @@ export async function proposeUpdateFinanceFor(
   const warningBlock = await spendLimitWarningBlock(supabase, userId, spends);
   const preview = renderFinanceReceipt(resolved.value) + warningBlock;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "update_finance",
     { operations: resolved.value } as unknown as Record<string, unknown>,
@@ -705,7 +699,6 @@ export async function proposeSetSpendLimitFor(
   const currency = await baseCurrency(supabase, userId);
   const summary = summarizeSetSpendLimit(v, { categoryName, currency });
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "set_spend_limit",
     v as unknown as Record<string, unknown>,
@@ -764,7 +757,6 @@ export async function proposeDeleteSpendLimitFor(
     currency,
   });
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "delete_spend_limit",
     { limitId },
@@ -1736,7 +1728,6 @@ export async function proposeUpdateTaskFor(
 
   const summary = summarizeUpdateTask(v, (task as { title: string }).title, groupName);
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "update_task",
     v as unknown as Record<string, unknown>,
@@ -1921,7 +1912,6 @@ export async function proposeDeleteTaskFor(
 
   const summary = `Delete task "${task.title}"${task.status === "done" ? " (already done)" : ""} — this cannot be undone.`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "delete_task",
     { taskId },
@@ -1990,7 +1980,6 @@ export async function proposeUpdateRecurringTaskFor(
   const summary = `Update repeating task "${rule.title}": ${bits.join(", ")}.`;
 
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "update_recurring_task",
     v as unknown as Record<string, unknown>,
@@ -2076,7 +2065,6 @@ export async function proposeCompleteRecurringFor(
     ? `Un-check today's "${rule.title}".`
     : `Check off today's "${rule.title}".`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "complete_recurring",
     { ruleId, undo },
@@ -2162,7 +2150,6 @@ export async function proposeManageGroupFor(
   }
 
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "manage_group",
     v as unknown as Record<string, unknown>,
@@ -2245,7 +2232,6 @@ export async function proposeUpsertGoalFor(
     : `Create goal "${v.title}"${v.horizon ? ` (${v.horizon})` : ""}${v.targetDate ? ` targeting ${v.targetDate}` : ""}.`;
 
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "upsert_goal",
     v as unknown as Record<string, unknown>,
@@ -2321,7 +2307,6 @@ export async function proposeRescheduleEventFor(
     ? `Move event ${v.eventId} to ${v.start} (all-day).`
     : `Move event ${v.eventId} to ${v.start} – ${v.end}.`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "reschedule_event",
     v as unknown as Record<string, unknown>,
@@ -2375,7 +2360,6 @@ export async function proposeCreateEventFor(
   const where = v.calendarId === "primary" ? "" : ` on calendar ${v.calendarId}`;
   const summary = `Create Google Calendar event "${v.summary}" — ${when}${where}.`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "create_event",
     v as unknown as Record<string, unknown>,
@@ -2441,7 +2425,6 @@ export async function proposeLogDailyFor(
   const sleep = v.sleepHours === null ? "" : `, slept ${v.sleepHours}h`;
   const summary = `Log today: mood ${v.mood}/5, energy ${v.energy}/5${sleep}.`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "log_daily",
     v as unknown as Record<string, unknown>,
@@ -2513,7 +2496,6 @@ export async function proposeUpdateSettingsFor(
   }
   const summary = `Update preferences: ${bits.join(", ")}.`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "update_settings",
     v as unknown as Record<string, unknown>,
@@ -2593,7 +2575,6 @@ export async function proposeManageFinanceFor(
 
   const preview = renderAdminReceipt(resolved.value);
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "manage_finance",
     { operations: resolved.value } as unknown as Record<string, unknown>,
@@ -3137,14 +3118,39 @@ export async function confirmAction(
   const supabase = createServiceClient();
   const ownerId = userId;
 
-  const proposal = await loadProposal(supabase, ownerId, proposalId);
+  const proposal = await loadProposal(ownerId, proposalId);
   if (!proposal) {
     return { ok: false, error: "proposal not found or already resolved" };
   }
 
+  // H2: over MCP the proposing hand and the confirming hand are the same model,
+  // so for destructive, financial and execution-capable writes a chat confirm is
+  // not consent. Refuse BEFORE the claim, leaving the row at 'proposed' so the
+  // user can approve that very proposal in the app. `watch` is a human channel
+  // (a tap on the wrist) and passes, as does the in-app rail, which never
+  // reaches this function.
+  if (authKind.startsWith("mcp:") && requiresAppApproval(proposal.tool_name, proposal.input)) {
+    return { ok: false, error: appApprovalMessage(proposal.tool_name) };
+  }
+  if (authKind.startsWith("mcp:") && proposal.tool_name === "update_task") {
+    const taskId = (proposal.input as { taskId?: unknown } | null)?.taskId;
+    if (typeof taskId === "string" && taskId) {
+      const { data: target } = await supabase
+        .from("tasks")
+        .select("ai_state")
+        .eq("id", taskId)
+        .eq("user_id", ownerId)
+        .maybeSingle();
+      const aiState = (target as { ai_state: string | null } | null)?.ai_state;
+      if (editsApprovedBuildPlan(proposal.tool_name, proposal.input, aiState)) {
+        return { ok: false, error: appApprovalMessage(proposal.tool_name) };
+      }
+    }
+  }
+
   const executor = EXECUTORS[proposal.tool_name];
   if (!executor) {
-    await resolveProposal(supabase, ownerId, proposalId, "error", {
+    await resolveProposal(ownerId, proposalId, "error", {
       error: `unknown tool ${proposal.tool_name}`,
     });
     return { ok: false, error: `unknown tool ${proposal.tool_name}` };
@@ -3153,7 +3159,7 @@ export async function confirmAction(
   // Claim BEFORE executing so a concurrent confirm (double-tap / client retry)
   // can't also run the executor and double-apply the write. The loser gets
   // no rows and bails without touching anything.
-  const claimed = await claimProposal(supabase, ownerId, proposalId);
+  const claimed = await claimProposal(ownerId, proposalId);
   if (!claimed) {
     return { ok: false, error: "proposal is already being confirmed or resolved" };
   }
@@ -3166,20 +3172,20 @@ export async function confirmAction(
       authKind,
     });
   } catch (err) {
-    await finalizeClaimedProposal(supabase, ownerId, proposalId, "error", {
+    await finalizeClaimedProposal(ownerId, proposalId, "error", {
       error: err instanceof Error ? err.message : "executor threw",
     });
     return { ok: false, error: err instanceof Error ? err.message : "executor threw" };
   }
 
   if (!outcome.ok) {
-    await finalizeClaimedProposal(supabase, ownerId, proposalId, "error", {
+    await finalizeClaimedProposal(ownerId, proposalId, "error", {
       error: outcome.error,
     });
     return outcome;
   }
 
-  await finalizeClaimedProposal(supabase, ownerId, proposalId, "executed", outcome.value);
+  await finalizeClaimedProposal(ownerId, proposalId, "executed", outcome.value);
   await revalidateWeb();
   return { ok: true, value: { preview: proposal.summary, result: outcome.value } };
 }
@@ -3191,9 +3197,8 @@ export async function cancelAction(
   if (typeof proposalId !== "string" || !proposalId) {
     return { ok: false, error: "proposalId is required" };
   }
-  const supabase = createServiceClient();
   const ownerId = userId;
-  const ok = await resolveProposal(supabase, ownerId, proposalId, "rejected", null);
+  const ok = await resolveProposal(ownerId, proposalId, "rejected", null);
   if (!ok) return { ok: false, error: "proposal not found or already resolved" };
   return { ok: true, value: { cancelled: true } };
 }

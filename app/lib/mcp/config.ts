@@ -32,7 +32,15 @@ export function workerAllowedUserIds(): string[] {
 // and phishing an authorization code out of a signed-in user. Override with
 // MCP_OAUTH_ALLOWED_REDIRECT_HOSTS (comma-separated); a bare host also matches
 // its subdomains.
-const DEFAULT_OAUTH_REDIRECT_HOSTS = ["claude.ai", "chatgpt.com", "localhost", "127.0.0.1"];
+//
+// The default is the hosts this deployment actually uses. chatgpt.com was in
+// it and is not any more (audit L2): a bare host matches every subdomain and
+// every path, so allowing it let any custom GPT register a redirect target and
+// then show a signed-in user a consent screen carrying a client_name of its
+// choosing. Anyone who wants it back sets the env var — that is a deliberate
+// act by whoever controls the deployment, which unauthenticated registration
+// is not.
+const DEFAULT_OAUTH_REDIRECT_HOSTS = ["claude.ai", "claude.com", "localhost", "127.0.0.1"];
 
 export function oauthAllowedRedirectHosts(): string[] {
   const configured = (process.env.MCP_OAUTH_ALLOWED_REDIRECT_HOSTS ?? "")
@@ -57,11 +65,19 @@ export async function todayKey(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<string> {
+  return todayISO(await userTimeZone(supabase, userId));
+}
+
+// The user's stored IANA zone, validated; null when unset or invalid.
+export async function userTimeZone(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<string | null> {
   const { data } = await supabase
     .from("user_settings")
     .select("timezone")
     .eq("user_id", userId)
     .maybeSingle();
   const timezone = (data as { timezone: string | null } | null)?.timezone ?? null;
-  return todayISO(safeTimeZone(timezone));
+  return safeTimeZone(timezone);
 }

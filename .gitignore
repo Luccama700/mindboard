@@ -75,3 +75,17 @@ overnight/.mindspace-sync.json
 
 # rc spike scratch (overnight/rc-spike.ps1)
 overnight/rc-spike-runs/
+
+# defence in depth for a public repo (audit 2026-10-26 L10): catch-all
+# patterns for local secrets and runtime state, not just the known names
+*.env
+!*.env.example
+*.key
+*.p12
+*.pfx
+credentials*.json
+service-account*.json
+*.log
+*.pid
+supabase/.temp/
+supabase/.branches/

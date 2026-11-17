@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { createClient } from "@/utils/supabase/server";
 import { decryptSecret } from "@/app/lib/assistant/crypto";
+import { providerKeyScope } from "@/app/lib/connections/keys";
 import {
   ASSISTANT_TOOLS,
   runAssistantTool,
@@ -74,7 +75,7 @@ export async function POST(request: Request) {
   }
   let apiKey: string;
   try {
-    apiKey = decryptSecret(encrypted);
+    apiKey = decryptSecret(encrypted, providerKeyScope(user.id, "anthropic"));
   } catch {
     return NextResponse.json({ error: "key unreadable — paste it again in settings" }, { status: 409 });
   }

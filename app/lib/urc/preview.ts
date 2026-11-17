@@ -14,7 +14,7 @@ export const URC_MAX_SPAWNS_PER_HOUR = 5;
 // What the PC may be asked to act on: a stop request is only meaningful for a
 // job that has reached the device.
 export const URC_LIVE_STATUSES = ["claimed", "running", "stopping"] as const;
-// What counts against the two-session limit. 'queued' is included: it is a
+// What counts against the live-session limit. 'queued' is included: it is a
 // session the PC is about to open, so letting three of them queue up would make
 // the limit meaningless for the ~2 minutes before they land.
 export const URC_CONCURRENCY_STATUSES = [

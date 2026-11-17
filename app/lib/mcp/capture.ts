@@ -84,13 +84,24 @@ export function sanitizeCaptureTitle(title: string): Result<string> {
   }
   const cleaned = title
     .replace(/[\\/]/g, " ")
+    // NTFS rejects these in file names, so a committed note carrying one breaks
+    // the Windows clone of the vault (and reel/capture titles are attacker-chosen).
+    .replace(/[:*?"<>|]/g, " ")
     .replace(/[\x00-\x1f\x7f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     // A leading dot would make the note a hidden file the vault reader skips.
-    .replace(/^\.+/, "");
+    .replace(/^\.+/, "")
+    // Windows silently drops trailing dots and spaces, so two notes could map
+    // to one file on disk.
+    .replace(/[.\s]+$/, "");
   if (!cleaned) {
     return { ok: false, error: "title has no filename-safe characters" };
+  }
+  // A path segment named after a Windows device (CON, NUL, COM1, ...) can't be
+  // checked out on Windows at all; course names become folder names verbatim.
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(cleaned)) {
+    return { ok: true, value: `${cleaned}_` };
   }
   return { ok: true, value: cleaned };
 }
@@ -101,9 +112,12 @@ export type CaptureStamp = {
   created: string; // YYYY-MM-DD HH:mm
 };
 
-export function vancouverStamp(now: Date): CaptureStamp {
+// Stamp in the note owner's own zone (user_settings.timezone, resolved by
+// userTimeZone). null = no stored zone, which stamps in UTC rather than in
+// whichever zone the deployment's owner happens to live in.
+export function zonedStamp(now: Date, timeZone: string | null): CaptureStamp {
   const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Vancouver",
+    timeZone: timeZone ?? "UTC",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -248,9 +262,10 @@ async function createCaptureFile(
   input: CaptureInput,
   safeTitle: string,
   now: Date,
+  timeZone: string | null,
   fetchImpl: typeof fetch,
 ): Promise<Result<CaptureOutcome>> {
-  const stamp = vancouverStamp(now);
+  const stamp = zonedStamp(now, timeZone);
   const written = await createVaultFileWithRetry(
     credentials,
     (attempt) => captureFilePath(stamp, safeTitle, attempt),
@@ -272,6 +287,7 @@ export async function runCapture(
   credentials: VaultWriteCredentials | null,
   raw: unknown,
   now: Date,
+  timeZone: string | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<Result<CaptureOutcome>> {
   if (!credentials) return { ok: false, error: VAULT_NOT_CONFIGURED_MESSAGE };
@@ -282,5 +298,5 @@ export async function runCapture(
   const safeTitle = sanitizeCaptureTitle(parsed.value.title);
   if (!safeTitle.ok) return safeTitle;
 
-  return createCaptureFile(credentials, parsed.value, safeTitle.value, now, fetchImpl);
+  return createCaptureFile(credentials, parsed.value, safeTitle.value, now, timeZone, fetchImpl);
 }

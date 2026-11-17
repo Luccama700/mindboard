@@ -30,6 +30,11 @@ import {
 // retried request collides on the primary key, finds the first attempt's row,
 // and replays its result (or reports it still in flight) instead of applying
 // the write twice. No key → a fresh row, no dedup.
+//
+// Every entry point opens a service client, so the three direct ai_audit_log
+// statements below (recordWatchProposal's insert, reopenFailed's guarded
+// update, loadRow's select) already satisfy the server-only rule migration
+// 0060 enforces; each filters by user_id itself (audit 2026-10-26, M7).
 
 export type WatchWriteOk = {
   ok: true;
@@ -394,23 +399,23 @@ export async function captureFromWatch(
     const settled = await settleExisting(supabase, userId, existing);
     if (settled) return settled;
   }
-  if (!(await claimProposal(supabase, userId, proposalId))) return IN_FLIGHT;
+  if (!(await claimProposal(userId, proposalId))) return IN_FLIGHT;
 
   let captured: Result<{ path: string; message: string }>;
   try {
     captured = await captureToBrainFor(supabase, userId, input);
   } catch (err) {
     const error = err instanceof Error ? err.message : "capture failed";
-    await finalizeClaimedProposal(supabase, userId, proposalId, "error", { error });
+    await finalizeClaimedProposal(userId, proposalId, "error", { error });
     return { ok: false, status: 502, error };
   }
   if (!captured.ok) {
-    await finalizeClaimedProposal(supabase, userId, proposalId, "error", {
+    await finalizeClaimedProposal(userId, proposalId, "error", {
       error: captured.error,
     });
     return { ok: false, status: failureStatus(captured.error), error: captured.error };
   }
   const result = { path: captured.value.path };
-  await finalizeClaimedProposal(supabase, userId, proposalId, "executed", result);
+  await finalizeClaimedProposal(userId, proposalId, "executed", result);
   return { ok: true, replayed: false, result };
 }

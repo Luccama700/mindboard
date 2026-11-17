@@ -3,6 +3,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@/utils/supabase/server";
 import { decryptSecret } from "@/app/lib/assistant/crypto";
+import { providerKeyScope } from "@/app/lib/connections/keys";
 import { proposeUpdateStockFor } from "@/app/lib/mcp/writes";
 import { MAX_STOCK_OPS } from "@/app/lib/mcp/inventory-ops";
 import { todayKey } from "@/app/lib/mcp/config";
@@ -103,7 +104,7 @@ export async function proposeStockFromText(input: {
   }
   let apiKey: string;
   try {
-    apiKey = decryptSecret(encrypted);
+    apiKey = decryptSecret(encrypted, providerKeyScope(user.id, "anthropic"));
   } catch {
     return { error: "key unreadable — paste it again in settings" };
   }

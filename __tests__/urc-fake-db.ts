@@ -31,6 +31,7 @@ export type FakeQuery = {
   select: (columns?: string) => FakeQuery;
   insert: (payload: Row | Row[]) => FakeQuery;
   update: (patch: Row) => FakeQuery;
+  delete: () => FakeQuery;
   eq: (column: string, value: unknown) => FakeQuery;
   in: (column: string, values: unknown[]) => FakeQuery;
   gte: (column: string, value: string) => FakeQuery;
@@ -63,7 +64,7 @@ export function makeDb(tables: Record<string, Row[]>): FakeDb {
     },
     from: (table: string) => {
       const filters: ((row: Row) => boolean)[] = [];
-      let mode: "select" | "insert" | "update" = "select";
+      let mode: "select" | "insert" | "update" | "delete" = "select";
       let patch: Row = {};
       let pending: Row[] = [];
       let orderKey: string | null = null;
@@ -97,6 +98,12 @@ export function makeDb(tables: Record<string, Row[]>): FakeDb {
           for (const row of hit) Object.assign(row, patch);
           return { data: hit.map((row) => ({ ...row })), error: null };
         }
+        if (mode === "delete") {
+          const hit = matched();
+          const keep = rows().filter((row) => !hit.includes(row));
+          tables[table] = keep;
+          return { data: hit.map((row) => ({ ...row })), error: null };
+        }
         let out = matched().map((row) => ({ ...row }));
         if (orderKey) {
           const key = orderKey;
@@ -120,6 +127,10 @@ export function makeDb(tables: Record<string, Row[]>): FakeDb {
         update: (next) => {
           mode = "update";
           patch = next;
+          return query;
+        },
+        delete: () => {
+          mode = "delete";
           return query;
         },
         eq: (column, value) => {

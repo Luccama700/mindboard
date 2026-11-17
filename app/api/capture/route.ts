@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
+import { ownerUserId, userTimeZone, workerAllowedUserIds } from "@/app/lib/mcp/config";
 import { reelRefFromCapture } from "@/app/lib/reels/detect";
 import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
 import { VAULT_NOT_CONFIGURED_MESSAGE } from "@/app/lib/mcp/capture";
@@ -62,7 +62,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const written = await createQuickNote(credentials, parsed.value, new Date());
+  const written = await createQuickNote(
+    credentials,
+    parsed.value,
+    new Date(),
+    await userTimeZone(createServiceClient(), ownerUserId()),
+  );
   if (!written.ok) {
     return NextResponse.json({ error: written.error }, { status: 502 });
   }

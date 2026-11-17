@@ -48,6 +48,12 @@ async function executeScheduleTask(
   return { ok: true, value: { scheduled: true } };
 }
 
+// The in-app confirm rail — a human tap, from /plan, /people, /inventory or
+// the /approvals inbox. The proposal row itself is read and resolved on the
+// service client (audit M7: clients may no longer write ai_audit_log), scoped
+// by a user id taken from the session and NEVER from the caller's input. The
+// write the proposal describes still executes on the session's own RLS-scoped
+// client, so approving something here can never reach another tenant's rows.
 export async function confirmProposal(
   proposalId: string,
 ): Promise<{ error: string | null; preview?: string }> {
@@ -57,13 +63,13 @@ export async function confirmProposal(
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const proposal = await loadProposal(supabase, user.id, proposalId);
+  const proposal = await loadProposal(user.id, proposalId);
   if (!proposal) return { error: "proposal not found or already resolved" };
 
   const isSchedule = proposal.tool_name === "schedule_task";
   const executor = isSchedule ? null : EXECUTORS[proposal.tool_name];
   if (!isSchedule && !executor) {
-    await resolveProposal(supabase, user.id, proposalId, "error", {
+    await resolveProposal(user.id, proposalId, "error", {
       error: `unknown tool ${proposal.tool_name}`,
     });
     return { error: `unknown tool ${proposal.tool_name}` };
@@ -72,7 +78,7 @@ export async function confirmProposal(
   // Claim BEFORE executing so a concurrent confirm (double-tap / retry, or a
   // race with the MCP confirm path) can't also run the executor and double-
   // apply the write. The loser bails without touching anything.
-  const claimed = await claimProposal(supabase, user.id, proposalId);
+  const claimed = await claimProposal(user.id, proposalId);
   if (!claimed) {
     return { error: "proposal is already being confirmed or resolved" };
   }
@@ -90,21 +96,20 @@ export async function confirmProposal(
         });
   } catch (err) {
     const message = err instanceof Error ? err.message : "executor threw";
-    await finalizeClaimedProposal(supabase, user.id, proposalId, "error", {
+    await finalizeClaimedProposal(user.id, proposalId, "error", {
       error: message,
     });
     return { error: message };
   }
 
   if (!outcome.ok) {
-    await finalizeClaimedProposal(supabase, user.id, proposalId, "error", {
+    await finalizeClaimedProposal(user.id, proposalId, "error", {
       error: outcome.error,
     });
     return { error: outcome.error };
   }
 
   await finalizeClaimedProposal(
-    supabase,
     user.id,
     proposalId,
     "executed",
@@ -123,7 +128,7 @@ export async function cancelProposal(
   } = await supabase.auth.getUser();
   if (!user) return { error: "not authenticated" };
 
-  const ok = await resolveProposal(supabase, user.id, proposalId, "rejected", null);
+  const ok = await resolveProposal(user.id, proposalId, "rejected", null);
   if (!ok) return { error: "proposal not found or already resolved" };
   revalidatePath("/", "layout");
   return { error: null };

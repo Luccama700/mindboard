@@ -1,4 +1,5 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import "server-only";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 // Minimal, stateless OAuth 2.1 primitives for the MCP authorization server.
 // Every artifact (client_id, auth code, access/refresh token) is a signed token
@@ -63,6 +64,13 @@ export function verifyToken<T extends Record<string, unknown>>(
   if (payload.typ !== expectedTyp) return null;
   if (typeof payload.exp === "number" && payload.exp < now) return null;
   return payload as T;
+}
+
+// A token-unique id. Two codes (or two refresh tokens) issued in the same
+// second for the same user, client, redirect and challenge would otherwise be
+// byte-identical, and the single-use store keys on the code's hash.
+export function newJti(): string {
+  return randomBytes(16).toString("base64url");
 }
 
 // ---------- PKCE (S256 only) ----------
@@ -182,6 +190,7 @@ export function issueCode(input: {
     client_id: input.clientId,
     redirect_uri: input.redirectUri,
     cc: input.codeChallenge,
+    jti: newJti(),
     exp: nowSec() + CODE_TTL,
   });
 }
@@ -191,19 +200,42 @@ export function verifyCode(code: string): {
   clientId: string;
   redirectUri: string;
   codeChallenge: string;
+  expiresAt: number;
 } | null {
   const p = verifyToken<{
     sub: string;
     client_id: string;
     redirect_uri: string;
     cc: string;
+    exp?: number;
   }>(code, "code");
   return p
-    ? { ownerId: p.sub, clientId: p.client_id, redirectUri: p.redirect_uri, codeChallenge: p.cc }
+    ? {
+        ownerId: p.sub,
+        clientId: p.client_id,
+        redirectUri: p.redirect_uri,
+        codeChallenge: p.cc,
+        // Pre-jti codes have no exp only in theory (issueCode has always set
+        // one); fall back to the TTL so the spent-code row still expires.
+        expiresAt: typeof p.exp === "number" ? p.exp : nowSec() + CODE_TTL,
+      }
     : null;
 }
 
+// Identity of a code in the single-use store. Hashed rather than stored raw so
+// a leaked oauth_used_codes dump is not a list of usable (if expired) codes.
+export function hashCode(code: string): string {
+  return createHash("sha256").update(code).digest("hex");
+}
+
 // ---------- access / refresh tokens ----------
+
+// The resource an access token is minted FOR. The protected-resource metadata
+// advertises this exact string, so a client that discovered the server at one
+// origin presents its token back at the same one.
+export function mcpResourceUrl(origin: string): string {
+  return `${origin}${RESOURCE_PATH}`;
+}
 
 export function issueAccessToken(input: {
   ownerId: string;
@@ -214,29 +246,63 @@ export function issueAccessToken(input: {
     typ: "access",
     sub: input.ownerId,
     client_id: input.clientId,
-    aud: `${input.origin}${RESOURCE_PATH}`,
+    aud: mcpResourceUrl(input.origin),
     scope: SCOPE,
     exp: nowSec() + ACCESS_TTL,
   });
 }
 
-export function verifyAccessToken(token: string): { ownerId: string; clientId: string } | null {
-  const p = verifyToken<{ sub: string; client_id: string }>(token, "access");
-  return p ? { ownerId: p.sub, clientId: p.client_id } : null;
+// expectedAudience is REQUIRED, so the compiler enumerates every verifier and
+// none can quietly skip the check. Without it a deployment that shares
+// MCP_OAUTH_SECRET — any Vercel preview — accepted production tokens, because
+// aud was minted and then never read (audit M2).
+export function verifyAccessToken(
+  token: string,
+  expectedAudience: string,
+): { ownerId: string; clientId: string } | null {
+  const p = verifyToken<{ sub: string; client_id: string; aud?: string }>(token, "access");
+  if (!p) return null;
+  if (p.aud !== expectedAudience) return null;
+  return { ownerId: p.sub, clientId: p.client_id };
 }
 
-export function issueRefreshToken(input: { ownerId: string; clientId: string }): string {
+// A refresh token names its family (gid -> oauth_grants.id) and its position
+// in that family's chain (jti). Only the jti the grant row currently holds is
+// live, so presenting an older one proves the family leaked. `grant: null`
+// issues the legacy, familyless shape, used only while migration 0059 is
+// unapplied.
+export function issueRefreshToken(input: {
+  ownerId: string;
+  clientId: string;
+  grant: { id: string; jti: string } | null;
+}): string {
   return signToken({
     typ: "refresh",
     sub: input.ownerId,
     client_id: input.clientId,
+    ...(input.grant ? { gid: input.grant.id, jti: input.grant.jti } : {}),
     exp: nowSec() + REFRESH_TTL,
   });
 }
 
-export function verifyRefreshToken(token: string): { ownerId: string; clientId: string } | null {
-  const p = verifyToken<{ sub: string; client_id: string }>(token, "refresh");
-  return p ? { ownerId: p.sub, clientId: p.client_id } : null;
+export function verifyRefreshToken(token: string): {
+  ownerId: string;
+  clientId: string;
+  grantId: string | null;
+  jti: string | null;
+} | null {
+  const p = verifyToken<{ sub: string; client_id: string; gid?: string; jti?: string }>(
+    token,
+    "refresh",
+  );
+  return p
+    ? {
+        ownerId: p.sub,
+        clientId: p.client_id,
+        grantId: typeof p.gid === "string" ? p.gid : null,
+        jti: typeof p.jti === "string" ? p.jti : null,
+      }
+    : null;
 }
 
 // ---------- discovery metadata ----------

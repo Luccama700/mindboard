@@ -1,0 +1,1521 @@
+/* The desk: the box a pane is drawn in, the gallery that shows one pane alone
+ * at a fixed size, and the desk itself (/v2/desk) at the foot of this file.
+ *
+ * Loaded after v2.css and calendar.css (app/v2/layout.tsx), whose tokens it
+ * reads and whose leaves it holds, and scoped the same way: every selector
+ * starts at [data-v2-root], so nothing here can reach a page outside app/v2.
+ *
+ * NO COLOUR IS WRITTEN HERE. Every colour is a scheme token from v2.css.
+ * __tests__/v2-appearance.test.ts reads every stylesheet in this folder for a
+ * hex, an rgb() or an hsl() and must find none.
+ *
+ * A LEAF SIZES BY ITS PANE. The box is a size container named `v2-pane`, and a
+ * leaf that changes with its room asks that container, never the window: the
+ * same body is right in a 230px tab and in a 1300px half of the screen. The
+ * leaf rules that do so live beside the leaves, in v2.css ("INSIDE A PANE"),
+ * and the side column's own rules there are written for both places at once.
+ * What is here is the box itself and what a body is wrapped in.
+ *
+ * Nothing here animates. The desk's frames glide by script (flip.ts, the Web
+ * Animations API, transform and opacity only), which asks for reduced motion
+ * itself: v2.css's one rule stops every CSS transition under [data-v2-root]
+ * and does not reach a script's animation.
+ */
+
+/* ------------------------------------------------------------------- the box */
+
+/* Fills whatever holds it, and holds its body to its own size: a body that is
+   taller than the box scrolls inside it (below), never the page. */
+[data-v2-root] .v2-pane {
+  container-type: inline-size;
+  container-name: v2-pane;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The scroller every body shares. It is the column the side lists are on a
+   wide window: thin bar in the scheme's own colours, its gutter always kept so
+   pressing Show more does not shift a row, and inline padding so the focus
+   ring of a row or a button inside is not cut off at the edge.
+   POSITIONED, so it is the containing block of what a body positions
+   absolutely (the read, not seen text of .v2-hidden): otherwise such text in a
+   body taller than its pane is placed against something outside the pane, and
+   the page scrolls instead of the pane. */
+[data-v2-root] .v2-pane-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 16px 10px 20px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--v2-edge) transparent;
+  scrollbar-gutter: stable;
+}
+
+/* The ring the lists have: inside the box, where the box's own edge cannot cut
+   it off. */
+[data-v2-root] .v2-pane-body:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The calendar has a scroller of its own (its grid, or its agenda), sized by
+   the pane it is in. Held to the box's height it is the only one: a scroller
+   inside another traps the wheel in the inner one. */
+[data-v2-root] .v2-pane-body > .v2-cal {
+  height: 100%;
+}
+
+/* ------------------------------------------------------------- what a body is */
+
+/* The day's own pane: its header, the energy answer and the line, as one column
+   of blocks. THE LINE NEVER GROWS WIDER THAN 640PX, as Today's own column does
+   not: a stop stretched across a 1300px pane is one long line of title with its
+   time a hand's width away. The cap is on the whole column rather than on the
+   line alone, so the energy control and the date stay with the line instead of
+   stretching to the far edge. */
+[data-v2-root] .v2-pane-day {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 640px;
+}
+
+/* Status: its blocks stacked with the side column's own spacing. */
+[data-v2-root] .v2-pane-status {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* One quiet sentence in place of a body: a pane that is not built yet. */
+[data-v2-root] .v2-pane-note {
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  text-wrap: pretty;
+}
+
+/* --------------------------------------------------------------- the gallery */
+
+/* One line, the live region (read, not seen), and the box at exactly the size
+   asked for. The page scrolls when the box is wider or taller than the window:
+   the box never gives way, because its size is the thing being looked at. */
+[data-v2-root] .v2-gallery {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px;
+}
+
+[data-v2-root] .v2-gallery-line {
+  color: var(--v2-ink-3);
+  font: 600 13px/1.2 var(--v2-display);
+  font-variant-numeric: tabular-nums;
+}
+
+/* An outline, not a border, so the edge of the box is visible without taking
+   a pixel of the size being looked at. */
+[data-v2-root] .v2-gallery > .v2-pane {
+  flex: none;
+  outline: 1px dashed var(--v2-edge);
+}
+
+/* ============================================================================
+ * THE DESK
+ *
+ * /v2/desk: one page, every layout. From 1024px a rail and a workspace of tiled
+ * frames; under it a top bar, one slot and a bottom bar.
+ *
+ * THE PAGE CARRIES EVERY CLASS AT ONCE, because the server cannot know the
+ * window: each frame holds its box for both tiled classes and says which
+ * classes it is shown in (data-shown), the workspace holds both classes'
+ * minimums, and the media queries below pick. They are the queries useTiles
+ * reads, at the engine's 1024 and 1600:
+ *
+ *   under 1024px        compact: the phone's one leaf, its front tab
+ *   1024px to 1599px    regular: --v2-frame-regular-*, --v2-desk-regular-min-*
+ *   from 1600px         wide:    --v2-frame-wide-*, --v2-desk-wide-min-*
+ *
+ * The three ranges do not overlap, so each thing that changes with the class is
+ * shown by exactly one rule, and nothing has to be undone at a wider width.
+ *
+ * THE GEOMETRY'S CONTRACT (app/lib/v2/tiles/css.ts). The workspace is the size
+ * container, with no padding and no border, never smaller than the tree's
+ * minimum for the class shown (the page scrolls instead, because below it the
+ * CSS and the engine draw differently). The stage, its one child, covers it and
+ * carries both classes' registered properties inline. Every frame and divider
+ * is a child of the stage, absolutely positioned against it, and nothing
+ * between them is a size container. A frame's box is the frame's OWN
+ * properties, --v2-frame-<class>-<side>; the stage's properties are the whole
+ * workspace and its splits, and are never read here.
+ *
+ * Quiet chrome, loud content: a frame is the card's surface with a hairline,
+ * its header one short line in the quiet ink, and the 6px between frames is the
+ * page, where the dividers will be. Nothing here animates: a change of
+ * arrangement or of layout glides by script (flip.ts).
+ * ==========================================================================*/
+
+[data-v2-root] .v2-desk {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+/* Between a phone and a laptop, v2.css frames Today as a device with room
+   above and below it. The desk fills the window instead. */
+@media (min-width: 520px) and (max-width: 1023.98px) {
+  [data-v2-root]:has(> .v2-desk) {
+    padding: 0;
+  }
+}
+
+/* ---- the workspace and its stage ---- */
+
+[data-v2-root] .v2-desk-work {
+  container-type: size;
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+[data-v2-root] .v2-desk-stage {
+  position: absolute;
+  inset: 0;
+}
+
+/* ---- a frame ---- */
+
+/* Not displayed until a class shows it (below). Its border is inside its box,
+   so the frame is exactly the rectangle the engine gives its leaf.
+   THE BODY IS THE PAGE'S COLOUR. Pane bodies were drawn against the page, and
+   their rows, cells and cards are the card's surface: a frame of that surface
+   would swallow every one of them. So the frame keeps its hairline and its
+   radius, its header is a band of the card's surface, and the body under it is
+   the page, as the 6px between frames is. */
+[data-v2-root] .v2-frame {
+  position: absolute;
+  display: none;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--v2-page);
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+}
+
+/* The box takes what the header leaves. */
+[data-v2-root] .v2-frame > .v2-pane {
+  flex: 1 1 0;
+  height: auto;
+}
+
+[data-v2-root] .v2-frame-head {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px 0 12px;
+  background: var(--v2-card);
+  /* A handle that a double click maximizes: its visible title is a copy of the
+     h2 that is read, so nothing in it is ever selected. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* The title as it is seen. The h2 beside it is read, not seen, and is what the
+   frame and its scroller are labelled by. */
+[data-v2-root] .v2-frame-name {
+  align-self: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--v2-ink-3);
+  font: 600 12px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+/* A leaf's tabs, in place of the title on a class where the pane shares its
+   leaf. Each tab is a button with its close control beside it. */
+[data-v2-root] .v2-frame-tabs {
+  display: none;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+[data-v2-root] .v2-frame-tabitem {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+[data-v2-root] .v2-frame-tab {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  white-space: nowrap;
+  color: var(--v2-ink-3);
+  font: 600 12px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+[data-v2-root] .v2-frame-tab:hover,
+[data-v2-root] .v2-frame-tab[aria-selected="true"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-frame-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--v2-accent);
+}
+
+/* The header's tools, at its far end: a close control for a pane alone in its
+   leaf, and maximize. Not displayed until a class shows them (below). */
+[data-v2-root] .v2-frame-tools {
+  display: none;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+[data-v2-root] .v2-frame-solo {
+  display: none;
+}
+
+/* QUIET UNTIL ASKED FOR. A header's controls are drawn only while the header
+   is hovered or holds the focus, at once (no fade); a touch screen has no
+   hover, so there they are always drawn. They keep their place at rest, so
+   nothing moves when they appear. */
+[data-v2-root] .v2-frame-close,
+[data-v2-root] .v2-frame-max {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--v2-ink-3);
+  opacity: 0;
+}
+
+[data-v2-root] .v2-frame-head:hover .v2-frame-close,
+[data-v2-root] .v2-frame-head:hover .v2-frame-max,
+[data-v2-root] .v2-frame-head:focus-within .v2-frame-close,
+[data-v2-root] .v2-frame-head:focus-within .v2-frame-max {
+  opacity: 1;
+}
+
+/* The pane menu's button (pane-menu.tsx), the first of the tools: as quiet as
+   the others, and drawn too while its menu is open. */
+[data-v2-root] .v2-frame-menu-button {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--v2-ink-3);
+  opacity: 0;
+}
+
+[data-v2-root] .v2-frame-head:hover .v2-frame-menu-button,
+[data-v2-root] .v2-frame-head:focus-within .v2-frame-menu-button,
+[data-v2-root] .v2-frame-menu-button[aria-expanded="true"] {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  [data-v2-root] .v2-frame-close,
+  [data-v2-root] .v2-frame-max {
+    opacity: 1;
+  }
+
+  [data-v2-root] .v2-frame-menu-button {
+    opacity: 1;
+  }
+}
+
+[data-v2-root] .v2-frame-close:hover,
+[data-v2-root] .v2-frame-max:hover {
+  color: var(--v2-ink);
+  background: var(--v2-card-2);
+}
+
+[data-v2-root] .v2-frame-close:focus-visible,
+[data-v2-root] .v2-frame-max:focus-visible {
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* A cross, drawn in the text's own colour. */
+[data-v2-root] .v2-frame-close::before,
+[data-v2-root] .v2-frame-close::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 50%;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+[data-v2-root] .v2-frame-close::after {
+  transform: translateY(-50%) rotate(-45deg);
+}
+
+/* A square: the pane at the size of the desk. Pressed, two smaller ones. */
+[data-v2-root] .v2-frame-max::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+/* ---- the pane menu: the first of the header's tools ---- */
+
+/* Its wrapper holds the button and the menu, and is not positioned. */
+[data-v2-root] .v2-frame-menu {
+  display: flex;
+  flex: none;
+}
+
+/* Its button (quiet like the other tools, above) is three dots in the text's
+   own colour. */
+[data-v2-root] .v2-frame-menu-button:hover,
+[data-v2-root] .v2-frame-menu-button[aria-expanded="true"] {
+  color: var(--v2-ink);
+  background: var(--v2-card-2);
+}
+
+[data-v2-root] .v2-frame-menu-button:focus-visible {
+  outline-offset: -2px;
+}
+
+[data-v2-root] .v2-frame-menu-button::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow:
+    -5px 0 0 currentColor,
+    5px 0 0 currentColor;
+  transform: translate(-50%, -50%);
+}
+
+/* THE MENU STAYS INSIDE ITS FRAME. The header, the tools and the wrapper are
+   not positioned, so the frame (absolute, overflow hidden) is the block the
+   menu is placed against: under the 32px header, 6px in from the frame's right
+   edge, never wider than the frame less 6px a side, never taller than what is
+   under the header less 6px, nor than the window less 24px, and scrolling
+   inside itself past that. So the frame's overflow never cuts it, and once it
+   is scrolled into view on opening (pane-menu.tsx) it is whole in the window.
+   Above the body, whose scroller is positioned and comes later, and above the
+   calendar's sticky head inside it (calendar.css, z-index 3): no frame is a
+   stacking context, so the two are weighed against each other. */
+[data-v2-root] .v2-frame-menu-list {
+  position: absolute;
+  z-index: 4;
+  top: 36px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: max-content;
+  min-width: min(180px, calc(100% - 12px));
+  max-width: calc(100% - 12px);
+  max-height: min(calc(100% - 42px), calc(100dvh - 24px));
+  padding: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--v2-card);
+  border: 1px solid var(--v2-edge);
+  border-radius: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--v2-edge) transparent;
+}
+
+[data-v2-root] .v2-frame-menu-list[hidden] {
+  display: none;
+}
+
+[data-v2-root] .v2-frame-menu-item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--v2-ink-2);
+  font: 500 13px/1.2 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-frame-menu-item:hover,
+[data-v2-root] .v2-frame-menu-item:focus-visible {
+  color: var(--v2-ink);
+  background: var(--v2-card-2);
+}
+
+[data-v2-root] .v2-frame-menu-item:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Between the kinds of item: moves, tabs, size, other layouts. */
+[data-v2-root] .v2-frame-menu-rule {
+  flex: none;
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--v2-edge);
+}
+
+/* ---- carrying a pane (use-dock-drag.ts) ---- */
+
+/* The header is the handle, where a pointer can carry: an open hand over its
+   empty part and its title. Its controls keep their own cursor. */
+@media (pointer: fine) {
+  [data-v2-root] .v2-frame-head {
+    cursor: grab;
+  }
+}
+
+/* While a pane is carried nothing on the stage is selected, and the hand is
+   closed wherever it goes. */
+[data-v2-root] .v2-desk-stage[data-dock] {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grabbing;
+}
+
+[data-v2-root] .v2-desk-stage[data-dock] * {
+  cursor: grabbing;
+}
+
+/* The pane carried dims where it was, at once. */
+[data-v2-root] .v2-frame[data-lifted] {
+  opacity: 0.45;
+}
+
+/* WHERE IT WOULD LAND: the part of the leaf a release takes, the accent at a
+   low alpha inside a hairline of it, at the frame's own radius, above the
+   frames and the pane menu, and never in the pointer's way. Drawn only while
+   a drag aims at a drop that changes something; it fades in by script, once
+   per zone. */
+[data-v2-root] .v2-dock {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border: 1px solid var(--v2-accent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--v2-accent) 14%, transparent);
+}
+
+[data-v2-root] .v2-desk-stage[data-dock] > .v2-dock[data-zone] {
+  display: block;
+}
+
+/* What a release will do, in one small line at its top left, so what is
+   under the overlay stays readable. */
+[data-v2-root] .v2-dock-words {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  max-width: calc(100% - 16px);
+  padding: 3px 7px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-radius: 6px;
+  background: var(--v2-card);
+  color: var(--v2-ink);
+  font: 600 11px/1.3 var(--v2-display);
+}
+
+/* The gap a divider is dragged in. Nothing is drawn at rest: the page shows
+   through it. Its hit area reaches 3px into each frame beside it (12px in
+   all), which stops well short of a header's controls (8px in), and a cursor
+   says which way it moves. It never selects text and never scrolls the page. */
+[data-v2-root] .v2-divider {
+  position: absolute;
+  display: none;
+  left: var(--v2-divider-left);
+  top: var(--v2-divider-top);
+  width: var(--v2-divider-width);
+  height: var(--v2-divider-height);
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+[data-v2-root] .v2-divider[data-dir="v"] {
+  cursor: row-resize;
+}
+
+[data-v2-root] .v2-divider::before {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+}
+
+[data-v2-root] .v2-divider[data-dir="v"]::before {
+  inset: -3px 0;
+}
+
+/* The hairline in the accent, down the middle of the gap, while the divider is
+   hovered, focused from the keyboard, or dragged. A change at once. */
+[data-v2-root] .v2-divider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--v2-accent);
+  opacity: 0;
+  transform: translateX(-50%);
+}
+
+[data-v2-root] .v2-divider[data-dir="v"]::after {
+  top: 50%;
+  bottom: auto;
+  left: 0;
+  right: 0;
+  width: auto;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+[data-v2-root] .v2-divider:hover::after,
+[data-v2-root] .v2-divider:focus-visible::after,
+[data-v2-root] .v2-desk-stage[data-drag] .v2-divider:focus::after {
+  opacity: 1;
+}
+
+/* From the keyboard the line is the focus mark, two pixels wide. */
+[data-v2-root] .v2-divider:focus-visible {
+  outline: none;
+}
+
+[data-v2-root] .v2-divider:focus-visible::after {
+  width: 2px;
+}
+
+[data-v2-root] .v2-divider[data-dir="v"]:focus-visible::after {
+  width: auto;
+  height: 2px;
+}
+
+/* While a divider is dragged nothing on the stage is selected. */
+[data-v2-root] .v2-desk-stage[data-drag] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* INSIDE A FRAME, A BODY DOES NOT SAY ITS PANE'S TITLE AGAIN. The frame's
+   header names the pane, and its h2 is what the frame is read by, so the two
+   lists' own headings and the calendar's small "Calendar" are not displayed
+   (and so not read twice). The sentence under a list's heading and the
+   calendar's week stay. The gallery and the classic pages have no frame. */
+[data-v2-root] .v2-frame .v2-list > .v2-sub,
+[data-v2-root] .v2-frame .v2-cal-name {
+  display: none;
+}
+
+/* On the desk the day's date is its pane's h3, under the frame's h2 (the
+   desk's own h1 is the page's): it keeps the face Today's h1 has, at the size
+   v2.css gives that h1 inside a pane. */
+[data-v2-root] .v2-desk .v2-pane .v2-top h3 {
+  font: 600 clamp(18px, 5.4cqw, 21px) / 1.15 var(--v2-display);
+  letter-spacing: 0.2px;
+}
+
+/* The day pane's own appearance dot: the desk has its own way in (the rail's
+   foot, the phone's top bar). The feed dots beside it stay. */
+[data-v2-root] .v2-desk .v2-pane .v2-top-aside .v2-appearance-dot {
+  display: none;
+}
+
+/* The day's notice is the desk's to say, once, on the rail or under the top
+   bar: the day pane's own copy of it would say it twice. */
+[data-v2-root] .v2-desk .v2-pane .v2-notice {
+  display: none;
+}
+
+/* ---- the notes: the notice, and what the source could not read ---- */
+
+[data-v2-root] .v2-desk-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--v2-ink-2);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+[data-v2-root] .v2-desk-notes-compact {
+  flex: none;
+  padding: 10px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--v2-edge);
+}
+
+[data-v2-root] .v2-desk-notes-rail {
+  margin-top: 22px;
+  padding: 0 8px;
+}
+
+/* ---- the phone's top bar ---- */
+
+[data-v2-root] .v2-desk-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: calc(52px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) 10px 0;
+  background: var(--v2-card);
+  border-bottom: 1px solid var(--v2-edge);
+}
+
+[data-v2-root] .v2-desk-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  color: var(--v2-ink);
+  font: 600 17px/1 var(--v2-display);
+}
+
+/* A chevron drawn in the text's own colour. */
+[data-v2-root] .v2-desk-chev {
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+
+[data-v2-root] .v2-desk-switch[aria-expanded="true"] .v2-desk-chev {
+  transform: translateY(2px) rotate(225deg);
+}
+
+/* The list of layouts, over the slot. Long when it is being edited, so it
+   scrolls inside itself. */
+[data-v2-root] .v2-desk-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: calc(100dvh - 140px);
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--v2-card);
+  border: 1px solid var(--v2-edge);
+  border-radius: 14px;
+}
+
+[data-v2-root] .v2-desk-menu-links {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-desk-menu[hidden] {
+  display: none;
+}
+
+[data-v2-root] .v2-desk-menu a {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  color: var(--v2-ink-2);
+  font: 600 15px/1 var(--v2-display);
+  text-decoration: none;
+}
+
+[data-v2-root] .v2-desk-menu a[aria-current="page"] {
+  color: var(--v2-signal);
+  background: var(--v2-card-2);
+}
+
+/* ---- the phone's bottom bar: the layout's tabs ---- */
+
+[data-v2-root] .v2-desk-bar {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  padding: 0 10px calc(8px + env(safe-area-inset-bottom));
+  background: var(--v2-card);
+  border-top: 1px solid var(--v2-edge);
+}
+
+[data-v2-root] .v2-desk-bar-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+[data-v2-root] .v2-desk-bar-tabs button {
+  position: relative;
+  flex: 1 0 auto;
+  min-width: 44px;
+  min-height: 52px;
+  padding: 0 12px;
+  white-space: nowrap;
+  color: var(--v2-ink-3);
+  font: 600 15px/1 var(--v2-display);
+}
+
+[data-v2-root] .v2-desk-bar-tabs button[aria-selected="true"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-desk-bar-tabs button[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 10px;
+  right: 10px;
+  height: 3px;
+  border-radius: 0 0 2px 2px;
+  background: var(--v2-accent);
+}
+
+/* The strip scrolls, so it clips: the ring goes inside the tab. */
+[data-v2-root] .v2-desk-bar-tabs button:focus-visible {
+  outline-offset: -3px;
+}
+
+/* ---- the rail ---- */
+
+[data-v2-root] .v2-desk-rail {
+  display: none;
+}
+
+[data-v2-root] .v2-desk-rail-head {
+  margin: 0 8px 6px;
+  color: var(--v2-ink-3);
+  font: 600 11px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+[data-v2-root] .v2-desk-panes-head {
+  margin-top: 26px;
+}
+
+[data-v2-root] .v2-desk-layouts,
+[data-v2-root] .v2-desk-group ul {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-desk-layouts {
+  gap: 2px;
+}
+
+/* The existing rail's items: the same size, face and ink. */
+[data-v2-root] .v2-desk-layouts a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--v2-ink-2);
+  font: 600 14px/1.15 var(--v2-display);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-desk-layouts a:not([aria-current="page"]):hover {
+  color: var(--v2-ink);
+}
+
+/* The one bright thing on the rail. */
+[data-v2-root] .v2-desk-layouts a[aria-current="page"] {
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-desk-layouts a[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--v2-accent);
+}
+
+[data-v2-root] .v2-desk-group h3 {
+  margin: 12px 8px 2px;
+  color: var(--v2-ink-3);
+  font: 600 11px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+/* A pane, quiet, and a little less quiet with a mark when it is open in the
+   layout on screen. The mark keeps its place when it is not drawn, so the
+   names stay in one column. Each is a button: a closed pane opens, an open one
+   comes to the front. */
+[data-v2-root] .v2-desk-pane {
+  color: var(--v2-ink-3);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+[data-v2-root] .v2-desk-pane-button {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  text-align: left;
+  line-height: inherit;
+}
+
+[data-v2-root] .v2-desk-pane-button:hover {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-desk-pane-button:focus-visible {
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+[data-v2-root] .v2-desk-pane-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-desk-open {
+  order: -1;
+  display: inline-flex;
+  flex: none;
+  width: 5px;
+  margin-top: 5px;
+  visibility: hidden;
+}
+
+[data-v2-root] .v2-desk-open-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--v2-ink-2);
+}
+
+/* ---- managing the layouts: on the rail, and in the phone's sheet ---- */
+
+/* The rail's heading and its one control, Edit, on one line. */
+[data-v2-root] .v2-desk-rail-headrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+[data-v2-root] .v2-desk-rail-headrow .v2-desk-rail-head {
+  margin: 0 0 0 8px;
+}
+
+[data-v2-root] .v2-desk-edit-toggle {
+  min-height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: var(--v2-ink-3);
+  font: 600 11px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+[data-v2-root] .v2-desk-edit-toggle:hover,
+[data-v2-root] .v2-desk-edit-toggle[aria-expanded="true"] {
+  color: var(--v2-ink);
+}
+
+/* The quiet mark on a layout that differs from its default, drawn for the
+   class shown only (in each class's block below). */
+[data-v2-root] .v2-desk-changed {
+  display: none;
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--v2-ink-3);
+}
+
+/* The column of layouts while it is being managed. */
+[data-v2-root] .v2-desk-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-desk-edit-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--v2-ink-2);
+  font: 600 14px/1.15 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-desk-edit-name:hover,
+[data-v2-root] .v2-desk-edit-name[aria-expanded="true"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-desk-edit li[aria-current] .v2-desk-edit-name {
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-desk-edit-note {
+  color: var(--v2-ink-3);
+  font: 500 11px/1.2 var(--v2-display);
+}
+
+/* A layout's actions, a question, or a field, stacked under its name: the
+   column stays one column. */
+[data-v2-root] .v2-desk-edit-actions,
+[data-v2-root] .v2-desk-edit-ask,
+[data-v2-root] .v2-desk-edit-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 2px 0 8px 8px;
+}
+
+[data-v2-root] .v2-desk-edit-actions button,
+[data-v2-root] .v2-desk-edit-ask button,
+[data-v2-root] .v2-desk-edit-field button,
+[data-v2-root] .v2-desk-edit-make {
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--v2-ink-2);
+  font: 500 12px/1.2 var(--v2-display);
+}
+
+[data-v2-root] .v2-desk-edit-actions button:hover,
+[data-v2-root] .v2-desk-edit-ask button:hover,
+[data-v2-root] .v2-desk-edit-field button:hover,
+[data-v2-root] .v2-desk-edit-make:hover {
+  color: var(--v2-ink);
+  background: var(--v2-card-2);
+}
+
+/* A move that cannot be made is said to be unavailable, and stays where it is
+   so the focus does not fall off it. */
+[data-v2-root] .v2-desk-edit-actions button[aria-disabled="true"],
+[data-v2-root] .v2-desk-arrange button[aria-disabled="true"] {
+  color: var(--v2-ink-3);
+  background: none;
+  cursor: default;
+  opacity: 0.55;
+}
+
+[data-v2-root] .v2-desk-edit-ask p {
+  padding: 4px 8px;
+  color: var(--v2-ink);
+  font-size: 12px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+[data-v2-root] .v2-desk-edit-ask [data-part="confirm"] {
+  color: var(--v2-warn);
+}
+
+[data-v2-root] .v2-desk-edit-field input {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 8px;
+  background: var(--v2-card);
+  color: var(--v2-ink);
+  font: 500 13px/1.2 var(--v2-text);
+}
+
+[data-v2-root] .v2-desk-edit-make {
+  width: 100%;
+  margin-top: 6px;
+  color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-desk-edit-new {
+  margin-top: 6px;
+  padding-left: 0;
+}
+
+[data-v2-root] .v2-desk-edit-limit {
+  margin-top: 6px;
+  padding: 0 8px;
+  color: var(--v2-ink-3);
+  font-size: 12px;
+  line-height: 1.35;
+  text-wrap: pretty;
+}
+
+/* In the phone's sheet every control is a finger's size. */
+[data-v2-root] .v2-desk-menu .v2-desk-edit-name,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-actions button,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-ask button,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-field button,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-field input,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-make,
+[data-v2-root] .v2-desk-menu .v2-desk-edit-toggle {
+  min-height: 44px;
+  padding-inline: 12px;
+  font-size: 15px;
+}
+
+[data-v2-root] .v2-desk-menu .v2-desk-edit-toggle-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid var(--v2-edge);
+}
+
+/* ---- the phone's list of panes, from the end of the bottom bar ---- */
+
+[data-v2-root] .v2-desk-arrange {
+  display: flex;
+  flex: none;
+}
+
+[data-v2-root] .v2-desk-arrange-toggle {
+  min-width: 44px;
+  min-height: 52px;
+  padding: 0 12px;
+  color: var(--v2-ink-3);
+  font: 600 15px/1 var(--v2-display);
+}
+
+[data-v2-root] .v2-desk-arrange-toggle[aria-expanded="true"] {
+  color: var(--v2-ink);
+}
+
+[data-v2-root] .v2-desk-arrange-toggle:focus-visible {
+  outline-offset: -3px;
+}
+
+/* Over the slot, above the bar. */
+[data-v2-root] .v2-desk-arrange-sheet {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 10px;
+  right: 10px;
+  z-index: 2;
+  max-height: calc(100dvh - 140px);
+  padding: 6px;
+  overflow-y: auto;
+  background: var(--v2-card);
+  border: 1px solid var(--v2-edge);
+  border-radius: 14px;
+}
+
+[data-v2-root] .v2-desk-arrange-sheet[hidden] {
+  display: none;
+}
+
+[data-v2-root] .v2-desk-arrange-head {
+  padding: 8px 10px 4px;
+  color: var(--v2-ink-3);
+  font: 600 12px/1.2 var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+[data-v2-root] .v2-desk-arrange ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+[data-v2-root] .v2-desk-arrange-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  min-height: 48px;
+  padding: 0 2px 0 10px;
+}
+
+[data-v2-root] .v2-desk-arrange-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--v2-ink);
+  font: 600 15px/1.2 var(--v2-display);
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-desk-arrange-actions {
+  display: flex;
+  flex: none;
+  margin-left: auto;
+}
+
+[data-v2-root] .v2-desk-arrange-actions button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: 10px;
+  color: var(--v2-ink-2);
+  font: 500 13px/1.1 var(--v2-display);
+}
+
+[data-v2-root] .v2-desk-arrange-actions button:focus-visible {
+  outline-offset: -3px;
+}
+
+/* ---- from 1024px: the rail and the tiled workspace ---- */
+
+@media (min-width: 1024px) {
+  [data-v2-root] .v2-desk {
+    flex-direction: row;
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  [data-v2-root] .v2-desk-top,
+  [data-v2-root] .v2-desk-notes-compact,
+  [data-v2-root] .v2-desk-bar {
+    display: none;
+  }
+
+  /* The existing rail's width and tone: the page's own colour, a hairline on
+     its right, and its own scroll when the window is short. */
+  [data-v2-root] .v2-desk-rail {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    width: var(--v2-rail-w);
+    height: 100dvh;
+    padding: 30px 14px 24px;
+    overflow-y: auto;
+    border-right: 1px solid var(--v2-edge);
+    scrollbar-width: thin;
+    scrollbar-color: var(--v2-edge) transparent;
+  }
+
+  /* The same 6px from the window's edges as between two frames. A margin, so
+     the workspace itself still has no padding and no border. */
+  [data-v2-root] .v2-desk-work {
+    margin: 6px;
+  }
+
+  /* As Today's h1 is from 1024px. */
+  [data-v2-root] .v2-desk .v2-pane .v2-top h3 {
+    letter-spacing: 0;
+  }
+}
+
+/* ---- compact: one slot, the front tab of the one leaf ---- */
+
+@media (width < 1024px) {
+  [data-v2-root] .v2-frame[data-shown~="compact"] {
+    display: flex;
+    inset: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  /* The bars name the pane here; the title is still read. */
+  [data-v2-root] .v2-frame-head {
+    min-height: 0;
+    padding: 0;
+  }
+
+  [data-v2-root] .v2-frame-name {
+    display: none;
+  }
+
+  /* The scroller's padding is the pane's inset here as it is from 1024px, so
+     the leaves' own phone gutter goes to nothing inside it: the two together
+     stood the day 30px off the edge. A length still, because the line's rail
+     reads it inside calc(). */
+  [data-v2-root] .v2-desk .v2-pane {
+    --v2-gutter: 0px;
+  }
+
+  [data-v2-root] .v2-desk-menu a[data-changed~="compact"] .v2-desk-changed {
+    display: inline-block;
+  }
+}
+
+/* ---- regular ---- */
+
+@media (1024px <= width < 1600px) {
+  /* A DEFINITE HEIGHT, never a stretched one. The workspace is the size
+     container its stage's extents are measured in, and a container's block
+     size that came from stretching to a line whose height its own min-height
+     set is not known when the browser first resolves the stage's units: on a
+     window shorter than the tree's minimum the first layout measured 0px tall
+     and drew every frame 2px high. So the height is written out: the window
+     less the 6px margin above and below, or the class's minimum (which already
+     carries its pixel of slack) when that is more. The width needs no such
+     help: it is the flex item's main size, resolved (min-width included)
+     before anything inside it is laid out. */
+  [data-v2-root] .v2-desk-work {
+    align-self: flex-start;
+    min-width: var(--v2-desk-regular-min-w);
+    min-height: var(--v2-desk-regular-min-h);
+    height: max(calc(100dvh - 12px), var(--v2-desk-regular-min-h));
+  }
+
+  [data-v2-root] .v2-frame[data-shown~="regular"] {
+    display: flex;
+    left: var(--v2-frame-regular-left);
+    top: var(--v2-frame-regular-top);
+    width: var(--v2-frame-regular-width);
+    height: var(--v2-frame-regular-height);
+  }
+
+  [data-v2-root] .v2-frame-name[data-strip~="regular"] {
+    display: none;
+  }
+
+  [data-v2-root] .v2-frame-tabs[data-in~="regular"] {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-divider[data-shown~="regular"] {
+    display: block;
+  }
+
+  [data-v2-root] .v2-frame-tools[data-in~="regular"] {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-desk-layouts a[data-changed~="regular"] .v2-desk-changed {
+    display: inline-block;
+  }
+
+  [data-v2-root] .v2-frame-solo[data-in~="regular"] {
+    display: block;
+  }
+
+  /* Maximized: two squares, the front one lower right. */
+  [data-v2-root] .v2-frame-max[data-max~="regular"]::before {
+    inset: 8px 5px 5px 8px;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="regular"]::after {
+    content: "";
+    position: absolute;
+    inset: 5px 8px 8px 5px;
+    border-top: 1.5px solid currentColor;
+    border-left: 1.5px solid currentColor;
+    border-radius: 2px 0 0 0;
+  }
+
+  [data-v2-root] .v2-desk-pane[data-open~="regular"] {
+    color: var(--v2-ink-2);
+  }
+
+  [data-v2-root] .v2-desk-pane[data-open~="regular"] .v2-desk-open {
+    visibility: visible;
+  }
+}
+
+/* ---- wide ---- */
+
+@media (min-width: 1600px) {
+  /* A definite height, for the reason given in the regular block. */
+  [data-v2-root] .v2-desk-work {
+    align-self: flex-start;
+    min-width: var(--v2-desk-wide-min-w);
+    min-height: var(--v2-desk-wide-min-h);
+    height: max(calc(100dvh - 12px), var(--v2-desk-wide-min-h));
+  }
+
+  [data-v2-root] .v2-frame[data-shown~="wide"] {
+    display: flex;
+    left: var(--v2-frame-wide-left);
+    top: var(--v2-frame-wide-top);
+    width: var(--v2-frame-wide-width);
+    height: var(--v2-frame-wide-height);
+  }
+
+  [data-v2-root] .v2-frame-name[data-strip~="wide"] {
+    display: none;
+  }
+
+  [data-v2-root] .v2-frame-tabs[data-in~="wide"] {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-divider[data-shown~="wide"] {
+    display: block;
+  }
+
+  [data-v2-root] .v2-frame-tools[data-in~="wide"] {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-desk-layouts a[data-changed~="wide"] .v2-desk-changed {
+    display: inline-block;
+  }
+
+  [data-v2-root] .v2-frame-solo[data-in~="wide"] {
+    display: block;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="wide"]::before {
+    inset: 8px 5px 5px 8px;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="wide"]::after {
+    content: "";
+    position: absolute;
+    inset: 5px 8px 8px 5px;
+    border-top: 1.5px solid currentColor;
+    border-left: 1.5px solid currentColor;
+    border-radius: 2px 0 0 0;
+  }
+
+  [data-v2-root] .v2-desk-pane[data-open~="wide"] {
+    color: var(--v2-ink-2);
+  }
+
+  [data-v2-root] .v2-desk-pane[data-open~="wide"] .v2-desk-open {
+    visibility: visible;
+  }
+}
+
+/* ---- a touch screen wide enough to be tiled ---- */
+
+/* A tablet on its side: the header's controls and the pane menu's items are a
+   finger's size, as on the phone, and the header grows to hold them, so the
+   menu opens under it a little lower. The glyphs keep their size inside the
+   larger boxes. Last in the sheet, so it also outweighs each class's glyph for
+   a maximized pane. */
+@media (hover: none) and (min-width: 1024px) {
+  [data-v2-root] .v2-frame-head {
+    min-height: 44px;
+  }
+
+  [data-v2-root] .v2-frame-menu-button,
+  [data-v2-root] .v2-frame-close,
+  [data-v2-root] .v2-frame-max {
+    width: 44px;
+    height: 44px;
+  }
+
+  [data-v2-root] .v2-frame-tab {
+    min-height: 44px;
+  }
+
+  [data-v2-root] .v2-frame-close::before,
+  [data-v2-root] .v2-frame-close::after {
+    left: 17px;
+    right: 17px;
+  }
+
+  [data-v2-root] .v2-frame-max::before {
+    inset: 17px;
+  }
+
+  [data-v2-root] .v2-frame-menu-list {
+    top: 48px;
+    max-height: min(calc(100% - 54px), calc(100dvh - 24px));
+  }
+
+  [data-v2-root] .v2-frame-menu-item {
+    min-height: 44px;
+  }
+}
+
+/* The maximized glyph is per class, as a pane can fill the desk on one class only. */
+@media (hover: none) and (1024px <= width < 1600px) {
+  [data-v2-root] .v2-frame-max[data-max~="regular"]::before {
+    inset: 19px 16px 16px 19px;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="regular"]::after {
+    inset: 16px 19px 19px 16px;
+  }
+}
+
+@media (hover: none) and (min-width: 1600px) {
+  [data-v2-root] .v2-frame-max[data-max~="wide"]::before {
+    inset: 19px 16px 16px 19px;
+  }
+
+  [data-v2-root] .v2-frame-max[data-max~="wide"]::after {
+    inset: 16px 19px 19px 16px;
+  }
+}

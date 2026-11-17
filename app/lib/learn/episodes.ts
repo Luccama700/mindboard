@@ -15,6 +15,7 @@ import {
 } from "@/app/_components/learn-types";
 import { loadConvertedSources, loadSourceDocuments } from "./context";
 import { pcmDurationSeconds, pcmToWav } from "./audio";
+import { providerErrorMessage } from "@/app/lib/provider-error";
 import {
   FLAVOR_SPECS,
   GEMINI_VOICES,
@@ -195,11 +196,11 @@ async function renderWithGemini(
   // the caller has already marked the episode row non-terminal, so an escaping
   // error would strand it there forever instead of failing it.
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
+    const detail = providerErrorMessage(await response.text().catch(() => ""));
     return {
       ok: false,
       error: detail
-        ? `gemini tts ${response.status}: ${detail.slice(0, 300)}`
+        ? `gemini tts ${response.status}: ${detail}`
         : `gemini tts ${response.status}`,
     };
   }
@@ -370,7 +371,11 @@ export async function generateEpisodeFor(
         .eq("user_id", userId);
       if (queuedError) return fail(queuedError.message);
 
-      const { error: jobError } = await supabase.from("jobs").insert({
+      // Always the service client, whichever client the caller passed:
+      // migration 0056 takes insert/update on `jobs` away from the session
+      // client, because the home worker treats a job row as something the
+      // server wrote (audit C1). userId is explicit, as everywhere else here.
+      const { error: jobError } = await createServiceClient().from("jobs").insert({
         user_id: userId,
         kind: "tts",
         payload: { episode_id: episodeId },
@@ -465,7 +470,6 @@ export async function proposeGenerateAudioOverviewFor(
     : "all converted sources";
   const summary = `Generate a ${parsed.value.flavor} audio overview of ${resolved.value.name} (${scope}, ${parsed.value.engine} voices).`;
   const proposalId = await recordProposal(
-    supabase,
     userId,
     "generate_audio_overview",
     parsed.value as unknown as Record<string, unknown>,

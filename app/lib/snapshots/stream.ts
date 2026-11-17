@@ -810,10 +810,10 @@ export function streamSnapshot(input: StreamInput): StreamSnapshot {
       glyph: "★",
       fact:
         pendingProposals === 1
-          ? "1 copilot proposal awaits your confirm"
-          : `${pendingProposals} copilot proposals await your confirm`,
+          ? "1 proposal awaits your approval"
+          : `${pendingProposals} proposals await your approval`,
       meta: null,
-      entity: { kind: "link", href: "/plan" },
+      entity: { kind: "link", href: "/approvals" },
     });
   }
 

@@ -1,0 +1,1633 @@
+/* The v2 look.
+ *
+ * SCOPING IS LOAD BEARING. This app's root layout owns <html> and <body>, sets a
+ * monospace font and a theme class, and loads app/globals.css (Tailwind v4 with
+ * preflight). This file may not edit any of that, so:
+ *
+ *   - every selector starts at [data-v2-root], including the resets, so nothing
+ *     here can reach a page outside app/v2;
+ *   - [data-v2-root] paints its own background and sets its own fonts and
+ *     colours, because it cannot style the elements above it;
+ *   - every keyframe name is prefixed v2-, so it cannot collide with globals.css.
+ *
+ * COLOUR IS NOT WRITTEN HERE. The block below is the ONLY place a colour is
+ * spelled out, and those ten values are not hand picked: they are exactly
+ * deriveTokens("#000000", "#A78BFA") from app/lib/v2/view/appearance.ts, the
+ * black and purple scheme. __tests__/v2-appearance.test.ts asserts that value
+ * for value, and asserts that nothing else in this file contains a hex, an rgb()
+ * or an hsl(). The reason for both: the scheme is a runtime choice, so the
+ * stylesheet's job is to say which token each thing uses, and the module's job
+ * is to say what colour each token is for the scheme that is on. These defaults
+ * exist so the server's first paint is already right, before any script runs.
+ *
+ * IDENTITY COLOURS ARE DATA. There is no token per lane and none per group:
+ * every stop sets --v2-lane, --v2-ident, --v2-on-ident and --v2-lit inline from
+ * its own colour (see stop-card.tsx and identityTokens), and everything tinted
+ * reads one of those four. The raw colour marks; the derived one carries text.
+ *
+ * TWO LAYOUTS, ONE DOCUMENT. Below 1024px this is the phone screen, unchanged.
+ * From 1024px up it is a desktop page: a rail, the day, and a side column. The
+ * document order is rail, main, side, which is the desktop reading order; the
+ * phone's own order is restored with `order` on the leaves, which is what the
+ * `display: contents` on the two wrappers is for. See THE DESKTOP PAGE at the
+ * foot of this file: it is one block, so what differs is readable in one place.
+ */
+
+[data-v2-root] {
+  /* ---- the scheme: deriveTokens("#000000", "#A78BFA"). Do not hand edit. ---- */
+  --v2-page: #000000;
+  --v2-card: #131216;
+  --v2-card-2: #211F25;
+  --v2-edge: #44414C;
+  --v2-ink: #FAF8FF;
+  --v2-ink-2: #ACA7BE;
+  --v2-ink-3: #898594;
+  --v2-accent: #A78BFA;
+  --v2-on-accent: #000000;
+  --v2-signal: #A78BFA;
+
+  /* Feed health is STATE, not palette: alive has to read as alive and not
+     answering as not answering on every scheme, so the hue is fixed in
+     appearance.ts and only the lightness moves. These two are derived like
+     every other token (deriveTokens), which is why they are in this block: on
+     the dark schemes they come out exactly these values, and on Paper they
+     darken until the dot is visible on the card it sits in. They are dots with
+     their own text labels, never text themselves. */
+  --v2-ok: #2FD6A3;
+  --v2-warn: #FFB84D;
+
+  /* Fallbacks for anything with no identity of its own: the panel's primary
+     action, and any card not inside a stop. A stop always sets all four. */
+  --v2-lane: var(--v2-edge);
+  --v2-ident: var(--v2-accent);
+  --v2-on-ident: var(--v2-on-accent);
+  --v2-lit: var(--v2-card-2);
+
+  /* motion: one easing family, three durations */
+  --v2-ease: cubic-bezier(0.2, 0, 0, 1);
+  --v2-ease-in: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --v2-quick: 140ms;
+  --v2-std: 280ms;
+  --v2-slow: 520ms;
+
+  --v2-display: var(--font-v2-display), "Trebuchet MS", system-ui, sans-serif;
+  --v2-text: var(--font-v2-text), system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* the line's geometry: one set of numbers the rail and the dots derive from */
+  --v2-gutter: 16px;
+  --v2-time: 50px;
+  --v2-rail-gap: 26px;
+  /* the desktop page's one fixed column. Wide enough for its longest word:
+     at 96px the word at its foot ran over the rail's own edge. */
+  --v2-rail-w: 128px;
+
+  display: block;
+  min-height: 100dvh;
+  background: var(--v2-page);
+  color: var(--v2-ink);
+  font: 400 15px/1.45 var(--v2-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (min-width: 420px) {
+  [data-v2-root] {
+    --v2-gutter: 20px;
+    --v2-time: 62px;
+    --v2-rail-gap: 36px;
+  }
+}
+
+[data-v2-root] *,
+[data-v2-root] *::before,
+[data-v2-root] *::after {
+  box-sizing: border-box;
+}
+
+[data-v2-root] button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+[data-v2-root] button:disabled {
+  cursor: default;
+}
+
+[data-v2-root] a:focus-visible,
+[data-v2-root] button:focus-visible,
+[data-v2-root] input:focus-visible,
+[data-v2-root] [tabindex]:focus-visible {
+  outline: 2px solid var(--v2-accent);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+[data-v2-root] h1,
+[data-v2-root] h2,
+[data-v2-root] h3,
+[data-v2-root] p {
+  margin: 0;
+}
+
+/* Read, not seen. The line of stops needs an h2 between the page's h1 and the
+   stops' h3 so the heading order does not skip a level. */
+[data-v2-root] .v2-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The side column's own blocks carry no shape on the phone: there, each of them
+   is simply the next thing down the screen. The desktop page gives them one. */
+[data-v2-root] .v2-desk-only {
+  display: none;
+}
+
+/* ------------------------------------------------- the old app's own chrome
+ *
+ * The root layout above this one mounts, for a signed in owner, a capture dock
+ * fixed to the bottom of the screen and a row of buttons fixed to the top, and
+ * app/globals.css pads the body to reserve the top row's band. None of those
+ * files may be edited from here, and this screen has its own bottom bar, so the
+ * two would sit on top of each other.
+ *
+ * These are the only rules in this file that do not start at [data-v2-root];
+ * they are still scoped to it, by :has(), so they cannot reach a page outside
+ * app/v2. !important because the body rule they cancel has the same specificity
+ * and the order the two stylesheets are injected in is not ours to decide.
+ */
+body:has([data-v2-root]) [data-capture-dock],
+body:has([data-v2-root]) [data-chrome-top] {
+  display: none !important;
+}
+
+body:has([data-v2-root]) {
+  padding-top: 0 !important;
+}
+
+/* ----------------------------------------------------------------- the frame */
+
+/* The wrappers exist for the desktop page. Here they are nothing at all, so
+   their children are the frame's own children and the phone's order below can
+   interleave them: the energy control belongs between the header and the line
+   on a phone, and in the side column on a desktop. */
+[data-v2-root] .v2-main,
+[data-v2-root] .v2-side,
+[data-v2-root] .v2-status,
+[data-v2-root] .v2-lists {
+  display: contents;
+}
+
+@media (max-width: 1023.98px) {
+  [data-v2-root] .v2-shell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    max-width: 430px;
+    min-height: 100dvh;
+    margin: 0 auto;
+    overflow: hidden;
+    padding-bottom: 92px;
+  }
+
+  /* The phone's own reading order, restored over the document's rail, main,
+     side. The nav is out of flow (it is pinned to the viewport) so it takes no
+     order of its own. */
+  [data-v2-root] .v2-top {
+    order: 1;
+  }
+  [data-v2-root] .v2-allday {
+    order: 2;
+  }
+  [data-v2-root] .v2-energy {
+    order: 3;
+  }
+  [data-v2-root] .v2-said {
+    order: 4;
+  }
+  [data-v2-root] .v2-day {
+    order: 5;
+  }
+  [data-v2-root] .v2-side-block {
+    order: 6;
+  }
+}
+
+/* A window between a phone and a laptop: the screen reads as the device it was
+   designed for, framed and centred. A hairline rather than the drop shadow it
+   had, because this palette lifts a surface by a step and not by a shadow. */
+@media (min-width: 520px) and (max-width: 1023.98px) {
+  [data-v2-root] {
+    padding: 24px 0;
+  }
+
+  [data-v2-root] .v2-shell {
+    min-height: 880px;
+    border: 1px solid var(--v2-edge);
+    border-radius: 34px;
+  }
+
+  [data-v2-root] .v2-nav {
+    bottom: 24px;
+    border-radius: 0 0 34px 34px;
+  }
+}
+
+/* ---------------------------------------------------------------- the header */
+
+[data-v2-root] .v2-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 22px var(--v2-gutter) 6px;
+}
+
+[data-v2-root] .v2-top h1 {
+  font: 600 clamp(18px, 5.4vw, 21px) / 1.15 var(--v2-display);
+  letter-spacing: 0.2px;
+}
+
+[data-v2-root] .v2-notice,
+[data-v2-root] .v2-feedline {
+  color: var(--v2-ink-2);
+  margin-top: 4px;
+  font-size: 14px;
+  text-wrap: pretty;
+}
+
+/* Kept as narrow as it can be: the date beside it is the page's h1, and at
+   375px every pixel this takes is a pixel that makes "Wednesday 15 April" wrap. */
+[data-v2-root] .v2-top-aside {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+[data-v2-root] .v2-feeds {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 22px;
+  background: var(--v2-card);
+}
+
+[data-v2-root] .v2-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--v2-ok);
+  transition: background var(--v2-std) var(--v2-ease);
+}
+
+[data-v2-root] .v2-dot[data-state="late"] {
+  background: var(--v2-warn);
+}
+
+[data-v2-root] .v2-dot[data-state="failing"],
+[data-v2-root] .v2-dot[data-state="blind"] {
+  background: var(--v2-warn);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--v2-warn) 18%, transparent);
+}
+
+/* The phone's way in to the appearance panel: the accent itself, as a mark. 44px
+   of target around a 16px swatch. */
+[data-v2-root] .v2-appearance-dot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  /* 44px of target in the direction the brief measures, and as little width as
+     the swatch needs, so the date keeps its line. */
+  width: 30px;
+  height: 44px;
+  border-radius: 10px;
+}
+
+[data-v2-root] .v2-appearance-dot span {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--v2-edge);
+}
+
+/* ----------------------------------------------------------------- all day */
+
+[data-v2-root] .v2-allday {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px var(--v2-gutter) 0;
+}
+
+[data-v2-root] .v2-allday-label {
+  font: 500 10px/14px var(--v2-display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-allday-chip {
+  padding: 6px 11px;
+  border-radius: 12px;
+  background: var(--v2-card);
+  color: var(--v2-ink-2);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ energy */
+
+[data-v2-root] .v2-energy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px var(--v2-gutter) 4px;
+}
+
+[data-v2-root] .v2-energy > span {
+  color: var(--v2-ink-2);
+  font-size: 14px;
+}
+
+[data-v2-root] .v2-seg {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  flex: 1;
+  background: var(--v2-card);
+  border-radius: 14px;
+  padding: 4px;
+}
+
+[data-v2-root] .v2-seg button {
+  position: relative;
+  z-index: 1;
+  min-height: 44px;
+  border-radius: 10px;
+  font: 600 14px/1 var(--v2-display);
+  color: var(--v2-ink-2);
+  transition: color var(--v2-std) var(--v2-ease);
+}
+
+[data-v2-root] .v2-seg button[aria-pressed="true"] {
+  color: var(--v2-on-accent);
+}
+
+[data-v2-root] .v2-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px) / 3);
+  border-radius: 10px;
+  background: var(--v2-accent);
+  transition:
+    transform var(--v2-std) var(--v2-ease),
+    opacity var(--v2-std) var(--v2-ease);
+}
+
+[data-v2-root] .v2-thumb[data-answered="no"] {
+  opacity: 0;
+}
+
+[data-v2-root] .v2-said {
+  min-height: 22px;
+  padding: 8px var(--v2-gutter) 0;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------- the line */
+
+[data-v2-root] .v2-line {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+[data-v2-root] .v2-stop {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--v2-time) 1fr;
+  column-gap: var(--v2-rail-gap);
+  padding: 0 var(--v2-gutter) 18px;
+}
+
+/* ONE LONG WORD MAY NOT WIDEN A STOP. The content column is 1fr, which means
+   minmax(auto, 1fr): its automatic minimum is its own content, so a pasted URL
+   in a task title made the track as wide as the word. On the phone the card grew
+   past the clipped frame and "Not today" went off screen; on desktop the lit
+   card ran under the sticky context column and the whole page scrolled
+   sideways. Two guards, and both are needed: min-width on the stop's children
+   lets the track be narrower than its content, and overflow-wrap lets the word
+   break so the content is not simply clipped. */
+[data-v2-root] .v2-stop > * {
+  min-width: 0;
+}
+
+/* Every line of text in a stop, not only its title: a fixed event prints its
+   location under the title, and a location is often a meeting link 200
+   characters long with no place to break. Held to its column by the min-width
+   above, it would spill out of the card instead of widening it. */
+[data-v2-root] .v2-stop h3,
+[data-v2-root] .v2-stop p,
+[data-v2-root] .v2-stop .v2-detail,
+[data-v2-root] .v2-row .v2-detail,
+[data-v2-root] .v2-row .v2-row-title,
+[data-v2-root] .v2-allday-chip {
+  overflow-wrap: anywhere;
+}
+
+/* The rail and its dot hang off one derived centre line, so the geometry stays
+   right when the gutter and the time column change at a wider viewport. */
+[data-v2-root] .v2-stop::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap) / 2 - 2px);
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--v2-edge);
+}
+
+[data-v2-root] .v2-stop::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap) / 2 - 8px);
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--v2-page);
+  border: 3px solid var(--v2-lane);
+}
+
+[data-v2-root] .v2-stop:last-child::before {
+  bottom: 18px;
+}
+
+[data-v2-root] .v2-stop time {
+  font: 600 15px/22px var(--v2-display);
+  font-variant-numeric: tabular-nums;
+  color: var(--v2-ink-2);
+  text-align: right;
+}
+
+[data-v2-root] .v2-stop h3 {
+  font: 600 16px/22px var(--v2-display);
+  text-wrap: pretty;
+}
+
+/* ---- two levels of name ----
+ *
+ * A real title is long and keeps its detail in a trailing parenthetical, which
+ * as one run of display type was five lines on a phone. The view model splits it
+ * at the user's own punctuation (see splitTitle); these clamps are what keep
+ * either half from taking the screen. The whole original string is on the
+ * element as a `title` attribute, so nothing is actually lost.
+ *
+ * -webkit-line-clamp with -webkit-box is the spelling every current engine
+ * accepts; the unprefixed `line-clamp` is declared beside it for the ones that
+ * have moved on. A skipped stop sets `display: inline` further down and so opts
+ * out of clamping, which is right: it is already one struck line.
+ */
+[data-v2-root] .v2-row .v2-row-title,
+[data-v2-root] .v2-stop h3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+[data-v2-root] .v2-stop .v2-detail,
+[data-v2-root] .v2-row .v2-detail {
+  margin-top: 3px;
+  color: var(--v2-ink-3);
+  font: 400 13px/1.35 var(--v2-text);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+[data-v2-root] .v2-stop p {
+  color: var(--v2-ink-3);
+  font-size: 14px;
+}
+
+[data-v2-root] .v2-stop .v2-leave {
+  color: var(--v2-ink-2);
+}
+
+/* The quiet line of identity: the name of the group this task lives in, in that
+   group's own colour, lifted until it reads on whatever is behind it. */
+[data-v2-root] .v2-stop .v2-ident,
+[data-v2-root] .v2-lit .v2-ident {
+  margin-top: 2px;
+  color: var(--v2-ident);
+  font: 500 12px/16px var(--v2-display);
+  letter-spacing: 0.02em;
+}
+
+/* A time the planner changed. `layout` only animates a stop that changed PLACE,
+   so a block that keeps its position and moves by twenty minutes needs its own
+   cue. The prototype holds the flash for 1.2s; this holds it for the standard
+   520ms, so the screen keeps to the three durations.
+   No 100% keyframe on purpose: the implicit end value is the element's own
+   computed colour, which differs between a stop's time and the lit card's label
+   and would otherwise have to be hard coded twice. */
+@keyframes v2-moved {
+  0%,
+  60% {
+    color: var(--v2-signal);
+  }
+}
+
+[data-v2-root] .v2-moved {
+  animation: v2-moved var(--v2-slow) var(--v2-ease);
+}
+
+[data-v2-root] .v2-stop .v2-tag {
+  display: inline-block;
+  margin-top: 4px;
+  font: 500 10px/14px var(--v2-display);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--v2-ink-3);
+}
+
+/* A row behind you is muted with COLOUR, never with opacity on the whole row:
+   opacity multiplies every pixel, so a word that carries meaning ("Not today",
+   "Done") would drop to about 2.3:1 against the page. Every ink token clears
+   4.5:1 on every surface by construction (see appearance.ts). Opacity is still
+   fine on the rail and the dot, which carry no text. */
+[data-v2-root] .v2-stop[data-state="past"] h3,
+[data-v2-root] .v2-stop[data-state="done"] h3 {
+  color: var(--v2-ink-2);
+}
+
+[data-v2-root] .v2-stop[data-state="past"]::before,
+[data-v2-root] .v2-stop[data-state="done"]::before {
+  background: var(--v2-lane);
+  opacity: 0.7;
+}
+
+[data-v2-root] .v2-stop[data-state="past"]::after,
+[data-v2-root] .v2-stop[data-state="done"]::after {
+  background: var(--v2-lane);
+}
+
+[data-v2-root] .v2-stop[data-state="done"] h3 {
+  text-decoration: line-through;
+  text-decoration-color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-stop[data-state="done"] .v2-tag {
+  color: var(--v2-ink-2);
+}
+
+/* A skipped stop is NOT a stop any more. The planner keeps it in the day's
+   blocks but its time is free again, so another stop can be placed over the
+   same minutes: drawing it with a dot on the rail would put two markers at one
+   point on the line. It reads as a struck-through line item hanging off the
+   rail instead, so the day still shows what was dropped without claiming it
+   occupies the time. */
+[data-v2-root] .v2-stop[data-state="skipped"] {
+  padding-bottom: 10px;
+}
+
+[data-v2-root] .v2-stop[data-state="skipped"] .v2-tag {
+  color: var(--v2-ink-2);
+}
+
+[data-v2-root] .v2-stop[data-state="skipped"]::after {
+  display: none;
+}
+
+[data-v2-root] .v2-stop[data-state="skipped"] time,
+[data-v2-root] .v2-stop[data-state="skipped"] h3 {
+  font-weight: 500;
+  color: var(--v2-ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-stop[data-state="skipped"] h3 {
+  display: inline;
+  font-size: 15px;
+}
+
+/* The lit stop: the one thing in hand, a filled tinted card on the line.
+ *
+ * Its fill is --v2-lit, which is the stop's own colour mixed into the card
+ * surface by identityTokens rather than by color-mix here: the ink on this card
+ * had its contrast measured against that exact mix, and a percentage written in
+ * two places is a percentage that ends up different in two places.
+ *
+ * There is no band down its left edge. The card is already marked by its fill,
+ * its edge, its label and its button, and a coloured stripe on one side of a
+ * card is a generic device that adds nothing. There is no shadow either: this
+ * palette lifts a surface by a step.
+ */
+[data-v2-root] .v2-lit {
+  /* The card is the content column of its own stop: the rail and the dot still
+     draw beside it, and the time column stays blank because the card says the
+     time itself. */
+  grid-column: 2;
+  position: relative;
+  margin-top: -6px;
+  padding: 14px 16px 16px;
+  border-radius: 20px;
+  background: var(--v2-lit);
+  border: 1.5px solid var(--v2-ident);
+  transition:
+    background var(--v2-slow) var(--v2-ease),
+    border-color var(--v2-slow) var(--v2-ease);
+}
+
+[data-v2-root] .v2-lit .v2-when {
+  font: 600 14px/1 var(--v2-display);
+  font-variant-numeric: tabular-nums;
+  color: var(--v2-ident);
+}
+
+/* The card has the room for a third line of either half, and it is the one thing
+   in hand, so it is the one place the whole name is worth the space. */
+[data-v2-root] .v2-lit h3 {
+  font: 600 clamp(18px, 5.2vw, 21px) / 1.2 var(--v2-display);
+  margin-top: 8px;
+  text-wrap: balance;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+
+[data-v2-root] .v2-lit .v2-detail {
+  margin-top: 6px;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+[data-v2-root] .v2-lit p {
+  color: var(--v2-ink-2);
+  margin-top: 6px;
+  font-size: 14px;
+}
+
+/* The accent is a mark at 3:1 on the PAGE, and the lit card is not the page: on
+   a custom pair the ring dropped to 2.56:1 against that fill. Inside the card
+   the ring is the stop's own identity colour, which is held at 4.5:1 against
+   exactly this surface by construction (identityTokens), and the ring is drawn
+   outside the control, on the fill, so it never sits on the filled button. */
+[data-v2-root] .v2-lit button:focus-visible,
+[data-v2-root] .v2-lit [tabindex]:focus-visible,
+[data-v2-root] .v2-lit:focus-visible {
+  outline-color: var(--v2-ident);
+}
+
+[data-v2-root] .v2-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+[data-v2-root] .v2-go {
+  min-height: 48px;
+  padding: 0 22px;
+  border-radius: 14px;
+  background: var(--v2-ident);
+  color: var(--v2-on-ident);
+  font: 700 16px/1 var(--v2-display);
+  transition:
+    transform var(--v2-quick) var(--v2-ease),
+    filter var(--v2-quick) var(--v2-ease);
+}
+
+[data-v2-root] .v2-go:active {
+  transform: scale(0.96);
+  filter: brightness(0.92);
+}
+
+[data-v2-root] .v2-quiet {
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 14px;
+  color: var(--v2-ink-2);
+  font-size: 15px;
+}
+
+[data-v2-root] .v2-quiet:active {
+  background: var(--v2-card-2);
+}
+
+/* "You are here": the clock on the rail, between what is behind and what is not.
+   It is the one thing on the page that moves by itself, and the one place the
+   accent appears without being asked for. */
+[data-v2-root] .v2-now {
+  position: relative;
+  height: 34px;
+  margin: -6px 0 12px;
+  list-style: none;
+}
+
+[data-v2-root] .v2-now::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap) / 2 - 2px);
+  top: -12px;
+  bottom: -12px;
+  width: 4px;
+  background: linear-gradient(var(--v2-edge), var(--v2-accent) 50%, var(--v2-edge));
+}
+
+[data-v2-root] .v2-now::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap) / 2 - 10px);
+  top: 7px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--v2-accent);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--v2-accent) 20%, transparent);
+  animation: v2-breathe 3.2s ease-in-out infinite;
+}
+
+@keyframes v2-breathe {
+  50% {
+    box-shadow: 0 0 0 11px color-mix(in srgb, var(--v2-accent) 7%, transparent);
+  }
+}
+
+[data-v2-root] .v2-now em {
+  position: absolute;
+  left: var(--v2-gutter);
+  top: 6px;
+  width: var(--v2-time);
+  text-align: right;
+  font: 700 15px/22px var(--v2-display);
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-now span {
+  position: absolute;
+  left: calc(var(--v2-gutter) + var(--v2-time) + var(--v2-rail-gap));
+  top: 6px;
+  font: 600 14px/22px var(--v2-display);
+  color: var(--v2-signal);
+}
+
+/* --------------------------------------------------------- quiet statements */
+
+[data-v2-root] .v2-sub {
+  padding: 26px var(--v2-gutter) 4px;
+  font: 600 16px/1 var(--v2-display);
+  color: var(--v2-ink-2);
+}
+
+[data-v2-root] .v2-empty {
+  margin: 20px var(--v2-gutter) 0;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px dashed var(--v2-edge);
+  color: var(--v2-ink-2);
+}
+
+/* STACKED, not a table. Side by side in a 340px column the title got about
+   110px and wrapped into fifteen lines, so the name owns the full width and one
+   quiet line sits under it: what it belongs to at the left, when or why at the
+   right. Opposite ends of that line separate them, with no glyph between. */
+[data-v2-root] .v2-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px var(--v2-gutter) 0;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: var(--v2-card);
+}
+
+[data-v2-root] .v2-row .v2-row-title {
+  font: 600 15px/1.3 var(--v2-display);
+  text-wrap: pretty;
+}
+
+[data-v2-root] .v2-row-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+/* Which group or lane this row belongs to. On the line a dot on the rail says
+   that; in a flat list nothing does, so the row names it. It is the user's own
+   name for a group and can be any length, so it gives way (with an ellipsis)
+   before it pushes the date out of the row. */
+[data-v2-root] .v2-row .v2-row-ident {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--v2-ident);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A list takes focus so a keyboard can scroll it (see the list components).
+   The ring is drawn inside the box: on a wide window the list is a column that
+   touches the top and bottom of the window, and a ring outside it would be cut
+   off there. */
+[data-v2-root] .v2-list:focus-visible {
+  outline-offset: -2px;
+}
+
+[data-v2-root] .v2-row .v2-row-reason {
+  color: var(--v2-ink-2);
+  text-align: right;
+}
+
+[data-v2-root] .v2-row .v2-row-ident::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+/* The rest of a long list of drops. One press, no count that keeps changing. */
+[data-v2-root] .v2-more {
+  min-height: 44px;
+  margin: 8px var(--v2-gutter) 0;
+  padding: 0 16px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+  color: var(--v2-signal);
+  font: 600 14px/1 var(--v2-display);
+}
+
+/* --------------------------------------------------- the side column's parts */
+
+[data-v2-root] .v2-side-head {
+  padding: 0 var(--v2-gutter) 8px;
+  font: 600 13px/1.2 var(--v2-display);
+  color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-side-line {
+  padding: 0 var(--v2-gutter) 8px;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+  text-wrap: pretty;
+}
+
+[data-v2-root] .v2-lanes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+[data-v2-root] .v2-lane-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--v2-card);
+}
+
+[data-v2-root] .v2-lane-name {
+  font: 600 14px/1.2 var(--v2-display);
+}
+
+/* The same dot the line uses, so one colour vocabulary covers both. */
+[data-v2-root] .v2-lane-name::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+[data-v2-root] .v2-lane-count {
+  margin-left: auto;
+  color: var(--v2-ink-2);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-v2-root] .v2-lane-due {
+  color: var(--v2-ink-3);
+  font-size: 13px;
+}
+
+/* -------------------------------------------------------------------- nav */
+
+/* On the phone: pinned to the viewport, as in the prototype. The day is taller
+   than a phone screen, so a bar at the bottom of the frame would scroll away,
+   and the frame reserves the space for it with its own padding-bottom. */
+[data-v2-root] .v2-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: min(430px, 100%);
+  padding: 0 10px calc(8px + env(safe-area-inset-bottom));
+  background: var(--v2-card);
+  border-top: 1px solid var(--v2-edge);
+  z-index: 10;
+}
+
+[data-v2-root] .v2-nav-items {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+/* Today and Week are links and the two still to come are disabled buttons; the
+   two have to look the same, so every rule here names both. */
+[data-v2-root] .v2-nav button,
+[data-v2-root] .v2-nav a {
+  position: relative;
+  min-height: 52px;
+  font: 600 15px/1 var(--v2-display);
+  color: var(--v2-ink-3);
+}
+
+/* A link that works reads brighter than a placeholder that does not, and says
+   so again under the pointer. The disabled two stay at --v2-ink-3. */
+[data-v2-root] .v2-nav a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--v2-ink-2);
+  text-decoration: none;
+  transition: color var(--v2-quick) var(--v2-ease);
+}
+
+[data-v2-root] .v2-nav a:not([aria-current="page"]):hover {
+  color: var(--v2-ink);
+}
+
+/* The desk's own item is the rail's fifth. The phone bar keeps four columns. */
+@media (max-width: 1023.98px) {
+  [data-v2-root] .v2-nav a.v2-nav-desktop {
+    display: none;
+  }
+}
+
+[data-v2-root] .v2-nav button[aria-current="page"],
+[data-v2-root] .v2-nav a[aria-current="page"] {
+  color: var(--v2-ink);
+}
+
+/* Under the current item: the nav bar sets which one (--v2-nav-at). */
+[data-v2-root] .v2-ind {
+  position: absolute;
+  top: -2px;
+  left: 10px;
+  height: 3px;
+  width: calc((100% - 20px) / 4);
+  background: var(--v2-accent);
+  border-radius: 2px;
+  transform: translateX(calc(var(--v2-nav-at, 0) * 100%));
+}
+
+/* The rail's foot. Shown only on the desktop page, where the rail has one. */
+[data-v2-root] .v2-rail-appearance {
+  display: none;
+}
+
+/* ------------------------------------------------------- the appearance panel */
+
+/* A VEIL, NOT A BLACKOUT. The page behind the panel is the preview for the two
+   colours being chosen, so blacking it out defeats the control. It stays visible
+   and the layer still catches the clicks, which is what keeps the panel modal.
+   On the phone the sheet sits at the bottom and is short enough that the top of
+   the day stays in view. */
+[data-v2-root] .v2-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 12px;
+  background: color-mix(in srgb, var(--v2-page) 30%, transparent);
+}
+
+[data-v2-root] .v2-panel {
+  width: min(430px, 100%);
+  max-height: 68dvh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 20px;
+  background: var(--v2-card);
+}
+
+/* The panel takes focus itself so its heading is read out, and it carries a
+   tabindex, which means the shared [tabindex]:focus-visible reset above would
+   otherwise put a ring on the whole panel and flatten its corners to 10px. */
+[data-v2-root] .v2-panel:focus,
+[data-v2-root] .v2-panel:focus-visible {
+  outline: none;
+  border-radius: 20px;
+}
+
+[data-v2-root] .v2-panel-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+[data-v2-root] .v2-panel-top h2 {
+  font: 600 18px/1.2 var(--v2-display);
+}
+
+[data-v2-root] .v2-panel-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+[data-v2-root] .v2-panel-label {
+  color: var(--v2-ink-2);
+  font-size: 13px;
+}
+
+[data-v2-root] .v2-swatches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+[data-v2-root] .v2-swatch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 12px;
+  background: var(--v2-card-2);
+  text-align: left;
+}
+
+[data-v2-root] .v2-swatch[aria-pressed="true"] {
+  border-color: var(--v2-accent);
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-swatch-colours {
+  display: inline-flex;
+  flex: none;
+}
+
+[data-v2-root] .v2-swatch-colours span {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid var(--v2-edge);
+}
+
+[data-v2-root] .v2-swatch-colours span + span {
+  margin-left: -6px;
+}
+
+[data-v2-root] .v2-swatch-name {
+  font: 500 13px/1.2 var(--v2-display);
+}
+
+[data-v2-root] .v2-fields {
+  display: flex;
+  gap: 10px;
+}
+
+[data-v2-root] .v2-field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--v2-ink-2);
+  font-size: 13px;
+}
+
+[data-v2-root] .v2-field input {
+  width: 100%;
+  height: 44px;
+  padding: 3px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 10px;
+  background: var(--v2-card-2);
+  cursor: pointer;
+}
+
+[data-v2-root] .v2-panel-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+[data-v2-root] .v2-panel-note {
+  color: var(--v2-ink-3);
+  font-size: 12px;
+}
+
+/* ============================================================================
+ * THE DESKTOP PAGE
+ *
+ * From 1024px up this is not a wider phone. It is a rail down the left edge, the
+ * day as the main column (up to 640px, so a line of text stays under about 80
+ * characters), and the day's context beside it, which stays in view while the
+ * line scrolls.
+ *
+ * THE PAGE FILLS THE WINDOW. There is no max-width on the frame. The day takes
+ * what it needs and stops at 640px; every pixel after that goes to the context,
+ * because that is where the information is, and the context becomes more
+ * columns as the window allows:
+ *
+ *   from 1024px   rail / day / one column (status, then the two lists)
+ *   from 1360px   rail / day / status / the two lists
+ *   from 1760px   rail / day / one column / the calendar (the week beside the
+ *                 day; the context gives its extra columns up for it)
+ *
+ * A source with no calendar draws no pane, and from 1760px its frame keeps the
+ * columns it had: rail / day / status / past their date / did not fit today.
+ *
+ * The day's track has a floor of 420px, so at 1024px it gives way before
+ * anything overflows sideways. The page is anchored to the left edge, because
+ * the rail belongs to the edge of the screen.
+ *
+ * Nothing below animates a layout property, and nothing below is a new motion:
+ * the three durations and the one easing family are unchanged.
+ * ==========================================================================*/
+
+@media (min-width: 1024px) {
+  [data-v2-root] {
+    /* Each column carries its own padding from here on, so the shared gutter
+       inside a row goes to nothing. It must stay a LENGTH: it is read inside
+       calc() by the line's rail and dot offsets. */
+    --v2-gutter: 0px;
+    padding: 0;
+  }
+
+  /* align-items is left at `stretch` ON PURPOSE. A sticky element can only move
+     inside its own containing block, which for a grid item is its grid area, so
+     with `start` a column's area would be exactly as tall as its content and
+     `position: sticky` below would never stick. Stretched, the rail and every
+     context column own the full height of the row and slide inside it; their
+     own heights are capped at the viewport. */
+  [data-v2-root] .v2-shell {
+    display: grid;
+    grid-template-columns: auto minmax(420px, 640px) minmax(340px, 1fr);
+    column-gap: clamp(20px, 2.6vw, 44px);
+    min-height: 100dvh;
+  }
+
+  /* min-width: 0 on every column: a grid item's automatic minimum is its
+     content, and one long unbroken word in a task title would otherwise widen
+     its track and push the page sideways. This is the OUTER half of that guard
+     only. The stop's own children carry the same min-width, and the four kinds
+     of text that can hold such a word carry overflow-wrap; see "ONE LONG WORD"
+     above. Without those two, these columns stayed the right width and the card
+     inside them overflowed instead. */
+  [data-v2-root] .v2-main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 30px 0 64px;
+  }
+
+  /* A COLUMN OF CONTEXT. It stays in view while the day scrolls, and scrolls on
+     its own when what is in it outruns the window. Which element is that column
+     depends on the width (see the table above): the three share these
+     declarations, and `display` decides which of them is a box at all.
+     The inline padding is not decoration: `overflow-y: auto` clips the inline
+     axis too, so without it the focus ring on a row or on Show more is cut off
+     at the column's edge.
+     The scrollbar is given the scheme's own colours rather than the platform's
+     grey bar, which on a black page is the loudest thing on the screen, and its
+     gutter is always reserved, so pressing Show more does not shift a row.
+     The wider padding on the right keeps the last column's rows off the edge of
+     the window, now that the frame has no padding of its own there. */
+  [data-v2-root] .v2-side,
+  [data-v2-root] .v2-status,
+  [data-v2-root] .v2-lists {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    max-height: 100dvh;
+    overflow-y: auto;
+    padding: 30px 14px 32px 6px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--v2-edge) transparent;
+    scrollbar-gutter: stable;
+  }
+
+  /* At this width the side is the one column, and its two halves are still
+     nothing: their children stack inside it as one list of blocks. */
+  [data-v2-root] .v2-status,
+  [data-v2-root] .v2-lists {
+    display: contents;
+  }
+
+  /* A list's rows. One across until the list is wide enough for two (about
+     570px), which only happens on a very wide screen: a row stretched across
+     600px is one long line of title with its date a hand's width away. min()
+     keeps a column narrower than 280px from being overflowed by its own track. */
+  [data-v2-root] .v2-list-rows {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+    column-gap: 10px;
+  }
+
+  /* A pill around six dots, not a control: it shrink wraps and it is not 44px
+     tall here, because nothing in it is pressable.
+     IN THE SIDE COLUMN OR IN A PANE. These leaves are restyled for sitting
+     beside the day, and a pane of the desk is the same kind of place, so each
+     rule here and under "the side column's blocks" names both, through
+     :where() so the page's own specificity is what it was. Each still wins over
+     the rule it overrides: it ties it and comes later in the file, except the
+     row title's, whose weight is carried by its own class (see there). */
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-feeds {
+    display: inline-flex;
+    align-self: flex-start;
+    min-height: 28px;
+    padding: 0 10px;
+  }
+
+  /* Small caps over every block is the look this screen is not. */
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-allday-label {
+    text-transform: none;
+    letter-spacing: 0.01em;
+    font-size: 12px;
+  }
+
+  [data-v2-root] .v2-desk-only {
+    display: block;
+  }
+
+  /* ---- the rail ---- */
+
+  [data-v2-root] .v2-nav {
+    position: sticky;
+    top: 0;
+    left: auto;
+    bottom: auto;
+    transform: none;
+    display: flex;
+    flex-direction: column;
+    width: var(--v2-rail-w);
+    height: 100dvh;
+    padding: 30px 14px 24px;
+    background: none;
+    border-top: 0;
+    border-right: 1px solid var(--v2-edge);
+    z-index: 1;
+  }
+
+  /* The phone bar's sliding indicator. The rail marks its own item instead. */
+  [data-v2-root] .v2-ind {
+    display: none;
+  }
+
+  [data-v2-root] .v2-nav-items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  [data-v2-root] .v2-nav button,
+  [data-v2-root] .v2-nav a {
+    min-height: 36px;
+    padding: 0 8px;
+    border-radius: 8px;
+    text-align: left;
+    font-size: 14px;
+  }
+
+  [data-v2-root] .v2-nav a {
+    justify-content: flex-start;
+  }
+
+  [data-v2-root] .v2-nav button[aria-current="page"],
+  [data-v2-root] .v2-nav a[aria-current="page"] {
+    color: var(--v2-signal);
+  }
+
+  [data-v2-root] .v2-nav button[aria-current="page"]::before,
+  [data-v2-root] .v2-nav a[aria-current="page"]::before {
+    content: "";
+    position: absolute;
+    left: -14px;
+    top: 7px;
+    bottom: 7px;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: var(--v2-accent);
+  }
+
+  [data-v2-root] .v2-rail-appearance {
+    display: block;
+    margin-top: auto;
+    min-height: 36px;
+    padding: 0 8px;
+    border-radius: 8px;
+    text-align: left;
+    color: var(--v2-ink-3);
+    font: 500 13px/1.2 var(--v2-display);
+  }
+
+  /* ---- the main column ---- */
+
+  [data-v2-root] .v2-top {
+    display: block;
+    padding: 0;
+  }
+
+  [data-v2-root] .v2-top h1 {
+    font-size: 30px;
+    letter-spacing: 0;
+  }
+
+  [data-v2-root] .v2-notice {
+    max-width: 64ch;
+    margin-top: 8px;
+  }
+
+  /* Both belong to the side column at this width: the feed line is shown there
+     with its dots, and the appearance control lives at the rail's foot. */
+  [data-v2-root] .v2-feedline,
+  [data-v2-root] .v2-top-aside {
+    display: none;
+  }
+
+  [data-v2-root] .v2-line {
+    margin-top: 26px;
+  }
+
+  [data-v2-root] .v2-lit h3 {
+    font-size: 21px;
+  }
+
+  /* ---- the side column's blocks ---- */
+
+  /* Each block is a block of information rather than a box: a quiet heading and
+     its rows, separated by space. The one surface in here is the row itself. */
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-energy,
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-said {
+    padding: 0;
+  }
+
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-said {
+    min-height: 20px;
+  }
+
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-allday {
+    padding: 0;
+  }
+
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-sub {
+    padding: 0 0 6px;
+    font-size: 13px;
+    color: var(--v2-ink-3);
+  }
+
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-row {
+    margin: 4px 0 0;
+    padding: 9px 12px;
+    border-radius: 12px;
+  }
+
+  /* The title's own class carries the weight :where() took away. This rule
+     overrides `.v2-row .v2-row-title` (two classes after the root), and with
+     only `.v2-row b` after the :where() it would have lost to it: the side
+     column's titles went back to 15px. The title is the row's only <b>. */
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-row b.v2-row-title {
+    font-size: 14px;
+  }
+
+  [data-v2-root] :where(.v2-side, .v2-pane) .v2-more {
+    margin: 8px 0 0;
+    min-height: 36px;
+  }
+
+  /* ---- the panel opens from the rail ---- */
+
+  /* Attached to the control that opened it: the rail's foot. Bottom left, beside
+     the rail, growing upward (align-items: flex-end pins its bottom edge). The
+     veil is lighter still here, because there is more page to see. */
+  [data-v2-root] .v2-sheet {
+    align-items: flex-end;
+    justify-content: flex-start;
+    padding: 20px 20px 20px calc(var(--v2-rail-w) + 12px);
+    background: color-mix(in srgb, var(--v2-page) 12%, transparent);
+  }
+
+  [data-v2-root] .v2-panel {
+    width: 360px;
+    max-height: calc(100dvh - 40px);
+  }
+}
+
+/* ---- wide: status and the lists are two columns ---- */
+
+@media (min-width: 1360px) {
+  /* rail / day / status, and then one more column for the lists. That last one
+     is an IMPLICIT track, made by the element when it exists, so an account with
+     nothing past its date and nothing dropped does not keep an empty column. */
+  [data-v2-root] .v2-shell {
+    grid-template-columns: auto minmax(420px, 640px) minmax(320px, 0.9fr);
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(300px, 1.1fr);
+  }
+
+  [data-v2-root] .v2-side {
+    display: contents;
+  }
+
+  [data-v2-root] .v2-status,
+  [data-v2-root] .v2-lists {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-lists:empty {
+    display: none;
+  }
+}
+
+/* ---- the calendar beside the day ---- */
+
+/* On Today the calendar is in the document at every width and on the screen
+   only from 1760px: below that it is its own page (app/v2/week), and the day
+   and its context need the room. */
+[data-v2-root] .v2-shell > .v2-cal {
+  display: none;
+}
+
+@media (min-width: 1760px) {
+  /* rail / day / context / calendar. The day gives up 80px of its ceiling and
+     the context its extra columns, and the calendar takes the most of what is
+     left: it is the one column here with seven days in it. Only a frame that
+     HAS the pane gets this, so a source with no calendar does not keep an
+     empty 680px track. */
+  [data-v2-root] .v2-shell:has(> .v2-cal) {
+    grid-template-columns: auto minmax(420px, 560px) minmax(320px, 0.7fr) minmax(680px, 1.6fr);
+  }
+
+  /* The context is one column again, as at 1024: the side is the box and its
+     two halves are nothing. */
+  [data-v2-root] .v2-shell:has(> .v2-cal) > .v2-side {
+    display: flex;
+  }
+
+  [data-v2-root] .v2-shell:has(> .v2-cal) .v2-status,
+  [data-v2-root] .v2-shell:has(> .v2-cal) .v2-lists {
+    display: contents;
+  }
+
+  /* Sticky and as tall as the window, like the other columns. Its own top and
+     bottom room only: the pane measures its own width to choose a layout, so
+     the room at its inline end is inside it (--v2-cal-end, calendar.css). */
+  [data-v2-root] .v2-shell > .v2-cal {
+    display: flex;
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    min-width: 0;
+    padding: 30px 0 24px;
+    --v2-cal-end: 14px;
+  }
+
+  /* Without a calendar, each list is a column of its own, as before. */
+  [data-v2-root] .v2-shell:not(:has(> .v2-cal)) .v2-lists {
+    display: contents;
+  }
+
+  /* The same column as above, on the list itself. It is a block and not a flex
+     column: its heading, its line and its rows already carry their own spacing. */
+  [data-v2-root] .v2-shell:not(:has(> .v2-cal)) .v2-list {
+    position: sticky;
+    top: 0;
+    min-width: 0;
+    max-height: 100dvh;
+    overflow-y: auto;
+    padding: 30px 14px 32px 6px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--v2-edge) transparent;
+    scrollbar-gutter: stable;
+  }
+}
+
+/* ============================================================================
+ * INSIDE A PANE
+ *
+ * A pane of the desk (desk.css) is a size container named v2-pane. A leaf drawn
+ * in one answers to the pane's own width, never the window's: the same leaf is
+ * right in a 230px tab and in a 1300px half of the screen. The side column's
+ * own restyles reach a pane through :where(.v2-side, .v2-pane) in the desktop
+ * page above; these are the rest. Today's page has no .v2-pane, so none of this
+ * reaches it.
+ * ==========================================================================*/
+
+/* The two sizes that follow the phone's width follow the pane's instead.
+   Written on .v2-pane, so they also out-rank the desktop tier's 30px and 21px,
+   which are sizes for Today's own wide column: in a pane the date stops at
+   21px whatever the window. */
+[data-v2-root] .v2-pane .v2-top h1 {
+  font-size: clamp(18px, 5.4cqw, 21px);
+}
+
+[data-v2-root] .v2-pane .v2-lit h3 {
+  font-size: clamp(18px, 5.2cqw, 21px);
+}
+
+/* A list's rows by the pane's own width: one across, two from 600px, three
+   from 900px, and never more, so a row is never one long line of title with
+   its date a hand's width away. minmax(0, ...) so one long word in a title
+   cannot widen its track. */
+[data-v2-root] .v2-pane .v2-list-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+@container v2-pane (width >= 600px) {
+  [data-v2-root] .v2-pane .v2-list-rows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container v2-pane (width >= 900px) {
+  [data-v2-root] .v2-pane .v2-list-rows {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* A row's foot in a narrow pane. Its two parts are placed whole: when the
+   group's name and the date do not fit on one line, the date goes onto the
+   next one, still at the right, instead of breaking in two ("6", then
+   "November") beside a name cut short. When they fit, nothing moves: the auto
+   margin takes exactly the space that space-between gave. A pane only: Today's
+   own side column keeps its rows as they were. */
+[data-v2-root] .v2-pane .v2-row-meta {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+[data-v2-root] .v2-pane .v2-row-meta > .v2-row-reason {
+  margin-left: auto;
+}
+
+/* -------------------------------------------------------- reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  [data-v2-root],
+  [data-v2-root] *,
+  [data-v2-root] *::before,
+  [data-v2-root] *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

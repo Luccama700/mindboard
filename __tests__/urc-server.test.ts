@@ -54,7 +54,7 @@ function job(over: Partial<Row> = {}): Row {
     session_url: null,
     error: null,
     audit_id: null,
-    confirmed_auth: "pat",
+    confirmed_auth: "oauth:client-abc",
     created_at: new Date(NOW.getTime() - 10_000).toISOString(),
     expires_at: new Date(NOW.getTime() + 110_000).toISOString(),
     claimed_at: null,
@@ -124,6 +124,21 @@ describe("ownership", () => {
       ok: false,
       error: URC_NOT_AVAILABLE,
     });
+  });
+
+  test("a personal access token is refused by all four tools", async () => {
+    install({ urc_jobs: [job()] });
+    const refusals = await Promise.all([
+      proposeSpawnUrc(OWNER, PAT, { folder: "mindboard" }),
+      getUrcStatus(OWNER, PAT, { jobId: job().id }),
+      listUrcSessions(OWNER, PAT),
+      stopUrc(OWNER, PAT, { jobId: job().id }),
+    ]);
+    for (const result of refusals) {
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toMatch(/personal access token/);
+    }
   });
 
   test("the static bearer is refused by all four tools", async () => {
@@ -364,9 +379,9 @@ describe("proposeSpawnUrc", () => {
 });
 
 describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
-  test("a PAT confirm queues the job and logs the credential", async () => {
+  test("an OAuth confirm queues the job and logs the credential", async () => {
     const db = install({ ai_audit_log: [proposal()] });
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -376,7 +391,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
     expect(queued.user_id).toBe(OWNER);
     expect(queued.device_id).toBe(DEVICE);
     expect(queued.folder_key).toBe("mindboard");
-    expect(queued.confirmed_auth).toBe("pat");
+    expect(queued.confirmed_auth).toBe("oauth:client-abc");
     expect(queued.audit_id).toBe(proposal().id);
     // two minutes, from the app clock
     expect(queued.expires_at).toBe(new Date(NOW.getTime() + 120_000).toISOString());
@@ -387,7 +402,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
       user_id: OWNER,
       event: "spawn_confirmed",
       folder_key: "mindboard",
-      confirmed_auth: "pat",
+      confirmed_auth: "oauth:client-abc",
     });
     expect(result.value.result.sessionName).toMatch(/^urc-[0-9a-f]{8}$/);
   });
@@ -409,6 +424,15 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
     expect(db.tables.ai_audit_log[0].status).toBe("error");
   });
 
+  test("a personal access token cannot confirm a spawn", async () => {
+    const db = install({ ai_audit_log: [proposal()] });
+    const result = await confirmAction(OWNER, proposal().id, PAT);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/personal access token/);
+    expect(db.tables.urc_jobs).toHaveLength(0);
+  });
+
   test("the in-app assistant and the watch cannot confirm a spawn", async () => {
     for (const kind of ["assistant", "watch"]) {
       const db = install({ ai_audit_log: [proposal()] });
@@ -424,7 +448,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
         proposal({ created_at: new Date(NOW.getTime() - 5 * 60_000 - 1000).toISOString() }),
       ],
     });
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatch(/more than 5 minutes old/);
@@ -437,7 +461,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
         proposal({ created_at: new Date(NOW.getTime() - 4 * 60_000).toISOString() }),
       ],
     });
-    await expect(confirmAction(OWNER, proposal().id, PAT)).resolves.toMatchObject({
+    await expect(confirmAction(OWNER, proposal().id, OAUTH)).resolves.toMatchObject({
       ok: true,
     });
     expect(db.tables.urc_jobs).toHaveLength(1);
@@ -445,7 +469,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
 
   test("another user's proposal cannot be confirmed", async () => {
     const db = install({ ai_audit_log: [proposal({ user_id: INTRUDER })] });
-    await expect(confirmAction(OWNER, proposal().id, PAT)).resolves.toEqual({
+    await expect(confirmAction(OWNER, proposal().id, OAUTH)).resolves.toEqual({
       ok: false,
       error: "proposal not found or already resolved",
     });
@@ -455,15 +479,15 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
 
   test("a non-owner cannot confirm even their own spawn_urc proposal", async () => {
     const db = install({ ai_audit_log: [proposal({ user_id: INTRUDER })] });
-    const result = await confirmAction(INTRUDER, proposal().id, PAT);
+    const result = await confirmAction(INTRUDER, proposal().id, OAUTH);
     expect(result).toEqual({ ok: false, error: URC_NOT_AVAILABLE });
     expect(db.tables.urc_jobs).toHaveLength(0);
   });
 
   test("a single-use proposal cannot be confirmed twice", async () => {
     const db = install({ ai_audit_log: [proposal()] });
-    await confirmAction(OWNER, proposal().id, PAT);
-    await expect(confirmAction(OWNER, proposal().id, PAT)).resolves.toEqual({
+    await confirmAction(OWNER, proposal().id, OAUTH);
+    await expect(confirmAction(OWNER, proposal().id, OAUTH)).resolves.toEqual({
       ok: false,
       error: "proposal not found or already resolved",
     });
@@ -479,7 +503,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
         proposal({ input: { folder: "secrets", deviceId: DEVICE } }),
       ],
     });
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result.ok).toBe(false);
     expect(db.tables.urc_jobs).toHaveLength(0);
   });
@@ -490,7 +514,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
         proposal({ input: { folder: "mindboard", deviceId: "99999999-9999-4999-8999-999999999999" } }),
       ],
     });
-    await confirmAction(OWNER, proposal().id, PAT);
+    await confirmAction(OWNER, proposal().id, OAUTH);
     expect(db.tables.urc_jobs[0].device_id).toBe(DEVICE);
   });
 
@@ -502,7 +526,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
         proposal({ created_at: new Date(NOW.getTime() + 2 * 60_000).toISOString() }),
       ],
     });
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatch(/dated in the future/);
@@ -513,7 +537,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
     const db = install({
       ai_audit_log: [proposal({ created_at: new Date(NOW.getTime() + 5_000).toISOString() })],
     });
-    await expect(confirmAction(OWNER, proposal().id, PAT)).resolves.toMatchObject({ ok: true });
+    await expect(confirmAction(OWNER, proposal().id, OAUTH)).resolves.toMatchObject({ ok: true });
     expect(db.tables.urc_jobs).toHaveLength(1);
   });
 
@@ -528,7 +552,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
           'duplicate key value violates unique constraint "urc_jobs_audit_unique"',
       },
     };
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result).toEqual({
       ok: false,
       error: "this session request has already been confirmed",
@@ -541,7 +565,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
       urc_devices: [device({ last_seen: new Date(NOW.getTime() - 60_000).toISOString() })],
       ai_audit_log: [proposal()],
     });
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result).toEqual({ ok: false, error: URC_OFFLINE });
     expect(db.tables.urc_jobs).toHaveLength(0);
   });
@@ -556,7 +580,7 @@ describe("confirm (through confirmAction → EXECUTORS.spawn_urc)", () => {
       ],
       ai_audit_log: [proposal()],
     });
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result.ok).toBe(false);
     expect(db.tables.urc_jobs).toHaveLength(4);
   });
@@ -579,6 +603,23 @@ describe("getUrcStatus", () => {
     expect(result.value.status).toBe("running");
     expect(result.value.sessionUrl).toBe("https://claude.ai/code/session_abc123");
     expect(result.value.folder).toBe("mindboard");
+  });
+
+  test("another OAuth client of the same account gets the status, not the link", async () => {
+    install({
+      urc_jobs: [
+        job({
+          status: "running",
+          started_at: NOW.toISOString(),
+          session_url: "https://claude.ai/code/session_abc123",
+        }),
+      ],
+    });
+    const result = await getUrcStatus(OWNER, "mcp:some-other-client", { jobId: job().id });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.status).toBe("running");
+    expect(result.value.sessionUrl).toBeNull();
   });
 
   test("a stopped session's link is withheld", async () => {
@@ -760,7 +801,7 @@ describe("chat-chosen session name", () => {
     const db = install({
       ai_audit_log: [proposal({ input: { folder: "mindboard", deviceId: DEVICE, name: "fix-tests" } })],
     });
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const queued = db.tables.urc_jobs[0];
@@ -773,7 +814,7 @@ describe("chat-chosen session name", () => {
     const db = install({
       ai_audit_log: [proposal({ input: { folder: "mindboard", deviceId: DEVICE, name: "a'b; rm -rf" } })],
     });
-    const result = await confirmAction(OWNER, proposal().id, PAT);
+    const result = await confirmAction(OWNER, proposal().id, OAUTH);
     expect(result.ok).toBe(true);
     expect(db.tables.urc_jobs[0].label).toBe("a-b-rm-rf");
   });

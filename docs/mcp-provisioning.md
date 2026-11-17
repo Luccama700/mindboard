@@ -58,9 +58,9 @@ regenerate.
 
 ## Notes for the deployment owner
 
-- The legacy static `MCP_BEARER_TOKEN` still works and maps to
-  `MINDBOARD_OWNER_USER_ID`; the home worker uses the same token for
-  `/api/worker`.
+- The legacy static `MCP_BEARER_TOKEN` → `MINDBOARD_OWNER_USER_ID` mapping is
+  off unless `MCP_STATIC_BEARER_ENABLED=true`. The home worker authenticates
+  with its own `WORKER_BEARER_TOKEN` on `/api/worker`.
 - The home worker only claims jobs from allowlisted users: the owner plus the
   comma-separated user ids in `WORKER_ALLOWED_USER_IDS` (Vercel env). Other
   users see worker-backed options declined with a friendly error and use the

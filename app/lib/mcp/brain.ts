@@ -2,6 +2,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/utils/supabase/service";
 import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
+import { userTimeZone } from "./config";
 import { runCapture, type CaptureOutcome } from "./capture";
 import type { Result } from "./validate";
 
@@ -17,7 +18,12 @@ export async function captureToBrainFor(
   raw: unknown,
 ): Promise<Result<CaptureOutcome>> {
   const credentials = await readVaultCredentials(supabase, userId);
-  const result = await runCapture(credentials, raw, new Date());
+  const result = await runCapture(
+    credentials,
+    raw,
+    new Date(),
+    await userTimeZone(supabase, userId),
+  );
   if (result.ok) revalidateVaultTree(userId);
   return result;
 }

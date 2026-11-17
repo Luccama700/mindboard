@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { createServiceClient } from "@/utils/supabase/service";
-import { ownerUserId, workerAllowedUserIds } from "@/app/lib/mcp/config";
+import { ownerUserId, todayKey, userTimeZone, workerAllowedUserIds } from "@/app/lib/mcp/config";
 import { readVaultCredentials, revalidateVaultTree } from "@/app/lib/brain/vault";
 import {
   createVaultBase64FileWithRetry,
@@ -21,9 +21,18 @@ import {
 import {
   buildSourceDocument,
   courseSourcePath,
-  vancouverStamp,
+  zonedStamp,
 } from "@/app/lib/mcp/course-ops";
 import { scriptToVibeVoiceText } from "@/app/lib/learn/podcast-script";
+import {
+  canonicalReelRef,
+  followupContext,
+  parseFollowupResult,
+  storagePathBelongsTo,
+  type FollowupTaskRow,
+} from "@/app/lib/worker/claims";
+import { appendSection } from "@/app/lib/notes";
+import { idempotentProposalId } from "@/app/lib/watch/protocol";
 import {
   SOURCE_COLUMNS,
   type CourseSource,
@@ -34,7 +43,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 // The home worker's only door into the app. The PC holds no database key —
-// just this bearer (the same static MCP_BEARER_TOKEN used by MCP tooling).
+// just this bearer (WORKER_BEARER_TOKEN; it buys this API and nothing else).
 // Claims are atomic via claim_next_job() (FOR UPDATE SKIP LOCKED + stale-
 // heartbeat reclaim); results land either in the request body (ocr markdown)
 // or directly in storage via a signed upload URL (tts audio — too big for a
@@ -50,7 +59,13 @@ type JobRow = {
 };
 
 function authorized(request: Request): boolean {
-  const expected = process.env.MCP_BEARER_TOKEN;
+  // The worker has its own secret (audit 2026-10-26, H1: MCP_BEARER_TOKEN was
+  // a skeleton key — every MCP tool as the owner, plus this whole API). The
+  // old token is accepted ONLY while WORKER_BEARER_TOKEN is unset, so the
+  // cutover is: set the new var, restart the PC's worker with it, then rotate
+  // MCP_BEARER_TOKEN. Once WORKER_BEARER_TOKEN exists the old one is refused
+  // here, with no overlap window to forget about.
+  const expected = process.env.WORKER_BEARER_TOKEN || process.env.MCP_BEARER_TOKEN;
   if (!expected) return false;
   const header = request.headers.get("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
@@ -63,31 +78,82 @@ function bad(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
+// A claim guard that re-derives a value and finds the row forged, or pointing
+// outside its own account, is not a transient failure: a retry re-runs the
+// same check against the same row. Dead-letter it on the first attempt instead
+// of letting it sit at the queue head (it is the oldest queued row) for three
+// more polls.
+class ClaimRejected extends Error {}
+
+// What a worker.py build says it can do safely, sent with every claim.
+const FOLLOWUP_SANDBOX_CAPABILITY = "followup-sandbox-1";
+
+function workerCapabilities(body: Record<string, unknown>): Set<string> {
+  const raw = body.capabilities;
+  return new Set(Array.isArray(raw) ? raw.filter((c): c is string => typeof c === "string") : []);
+}
+
+// PostgREST returns an embedded one-to-one either as an object or as a
+// one-element array depending on how it infers the relationship.
+type GroupRel = { name: string } | { name: string }[] | null;
+function groupName(rel: GroupRel): string | null {
+  const row = Array.isArray(rel) ? (rel[0] ?? null) : rel;
+  return row?.name ?? null;
+}
+
+// One worker_status row per tenant the worker actually serves, not just the
+// owner: /settings reads the caller's own row, so an allowlisted user used to
+// see "offline" and a stuck queue while their jobs were being drained.
+// One row per allowlisted tenant, written one at a time: a single bad id (a
+// deleted account, a typo in WORKER_ALLOWED_USER_IDS) must not fail the whole
+// batch and leave the owner's own status frozen. The PC's self-description
+// (hostname and the like) goes to the owner's row only; other tenants learn
+// "online" and nothing about the machine.
 async function markSeen(info: Record<string, unknown> = {}) {
   const supabase = createServiceClient();
-  await supabase.from("worker_status").upsert(
-    { user_id: ownerUserId(), last_seen_at: new Date().toISOString(), info },
-    { onConflict: "user_id" },
+  const lastSeenAt = new Date().toISOString();
+  const owner = ownerUserId();
+  await Promise.all(
+    workerAllowedUserIds().map((userId) =>
+      supabase
+        .from("worker_status")
+        .upsert(
+          { user_id: userId, last_seen_at: lastSeenAt, info: userId === owner ? info : {} },
+          { onConflict: "user_id" },
+        )
+        .then(
+          () => undefined,
+          () => undefined,
+        ),
+    ),
   );
 }
 
+// Post-claim ops address a job by its id alone, so they must re-assert the same
+// allowlist `claim_next_job(allowed_users)` enforces on the way in — otherwise a
+// bearer holder could heartbeat, complete, or fail a non-allowlisted tenant's
+// job (whose completion writes that tenant's vault and Postgres rows) purely by
+// guessing its id. Scoping the load is the single choke point: complete, fail,
+// and the mid-finalize retry in the catch block all go through it.
 async function loadJob(jobId: string): Promise<JobRow | null> {
   const supabase = createServiceClient();
   const { data } = await supabase
     .from("jobs")
     .select("id, user_id, kind, payload, status, attempts")
     .eq("id", jobId)
+    .in("user_id", workerAllowedUserIds())
     .maybeSingle();
   return (data as JobRow | null) ?? null;
 }
 
-async function failJob(job: JobRow, message: string) {
+async function failJob(job: JobRow, message: string, permanent = false) {
   const supabase = createServiceClient();
-  const dead = job.attempts >= 3;
+  const dead = permanent || job.attempts >= 3;
   await supabase
     .from("jobs")
     .update({ status: dead ? "failed" : "queued", error: message })
-    .eq("id", job.id);
+    .eq("id", job.id)
+    .eq("user_id", job.user_id);
 
   if (!dead) return;
   // Dead-lettered: surface the failure on the thing the job was for.
@@ -119,7 +185,7 @@ async function failJob(job: JobRow, message: string) {
           buildReelFailureDocument({
             url: String(job.payload.url ?? ""),
             error: message,
-            stampIso: vancouverStamp(new Date()).created,
+            stampIso: zonedStamp(new Date(), await userTimeZone(supabase, job.user_id)).created,
           }),
           `Reel failed: ${shortcode}`,
         );
@@ -135,21 +201,42 @@ async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
   const supabase = createServiceClient();
 
   if (job.kind === "followup") {
-    // Claude Code on the PC does the work through the MCP server; the claim
-    // only carries the task context and the dictated instruction.
-    return { job: { id: job.id, kind: job.kind }, followup: job.payload };
+    // The PC's run is research-only (web tools, no MCP, no credential), and
+    // the write happens here on completion — so the claim carries nothing from
+    // jobs.payload except the task id it is looked up by, and nothing the run
+    // could write through. The owner gate is because the completion writes the
+    // owner's Mindboard; a non-owner's follow-up has nowhere legitimate to go.
+    if (job.user_id !== ownerUserId()) {
+      throw new ClaimRejected("follow-ups only run for the deployment owner");
+    }
+    const taskId = String(job.payload.task_id ?? "");
+    if (!taskId) throw new ClaimRejected("follow-up job carries no task id");
+    const { data } = await supabase
+      .from("tasks")
+      .select("title, notes, priority, due_date, due_time, groups(name)")
+      .eq("id", taskId)
+      .eq("user_id", job.user_id)
+      .maybeSingle();
+    if (!data) throw new ClaimRejected("the follow-up's task no longer exists");
+    const task = data as unknown as FollowupTaskRow & { groups: GroupRel };
+    return {
+      job: { id: job.id, kind: job.kind },
+      followup: followupContext(task, groupName(task.groups), job.payload),
+    };
   }
 
   if (job.kind === "reel") {
     // The worker downloads the reel itself (yt-dlp); it only needs the URL.
     // Transcript + frame notes + a cover thumbnail come back in the complete
-    // body — no signed URL to hand out.
+    // body — no signed URL to hand out. The URL is re-derived through the same
+    // canonicalizer the enqueue paths use, so what reaches the PC's command
+    // line is always `https://www.instagram.com/reel/<shortcode>/` and never
+    // whatever the row happened to hold.
+    const ref = canonicalReelRef(job.payload.url);
+    if (!ref.ok) throw new ClaimRejected(ref.error);
     return {
       job: { id: job.id, kind: job.kind },
-      reel: {
-        url: String(job.payload.url ?? ""),
-        shortcode: String(job.payload.shortcode ?? ""),
-      },
+      reel: { url: ref.value.url, shortcode: ref.value.shortcode },
     };
   }
 
@@ -163,6 +250,12 @@ async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
       .maybeSingle();
     const source = sourceRow as CourseSource | null;
     if (!source?.storage_path) throw new Error("source has no stored pdf");
+    // RLS lets a client PATCH storage_path after attachSourceFile checked it,
+    // so re-assert the prefix before the service role signs a download for it
+    // (audit M7; migration 0057 adds the matching CHECK).
+    if (!storagePathBelongsTo(job.user_id, source.id, source.storage_path)) {
+      throw new ClaimRejected("source pdf is stored outside this account's folder");
+    }
 
     const { data: signed, error } = await supabase.storage
       .from("course-files")
@@ -218,15 +311,81 @@ async function enrichClaim(job: JobRow): Promise<Record<string, unknown>> {
   };
 }
 
-// The follow-up's writes already landed through MCP (create_task /
-// update_task → confirm_action, audited); the job row just keeps the receipt.
-function completeFollowup(body: Record<string, unknown>): Record<string, unknown> {
-  const ids = Array.isArray(body.created_task_ids)
-    ? body.created_task_ids.filter((id): id is string => typeof id === "string")
-    : [];
+// The follow-up's write happens HERE, not on the PC: the run has no Mindboard
+// credential and no MCP server, so it reports a validated result and the
+// server creates exactly one task from it (audit 2026-10-26, C1 fix step 4).
+async function completeFollowup(
+  job: JobRow,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const supabase = createServiceClient();
+  const parsed = parseFollowupResult(body.followup_result);
+  if (!parsed.ok) throw new Error(parsed.error);
+  const result = parsed.value;
+
+  const taskId = String(job.payload.task_id ?? "");
+  const { data: originalRow } = await supabase
+    .from("tasks")
+    .select("id, title, notes, priority, due_date, due_time, group_id")
+    .eq("id", taskId)
+    .eq("user_id", job.user_id)
+    .maybeSingle();
+  if (!originalRow) throw new Error("the follow-up's original task is gone");
+  const original = originalRow as {
+    id: string;
+    notes: string | null;
+    priority: string;
+    due_date: string | null;
+    due_time: string | null;
+    group_id: string | null;
+  };
+
+  // "Exactly one follow-up task" as a database fact, not a prompt rule: the id
+  // is derived from the job id, so a complete that blows up after the insert
+  // (and is therefore requeued and re-run) collides instead of creating a
+  // second task. On collision keep what already landed.
+  const followupId = idempotentProposalId(job.user_id, "followup-task", job.id);
+  const { error: insertError } = await supabase.from("tasks").insert({
+    id: followupId,
+    user_id: job.user_id,
+    group_id: original.group_id,
+    title: result.title,
+    notes: result.notes || null,
+    due_date: original.due_date,
+    due_time: original.due_date ? original.due_time : null,
+    priority: original.priority,
+  });
+  if (insertError && insertError.code !== "23505") {
+    throw new Error(insertError.message);
+  }
+
+  let updatedOriginal = false;
+  const update = result.original_update;
+  if (update) {
+    const patch: Record<string, unknown> = {
+      ...(update.title ? { title: update.title } : {}),
+      ...(update.due_date ? { due_date: update.due_date } : {}),
+      ...(update.priority ? { priority: update.priority } : {}),
+    };
+    // A retried complete must not append the same section twice.
+    if (update.notes_append && !(original.notes ?? "").includes(update.notes_append)) {
+      const today = await todayKey(supabase, job.user_id);
+      patch.notes = appendSection(original.notes, `Follow-up — ${today}`, update.notes_append);
+    }
+    const { error } = await supabase
+      .from("tasks")
+      .update(patch)
+      .eq("id", original.id)
+      .eq("user_id", job.user_id);
+    if (error) throw new Error(error.message);
+    updatedOriginal = true;
+  }
+
+  // Shape unchanged for whatever reads jobs.result (the watch's follow-up
+  // receipt); only its provenance moved from the PC to here.
   return {
-    created_task_ids: ids,
-    updated_original: body.updated_original === true,
+    created_task_ids: [followupId],
+    updated_original: updatedOriginal,
     summary: typeof body.summary === "string" ? body.summary.slice(0, 500) : "",
     cost_usd: typeof body.cost_usd === "number" ? body.cost_usd : null,
   };
@@ -272,7 +431,7 @@ async function completeOcr(
     kind: source.kind,
     pageCount: pageCount ?? source.page_count,
     markdown,
-    stamp: vancouverStamp(new Date()),
+    stamp: zonedStamp(new Date(), await userTimeZone(supabase, job.user_id)),
     via: "home worker",
   });
 
@@ -408,7 +567,7 @@ async function completeReel(
     transcript,
     frames,
     thumbnailEmbed,
-    stampIso: vancouverStamp(new Date()).created,
+    stampIso: zonedStamp(new Date(), await userTimeZone(supabase, job.user_id)).created,
     via: "home worker",
   });
 
@@ -449,11 +608,26 @@ export async function POST(request: Request) {
       const jobs = (data ?? []) as JobRow[];
       if (jobs.length === 0) return NextResponse.json({ job: null });
       const job = jobs[0];
+      // A follow-up is only safe on a worker that runs it sandboxed (web tools
+      // only, no credentials). An older worker.py would run it with a shell, so
+      // until the PC is updated its follow-ups go back on the queue untouched
+      // (the claim's attempt is handed back) instead of being served.
+      if (job.kind === "followup" && !workerCapabilities(body).has(FOLLOWUP_SANDBOX_CAPABILITY)) {
+        await supabase
+          .from("jobs")
+          .update({ status: "queued", attempts: Math.max(0, job.attempts - 1), heartbeat_at: null })
+          .eq("id", job.id)
+          .eq("user_id", job.user_id);
+        return NextResponse.json({
+          job: null,
+          skipped: "follow-ups need an updated worker.py (sandboxed runs); update the PC and restart it",
+        });
+      }
       try {
         return NextResponse.json(await enrichClaim(job));
       } catch (e) {
         const message = e instanceof Error ? e.message : "claim enrichment failed";
-        await failJob(job, message);
+        await failJob(job, message, e instanceof ClaimRejected);
         return NextResponse.json({ job: null, skipped: message });
       }
     }
@@ -461,11 +635,13 @@ export async function POST(request: Request) {
     if (op === "heartbeat") {
       const jobId = String(body.job_id ?? "");
       if (!jobId) return bad("job_id required");
+      // Same allowlist as loadJob, inlined so the heartbeat stays one round trip.
       await supabase
         .from("jobs")
         .update({ heartbeat_at: new Date().toISOString() })
         .eq("id", jobId)
-        .eq("status", "processing");
+        .eq("status", "processing")
+        .in("user_id", workerAllowedUserIds());
       await markSeen();
       return NextResponse.json({ ok: true });
     }
@@ -482,13 +658,14 @@ export async function POST(request: Request) {
           : job.kind === "reel"
             ? await completeReel(job, body)
             : job.kind === "followup"
-              ? completeFollowup(body)
+              ? await completeFollowup(job, body)
               : await completeTts(job, body);
 
       await supabase
         .from("jobs")
         .update({ status: "done", result, error: null })
-        .eq("id", job.id);
+        .eq("id", job.id)
+        .eq("user_id", job.user_id);
       await markSeen();
       return NextResponse.json({ ok: true, ...result });
     }

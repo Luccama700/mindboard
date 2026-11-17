@@ -112,11 +112,19 @@ export function zonedIso(utcMs: number, timeZone: string | null): string {
     second: "2-digit",
   }).formatToParts(d);
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
-  const offsetMin = offsetMsAt(d.getTime(), timeZone) / 60_000;
+  // Rounded to the whole minute BEFORE the offset is split into hours and
+  // minutes. offsetMsAt compares the zone's wall clock, which Intl gives to the
+  // second, against the raw instant, so an instant carrying milliseconds makes
+  // the offset a fraction of a minute short: Tokyo's +09:00 came out as
+  // 539.998 minutes, floor(539.998 / 60) = 8 with 59.998 % 60 rounding to 60,
+  // and the string read "+08:60" - which Postgres refuses with a 22009 and
+  // Date.parse reads as NaN. A whole-second instant is unaffected: the offset
+  // is already an exact number of minutes, and rounding it changes nothing.
+  const offsetMin = Math.round(offsetMsAt(d.getTime(), timeZone) / 60_000);
   const sign = offsetMin >= 0 ? "+" : "-";
   const abs = Math.abs(offsetMin);
   const oh = String(Math.floor(abs / 60)).padStart(2, "0");
-  const om = String(Math.round(abs % 60)).padStart(2, "0");
+  const om = String(abs % 60).padStart(2, "0");
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get(
     "minute",
   )}:${get("second")}${sign}${oh}:${om}`;

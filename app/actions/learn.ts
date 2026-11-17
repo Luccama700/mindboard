@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { createClient } from "@/utils/supabase/server";
+import { createServiceClient } from "@/utils/supabase/service";
 import { workerAllowedUserIds } from "@/app/lib/mcp/config";
 import {
   COURSE_COLUMNS,
@@ -234,7 +235,10 @@ export async function queueSourceConversion(input: {
     return { error: `source is ${source.status}` };
   }
 
-  const { error: jobError } = await supabase.from("jobs").insert({
+  // Enqueued on the service client with an explicit user_id: migration 0056
+  // takes insert/update on `jobs` away from the session client, because the
+  // home worker treats a job row as something the server wrote (audit C1).
+  const { error: jobError } = await createServiceClient().from("jobs").insert({
     user_id: user.id,
     kind: "ocr",
     payload: { source_id: input.sourceId },

@@ -84,9 +84,15 @@ function validate(
   return { redirect, fail };
 }
 
+// The HOST leads and client_name follows as a claim, never as identity.
+// Registration is unauthenticated, so client_name is a string the requester
+// typed — "Mindboard Official Sync" costs an attacker nothing. The redirect
+// host is the one thing it could not choose freely: it had to clear the
+// allow-list, and it is where the code will actually be delivered. Rendering
+// them the other way round (audit L2) put the attacker-controlled half in the
+// position a user reads as "who is asking".
 function consentPage(q: Params, ticket: string, clientName: string | undefined): Response {
   const host = new URL(q.redirectUri).host;
-  const who = clientName ? `${clientName} (${host})` : host;
   const hidden = (name: string, value: string) =>
     `<input type="hidden" name="${name}" value="${esc(value)}">`;
 
@@ -94,15 +100,16 @@ function consentPage(q: Params, ticket: string, clientName: string | undefined):
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorize ${esc(who)} — Mindboard</title>
+<title>Authorize ${esc(host)} — Mindboard</title>
 <style>
   :root { color-scheme: dark; }
   body { margin:0; min-height:100dvh; display:grid; place-items:center; padding:24px;
          background:#0d0d0d; color:#f5f0e8;
          font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:15px; line-height:1.5; }
   main { width:100%; max-width:26rem; border:1px solid #2a2a2a; border-radius:14px; padding:22px; }
-  h1 { font-size:15px; font-weight:600; margin:0 0 14px; }
+  h1 { font-size:15px; font-weight:600; margin:0 0 6px; }
   .who { color:#b5ff3c; overflow-wrap:anywhere; }
+  p.claim { color:#6b6b6b; font-size:13px; margin:0 0 14px; overflow-wrap:anywhere; }
   ul { margin:14px 0; padding-left:18px; color:#6b6b6b; font-size:13px; }
   p.warn { color:#6b6b6b; font-size:13px; margin:14px 0 0; }
   .row { display:flex; gap:10px; margin-top:20px; }
@@ -112,7 +119,8 @@ function consentPage(q: Params, ticket: string, clientName: string | undefined):
   form { display:contents; }
 </style>
 </head><body><main>
-  <h1>Connect <span class="who">${esc(who)}</span> to Mindboard?</h1>
+  <h1>Give <span class="who">${esc(host)}</span> access to Mindboard?</h1>
+  ${clientName ? `<p class="claim">It calls itself &ldquo;${esc(clientName)}&rdquo; — a name it chose, not one we checked.</p>` : ""}
   <p style="margin:0;color:#6b6b6b;font-size:13px;">It will get full read and write access to:</p>
   <ul>
     <li>tasks, groups, and your calendar</li>

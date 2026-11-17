@@ -264,7 +264,12 @@ export async function deviceFailed(
 
   const { error } = await supabase
     .from("urc_jobs")
-    .update({ status: "failed", error: message, stopped_at: new Date().toISOString() })
+    .update({
+      status: "failed",
+      error: message,
+      stopped_at: new Date().toISOString(),
+      session_url: null,
+    })
     .eq("id", job.id)
     .eq("user_id", device.user_id)
     .eq("device_id", device.id);
@@ -298,7 +303,7 @@ export async function deviceStopped(
 
   const { error } = await supabase
     .from("urc_jobs")
-    .update({ status: "stopped", stopped_at: new Date().toISOString() })
+    .update({ status: "stopped", stopped_at: new Date().toISOString(), session_url: null })
     .eq("id", job.id)
     .eq("user_id", device.user_id)
     .eq("device_id", device.id);

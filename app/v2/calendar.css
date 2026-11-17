@@ -1,0 +1,734 @@
+/* The calendar pane, and the Week page around it.
+ *
+ * Loaded after v2.css (app/v2/layout.tsx) and scoped the same way: every
+ * selector starts at [data-v2-root], so nothing here can reach a page outside
+ * app/v2.
+ *
+ * NO COLOUR IS WRITTEN HERE. Every colour is a scheme token from v2.css, or one
+ * of the four identity tokens a chip sets from its calendar's colour (see
+ * calendar-chip.tsx and identityTokens). __tests__/v2-appearance.test.ts reads
+ * this file for a hex, an rgb() or an hsl() and must find none, so a pair of
+ * colours the owner picks reaches the calendar exactly as it reaches the day.
+ *
+ * SIZED BY ITS OWN WIDTH, NOT THE WINDOW'S. The pane is a container and its
+ * three layouts are container queries on it: an agenda under 480px, the near
+ * days from 480px, all seven from 760px, with no gap between them at a
+ * fractional width. The same pane is one column beside Today and the whole
+ * window on the Week page, so a media query would be wrong in one place or the
+ * other.
+ *
+ * QUIET, READ ONLY. Hour lines are hairlines that recede and the chips carry the
+ * weight. Two places take the eye: the week label, and today's column (a quiet
+ * tint, its weekday in the accent). The only motion is a chip's hover and a
+ * link's, at the quick duration. Nothing animates on load, and the now line
+ * holds still: the one loop on this screen is the "you are here" dot on the
+ * day's own line.
+ *
+ * REDUCED MOTION IS v2.css's ONE RULE, which stops every transition under
+ * [data-v2-root]. Every selector here starts there, so this file needs no block
+ * of its own, and a test holds both halves of that.
+ */
+
+/* ------------------------------------------------------------------ the pane */
+
+[data-v2-root] .v2-cal {
+  container-type: inline-size;
+  container-name: v2-cal;
+  /* Room at the inline end of the pane's parts, set by whatever holds the pane.
+     It is inside the container on purpose: the container's own width is what
+     the 480 and 760 thresholds measure. */
+  --v2-cal-end: 0px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ---- the header: the week, the links, and what the colours mean ---- */
+
+[data-v2-root] .v2-cal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 16px;
+  padding-inline-end: var(--v2-cal-end);
+}
+
+[data-v2-root] .v2-cal-titles {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+[data-v2-root] .v2-cal-title {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+[data-v2-root] .v2-cal-name {
+  color: var(--v2-ink-3);
+  font: 600 13px/1.2 var(--v2-display);
+}
+
+/* The first of the two places the eye should land. */
+[data-v2-root] .v2-cal-week {
+  color: var(--v2-ink);
+  font: 600 26px/1.1 var(--v2-display);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-cal-nothing {
+  margin-top: 6px;
+  color: var(--v2-ink-2);
+  font-size: 14px;
+}
+
+/* Three fixed slots, so Next stays where the hand left it whether or not there
+   is a Previous or a This week beside it. */
+[data-v2-root] .v2-cal-links {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  grid-template-areas: "prev this next";
+  gap: 6px;
+}
+
+[data-v2-root] .v2-cal-prev {
+  grid-area: prev;
+}
+
+[data-v2-root] .v2-cal-this {
+  grid-area: this;
+}
+
+[data-v2-root] .v2-cal-next {
+  grid-area: next;
+}
+
+[data-v2-root] .v2-cal-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--v2-edge);
+  border-radius: 10px;
+  color: var(--v2-ink-2);
+  font: 600 13px/1 var(--v2-display);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    color var(--v2-quick) var(--v2-ease),
+    border-color var(--v2-quick) var(--v2-ease);
+}
+
+[data-v2-root] .v2-cal-link:hover {
+  color: var(--v2-ink);
+  border-color: var(--v2-ink-3);
+}
+
+[data-v2-root] .v2-cal-link:focus-visible {
+  outline: 2px solid var(--v2-accent);
+  outline-offset: 3px;
+}
+
+/* A finger needs the full 44px; a pointer does not, and the header is short. */
+@media (pointer: coarse) {
+  [data-v2-root] .v2-cal-link {
+    min-height: 44px;
+  }
+}
+
+[data-v2-root] .v2-cal-meta {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 18px;
+}
+
+[data-v2-root] .v2-cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--v2-ink-2);
+  font-size: 13px;
+}
+
+/* The same dot a lane wears on the day's own line. */
+[data-v2-root] .v2-cal-legend li::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--v2-lane);
+}
+
+[data-v2-root] .v2-cal-note {
+  color: var(--v2-ink-3);
+  font-size: 12px;
+}
+
+/* ---- a day the source cannot speak for ---- */
+
+/* Said in words, in a box that is plainly not a free day. */
+[data-v2-root] .v2-cal-unknown {
+  padding: 10px 12px;
+  border: 1px dashed var(--v2-edge);
+  border-radius: 12px;
+  color: var(--v2-ink-2);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------- a chip */
+
+/* A small card: its calendar's colour as a mark on the leading edge, the card
+   tinted with it, the title in the ink. The fill and the ink are the identity
+   pair identityTokens holds at 4.5:1, so the title reads on any colour the
+   owner gave a calendar, on any scheme. This is the agenda's chip; the grid's
+   is placed and tightened below.
+   CLIP, NOT HIDDEN. A hidden overflow is still a scroll box, so find in page
+   could scroll a clipped chip sideways onto its second column and leave it
+   there. A clipped one cannot be scrolled at all. */
+[data-v2-root] .v2-cal-chip {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: clip;
+  padding: 8px 12px 9px 11px;
+  border-radius: 12px;
+  background: var(--v2-lit);
+  border-inline-start: 3px solid var(--v2-lane);
+  color: var(--v2-ink);
+  transition: box-shadow var(--v2-quick) var(--v2-ease);
+}
+
+[data-v2-root] .v2-cal-chip:hover {
+  box-shadow: 0 0 0 1px var(--v2-ident);
+}
+
+/* What the app planned, never to be mistaken for what is on the calendar: no
+   fill at all, and a dashed outline in the accent. */
+[data-v2-root] .v2-cal-chip[data-kind="planned"] {
+  background: transparent;
+  border: 1.5px dashed var(--v2-accent);
+}
+
+[data-v2-root] .v2-cal-chip-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font: 600 15px/1.3 var(--v2-display);
+}
+
+[data-v2-root] .v2-cal-chip-time {
+  color: var(--v2-ink-2);
+  font: 400 13px/1.35 var(--v2-text);
+  font-variant-numeric: tabular-nums;
+}
+
+[data-v2-root] .v2-cal-chip-cal {
+  color: var(--v2-ident);
+  font: 500 12px/1.35 var(--v2-display);
+}
+
+[data-v2-root] .v2-cal-chip[data-kind="planned"] .v2-cal-chip-cal {
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-cal-chip-loc {
+  color: var(--v2-ink-2);
+  font: 400 13px/1.35 var(--v2-text);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- the agenda */
+
+/* The same gutter treatment as the side lists: the scrollbar's room is always
+   kept, so a classic scrollbar sits beside the cards and never on them, and
+   the cards keep a little air from it. */
+[data-v2-root] .v2-cal-agenda {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline-end: calc(var(--v2-cal-end) + 8px);
+  scrollbar-width: thin;
+  scrollbar-color: var(--v2-edge) transparent;
+  scrollbar-gutter: stable;
+}
+
+[data-v2-root] .v2-cal-agenda:focus-visible {
+  outline-offset: -2px;
+}
+
+[data-v2-root] .v2-cal-aday h3 {
+  margin-bottom: 8px;
+  color: var(--v2-ink-2);
+  font: 600 14px/1.2 var(--v2-display);
+}
+
+[data-v2-root] .v2-cal-aday[data-today] h3 {
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-cal-aday ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* An all day event in the agenda: its name, and the words that say so. */
+[data-v2-root] .v2-cal-aitem {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--v2-card);
+  color: var(--v2-ink-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+[data-v2-root] .v2-cal-aitem span:first-child {
+  min-width: 0;
+  color: var(--v2-ink);
+}
+
+/* ------------------------------------------------------------------ the grid */
+
+/* ONE SCROLLER. The weekday row and the all day row are sticky inside it, so
+   they share its width and the columns line up without knowing how wide a
+   scrollbar is. It is focusable, so a keyboard can scroll it. */
+[data-v2-root] .v2-cal-grid {
+  /* The day tracks: the near days alone until the pane is 760px wide. The two
+     lists are written on the element by the pane, from the view's own flags. */
+  --v2-cal-tracks: var(--v2-cal-near);
+  --v2-cal-gutter: 46px;
+  /* Room above the first hour line, so its label is not cut off by the row
+     above it. */
+  --v2-cal-inset: 8px;
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-inline-end: var(--v2-cal-end);
+  scrollbar-width: thin;
+  scrollbar-color: var(--v2-edge) transparent;
+}
+
+[data-v2-root] .v2-cal-grid:focus-visible {
+  outline-offset: -2px;
+}
+
+[data-v2-root] .v2-cal-top {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex: none;
+  background: var(--v2-page);
+  border-bottom: 1px solid var(--v2-card-2);
+}
+
+/* Every row of the grid on the same tracks: the hour labels, then the days. */
+[data-v2-root] .v2-cal-days,
+[data-v2-root] .v2-cal-allday,
+[data-v2-root] .v2-cal-canvas {
+  display: grid;
+  grid-template-columns: var(--v2-cal-gutter) var(--v2-cal-tracks);
+}
+
+[data-v2-root] .v2-cal-day {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 8px 10px;
+  color: var(--v2-ink-2);
+  font: 500 12px/1 var(--v2-text);
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-cal-day b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  border-radius: 13px;
+  color: var(--v2-ink);
+  font: 600 16px/1 var(--v2-display);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The second place the eye should land: today, its weekday in the accent. */
+[data-v2-root] .v2-cal-day[data-today] {
+  color: var(--v2-signal);
+}
+
+[data-v2-root] .v2-cal-day[data-today] b {
+  background: var(--v2-accent);
+  color: var(--v2-on-accent);
+}
+
+[data-v2-root] .v2-cal-allday {
+  grid-auto-rows: 22px;
+  row-gap: 3px;
+  padding-bottom: 8px;
+}
+
+[data-v2-root] .v2-cal-allday-label {
+  grid-column: 1;
+  padding-right: 8px;
+  color: var(--v2-ink-3);
+  font: 500 11px/22px var(--v2-display);
+  text-align: right;
+  white-space: nowrap;
+}
+
+[data-v2-root] .v2-cal-span {
+  min-width: 0;
+  margin: 0 2px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--v2-lit);
+  border-inline-start: 3px solid var(--v2-lane);
+  color: var(--v2-ink);
+  font: 600 12px/22px var(--v2-display);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A bar that runs on past the edge of what is drawn: the square end says so. */
+[data-v2-root] .v2-cal-span[data-before] {
+  margin-inline-start: 0;
+  border-inline-start-width: 0;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+
+[data-v2-root] .v2-cal-span[data-after] {
+  margin-inline-end: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* THE HOURS. Everything in here is positioned against the grid's column lines
+   and the canvas's own height, so none of it depends on a row being sized: the
+   canvas fills what the pane gives it, and never gives an hour less than 28px,
+   at which point the scroller scrolls instead. */
+[data-v2-root] .v2-cal-canvas {
+  position: relative;
+  flex: 1 0 auto;
+  min-height: calc(var(--v2-cal-rows) * 28px + var(--v2-cal-inset));
+}
+
+[data-v2-root] .v2-cal-gutter,
+[data-v2-root] .v2-cal-lines {
+  position: absolute;
+  inset: var(--v2-cal-inset) 0 0;
+}
+
+/* Both lines are named on purpose. For an absolutely positioned child of a
+   grid, an end line left to "auto" is the container's edge, not one track. */
+[data-v2-root] .v2-cal-gutter {
+  grid-column: 1 / 2;
+}
+
+[data-v2-root] .v2-cal-lines {
+  grid-column: 2 / -1;
+}
+
+[data-v2-root] .v2-cal-gutter span {
+  position: absolute;
+  top: calc(var(--v2-cal-at) * 100%);
+  right: 8px;
+  transform: translateY(-50%);
+  color: var(--v2-ink-3);
+  font: 500 11px/1 var(--v2-display);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hairlines that recede: the faintest surface the scheme has. */
+[data-v2-root] .v2-cal-lines span {
+  position: absolute;
+  top: calc(var(--v2-cal-at) * 100%);
+  right: 0;
+  left: 0;
+  border-top: 1px solid var(--v2-card-2);
+}
+
+/* A day. It runs up through the inset, so today's tint meets the row above. */
+[data-v2-root] .v2-cal-col {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  border-inline-start: 1px solid var(--v2-card-2);
+}
+
+[data-v2-root] .v2-cal-col[data-today] {
+  background: color-mix(in srgb, var(--v2-accent) 6%, transparent);
+}
+
+/* Not a free day: the hour lines stop, and the column says why. */
+[data-v2-root] .v2-cal-col[data-covered="no"] {
+  background: var(--v2-page);
+}
+
+[data-v2-root] .v2-cal-col .v2-cal-unknown {
+  margin: 6px 4px;
+  padding: 8px 6px;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* The hours of one day, the same box the view's fractions are fractions of. */
+[data-v2-root] .v2-cal-plane {
+  position: absolute;
+  inset: var(--v2-cal-inset) 0 0;
+}
+
+[data-v2-root] .v2-cal-plane > ul {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A chip in the grid: placed by the view's numbers, sharing its column with
+   whatever overlaps it, and its own size container.
+   LINES THAT DO NOT FIT LEAVE WHOLE. The chip lays its lines in a column that
+   wraps, so a line with no room left moves to a second column, which the
+   chip's overflow clips: a short chip shows its title alone, and nothing is cut
+   through the middle or dropped from what a screen reader hears. */
+[data-v2-root] .v2-cal-col .v2-cal-chip {
+  position: absolute;
+  top: calc(var(--v2-cal-at) * 100% + 1px);
+  left: calc(var(--v2-cal-i) / var(--v2-cal-n) * 100% + 2px);
+  width: calc(100% / var(--v2-cal-n) - 4px);
+  height: calc(var(--v2-cal-span) * 100% - 2px);
+  container-type: size;
+  container-name: v2-chip;
+  flex-flow: column wrap;
+  align-content: flex-start;
+  column-gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+[data-v2-root] .v2-cal-col .v2-cal-chip > span {
+  flex: none;
+  width: 100%;
+}
+
+/* The tooltip's carrier: empty, hidden from a screen reader, and laid over the
+   whole chip so a pointer anywhere on it finds the tooltip. Out of the flow, so
+   the wrap above never counts it as a line. */
+[data-v2-root] .v2-cal-col .v2-cal-chip > .v2-cal-chip-tip {
+  position: absolute;
+  inset: 0;
+  width: auto;
+}
+
+[data-v2-root] .v2-cal-col .v2-cal-chip-title {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  font-size: 12.5px;
+  line-height: 15px;
+}
+
+[data-v2-root] .v2-cal-col .v2-cal-chip > span:not(.v2-cal-chip-title) {
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* THE TITLE HAS FIRST CALL ON THE CHIP'S HEIGHT. In a seven day grid a column
+   is about 100px wide, and a title cut to two words is no use to anybody: the
+   calendar it is on is already said by the mark and the legend. So the title
+   gets as many lines as fit with the time still whole under it, up to four,
+   and the calendar's name and the place take whatever whole lines are left
+   (the wrap above moves out any that do not fit).
+   The steps are the line heights above, measured on the chip's content box,
+   which is what a size query reads: N lines of title (15px each) and the time
+   (14px) need 15N + 14. So one line under 44px, two from 44 (the default
+   above), three from 59, four from 74. No step lets a line be cut in half.
+   Under 29px there is no room for the time either, and the title is alone.
+   RANGE SYNTAX, because a height can be fractional: a step written as
+   "max-height: 43.98px" left a chip 43.99px tall in neither step. */
+@container v2-chip (height < 44px) {
+  [data-v2-root] .v2-cal-col .v2-cal-chip-title {
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+  }
+}
+
+@container v2-chip (height >= 59px) {
+  [data-v2-root] .v2-cal-col .v2-cal-chip-title {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+}
+
+@container v2-chip (height >= 74px) {
+  [data-v2-root] .v2-cal-col .v2-cal-chip-title {
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+  }
+}
+
+/* An event that runs on past the top or the bottom of the window. */
+[data-v2-root] .v2-cal-col .v2-cal-chip[data-before] {
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+}
+
+[data-v2-root] .v2-cal-col .v2-cal-chip[data-after] {
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* Now, in today's column. Over the chips, and out of the pointer's way. */
+[data-v2-root] .v2-cal-now {
+  position: absolute;
+  top: calc(var(--v2-cal-at) * 100%);
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 0;
+  margin-top: -1px;
+  border-top: 2px solid var(--v2-accent);
+  pointer-events: none;
+}
+
+[data-v2-root] .v2-cal-now::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--v2-accent);
+}
+
+[data-v2-root] .v2-cal-now span {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--v2-page);
+  color: var(--v2-signal);
+  font: 600 11px/14px var(--v2-display);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---- the pane's three layouts, by its own width ----
+
+   RANGE SYNTAX, because a container's width can be fractional: written as
+   "max-width: 759.98px" and "min-width: 760px", a pane 759.99px wide was in
+   neither layout. Each threshold is one number, below it on one side and at or
+   above it on the other. */
+
+@container v2-cal (width >= 480px) {
+  [data-v2-root] .v2-cal-agenda {
+    display: none;
+  }
+
+  [data-v2-root] .v2-cal-grid {
+    display: flex;
+  }
+}
+
+/* The near days: three of them, from today (see `near` in the view). The other
+   days keep their column lines at no width, and their columns, cells and bars
+   are not drawn. */
+@container v2-cal (480px <= width < 760px) {
+  [data-v2-root] .v2-cal-grid [data-near="no"] {
+    display: none;
+  }
+}
+
+@container v2-cal (width >= 760px) {
+  [data-v2-root] .v2-cal-grid {
+    --v2-cal-tracks: var(--v2-cal-all);
+  }
+}
+
+/* ============================================================== the Week page
+ *
+ * The rail (or, on a phone, the bar) and the pane, filling the window at every
+ * width. The bar is pinned to the viewport below 1024px, so the frame keeps its
+ * height clear; from 1024px the rail is a column of its own, as on Today.
+ */
+
+[data-v2-root] .v2-week {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding: 20px var(--v2-gutter) calc(76px + env(safe-area-inset-bottom));
+}
+
+[data-v2-root] .v2-week-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+[data-v2-root] .v2-week-main > .v2-cal {
+  flex: 1;
+}
+
+/* What this data is: the notice Today shows under its date, here the one line
+   above the pane, at the pane's own spacing. */
+[data-v2-root] .v2-week-main > .v2-notice {
+  flex: none;
+  margin: 0 0 14px;
+}
+
+/* The framed tablet window: the root pads the page by 24px top and bottom. */
+@media (min-width: 520px) and (max-width: 1023.98px) {
+  [data-v2-root] .v2-week {
+    height: calc(100dvh - 48px);
+  }
+}
+
+@media (min-width: 1024px) {
+  [data-v2-root] .v2-week {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: clamp(20px, 2.6vw, 44px);
+    height: 100dvh;
+    padding: 0;
+  }
+
+  [data-v2-root] .v2-week-main {
+    padding: 30px 24px 24px 0;
+  }
+}

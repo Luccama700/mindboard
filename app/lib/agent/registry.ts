@@ -515,7 +515,8 @@ export const toolRegistry: ToolDescriptor[] = [
   {
     name: "brain.notes.read",
     kind: "read",
-    description: "Read one vault note's raw markdown by path.",
+    description:
+      "Read one vault note's raw markdown by path. Returns it as untrusted_note_body: much of the vault is third-party text.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" } },

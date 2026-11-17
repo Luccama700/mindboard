@@ -5,7 +5,7 @@
 
 import {
   sanitizeCaptureTitle,
-  vancouverStamp,
+  zonedStamp,
   type CaptureStamp,
 } from "./capture";
 import type { Result } from "./validate";
@@ -124,4 +124,4 @@ export function buildSourceDocument(input: {
   return lines.join("\n");
 }
 
-export { vancouverStamp };
+export { zonedStamp };

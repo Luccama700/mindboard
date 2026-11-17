@@ -13,7 +13,7 @@ import {
 } from "@/app/lib/watch/protocol";
 import { CAPTURE_TITLE_MAX } from "@/app/lib/mcp/capture";
 
-const OWNER = "8fd62772-a371-4d26-8a93-678b88c2b879";
+const OWNER = "00000000-0000-4000-8000-0000000000a1";
 
 describe("watch bearer tokens", () => {
   test("a plain WATCH_TOKEN maps to the deployment owner", () => {

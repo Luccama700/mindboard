@@ -10,13 +10,20 @@ import { URC_NOT_AVAILABLE } from "./preview";
 // that already sits in worker/worker.env and overnight/.env on this machine and
 // maps straight to the owner. Starting an interactive session on the PC is the
 // one MCP capability where "whoever holds the shared token is the owner" is too
-// weak, so URC accepts only a credential bound to a live account: an OAuth
-// token from claude.ai or a per-user mbp_ PAT.
+// weak, so URC accepts only an OAuth token from claude.ai.
+//
+// Why PATs are refused too (audit 2026-10-26 M3): a user has exactly one PAT
+// (user_settings.mcp_token_hash), and the owner's sits in overnight/.env on the
+// same PC where the dispatch agent runs with Bash(*). A credential stored on
+// disk next to an agent can't be the one that starts interactive sessions.
 
 export const URC_MCP_PREFIX = "mcp:";
 
 export const URC_STATIC_REFUSED =
-  "URC can't be driven with the shared static MCP token — connect over OAuth (claude.ai) or use a personal access token";
+  "URC can't be driven with the shared static MCP token — connect over OAuth (claude.ai)";
+
+export const URC_PAT_REFUSED =
+  "URC can't be driven with a personal access token — connect over OAuth (claude.ai)";
 
 export const URC_NON_MCP_REFUSED =
   "URC sessions can only be started from the Mindboard MCP server";
@@ -42,8 +49,9 @@ export function mcpAuthKind(clientId: string | null | undefined): string {
 }
 
 // Resolve the caller to the confirmed_auth label stored on the job, or refuse.
-// Fails closed: anything that is not an MCP OAuth/PAT credential is rejected,
-// including a missing kind and the in-app assistant / watch confirm paths.
+// Fails closed: anything that is not an MCP OAuth credential is rejected,
+// including a missing kind, PATs, and the in-app assistant / watch confirm
+// paths.
 export function urcAuth(
   userId: string,
   authKind: string | null | undefined,
@@ -59,6 +67,6 @@ export function urcAuth(
   if (!clientId || clientId === "static") {
     return { ok: false, error: URC_STATIC_REFUSED };
   }
-  if (clientId === "pat") return { ok: true, value: { confirmedAuth: "pat" } };
+  if (clientId === "pat") return { ok: false, error: URC_PAT_REFUSED };
   return { ok: true, value: { confirmedAuth: `oauth:${clientId}` } };
 }

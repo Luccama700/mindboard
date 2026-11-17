@@ -112,4 +112,29 @@ describe("zonedIso", () => {
     const d = new Date(2026, 6, 8, 8, 0, 0);
     expect(zonedIso(d.getTime(), null)).toBe(d.toISOString());
   });
+
+  // An instant with milliseconds used to produce an invalid offset at a
+  // positive one: the offset came out a fraction of a minute short, so
+  // Tokyo read "+08:60" and UTC read "-00:00". Both are refused by Postgres
+  // (22009) and parse as NaN. The second is dropped either way (the format
+  // carries whole seconds), so what matters is that the offset does not move.
+  describe("an instant carrying milliseconds", () => {
+    const WHOLE = Date.UTC(2026, 6, 8, 12, 0, 0);
+    const cases: Array<[string, string, string]> = [
+      ["a positive whole-hour zone", "Asia/Tokyo", "2026-07-08T21:00:00+09:00"],
+      ["a positive half-hour zone", "Asia/Kolkata", "2026-07-08T17:30:00+05:30"],
+      ["a negative zone", "America/New_York", "2026-07-08T08:00:00-04:00"],
+      ["UTC", "UTC", "2026-07-08T12:00:00+00:00"],
+    ];
+
+    for (const [what, zone, expected] of cases) {
+      test(`${what} reads the same with and without them`, () => {
+        expect(zonedIso(WHOLE, zone)).toBe(expected);
+        expect(zonedIso(WHOLE + 123, zone)).toBe(expected);
+        expect(zonedIso(WHOLE + 999, zone)).toBe(expected);
+        // The whole point: what comes out is an instant again.
+        expect(Number.isFinite(Date.parse(zonedIso(WHOLE + 123, zone)))).toBe(true);
+      });
+    }
+  });
 });
