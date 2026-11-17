@@ -44,7 +44,12 @@ export function suggestCategory(
   return null;
 }
 
-const SPEND_RE = /^\$\s*(\d+(?:[.,]\d{1,2})?)?\s*(.*)$/;
+// The amount is either thousands-grouped ("1,200" or "1,250.50") or plain with
+// an optional 1-2 digit decimal, "." or "," ("12.50", "9,99"). It must not be
+// followed by more digits, so "1200.999" is no amount rather than a guess.
+const SPEND_RE =
+  /^\$\s*(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:[.,]\d{1,2})?)?(?![.,]?\d)\s*(.*)$/;
+const GROUPED_RE = /^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/;
 
 export function parseCapture(
   input: string,
@@ -58,7 +63,12 @@ export function parseCapture(
 
   if (raw.startsWith("$")) {
     const match = SPEND_RE.exec(raw);
-    const amountRaw = match?.[1]?.replace(",", ".");
+    const matched = match?.[1];
+    const amountRaw = matched
+      ? GROUPED_RE.test(matched)
+        ? matched.replace(/,/g, "")
+        : matched.replace(",", ".")
+      : undefined;
     const amount = amountRaw ? Number(amountRaw) : null;
     const description = (match?.[2] ?? "").trim();
     return {

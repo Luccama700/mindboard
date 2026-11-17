@@ -638,11 +638,11 @@ function FreeGapUnderlay({
   // Shared busy-builder so the underlay and the gap planner can't drift. It
   // counts timed events, time-blocked tasks, and TIMED recurring only — planned
   // ghosts (dueTime null) never enter the busy math.
-  const busy = busyFromDayItems(dateKey, [
-    ...events,
-    ...timedTasks,
-    ...recurring,
-  ]);
+  const busy = busyFromDayItems(
+    dateKey,
+    [...events, ...timedTasks, ...recurring],
+    timeZone,
+  );
 
   const intervals = freeIntervalsForDay({
     events: busy,

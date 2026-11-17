@@ -3,13 +3,33 @@
 import { createClient } from "@/utils/supabase/client";
 import { CALENDAR_SCOPES } from "@/utils/google/scopes";
 import Link from "next/link";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
+
+/** What the login page says about a failed sign-in, from its ?error= value. */
+function loginErrorMessage(code: string | null): string | null {
+  if (code === null) return null;
+  return "sign-in didn't go through. try again.";
+}
 
 export default function LoginPage() {
+  // useSearchParams needs a Suspense boundary on a prerendered client page.
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const [loading, setLoading] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const callbackError = loginErrorMessage(useSearchParams().get("error"));
+  const error = startError ?? callbackError;
 
   async function signInWithGoogle() {
     setLoading(true);
+    setStartError(null);
     const supabase = createClient();
     // Preserve a relative ?next= (e.g. the MCP OAuth /authorize URL) across login.
     const rawNext = new URLSearchParams(window.location.search).get("next");
@@ -31,6 +51,7 @@ export default function LoginPage() {
     });
     if (error) {
       setLoading(false);
+      setStartError("couldn't reach google sign-in. try again.");
     }
   }
 
@@ -53,6 +74,12 @@ export default function LoginPage() {
         >
           {loading ? "redirecting..." : "continue with google →"}
         </button>
+
+        {error && (
+          <p role="alert" className="text-xs text-danger">
+            {error}
+          </p>
+        )}
 
         <Link
           href="/"

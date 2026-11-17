@@ -36,7 +36,7 @@ export default async function InventoryPage() {
       .order("created_at", { ascending: true }),
     supabase
       .from("user_settings")
-      .select("shopping_store, shopping_day")
+      .select("shopping_store, shopping_day, timezone")
       .eq("user_id", user.id)
       .maybeSingle(),
   ]);
@@ -68,6 +68,7 @@ export default async function InventoryPage() {
             ? settingsResult.data.shopping_day
             : null
         }
+        timeZone={(settingsResult.data?.timezone as string | null) ?? "UTC"}
       />
     </main>
   );

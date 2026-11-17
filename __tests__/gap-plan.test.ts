@@ -212,8 +212,8 @@ describe("busyFromDayItems", () => {
     ]);
     expect(busy).toEqual([
       { summary: "ev", start: "2026-07-08T09:00:00", end: "2026-07-08T10:00:00", allDay: false },
-      { summary: "tt", start: "2026-07-08T14:00:00", end: "2026-07-08T15:00:00", allDay: false },
-      { summary: "rt", start: "2026-07-08T16:00:00", end: "2026-07-08T16:30:00", allDay: false },
+      { summary: "tt", start: "2026-07-08T14:00:00.000Z", end: "2026-07-08T15:00:00.000Z", allDay: false },
+      { summary: "rt", start: "2026-07-08T16:00:00.000Z", end: "2026-07-08T16:30:00.000Z", allDay: false },
     ]);
   });
 
@@ -230,8 +230,28 @@ describe("busyFromDayItems", () => {
       rtask({ id: "untimed-no-slot", dueTime: null }),
     ]);
     expect(busy).toEqual([
-      { summary: "gym", start: "2026-07-08T07:00:00", end: "2026-07-08T08:30:00", allDay: false },
+      { summary: "gym", start: "2026-07-08T07:00:00.000Z", end: "2026-07-08T08:30:00.000Z", allDay: false },
     ]);
+  });
+});
+
+describe("busyFromDayItems in the user's zone", () => {
+  test("task and routine times are wall-clock times in the given zone, as instants", () => {
+    const busy = busyFromDayItems(
+      DATE,
+      [
+        { kind: "task", id: "t", title: "tt", color: "#fff", group: "g", dueTime: "14:00:00", durationMin: 60, pushed: false } as CalendarItem,
+        { kind: "rtask", id: "r", ruleId: "rule", title: "rt", color: "#fff", dueTime: "16:00:00", durationMin: null, plannedStart: null, plannedMinutes: null, slotStart: null, slotMinutes: null, scheduleLabel: "every day", done: false } as CalendarItem,
+      ],
+      "America/Vancouver",
+    );
+    // July: Vancouver is UTC-7. Every value carries its zone, so the server
+    // (UTC) and the browser read the same instant and hydration agrees.
+    expect(busy.map((b) => [b.start, b.end])).toEqual([
+      ["2026-07-08T21:00:00.000Z", "2026-07-08T22:00:00.000Z"],
+      ["2026-07-08T23:00:00.000Z", "2026-07-08T23:30:00.000Z"],
+    ]);
+    for (const b of busy) expect(b.start.endsWith("Z")).toBe(true);
   });
 });
 

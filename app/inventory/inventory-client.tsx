@@ -211,6 +211,7 @@ export function InventoryClient({
   initialUsages,
   initialShoppingStore,
   initialShoppingDay,
+  timeZone,
 }: {
   userId: string;
   initialGroups: InventoryGroup[];
@@ -218,6 +219,8 @@ export function InventoryClient({
   initialUsages: InventoryUsage[];
   initialShoppingStore: string | null;
   initialShoppingDay: number | null;
+  /** The user's zone (user_settings.timezone), so server and browser print the same day. */
+  timeZone: string;
 }) {
   const router = useRouter();
 
@@ -1238,6 +1241,7 @@ export function InventoryClient({
                 <ArchivedRow
                   key={it.id}
                   item={it}
+                  timeZone={timeZone}
                   onRestore={(id) => onSetArchived(id, false)}
                   onDelete={(id) => {
                     if (
@@ -1792,20 +1796,27 @@ function ItemRow({
   );
 }
 
+/** "nov 16": the day an item was archived, in the user's zone (server and browser agree). */
+export function archivedSinceLabel(archivedAt: string | null, timeZone: string): string | null {
+  return archivedAt
+    ? new Date(archivedAt)
+        .toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone })
+        .toLowerCase()
+    : null;
+}
+
 function ArchivedRow({
   item,
+  timeZone,
   onRestore,
   onDelete,
 }: {
   item: InventoryItem;
+  timeZone: string;
   onRestore: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  const since = item.archived_at
-    ? new Date(item.archived_at)
-        .toLocaleDateString("en-US", { month: "short", day: "numeric" })
-        .toLowerCase()
-    : null;
+  const since = archivedSinceLabel(item.archived_at, timeZone);
 
   return (
     <li className="flex items-center gap-2 min-h-11">
