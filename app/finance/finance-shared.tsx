@@ -50,7 +50,7 @@ export function CollapsibleSection({
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        className="flex w-full items-center justify-between text-left"
+        className="min-h-11 flex w-full items-center justify-between text-left"
       >
         <span className="text-[10px] tracking-widest uppercase text-muted">
           {title} · {count}

@@ -321,7 +321,7 @@ function GroupEditPanel({
       <div className="flex justify-end pt-2">
         <button
           onClick={() => onArchive(group.id)}
-          className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
+          className="tap-y text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
         >
           archive
         </button>
@@ -348,7 +348,7 @@ function TypePicker({
             key={t}
             type="button"
             onClick={() => onChange(t)}
-            className={`text-xs px-3 py-2 border rounded-full transition-colors ${
+            className={`min-h-11 text-xs px-3 py-2 border rounded-full transition-colors ${
               value === t
                 ? "bg-fg text-page border-fg"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"

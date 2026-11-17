@@ -283,7 +283,7 @@ function AccountEditPanel({
       <div className="flex justify-end pt-2">
         <button
           onClick={() => onArchive(account.id)}
-          className="text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
+          className="tap-y text-danger text-xs tracking-widest uppercase hover:text-danger-hover transition-colors py-2 px-3"
         >
           archive
         </button>
@@ -480,7 +480,7 @@ export function BalanceUpdatePanel({
           <button
             type="button"
             onClick={enterSplit}
-            className="text-[10px] tracking-widest uppercase text-muted hover:text-accent transition-colors"
+            className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-accent transition-colors"
           >
             + split across categories
           </button>
@@ -496,7 +496,7 @@ export function BalanceUpdatePanel({
             <button
               type="button"
               onClick={exitSplit}
-              className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+              className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
             >
               single category
             </button>
@@ -527,7 +527,7 @@ export function BalanceUpdatePanel({
                   type="button"
                   onClick={() => removeSplitRow(i)}
                   aria-label="remove split"
-                  className="px-2 py-2 text-muted hover:text-danger transition-colors"
+                  className="tap-y px-2 py-2 text-muted hover:text-danger transition-colors"
                 >
                   ×
                 </button>
@@ -540,14 +540,14 @@ export function BalanceUpdatePanel({
               <button
                 type="button"
                 onClick={addSplitRow}
-                className="text-[10px] tracking-widest uppercase text-muted hover:text-accent transition-colors"
+                className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-accent transition-colors"
               >
                 + add
               </button>
               <button
                 type="button"
                 onClick={evenSplit}
-                className="text-[10px] tracking-widest uppercase text-muted hover:text-accent transition-colors"
+                className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-accent transition-colors"
               >
                 even
               </button>
@@ -684,7 +684,7 @@ function CategoryField({
           type="button"
           onClick={() => setNewOpen((v) => !v)}
           aria-expanded={newOpen}
-          className="px-3 py-2 border border-dashed rounded-full border-line-strong text-muted text-xs hover:border-accent hover:text-accent transition-colors"
+          className="min-h-11 px-3 py-2 border border-dashed rounded-full border-line-strong text-muted text-xs hover:border-accent hover:text-accent transition-colors"
         >
           + new
         </button>
@@ -706,7 +706,7 @@ function CategoryField({
             type="button"
             onClick={createNew}
             disabled={isPending}
-            className="text-xs tracking-widest uppercase px-3 py-2 border rounded-full border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
+            className="min-h-11 text-xs tracking-widest uppercase px-3 py-2 border rounded-full border-fg text-fg hover:bg-fg hover:text-page transition-colors disabled:opacity-50"
           >
             add category
           </button>
@@ -749,7 +749,7 @@ function HistoryRow({
     <li className="border-t border-line first:border-t-0">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-card-hover transition-colors"
+        className="min-h-11 w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-card-hover transition-colors"
       >
         <span
           className="w-2.5 h-2.5 flex-shrink-0"
@@ -872,14 +872,14 @@ function HistoryRow({
                 <button
                   type="button"
                   onClick={() => onDeleteChange(change.id)}
-                  className="text-danger text-[10px] tracking-widest uppercase hover:text-danger-hover transition-colors py-2"
+                  className="tap-y text-danger text-[10px] tracking-widest uppercase hover:text-danger-hover transition-colors py-2"
                 >
                   delete — sure?
                 </button>
                 <button
                   type="button"
                   onClick={() => setConfirmDelete(false)}
-                  className="text-muted text-[10px] tracking-widest uppercase hover:text-fg transition-colors py-2"
+                  className="tap-y text-muted text-[10px] tracking-widest uppercase hover:text-fg transition-colors py-2"
                 >
                   keep
                 </button>
@@ -888,7 +888,7 @@ function HistoryRow({
               <button
                 type="button"
                 onClick={() => setConfirmDelete(true)}
-                className="text-muted text-[10px] tracking-widest uppercase hover:text-danger transition-colors py-2"
+                className="tap-y text-muted text-[10px] tracking-widest uppercase hover:text-danger transition-colors py-2"
               >
                 delete
               </button>

@@ -300,8 +300,18 @@ function CourseRow({
           className="h-2.5 w-2.5 shrink-0 rounded-full"
           style={{ backgroundColor: course.color }}
         />
-        <span className="flex-1 truncate text-body text-fg">{course.name}</span>
-        {meta && <span className="text-meta text-muted">{meta}</span>}
+        {/* Name and code/term share a wrapping row, so on a phone the meta
+            drops under the name instead of truncating it to a few letters. */}
+        <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3">
+          <span className="min-w-0 max-w-full flex-auto truncate text-body text-fg">
+            {course.name}
+          </span>
+          {meta && (
+            <span className="min-w-0 max-w-full truncate text-meta text-muted">
+              {meta}
+            </span>
+          )}
+        </span>
         <span className="text-meta text-muted">
           {sources.length > 0 ? sources.length : "—"}
         </span>
@@ -804,8 +814,13 @@ function SourceRowItem({
   };
 
   return (
-    <li className="flex min-h-11 items-center gap-2 py-1">
-      <span className="flex-1 min-w-0">
+    // Wraps on a phone: a source that can be converted carries a model
+    // select, a convert button and the delete, which together are wider than
+    // the title's share of a 390px row and used to squeeze the title away.
+    // The title keeps at least 11rem; whatever does not fit beside that
+    // drops to a second line, right aligned.
+    <li className="flex min-h-11 flex-wrap items-center justify-end gap-x-2 gap-y-1 py-1">
+      <span className="min-w-[11rem] flex-1">
         <span className="line-clamp-2 break-words text-body text-fg">{source.title}</span>
         <span
           className={`block text-meta ${

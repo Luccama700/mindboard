@@ -79,7 +79,7 @@ export default async function TasksHistoryPage() {
       <header className="mb-6">
         <Link
           href="/tasks"
-          className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
+          className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors"
         >
           ← tasks
         </Link>

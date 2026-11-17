@@ -6,7 +6,7 @@ export default function BrainNoteNotFound() {
       <header className="flex items-center justify-between mb-10">
         <Link
           href="/brain"
-          className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
+          className="tap-y text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
         >
           ← brain
         </Link>

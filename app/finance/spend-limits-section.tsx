@@ -267,7 +267,7 @@ function LimitRow({
                 setEditOpen(false);
                 onArchive(limit.id);
               }}
-              className="px-3 py-2 text-xs uppercase tracking-widest text-danger transition-colors hover:text-danger-hover"
+              className="tap-y px-3 py-2 text-xs uppercase tracking-widest text-danger transition-colors hover:text-danger-hover"
             >
               delete
             </button>

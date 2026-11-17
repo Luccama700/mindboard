@@ -159,7 +159,7 @@ function TextureSlider({ theme }: { theme: ThemeName }) {
           type="button"
           onClick={resetTexture}
           disabled={override === null}
-          className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors py-1.5 px-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted"
+          className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors py-1.5 px-2 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted"
         >
           reset
         </button>
@@ -219,7 +219,7 @@ function PaletteEditor({ theme }: { theme: ThemeName }) {
                       type="button"
                       onClick={() => setActiveSlot(isActive ? null : key)}
                       aria-expanded={isActive}
-                      className="flex items-center justify-between w-full px-3 py-2 hover:bg-card-hover transition-colors"
+                      className="min-h-11 flex items-center justify-between w-full px-3 py-2 hover:bg-card-hover transition-colors"
                     >
                       <span className="text-[10px] tracking-widest uppercase text-muted">
                         {PALETTE_LABELS[key]}
@@ -257,7 +257,7 @@ function PaletteEditor({ theme }: { theme: ThemeName }) {
           type="button"
           onClick={resetPalette}
           disabled={!hasOverrides}
-          className="text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted"
+          className="tap-y text-[10px] tracking-widest uppercase text-muted hover:text-fg transition-colors py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted"
         >
           reset to preset
         </button>

@@ -69,7 +69,7 @@ export default async function ApprovalsPage() {
   }));
 
   return (
-    <main className="min-h-screen px-5 pt-6 pb-40 max-w-2xl mx-auto">
+    <main className="min-h-screen px-5 pt-6 pb-64 max-w-2xl mx-auto">
       <header className="mb-5">
         <h1 className="text-label uppercase text-muted">approvals</h1>
         <p className="mt-2 text-meta text-muted leading-relaxed">

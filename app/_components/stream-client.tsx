@@ -388,7 +388,7 @@ function CardRow({
           type="button"
           onClick={() => onAdjust(card, -1)}
           aria-label={`decrease ${card.entity.name}`}
-          className="min-h-11 px-3 text-muted hover:text-fg transition-colors"
+          className="min-h-11 min-w-11 px-3 text-muted hover:text-fg transition-colors"
         >
           −
         </button>
@@ -396,7 +396,7 @@ function CardRow({
           type="button"
           onClick={() => onAdjust(card, 1)}
           aria-label={`increase ${card.entity.name}`}
-          className="min-h-11 px-3 text-muted hover:text-fg transition-colors border-l border-hairline"
+          className="min-h-11 min-w-11 px-3 text-muted hover:text-fg transition-colors border-l border-hairline"
         >
           ＋
         </button>
@@ -521,7 +521,7 @@ function CardRow({
                 type="button"
                 onClick={() => setTitleOpen((v) => !v)}
                 aria-expanded={titleOpen}
-                className={`min-w-0 text-left ${
+                className={`min-w-0 py-2.5 -my-2.5 text-left ${
                   titleOpen ? "break-words" : "truncate"
                 } ${factStruck ? "line-through text-muted" : ""}`}
               >
@@ -544,42 +544,54 @@ function CardRow({
           </>
         ) : (
           <>
-            <p className="text-body text-fg flex items-baseline gap-2 min-w-0">
+            {/* Title first. The meta used to be shrink-0 on the same line, so
+                on a phone a long meta ("today 14:30 · Ceramics studio
+                project") starved the title down to two letters. Now the two
+                share a wrapping row: side by side when both fit, the meta on
+                its own line under the title when they do not, and each
+                truncates only against the full width. The title's vertical
+                padding is pulled back by the same negative margin, so the
+                row keeps its height and the tap target is 44px. */}
+            <div className="text-body text-fg flex items-baseline gap-2 min-w-0">
               <span className="text-muted shrink-0" aria-hidden>
                 {card.glyph}
               </span>
-              {rtaskRule ? (
-                <button
-                  type="button"
-                  onClick={() => setEditOpen((v) => !v)}
-                  aria-expanded={editOpen}
-                  className={`min-w-0 text-left ${
-                    editOpen ? "break-words" : "truncate"
-                  } ${factStruck ? "line-through text-muted" : ""} ${
-                    editOpen ? "text-accent" : ""
-                  }`}
-                >
-                  {card.fact}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setTitleOpen((v) => !v)}
-                  aria-expanded={titleOpen}
-                  className={`min-w-0 text-left ${
-                    titleOpen ? "break-words" : "truncate"
-                  } ${factStruck ? "line-through text-muted" : ""} ${
-                    taskTier === 2 ? "font-medium" : ""
-                  }`}
-                >
-                  {card.fact}
-                </button>
-              )}
-              {card.meta && (
-                <span className="text-meta text-muted shrink-0">{card.meta}</span>
-              )}
-              {aiBadgeNode}
-            </p>
+              <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
+                {rtaskRule ? (
+                  <button
+                    type="button"
+                    onClick={() => setEditOpen((v) => !v)}
+                    aria-expanded={editOpen}
+                    className={`min-w-0 max-w-full py-[11px] -my-[11px] text-left ${
+                      editOpen ? "break-words" : "truncate"
+                    } ${factStruck ? "line-through text-muted" : ""} ${
+                      editOpen ? "text-accent" : ""
+                    }`}
+                  >
+                    {card.fact}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setTitleOpen((v) => !v)}
+                    aria-expanded={titleOpen}
+                    className={`min-w-0 max-w-full py-[11px] -my-[11px] text-left ${
+                      titleOpen ? "break-words" : "truncate"
+                    } ${factStruck ? "line-through text-muted" : ""} ${
+                      taskTier === 2 ? "font-medium" : ""
+                    }`}
+                  >
+                    {card.fact}
+                  </button>
+                )}
+                {card.meta && (
+                  <span className="text-meta text-muted min-w-0 max-w-full truncate">
+                    {card.meta}
+                  </span>
+                )}
+                {aiBadgeNode}
+              </div>
+            </div>
             {rtaskRule && editOpen && (
               <RecurringEditPanel
                 rule={rtaskRule}
@@ -1024,32 +1036,35 @@ export function StreamClient({
   return (
     <div>
       <div className="mb-8">
-      <div className="flex items-baseline justify-between flex-wrap gap-x-4 gap-y-1 pr-10 lg:pr-0">
+      {/* The chrome row has its own band above the page (globals.css), so the
+          header runs the full width. Each vital stays on one line and the
+          row wraps between them, never inside one ("3 to / clear"). */}
+      <div className="flex items-baseline justify-between flex-wrap gap-x-4 gap-y-2">
         <p className="text-body text-fg">
           {todayLabel} <span className="text-muted">· {clockLabel}</span>
         </p>
         <p
-          className="flex items-baseline gap-3 text-meta text-muted"
+          className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-meta text-muted whitespace-nowrap"
           data-tour="vitals"
         >
           {delta !== 0 && (
             <Link
               href="/finance"
-              className={`text-body ${delta > 0 ? "text-positive" : "text-danger"} hover:opacity-80 transition-opacity`}
+              className={`tap-y text-body ${delta > 0 ? "text-positive" : "text-danger"} hover:opacity-80 transition-opacity`}
             >
               {delta > 0 ? "▲" : "▼"}{" "}
               {formatMoney(Math.abs(delta), snapshot.pulse.currency)}
             </Link>
           )}
           <span>{snapshot.pulse.toClear} to clear</span>
-          <Link href="/week" className="hover:text-fg transition-colors">
+          <Link href="/week" className="tap-y hover:text-fg transition-colors">
             {snapshot.pulse.freeHours}h free
           </Link>
           <button
             type="button"
             onClick={() => setLogOpen(true)}
             aria-label="daily check-in"
-            className="hover:text-fg transition-colors tracking-[0.2em]"
+            className="tap-y hover:text-fg transition-colors tracking-[0.2em]"
           >
             {moodDots}
           </button>
@@ -1058,7 +1073,7 @@ export function StreamClient({
       {weekDone + weekMissed > 0 && (
         <Link
           href="/tasks/history"
-          className="mt-1 inline-block text-meta text-muted hover:text-fg transition-colors"
+          className="tap-y mt-1 inline-block text-meta text-muted hover:text-fg transition-colors"
         >
           this week · {weekDone} done · {weekMissed} missed
         </Link>
@@ -1074,7 +1089,7 @@ export function StreamClient({
         <button
           type="button"
           onClick={() => setStepError(null)}
-          className="block w-full text-left text-meta text-danger mb-4"
+          className="min-h-11 block w-full text-left text-meta text-danger mb-4"
         >
           {stepError} · tap to dismiss
         </button>

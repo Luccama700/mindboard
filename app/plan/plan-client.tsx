@@ -291,7 +291,7 @@ export function PlanClient({
               return (
                 <p
                   key={index}
-                  className="text-body text-fg whitespace-pre-wrap leading-relaxed"
+                  className="text-body text-fg whitespace-pre-wrap break-words leading-relaxed"
                 >
                   {item.text}
                   {busy && index === items.length - 1 && (

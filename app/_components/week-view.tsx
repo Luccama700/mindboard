@@ -11,7 +11,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { freeIntervalsForDay } from "@/app/lib/snapshots/schedule";
 import { busyFromDayItems, rtaskEffectiveTiming } from "@/app/lib/snapshots/gap-plan";
 import { zonedClockMinutes } from "@/app/lib/snapshots/zoned-time";
@@ -414,7 +414,7 @@ function RecurringTaskBlock({
             });
           }}
           aria-label={`approve ${item.title}`}
-          className="absolute right-0.5 top-0.5 z-20 flex h-6 w-6 items-center justify-center rounded text-[11px] text-positive transition-colors hover:bg-positive-wash"
+          className="tap-44 absolute right-0.5 top-0.5 z-20 flex h-6 w-6 items-center justify-center rounded text-[11px] text-positive transition-colors hover:bg-positive-wash"
         >
           ✓
         </button>
@@ -673,7 +673,7 @@ function FreeGapUnderlay({
                 <span className="text-[9px] text-positive">{hours}h</span>
                 <Link
                   href="/plan"
-                  className="pointer-events-auto text-[9px] text-muted hover:text-fg transition-colors"
+                  className="pointer-events-auto -m-2.5 p-2.5 text-[9px] text-muted hover:text-fg transition-colors"
                 >
                   plan ◇
                 </Link>
@@ -724,6 +724,32 @@ export function WeekView({
 }: WeekViewProps) {
   const week = buildWeek(selected);
   const timedRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
+  // On a phone the grid is wider than the screen (seven columns need 43rem)
+  // and scrolls sideways, starting at Sunday: on a Wednesday the first thing
+  // the week showed was three days that were already over. Bring the selected
+  // day (today, on arrival) to the first column after the pinned hour gutter.
+  // Only when it is not already fully in view, so tapping a visible day does
+  // not make the grid jump under the finger. A no-op wherever the grid fits.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller || scroller.scrollWidth <= scroller.clientWidth) return;
+    const column = scroller.querySelector<HTMLElement>(
+      `[data-week-day="${selected}"]`,
+    );
+    if (!column) return;
+    const gutter = 56; // the 3.5rem hour column, pinned with sticky left-0
+    const box = scroller.getBoundingClientRect();
+    const rect = column.getBoundingClientRect();
+    const visible =
+      rect.left >= box.left + gutter - 1 && rect.right <= box.right + 1;
+    if (visible) return;
+    scroller.scrollLeft = Math.max(
+      0,
+      rect.left - box.left + scroller.scrollLeft - gutter,
+    );
+  }, [selected]);
   const [activeItem, setActiveItem] = useState<CalendarItem | null>(null);
 
   const now = new Date();
@@ -948,10 +974,16 @@ export function WeekView({
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveItem(null)}
     >
-      <div className="overflow-x-auto border border-line rounded-xl">
+      {/* The hour gutter is pinned (sticky left-0) in all three bands, so the
+          hours stay readable while the days scroll under a thumb, and the
+          scroll settles on a day boundary instead of mid-column. */}
+      <div
+        ref={scrollerRef}
+        className="overflow-x-auto overscroll-x-contain snap-x snap-proximity scroll-pl-14 border border-line rounded-xl"
+      >
         <div className="min-w-[43rem] bg-page">
           <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-line">
-            <div className="border-r border-line" />
+            <div className="sticky left-0 z-30 border-r border-line bg-page" />
             {week.map((date) => {
               const key = toDateKey(date);
               const isSelected = selected === key;
@@ -962,7 +994,8 @@ export function WeekView({
                   key={key}
                   type="button"
                   onClick={() => onSelect(key)}
-                  className={`min-h-16 border-r border-line px-2 py-2 text-center transition-colors last:border-r-0 ${
+                  data-week-day={key}
+                  className={`min-h-16 snap-start border-r border-line px-2 py-2 text-center transition-colors last:border-r-0 ${
                     isSelected ? "bg-card" : "bg-page"
                   }`}
                 >
@@ -984,7 +1017,7 @@ export function WeekView({
           </div>
 
           <div className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))] border-b border-line">
-            <div className="border-r border-line px-2 py-2 text-[9px] tracking-widest uppercase text-muted">
+            <div className="sticky left-0 z-30 border-r border-line bg-page px-2 py-2 text-[9px] tracking-widest uppercase text-muted">
               due
             </div>
             {week.map((date) => {
@@ -1051,7 +1084,7 @@ export function WeekView({
             className="grid grid-cols-[3.5rem_repeat(7,minmax(0,1fr))]"
             style={{ height: weekHeight }}
           >
-            <div className="relative border-r border-line">
+            <div className="sticky left-0 z-30 border-r border-line bg-page">
               {hourLabels.slice(0, -1).map((hour, index) => (
                 <div
                   key={hour}

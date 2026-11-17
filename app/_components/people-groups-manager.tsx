@@ -144,7 +144,7 @@ export function PeopleGroupsManager({
                         setDraftColor(group.color);
                         setConfirmingDelete(null);
                       }}
-                      className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11"
+                      className="text-label uppercase text-muted hover:text-fg transition-colors min-h-11 min-w-11"
                     >
                       edit
                     </button>
@@ -166,7 +166,7 @@ export function PeopleGroupsManager({
                       <button
                         type="button"
                         onClick={() => setConfirmingDelete(group.id)}
-                        className="text-label uppercase text-muted hover:text-danger transition-colors min-h-11"
+                        className="text-label uppercase text-muted hover:text-danger transition-colors min-h-11 min-w-11"
                       >
                         delete
                       </button>

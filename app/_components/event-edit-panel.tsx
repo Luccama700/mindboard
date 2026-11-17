@@ -150,13 +150,13 @@ export function EventEditPanel({
         <button
           type="button"
           onClick={onCancel}
-          className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors px-3 py-1.5"
+          className="tap-y text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors px-3 py-1.5"
         >
           cancel
         </button>
         <button
           type="submit"
-          className="bg-accent text-accent-fg text-xs tracking-widest uppercase font-bold px-3 py-1.5 hover:opacity-90 transition-colors"
+          className="min-h-11 bg-accent text-accent-fg text-xs tracking-widest uppercase font-bold px-3 py-1.5 hover:opacity-90 transition-colors"
         >
           save
         </button>

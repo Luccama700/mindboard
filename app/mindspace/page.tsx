@@ -41,10 +41,10 @@ export default async function MindspacePage() {
   ]);
 
   const header = (
-    <header className="flex items-center justify-between mb-10 pr-10 lg:pr-0">
+    <header className="flex items-center justify-between mb-10">
       <Link
         href="/"
-        className="text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
+        className="tap-y text-muted text-xs tracking-widest uppercase hover:text-fg transition-colors"
       >
         ← mindboard
       </Link>

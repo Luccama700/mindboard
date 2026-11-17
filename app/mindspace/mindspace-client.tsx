@@ -250,7 +250,7 @@ export function MindspaceClient({
             {label}
           </button>
         ))}
-        <span className="ml-auto text-[10px] text-muted">
+        <span className="ml-auto min-w-0 text-right text-[10px] text-muted">
           {current.totalItems} traces · {massLabel(current.totalMassMinutes)}
           {pendingCount > 0 && <> · reading {pendingCount} new…</>}
         </span>
@@ -386,7 +386,7 @@ export function MindspaceClient({
                             {item.href ? (
                               <Link
                                 href={item.href}
-                                className="flex items-baseline gap-2 min-h-8 text-xs hover:text-accent transition-colors"
+                                className="flex items-center gap-2 min-h-11 text-xs hover:text-accent transition-colors"
                               >
                                 <span className="text-muted shrink-0">
                                   {SOURCE_LABELS[item.source]}

@@ -309,7 +309,7 @@ function UsagesEditor({
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="w-full rounded-full border border-dashed border-line-strong text-muted text-xs px-3 py-2 hover:border-accent-ink hover:text-accent-ink transition-colors"
+          className="min-h-11 w-full rounded-full border border-dashed border-line-strong text-muted text-xs px-3 py-2 hover:border-accent-ink hover:text-accent-ink transition-colors"
         >
           + add usage
         </button>
@@ -399,7 +399,7 @@ function UsageRowEditor({
           <button
             type="button"
             onClick={() => commit()}
-            className="px-3 bg-accent text-accent-fg text-xs font-bold hover:opacity-90 transition-colors"
+            className="min-h-11 px-3 bg-accent text-accent-fg text-xs font-bold hover:opacity-90 transition-colors"
           >
             add
           </button>
@@ -407,7 +407,7 @@ function UsageRowEditor({
             type="button"
             onClick={onCancel}
             aria-label="cancel"
-            className="px-3 bg-card text-muted text-sm hover:text-fg transition-colors"
+            className="min-h-11 px-3 bg-card text-muted text-sm hover:text-fg transition-colors"
           >
             ×
           </button>
@@ -417,7 +417,7 @@ function UsageRowEditor({
           type="button"
           onClick={onDelete}
           aria-label="remove usage"
-          className="px-3 bg-card text-muted hover:text-danger transition-colors"
+          className="min-h-11 px-3 bg-card text-muted hover:text-danger transition-colors"
         >
           ×
         </button>
