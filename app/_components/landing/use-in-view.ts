@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 // Once-only reveal: flips true the first time the element approaches the
-// viewport and stays true (scroll-reveal, and a gate that keeps looping
-// vignette animations from running off-screen).
-export function useInView<T extends HTMLElement>(rootMargin = "-10% 0px") {
+// viewport and stays true. Sections use it to play their entrance once.
+export function useInView<T extends HTMLElement>(rootMargin = "-8% 0px") {
   const ref = useRef<T | null>(null);
   const [inView, setInView] = useState(false);
 
@@ -34,14 +33,20 @@ export function useInView<T extends HTMLElement>(rootMargin = "-10% 0px") {
   return { ref, inView };
 }
 
+const REDUCED = "(prefers-reduced-motion: reduce)";
+
+function subscribeReduced(onChange: () => void) {
+  const mq = window.matchMedia(REDUCED);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
+// The server cannot know, so it renders the moving version and the first
+// client render corrects it. Nothing that moves starts before that.
 export function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onChange = () => setReduced(mq.matches);
-    onChange();
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
+  return useSyncExternalStore(
+    subscribeReduced,
+    () => window.matchMedia(REDUCED).matches,
+    () => false,
+  );
 }

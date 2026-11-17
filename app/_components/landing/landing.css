@@ -1,0 +1,2033 @@
+/* The logged-out landing ("put it down.").
+ *
+ * Plain CSS, loaded only by landing.tsx. Everything is under .landing and every
+ * class is prefixed landing-, so nothing here reaches a signed-in page.
+ *
+ * NO COLOUR IS WRITTEN HERE. Every colour is a theme token from globals.css
+ * (--bg, --fg, --accent, ...) or mixed from two of them, so all six themes and
+ * a user's own palette repaint the page, running animations included. Text and
+ * strokes in the accent use --accent-ink, which the light themes darken until
+ * it reads on paper; fills use --accent with --accent-fg on top. (Every
+ * `black` below is in a mask, not paint.)
+ *
+ * MOTION. Entrances are CSS, played once. globals.css zeroes every duration
+ * and delay under prefers-reduced-motion, so each animation here ends on the
+ * state the page should rest in, and nothing is hidden behind a delay.
+ */
+
+.landing {
+  --lp-gutter: 20px;
+  --lp-max: 1200px;
+  --lp-ease: cubic-bezier(0.2, 0, 0, 1);
+  --lp-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Reading copy: quieter than --fg, but well clear of --muted, which is for
+     labels. Mixed from the palette so it follows every theme. */
+  --lp-soft: color-mix(in srgb, var(--fg) 66%, var(--bg));
+  --lp-ink: var(--accent-ink);
+  --lp-hair: color-mix(in srgb, var(--fg) 13%, transparent);
+  --lp-wash: color-mix(in srgb, var(--accent) 13%, transparent);
+  --lp-glow: color-mix(in srgb, var(--accent) 42%, transparent);
+
+  position: relative;
+  min-height: 100svh;
+  overflow-x: clip;
+  color: var(--fg);
+}
+
+@media (max-width: 374.98px) {
+  .landing {
+    --lp-gutter: 16px;
+  }
+}
+
+@media (min-width: 768px) {
+  .landing {
+    --lp-gutter: 32px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .landing {
+    --lp-gutter: 40px;
+  }
+}
+
+.landing ::selection {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.landing :is(a, button):focus-visible {
+  outline: 2px solid var(--lp-ink);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+.landing button {
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.landing kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  color: var(--lp-ink);
+  font: inherit;
+  font-size: 0.92em;
+}
+
+.landing-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* CRT: scanlines and a vignette, behind the content of the section that asks
+   for them. A few percent, so it reads as a surface and not as an effect. */
+.landing-crt {
+  isolation: isolate;
+}
+
+.landing-crt::before,
+.landing-crt::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.landing-crt::before {
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 2px,
+    color-mix(in srgb, var(--fg) 3.5%, transparent) 2px,
+    color-mix(in srgb, var(--fg) 3.5%, transparent) 3px
+  );
+}
+
+.landing-crt::after {
+  background: radial-gradient(
+    ellipse at center,
+    transparent 55%,
+    color-mix(in srgb, var(--bg) 72%, transparent) 100%
+  );
+}
+
+/* The texture fades out toward the section it borders, so there is no seam
+   where it stops. (Masks, not paint.) */
+.landing-hero::before,
+.landing-hero::after {
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 220px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 220px), transparent);
+}
+
+.landing-close::before,
+.landing-close::after {
+  -webkit-mask-image: linear-gradient(to top, black calc(100% - 220px), transparent);
+  mask-image: linear-gradient(to top, black calc(100% - 220px), transparent);
+}
+
+/* The block cursor. It ends each cycle lit, so a stopped animation shows it. */
+@keyframes landing-blink {
+  0%,
+  54% {
+    opacity: 1;
+  }
+  55%,
+  99% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.landing-caret {
+  display: inline-block;
+  width: 0.46em;
+  height: 0.7em;
+  margin-left: 0.1em;
+  background: var(--accent);
+  box-shadow: 0 0 0.35em var(--lp-glow);
+  animation: landing-blink 1.15s linear infinite;
+}
+
+@keyframes landing-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+@keyframes landing-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+}
+
+/* ------------------------------------------------------------------ hero */
+
+.landing-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+}
+
+.landing-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: var(--lp-max);
+  margin: 0 auto;
+  padding: max(env(safe-area-inset-top), 14px) var(--lp-gutter) 0;
+}
+
+.landing-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.landing-mark i {
+  width: 9px;
+  height: 9px;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--lp-glow);
+}
+
+.landing-signin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding-left: 12px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--lp-soft);
+  transition: color 160ms var(--lp-ease);
+}
+
+.landing-signin span {
+  transition: transform 160ms var(--lp-ease);
+}
+
+.landing-hero-grid {
+  flex: 1;
+  display: grid;
+  align-content: center;
+  gap: 26px;
+  width: 100%;
+  max-width: var(--lp-max);
+  margin: 0 auto;
+  padding: 16px var(--lp-gutter) 44px;
+}
+
+.landing-pitch > * {
+  animation: landing-rise 700ms var(--lp-spring) both;
+}
+
+.landing-pitch > :nth-child(2) {
+  animation-delay: 90ms;
+}
+.landing-pitch > :nth-child(3) {
+  animation-delay: 160ms;
+}
+.landing-pitch > :nth-child(4) {
+  animation-delay: 220ms;
+}
+
+.landing-h1 {
+  font-size: clamp(64px, 21.4vw, 96px);
+  font-weight: 700;
+  line-height: 0.88;
+  letter-spacing: -0.07em;
+}
+
+.landing-h1 > span {
+  display: block;
+  white-space: nowrap;
+}
+
+.landing-lede {
+  max-width: 37ch;
+  margin-top: 18px;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--lp-soft);
+  text-wrap: pretty;
+}
+
+.landing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  margin-top: 22px;
+}
+
+.landing-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 22px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 30%, transparent);
+  transition:
+    transform 160ms var(--lp-ease),
+    box-shadow 240ms var(--lp-ease);
+}
+
+.landing-cta span {
+  transition: transform 200ms var(--lp-ease);
+}
+
+.landing-cta:active {
+  transform: scale(0.98);
+}
+
+/* On a phone the desk is below, and the short label keeps this beside the
+   button; on a desk it is to the right, and there is room for the sentence. */
+.landing-ghost span:first-child {
+  display: none;
+}
+
+.landing-ghost {
+  min-height: 44px;
+  font-size: 13px;
+  color: var(--lp-soft);
+  text-decoration: underline dotted var(--muted);
+  text-underline-offset: 5px;
+  transition: color 160ms var(--lp-ease);
+}
+
+.landing-note {
+  margin-top: 12px;
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+@media (hover: hover) {
+  .landing-signin:hover,
+  .landing-ghost:hover {
+    color: var(--fg);
+  }
+  .landing-signin:hover span,
+  .landing-cta:hover span {
+    transform: translateX(3px);
+  }
+  .landing-cta:hover {
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--fg) 30%, transparent),
+      0 0 32px -6px var(--lp-glow);
+  }
+}
+
+@media (min-width: 1024px) {
+  .landing-hero-grid {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    align-items: center;
+    gap: 64px;
+    padding-block: 32px 64px;
+  }
+
+  .landing-h1 {
+    font-size: clamp(96px, 9.6vw, 138px);
+  }
+
+  .landing-lede {
+    margin-top: 30px;
+    font-size: 16px;
+  }
+
+  .landing-ghost span:first-child {
+    display: inline;
+  }
+
+  .landing-ghost span:last-child {
+    display: none;
+  }
+
+  .landing-actions {
+    column-gap: 14px;
+  }
+
+  .landing-actions {
+    margin-top: 30px;
+  }
+}
+
+/* ------------------------------------------------------------- the desk */
+
+.landing-desk-wrap {
+  position: relative;
+  min-width: 0;
+  animation: landing-rise 800ms var(--lp-spring) 260ms both;
+}
+
+/* Phosphor bloom behind the desk: one gradient, no blur filter. */
+.landing-desk-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -14% -10% 6%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--accent) 15%, transparent),
+    transparent 72%
+  );
+}
+
+.landing-desk {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--bg-card);
+  box-shadow:
+    inset 0 1px 0 var(--glass-specular),
+    0 40px 80px -44px var(--glass-shadow);
+  transition: border-color 200ms var(--lp-ease);
+}
+
+.landing-desk:focus-within {
+  border-color: color-mix(in srgb, var(--accent-ink) 60%, var(--glass-border));
+}
+
+/* A phone has the tabs for a top row; this one is for the tiled desk. */
+.landing-desk-status {
+  display: none;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border-line);
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.landing-led {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--positive);
+  vertical-align: 1px;
+}
+
+/* The phone shows one pane at a time and these pick it; a wider desk tiles
+   all four and has no use for them. */
+.landing-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border-line);
+}
+
+.landing-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 44px;
+  font-size: 12px;
+  color: var(--muted);
+  transition: color 160ms var(--lp-ease);
+}
+
+.landing-tab span {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.landing-tab[aria-pressed="true"] {
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--lp-ink);
+}
+
+.landing-tab[aria-pressed="true"] span {
+  color: var(--lp-ink);
+  opacity: 1;
+}
+
+/* A 1px gap over the line colour: the hairlines between tiles. */
+.landing-panes {
+  display: grid;
+  gap: 1px;
+  background: var(--border-line);
+}
+
+.landing-pane {
+  position: relative;
+  display: none;
+  flex-direction: column;
+  min-width: 0;
+  height: 222px;
+  overflow: hidden;
+  padding: 12px 14px 14px;
+  background: var(--bg-card);
+}
+
+.landing-pane[data-front] {
+  display: flex;
+}
+
+.landing-pane-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.landing-pane-head h3 {
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.landing-pane-head h3::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 7px;
+  background: var(--lp-ink);
+  vertical-align: 1.5px;
+}
+
+.landing-pane-head span {
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+/* The pane a capture lands in lights up once and settles. */
+@keyframes landing-flash {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.landing-pane-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--lp-wash);
+  box-shadow: inset 0 0 0 1px var(--lp-ink);
+  animation: landing-flash 900ms var(--lp-ease);
+}
+
+/* today */
+
+.landing-rows {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -6px;
+  /* A row that does not fit fades out instead of being cut in half. */
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 26px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 26px), transparent);
+}
+
+.landing-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 4px 6px;
+  border-radius: 9px;
+  font-size: 13px;
+  text-align: left;
+  transition: background 160ms var(--lp-ease);
+}
+
+@keyframes landing-file {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+    background: var(--lp-wash);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0);
+    background: var(--lp-wash);
+  }
+}
+
+.landing-row.is-fresh {
+  animation: landing-file 900ms var(--lp-spring);
+}
+
+.landing-check {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1;
+  color: transparent;
+  transition:
+    background 160ms var(--lp-ease),
+    border-color 160ms var(--lp-ease);
+}
+
+.landing-row[aria-pressed="true"] .landing-check {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.landing-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.landing-row[aria-pressed="true"] .landing-row-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.landing-row-meta {
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.landing-row-meta em {
+  margin-right: 8px;
+  font-style: normal;
+  opacity: 0.75;
+}
+
+.landing-row.is-fresh .landing-row-meta {
+  color: var(--lp-ink);
+}
+
+/* money */
+
+@keyframes landing-tick {
+  from {
+    opacity: 0.2;
+    transform: translateY(7px);
+  }
+}
+
+.landing-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 30px;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.landing-balance > span {
+  display: inline-block;
+  animation: landing-tick 420ms var(--lp-spring);
+}
+
+.landing-balance small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--lp-ink);
+  animation: landing-rise 420ms var(--lp-spring);
+}
+
+.landing-spark {
+  display: block;
+  width: 100%;
+  height: 54px;
+  margin-top: 6px;
+  overflow: visible;
+}
+
+.landing-spark polyline {
+  fill: none;
+  stroke: var(--lp-ink);
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.landing-spark polyline.is-short {
+  stroke: var(--danger);
+}
+
+.landing-spark-mark {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.landing-spark-zero {
+  stroke: var(--danger);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+  vector-effect: non-scaling-stroke;
+}
+
+.landing-spark-marks {
+  position: relative;
+  height: 12px;
+  margin-top: 3px;
+  font-size: 9px;
+  line-height: 12px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+/* Under the two dashed marks: day 3 and day 10 of a 14 day line. */
+.landing-spark-marks span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.landing-spark-marks span:first-child {
+  left: 23.08%;
+}
+
+.landing-spark-marks span:last-child {
+  left: 76.92%;
+}
+
+.landing-pane-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 8px;
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.landing-pane-foot .is-ok {
+  color: var(--lp-soft);
+}
+
+.landing-pane-foot .is-ok::before {
+  content: "✓ ";
+  color: var(--lp-ink);
+}
+
+.landing-pane-foot .is-short {
+  color: var(--danger);
+}
+
+.landing-pane-foot strong {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+/* The free hours, under the day's rows. Desk-width only. */
+.landing-free {
+  display: none;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-line);
+}
+
+.landing-free p {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.landing-free strong {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--lp-ink);
+}
+
+/* shelf (also drawn in the day line) */
+
+.landing-shelf {
+  display: grid;
+  gap: 9px;
+}
+
+.landing-shelf li {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--lp-soft);
+}
+
+.landing-shelf li > span:last-child {
+  min-width: 34px;
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.landing-shelf strong {
+  font-weight: 500;
+  color: var(--lp-ink);
+}
+
+.landing-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--lp-hair);
+}
+
+.landing-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transform-origin: left;
+}
+
+/* copilot */
+
+.landing-ask > p:first-child {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.landing-ask > p:last-child {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+  animation: landing-rise 520ms var(--lp-spring) 120ms both;
+}
+
+.landing-ask-empty {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+/* the dock */
+
+.landing-dock {
+  position: relative;
+  z-index: 2;
+  padding: 8px 8px 8px 14px;
+  border-top: 1px solid var(--border-strong);
+  background: var(--bg-popover);
+}
+
+.landing-dock-read {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.landing-dock-hint {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.landing-dock-hint b {
+  margin: 0 3px;
+  font-weight: 400;
+  opacity: 0.5;
+}
+
+.landing-dock-hint kbd {
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.landing-chip {
+  padding: 3px 8px;
+  border-radius: 99px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  animation: landing-pop 180ms var(--lp-spring);
+}
+
+/* The first chip is the mode, the rest are what was lifted off the line. */
+.landing-chip:first-child {
+  background: none;
+  color: var(--lp-ink);
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.landing-dock-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.landing-dock-glyph {
+  flex: none;
+  width: 1ch;
+  font-size: 17px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--lp-ink);
+}
+
+.landing-dock-input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  /* 16px, or iOS zooms the page when the field takes focus. */
+  font-size: 16px;
+  caret-color: var(--lp-ink);
+}
+
+.landing-dock-input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.landing-dock-send {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 16px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 30%, transparent);
+  transition:
+    background 160ms var(--lp-ease),
+    color 160ms var(--lp-ease),
+    transform 120ms var(--lp-ease);
+}
+
+.landing-dock-send:disabled {
+  background: var(--bg-card-hover);
+  color: var(--muted);
+  box-shadow: none;
+  cursor: default;
+}
+
+.landing-dock-send:not(:disabled):active {
+  transform: scale(0.94);
+}
+
+.landing-receipt {
+  min-height: 18px;
+  margin-top: 12px;
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  color: var(--lp-soft);
+}
+
+.landing-receipt b {
+  font-weight: 700;
+  color: var(--lp-ink);
+}
+
+.landing-receipt i {
+  font-style: normal;
+  color: var(--muted);
+}
+
+.landing-tries {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* One row that scrolls sideways, bled to the screen edges. */
+  margin: 10px calc(-1 * var(--lp-gutter)) 0;
+  padding: 2px var(--lp-gutter);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.landing-tries::-webkit-scrollbar {
+  display: none;
+}
+
+.landing-tries > span {
+  flex: none;
+  padding-left: 4px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.landing-try {
+  flex: none;
+  min-height: 40px;
+  padding: 0 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 99px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--lp-soft);
+  transition:
+    border-color 160ms var(--lp-ease),
+    color 160ms var(--lp-ease);
+}
+
+@media (hover: hover) {
+  .landing-row:hover {
+    background: var(--bg-card-hover);
+  }
+  .landing-tab:hover {
+    color: var(--fg);
+  }
+  .landing-try:hover {
+    border-color: var(--lp-ink);
+    color: var(--fg);
+  }
+}
+
+@media (min-width: 640px) {
+  .landing-tabs {
+    display: none;
+  }
+
+  .landing-desk-status {
+    display: flex;
+  }
+
+  /* Master and stack: the day on the left, three tiles beside it. */
+  .landing-panes {
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+  }
+
+  .landing-pane {
+    display: flex;
+    height: auto;
+    padding: 14px 16px 16px;
+  }
+
+  .landing-pane[data-lane="today"] {
+    grid-row: 1 / span 3;
+  }
+
+  .landing-pane[data-lane="money"] {
+    min-height: 176px;
+  }
+
+  .landing-pane[data-lane="shelf"] {
+    min-height: 118px;
+  }
+
+  .landing-pane[data-lane="copilot"] {
+    min-height: 136px;
+  }
+
+  .landing-row {
+    min-height: 38px;
+  }
+
+  .landing-free {
+    display: block;
+  }
+
+  .landing-tries {
+    flex-wrap: wrap;
+    margin-inline: 0;
+    padding-inline: 0;
+    overflow: visible;
+  }
+
+  .landing-try {
+    min-height: 34px;
+  }
+}
+
+/* Beside the headline on a small laptop the day's tile is narrow: the lane
+   label gives its room to the title. */
+@media (min-width: 1024px) and (max-width: 1279.98px) {
+  .landing-row-meta em {
+    display: none;
+  }
+}
+
+/* -------------------------------------------------------------- sections */
+
+.landing-sec {
+  position: relative;
+  width: 100%;
+  max-width: var(--lp-max);
+  margin: 0 auto;
+  padding: 76px var(--lp-gutter);
+}
+
+.landing-kicker {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.landing-kicker::before {
+  content: "#";
+  color: var(--lp-ink);
+}
+
+.landing-h2 {
+  max-width: 19ch;
+  margin-top: 14px;
+  font-size: clamp(27px, 7.2vw, 46px);
+  font-weight: 700;
+  line-height: 1.06;
+  letter-spacing: -0.055em;
+  text-wrap: balance;
+}
+
+.landing-sec-lede {
+  max-width: 47ch;
+  margin-top: 18px;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--lp-soft);
+  text-wrap: pretty;
+}
+
+/* Section entrances: hidden until the section is seen, then staggered by --i. */
+.landing-sec-head,
+.landing-stop,
+.landing-chat,
+.landing-key,
+.landing-man,
+.landing-end {
+  opacity: 0;
+  transform: translateY(16px);
+  transition:
+    opacity 700ms var(--lp-ease),
+    transform 700ms var(--lp-spring);
+  transition-delay: calc(var(--i, 0) * 70ms);
+}
+
+.is-in :is(.landing-sec-head, .landing-stop, .landing-chat, .landing-key, .landing-man, .landing-end) {
+  opacity: 1;
+  transform: none;
+}
+
+@media (min-width: 1024px) {
+  .landing-sec {
+    padding-block: 112px;
+  }
+}
+
+/* -------------------------------------------------------------- the day */
+
+.landing-line {
+  position: relative;
+  display: grid;
+  gap: 30px;
+  margin-top: 40px;
+}
+
+/* The line itself, drawn from the first stop when the section is seen. */
+.landing-line::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 61px;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    var(--lp-ink),
+    var(--border-strong) 28%,
+    var(--border-strong)
+  );
+  transform: scaleY(0);
+  transform-origin: top;
+  transition: transform 1400ms var(--lp-ease) 150ms;
+}
+
+.is-in .landing-line::before {
+  transform: none;
+}
+
+.landing-stop {
+  position: relative;
+  display: grid;
+  grid-template-columns: 50px 22px minmax(0, 1fr);
+  align-items: start;
+  transition-delay: calc(200ms + var(--i, 0) * 110ms);
+}
+
+.landing-stop-time {
+  font-size: 12px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--lp-soft);
+}
+
+.landing-stop-dot {
+  position: relative;
+  z-index: 1;
+  justify-self: center;
+  width: 9px;
+  height: 9px;
+  margin-top: 2px;
+  border: 2px solid var(--lp-ink);
+  border-radius: 50%;
+  background: var(--bg);
+}
+
+.landing-stop-body {
+  max-width: 440px;
+  padding-left: 10px;
+}
+
+.landing-stop-lane {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.landing-vig {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 98px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--lp-hair);
+  border-radius: 12px;
+  background: var(--glass-panel);
+  box-shadow: inset 0 1px 0 var(--glass-specular);
+}
+
+.landing-stop-cap {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--lp-soft);
+  text-wrap: pretty;
+}
+
+.landing-vig-list {
+  display: grid;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.landing-vig-list li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.landing-vig-list b {
+  display: inline-block;
+  width: 42px;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.landing-vig-list li:first-child b {
+  color: var(--lp-ink);
+}
+
+.landing-vig-list i {
+  font-style: normal;
+  color: var(--muted);
+}
+
+.landing-vig-track {
+  position: relative;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--lp-hair);
+}
+
+.landing-vig-track i,
+.landing-vig-track em {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+}
+
+.landing-vig-track i {
+  background: var(--border-subtle);
+}
+
+.landing-vig-track em {
+  border: 1px dashed var(--lp-ink);
+  background: var(--lp-wash);
+}
+
+.landing-vig-hours {
+  position: relative;
+  height: 12px;
+  margin-top: 4px;
+  font-size: 9px;
+  line-height: 12px;
+  color: var(--muted);
+}
+
+.landing-vig-hours span {
+  position: absolute;
+}
+
+.landing-vig-cal p {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--lp-soft);
+}
+
+.landing-vig-cal strong {
+  font-weight: 500;
+  color: var(--lp-ink);
+}
+
+.landing-vig-money svg {
+  display: block;
+  width: 100%;
+  height: 52px;
+  overflow: visible;
+}
+
+.landing-vig-money polyline,
+.landing-vig-brain line {
+  fill: none;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.landing-vig-money polyline {
+  stroke: var(--lp-ink);
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1500ms var(--lp-ease) 500ms;
+}
+
+.landing-vig-money p {
+  position: relative;
+  height: 12px;
+  margin-top: 4px;
+  font-size: 9px;
+  line-height: 12px;
+  color: var(--muted);
+}
+
+.landing-vig-money p span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.landing-vig-money p span:first-child {
+  left: 23%;
+}
+
+.landing-vig-money p span:last-child {
+  left: 77%;
+}
+
+.landing-vig-people {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.landing-vig-people li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.landing-vig-people i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lp-ink);
+}
+
+.landing-vig-people span {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.landing-vig-brain {
+  display: block;
+  width: 100%;
+  height: 66px;
+  overflow: visible;
+}
+
+.landing-vig-brain line {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  transition: stroke-dashoffset 700ms var(--lp-ease);
+  transition-delay: calc(700ms + var(--i, 0) * 90ms);
+}
+
+.landing-vig-brain circle {
+  fill: var(--lp-soft);
+}
+
+.landing-vig-brain circle.is-new {
+  fill: var(--accent);
+  stroke: var(--lp-wash);
+  stroke-width: 8;
+  paint-order: stroke;
+}
+
+.is-in :is(.landing-vig-money polyline, .landing-vig-brain line) {
+  stroke-dashoffset: 0;
+}
+
+/* From here the line runs across. Each stop draws its own length of it, so
+   the same rule serves three stops to a row and six. */
+@media (min-width: 900px) {
+  .landing-line {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 44px 24px;
+    margin-top: 56px;
+  }
+
+  .landing-line::before {
+    content: none;
+  }
+
+  .landing-stop {
+    display: block;
+  }
+
+  .landing-stop::before {
+    content: "";
+    position: absolute;
+    top: 29px;
+    right: -24px;
+    left: 0;
+    height: 1px;
+    background: var(--border-strong);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 500ms var(--lp-ease);
+    transition-delay: calc(200ms + var(--i, 0) * 110ms);
+  }
+
+  .landing-stop:first-child::before {
+    background: linear-gradient(to right, var(--lp-ink), var(--border-strong));
+  }
+
+  .is-in .landing-stop::before {
+    transform: none;
+  }
+
+  .landing-stop-time {
+    display: block;
+    height: 20px;
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  .landing-stop-dot {
+    display: block;
+    justify-self: start;
+    margin: 5px 0 0;
+  }
+
+  .landing-stop-body {
+    max-width: none;
+    padding: 20px 0 0;
+  }
+}
+
+@media (min-width: 1180px) {
+  .landing-line {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 20px;
+  }
+
+  .landing-stop::before {
+    right: -20px;
+  }
+
+  .landing-vig {
+    padding: 12px 10px;
+  }
+
+  .landing-vig-list {
+    font-size: 11px;
+    letter-spacing: -0.02em;
+  }
+
+  .landing-vig-list i {
+    display: none;
+  }
+
+  .landing-vig-list b {
+    width: 36px;
+  }
+}
+
+/* ------------------------------------------------------------------ mcp */
+
+.landing-mcp {
+  display: grid;
+  gap: 36px;
+}
+
+.landing-tools {
+  margin-top: 28px;
+  font-size: 12px;
+  line-height: 22px;
+  color: var(--muted);
+}
+
+.landing-tools p {
+  color: var(--lp-soft);
+}
+
+.landing-tools p span {
+  margin-right: 4px;
+  color: var(--lp-ink);
+}
+
+.landing-tools ul {
+  margin-top: 6px;
+  columns: 2;
+  column-gap: 24px;
+}
+
+.landing-tools li {
+  break-inside: avoid;
+}
+
+.landing-chat {
+  display: grid;
+  gap: 16px;
+  padding: 0 16px 18px;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--glass-panel);
+  box-shadow:
+    inset 0 1px 0 var(--glass-specular),
+    0 40px 80px -48px var(--glass-shadow);
+  transition-delay: 120ms;
+}
+
+.landing-chat-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 -16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-line);
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.landing-chat-bar span:last-child::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--positive);
+  vertical-align: 1px;
+}
+
+.landing-chat b {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.landing-chat-you,
+.landing-chat-reply {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.landing-chat-call {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.landing-chat-call b {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.landing-chat-call span {
+  padding: 3px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--lp-soft);
+}
+
+.landing-proposal {
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg-card);
+  transition:
+    border-color 240ms var(--lp-ease),
+    box-shadow 240ms var(--lp-ease);
+}
+
+[data-verdict="pending"] .landing-proposal {
+  border-color: color-mix(in srgb, var(--accent-ink) 55%, var(--border-strong));
+  box-shadow: 0 0 0 4px var(--lp-wash);
+}
+
+@keyframes landing-wait {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.landing-proposal-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--lp-ink);
+}
+
+.landing-proposal-state i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lp-ink);
+  animation: landing-wait 1.4s ease-in-out infinite;
+}
+
+[data-verdict="declined"] .landing-proposal-state {
+  color: var(--muted);
+}
+
+.landing-proposal dl {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.landing-proposal dl div {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.landing-proposal dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.landing-proposal dd {
+  font-size: 13px;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+[data-verdict="declined"] .landing-proposal dd {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.landing-proposal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.landing-yes,
+.landing-no {
+  min-height: 44px;
+  border-radius: 99px;
+  font-size: 13px;
+  white-space: nowrap;
+  transition:
+    transform 120ms var(--lp-ease),
+    border-color 160ms var(--lp-ease),
+    color 160ms var(--lp-ease);
+}
+
+.landing-yes {
+  padding: 0 20px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 30%, transparent);
+}
+
+.landing-no {
+  padding: 0 16px;
+  border: 1px solid var(--border-strong);
+  color: var(--lp-soft);
+}
+
+.landing-yes:active,
+.landing-no:active {
+  transform: scale(0.97);
+}
+
+/* Tall enough for the longer of the two replies, so answering moves nothing. */
+.landing-chat-reply {
+  min-height: 88px;
+}
+
+.landing-chat-reply > span {
+  display: block;
+  animation: landing-rise 520ms var(--lp-spring);
+}
+
+.landing-chat-reply > .landing-chat-wait {
+  font-size: 12px;
+  color: var(--muted);
+  animation: none;
+}
+
+@media (hover: hover) {
+  .landing-no:hover {
+    border-color: var(--border-subtle);
+    color: var(--fg);
+  }
+}
+
+@media (min-width: 640px) {
+  .landing-tools ul {
+    columns: 3;
+  }
+
+  .landing-chat {
+    padding: 0 22px 22px;
+  }
+
+  .landing-chat-bar {
+    margin: 0 -22px;
+    padding-inline: 22px;
+  }
+
+  .landing-chat-reply {
+    min-height: 68px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .landing-mcp {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    align-items: center;
+    gap: 72px;
+  }
+}
+
+/* --------------------------------------------------------------- themes */
+
+.landing-keys {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 32px;
+}
+
+/* A key is painted in its own theme's colours (inline, from themes.ts), so it
+   shows what it switches to whatever theme the page is in. */
+.landing-key {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-height: 136px;
+  padding: 14px;
+  border: 1px solid;
+  border-radius: 14px;
+  text-align: left;
+  transition:
+    opacity 700ms var(--lp-ease),
+    transform 320ms var(--lp-spring),
+    box-shadow 240ms var(--lp-ease);
+}
+
+.landing-key[aria-pressed="true"] {
+  box-shadow: 0 0 0 4px var(--lp-wash);
+}
+
+.landing-key-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: auto;
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.landing-key-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.landing-key-name {
+  margin-top: 22px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 22px;
+  letter-spacing: -0.04em;
+}
+
+.landing-key-tag {
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.landing-key-swatch {
+  display: flex;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.landing-key-swatch i {
+  width: 16px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+@media (hover: hover) {
+  .is-in .landing-key:hover {
+    transform: translateY(-4px);
+    transition-delay: 0ms;
+  }
+}
+
+@media (min-width: 640px) {
+  .landing-keys {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .landing-keys {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    margin-top: 44px;
+  }
+}
+
+/* ------------------------------------------------- fine print and close */
+
+.landing-close {
+  max-width: none;
+  padding-bottom: max(env(safe-area-inset-bottom), 40px);
+}
+
+.landing-man {
+  max-width: 720px;
+  margin: 0 auto;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.landing-man-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 26px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-line);
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.landing-man-head span:nth-child(2) {
+  display: none;
+}
+
+.landing-man dl {
+  display: grid;
+  gap: 18px;
+}
+
+.landing-man dt {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 22px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.landing-man dd {
+  padding-left: 3ch;
+  color: var(--lp-soft);
+  text-wrap: pretty;
+}
+
+.landing-end {
+  display: grid;
+  justify-items: center;
+  gap: 30px;
+  margin-top: 96px;
+  text-align: center;
+  transition-delay: 200ms;
+}
+
+.landing-end-line {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--lp-soft);
+}
+
+.landing-end-line span {
+  display: block;
+  margin-top: 12px;
+  font-size: clamp(38px, 12.2vw, 104px);
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.07em;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.landing-foot {
+  max-width: 44ch;
+  margin-top: 48px;
+  font-size: 11px;
+  line-height: 18px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+@media (min-width: 768px) {
+  .landing-man-head span:nth-child(2) {
+    display: inline;
+  }
+
+  .landing-man dl div {
+    display: grid;
+    grid-template-columns: 15ch minmax(0, 1fr);
+  }
+
+  .landing-man dd {
+    padding-left: 0;
+  }
+
+  .landing-man dd span {
+    display: block;
+  }
+
+  .landing-end {
+    margin-top: 128px;
+  }
+
+  .landing-end-line {
+    font-size: 16px;
+  }
+}

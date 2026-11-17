@@ -1,36 +1,35 @@
 "use client";
 
 import { useEffect } from "react";
-import { BootHero } from "./boot-hero";
-import { CloseCta } from "./close-cta";
-import { DayScene } from "./day-scene";
-import { GrammarDoors } from "./grammar-doors";
-import { McpBridge } from "./mcp-bridge";
-import { ThemeSplit } from "./theme-split";
+import { DayLine } from "./day-line";
+import { FinePrint } from "./fine-print";
+import { Hero } from "./hero";
+import { McpApprove } from "./mcp-approve";
+import { ThemeKeys } from "./theme-keys";
+import "./landing.css";
 
-// The logged-out `/`: "one day on the board". A terminal boots, then a
-// pinned scroll-scrubbed scene plays one full day through the product —
-// wake, capture, money, shelf, night — followed by the capture grammar, the
-// live theme flip, and the close. Scrolling back rewinds the day. Zero
-// network calls; every color is a theme token so the flip recolors running
-// animations; reduced motion gets static frames of the same story.
+// The logged-out `/`: "put it down." The page is the product at small scale.
+// The hero holds a working desk (the Dock's own capture grammar, four panes it
+// files into), then the day as a line of six stops, an MCP approval the
+// visitor answers, the six themes as live keys, and the fine print as a man
+// page. Zero network calls. Every colour is a theme token, so a theme flip
+// repaints everything, running animations included; reduced motion gets the
+// same story with nothing moving.
 export function Landing() {
   // Server-action redirects (sign-out lands here) preserve the previous
   // page's scroll position, which would drop the visitor into the middle of
-  // the story with the boot sequence already off-screen. The page is a
-  // sequence — always start it from the top.
+  // the page. It reads from the top.
   useEffect(() => {
     if (window.scrollY > 0) window.scrollTo(0, 0);
   }, []);
 
   return (
-    <main className="min-h-screen bg-page text-fg overflow-x-clip">
-      <BootHero />
-      <DayScene />
-      <McpBridge />
-      <GrammarDoors />
-      <ThemeSplit />
-      <CloseCta />
+    <main className="landing">
+      <Hero />
+      <DayLine />
+      <McpApprove />
+      <ThemeKeys />
+      <FinePrint />
     </main>
   );
 }
