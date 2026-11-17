@@ -165,6 +165,12 @@ export function OnboardingController({
           reserves the row's band whenever this screen has the row at all, so
           starting a tour (which hides the row) doesn't shift the page. */}
       {routeKey !== null && <span data-chrome-top hidden />}
+      {/* Every signed-in screen, with or without the row: the body absorbs
+          the status-bar inset on [data-app-shell], and the scrim backs the
+          translucent status bar so a scrolled page does not overprint the
+          clock. Both are inert in a browser tab, where the inset is 0. */}
+      <span data-app-shell hidden />
+      <div aria-hidden data-status-scrim className="status-scrim" />
 
       {showHelp && (
         <div className="fixed top-0 right-2 z-30 pt-[env(safe-area-inset-top,0px)] lg:right-1">

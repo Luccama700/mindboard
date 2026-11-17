@@ -327,6 +327,52 @@ export function applyPaletteOverrides(overrides: Partial<Palette> | null) {
       root.style.removeProperty(cssVar);
     }
   }
+  syncThemeColor();
+}
+
+// The two themes with a light page. globals.css gives the same pair a light
+// color-scheme and a brighter glass rim.
+export const LIGHT_THEMES: readonly ThemeName[] = ["cream", "sand"];
+
+// iOS reads the status bar style once, when the installed app launches. The
+// translucent style always draws the clock and battery in white, which is
+// right over the four dark themes and invisible over cream and sand; those
+// two take the default style, which gives the bar its own backing and dark
+// text. With "default" the page starts below the bar, so the top inset is 0
+// and everything keyed to env(safe-area-inset-top) simply collapses.
+export function appleStatusBarStyle(
+  name: ThemeName,
+): "default" | "black-translucent" {
+  return LIGHT_THEMES.includes(name) ? "default" : "black-translucent";
+}
+
+// The browser chrome's tint (Safari's toolbar, Android's status bar, the
+// installed app's title area). The server renders it from the theme cookie,
+// which is right on first paint and then stale the moment the theme flips or a
+// customised page colour is applied, since neither reloads the document. Read
+// the live --bg back off <html> so the tint is whatever the page actually is.
+// Called at the end of applyPaletteOverrides, which every theme or palette
+// change goes through (setActiveTheme applies the class first, then calls it).
+export function syncThemeColor() {
+  if (typeof document === "undefined") return;
+  const bg = getComputedStyle(document.documentElement)
+    .getPropertyValue("--bg")
+    .trim();
+  if (!bg) return;
+  let metas = document.querySelectorAll<HTMLMetaElement>(
+    'meta[name="theme-color"]',
+  );
+  if (metas.length === 0) {
+    const meta = document.createElement("meta");
+    meta.name = "theme-color";
+    document.head.appendChild(meta);
+    metas = document.querySelectorAll<HTMLMetaElement>(
+      'meta[name="theme-color"]',
+    );
+  }
+  metas.forEach((meta) => {
+    if (meta.content !== bg) meta.content = bg;
+  });
 }
 
 export function setActiveTheme(name: ThemeName) {

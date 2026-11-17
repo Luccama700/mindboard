@@ -35,7 +35,7 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center px-6">
+    <main className="min-h-dvh flex flex-col items-center justify-center px-6 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <div className="max-w-sm w-full space-y-8">
         <div>
           <p className="text-muted text-xs tracking-widest uppercase mb-3">
@@ -49,14 +49,14 @@ export default function LoginPage() {
         <button
           onClick={signInWithGoogle}
           disabled={loading}
-          className="w-full bg-accent text-accent-fg text-sm font-bold rounded-full px-6 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 transition-colors disabled:opacity-50"
+          className="press w-full min-h-[52px] bg-accent text-accent-fg text-sm font-bold rounded-full px-6 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.25)] hover:opacity-90 disabled:opacity-50"
         >
           {loading ? "redirecting..." : "continue with google →"}
         </button>
 
         <Link
           href="/"
-          className="block text-muted text-xs hover:text-fg transition-colors"
+          className="-ml-3 inline-flex min-h-11 items-center px-3 text-muted text-xs hover:text-fg transition-colors"
         >
           ← back
         </Link>

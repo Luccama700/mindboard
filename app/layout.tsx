@@ -5,7 +5,12 @@ import { cookies } from "next/headers";
 import { DockMount } from "./_components/dock-mount";
 import { TourMount } from "./_components/onboarding/tour-mount";
 import { ThemeInitializer } from "./_components/theme-initializer";
-import { getTheme, isThemeName, type ThemeName } from "./_components/themes";
+import {
+  appleStatusBarStyle,
+  getTheme,
+  isThemeName,
+  type ThemeName,
+} from "./_components/themes";
 import "./globals.css";
 
 const geistMono = Geist_Mono({
@@ -13,22 +18,35 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
+const BASE_METADATA: Metadata = {
   title: "Mindboard",
   description: "Personal life dashboard",
   manifest: "/manifest.webmanifest",
   icons: {
     apple: "/icons/apple-touch-icon.png",
   },
-  appleWebApp: {
-    capable: true,
-    title: "Mindboard",
-    statusBarStyle: "black-translucent",
-  },
-  other: {
-    "apple-mobile-web-app-capable": "yes",
-  },
+  // Stops iOS turning dates, times and long numbers in task titles and ledger
+  // rows into blue tel:/calendar links.
+  formatDetection: { telephone: false, date: false, address: false, email: false },
 };
+
+// The status bar style follows the theme (see appleStatusBarStyle). The theme
+// is known on the server from the cookie the settings panel mirrors, so the
+// next launch of the installed app after a theme change picks the right one.
+export async function generateMetadata(): Promise<Metadata> {
+  const theme = await cookieTheme();
+  return {
+    ...BASE_METADATA,
+    appleWebApp: {
+      capable: true,
+      title: "Mindboard",
+      statusBarStyle: appleStatusBarStyle(theme),
+    },
+    other: {
+      "apple-mobile-web-app-capable": "yes",
+    },
+  };
+}
 
 async function cookieTheme(): Promise<ThemeName> {
   const store = await cookies();

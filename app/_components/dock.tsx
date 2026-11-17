@@ -479,6 +479,11 @@ export function Dock({
   }
 
   return (
+    <>
+    {/* The page colour rising from the screen edge, behind the Dock: see
+        .dock-fade in globals.css. Its own marker, not the Dock's: task rows
+        find the Dock with querySelector("[data-capture-dock]"). */}
+    <div aria-hidden data-dock-fade className="dock-fade" />
     <div
       ref={wrapRef}
       data-capture-dock
@@ -545,12 +550,12 @@ export function Dock({
               type="button"
               onClick={() => setGroupsOpen(false)}
               aria-label="close groups"
-              className="min-h-11 px-2 text-lg leading-none text-muted hover:text-fg transition-colors"
+              className="min-h-11 min-w-11 px-2 text-lg leading-none text-muted hover:text-fg transition-colors"
             >
               ×
             </button>
           </div>
-          <div className="max-h-[min(60vh,30rem)] overflow-y-auto p-3">
+          <div className="max-h-[min(60dvh,30rem)] overflow-y-auto overscroll-contain p-3">
             {groupsTab === "groups" ? (
               <GroupsClient
                 key={groups.map((g) => g.id).join(",")}
@@ -616,7 +621,14 @@ export function Dock({
                     </span>
                   )}
                 </span>
-                <span className="text-label uppercase" aria-hidden>
+                {/* Tighter tracking below lg: five tabs share a phone's
+                    width, and at the label role's 0.14em "inventory" is wider
+                    than its fifth of a 375px screen and runs into its
+                    neighbours. */}
+                <span
+                  className="text-label uppercase max-lg:tracking-[0.04em]"
+                  aria-hidden
+                >
                   {tab.shortLabel ? (
                     <>
                       <span className="lg:hidden">{tab.shortLabel}</span>
@@ -641,7 +653,9 @@ export function Dock({
             <span className="text-body leading-none" aria-hidden>
               ≡
             </span>
-            <span className="text-label uppercase">more</span>
+            <span className="text-label uppercase max-lg:tracking-[0.04em]">
+              more
+            </span>
           </button>
         </div>
       </div>
@@ -753,7 +767,7 @@ export function Dock({
       <div>
         {groupOpen && (
           <div className="absolute left-0 right-0 bottom-full mb-2 glass-pop glass-rise rounded-pop p-2">
-            <div className="max-h-56 overflow-y-auto">
+            <div className="max-h-56 overflow-y-auto overscroll-contain">
               <button
                 type="button"
                 onClick={() => {
@@ -869,7 +883,7 @@ export function Dock({
                   )
                 }
                 aria-label="repeat every N days"
-                className="w-16 bg-glass-well rounded-field border border-line-strong text-fg text-sm px-2 py-2 focus:border-accent focus:outline-none transition-colors"
+                className="w-16 min-h-11 bg-glass-well rounded-field border border-line-strong text-fg text-sm px-2 py-2 focus:border-accent focus:outline-none transition-colors"
               />
               <span className="text-[10px] tracking-widest uppercase text-muted">
                 days
@@ -896,9 +910,12 @@ export function Dock({
 
         {/* One side-scrolling chip row on mobile (the dock must stay short);
             desktop has the width to wrap instead. shrink-0 keeps every chip
-            at its natural width so the row scrolls rather than squeezes. */}
+            at its natural width so the row scrolls rather than squeezes.
+            .scroll-x-fade (globals.css) fades the trailing edge so the cut
+            chip reads as "more this way", and pads the end so the last chip
+            scrolls clear of the fade. */}
         <div
-          className={`flex items-center gap-2 mb-2 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-x-visible [&>*]:shrink-0 ${
+          className={`scroll-x-fade flex items-center gap-2 mb-2 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-x-visible [&>*]:shrink-0 ${
             !planMode && capture.mode !== "task" ? "hidden" : ""
           }`}
         >
@@ -1043,7 +1060,7 @@ export function Dock({
               )
             }
             aria-label={`priority: ${priority}`}
-            className={`min-h-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full transition-colors font-bold ${
+            className={`min-h-11 min-w-11 text-[10px] tracking-widest uppercase px-3 py-2 border rounded-full transition-colors font-bold ${
               priority === "high"
                 ? "border-danger text-danger hover:bg-danger hover:text-white"
                 : "border-line-strong text-muted hover:border-fg hover:text-fg"
@@ -1135,5 +1152,6 @@ export function Dock({
       </div>
       </form>
     </div>
+    </>
   );
 }

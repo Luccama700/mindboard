@@ -225,21 +225,101 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Top chrome band. The ※ / ? row (onboarding controller) is fixed at the top
+/* The signed-in shell's vertical frame, in three variables every page and
+   panel can read:
+
+     --safe-top / --safe-bottom   the device's own insets (0 in a browser tab,
+                                  the status bar and home indicator in the
+                                  installed PWA, where viewport-fit is cover);
+     --app-top                    how far the shell pushes a page down: the
+                                  status bar, plus the chrome row when there
+                                  is one;
+     --dock-clear                 the Dock's resting footprint, measured from
+                                  the bottom of the screen to its top edge.
+
+   Top chrome band. The ※ / ? row (onboarding controller) is fixed at the top
    right; while it is mounted the body reserves its height so no page header
-   control ends up underneath it, on any dashboard width. The band also absorbs
-   the status-bar / Dynamic Island inset in the installed PWA (viewport-fit is
-   cover, so without this the first header row sits under the clock). */
+   control ends up underneath it, on any dashboard width. Every signed-in
+   screen, row or no row, also absorbs the status-bar / Dynamic Island inset:
+   the controller marks the shell with [data-app-shell], so /settings,
+   /mindspace and /approvals (which have no row) no longer start under the
+   clock. The logged-out landing and /login handle their own insets. */
 :root {
   --chrome-top: 2.75rem;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-top: 0px;
+  /* 11.25rem is the Dock at rest: padding, rail, chip row, input row. Its
+     bottom offset is the same max() the Dock itself uses. */
+  --dock-clear: calc(11.25rem + max(var(--safe-bottom), 1rem));
 }
 @media (min-width: 64rem) {
   :root {
     --chrome-top: 2.25rem;
   }
 }
+body:has([data-app-shell]) {
+  --app-top: var(--safe-top);
+  padding-top: var(--app-top);
+}
 body:has([data-chrome-top]) {
-  padding-top: calc(env(safe-area-inset-top, 0px) + var(--chrome-top));
+  --app-top: calc(var(--safe-top) + var(--chrome-top));
+  padding-top: var(--app-top);
+}
+
+/* The band above is body padding, so a page that asks for a full screen of
+   its own would always be one band too tall and scroll by exactly that much
+   with nothing below the fold. dvh, not vh: in a Safari tab 100vh is the
+   viewport with the toolbars retracted. Unlayered, so it beats the utility. */
+body:has([data-app-shell]) main.min-h-screen {
+  min-height: calc(100dvh - var(--app-top));
+}
+
+/* Status bar scrim (installed PWA only: the inset is 0 everywhere else, so
+   this has no height). The status bar is translucent, so without a backing a
+   scrolled page slides under the clock and the two overprint each other. */
+.status-scrim {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--safe-top);
+  z-index: 35;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  backdrop-filter: blur(16px) saturate(160%);
+}
+
+/* Home indicator fade, under the Dock. The Dock floats above the indicator,
+   which leaves a strip of live page between its bottom edge and the screen
+   edge; rows scrolling through that strip read as clutter around the
+   indicator. The page colour rises from the screen edge and is gone by the
+   time it is behind the Dock. */
+.dock-fade {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(max(var(--safe-bottom), 1rem) + 2.5rem);
+  z-index: 39;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--bg) 25%, transparent);
+}
+@media (min-width: 64rem) {
+  .dock-fade {
+    display: none;
+  }
+}
+
+/* On a phone the band above already separates the status bar from the page,
+   so a page's own top padding (pt-6 / pt-8, from before the band existed)
+   only pushes its header a further thumb-width down a screen that is short
+   on height. Unlayered, so it beats the utilities. */
+@media (max-width: 63.99rem) {
+  body:has([data-chrome-top]) main {
+    padding-top: 0.75rem;
+  }
 }
 
 /* Ambient texture — a tiled grayscale SVG grain at a few percent opacity,
@@ -328,6 +408,50 @@ body::before {
     transform: translate(-50%, -50%);
   }
 
+  /* The same idea for a line of text that is a control (a meta link, a
+     vitals figure): the row keeps its height and the touch target grows to
+     44px around it. Not for anything with overflow hidden (truncate), which
+     would clip the expander; pad those and pull the padding back with a
+     negative margin instead. */
+  .tap-y {
+    position: relative;
+  }
+  .tap-y::after {
+    content: "";
+    position: absolute;
+    left: -4px;
+    right: -4px;
+    top: 50%;
+    height: 44px;
+    transform: translateY(-50%);
+  }
+
+  /* A side-scrolling chip row on a phone: no scrollbar track, momentum, and
+     a fade on the trailing edge that says the row continues. The end padding
+     lets the last chip scroll out from under the fade. From sm up the rows
+     wrap instead of scrolling, so all of it switches off. */
+  @media (max-width: 39.99rem) {
+    .scroll-x-fade {
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-x: contain;
+      padding-inline-end: 1.5rem;
+      -webkit-mask-image: linear-gradient(
+        to right,
+        #000 calc(100% - 1.75rem),
+        transparent
+      );
+      mask-image: linear-gradient(
+        to right,
+        #000 calc(100% - 1.75rem),
+        transparent
+      );
+    }
+    .scroll-x-fade::-webkit-scrollbar {
+      display: none;
+    }
+  }
+
   /* Tactile press: a quiet scale-in on tap (mirrors the dock submit button). */
   .press {
     transition: transform var(--dur-micro) var(--ease-signal);
@@ -378,6 +502,11 @@ body::before {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background: rgba(0, 0, 0, 0.55);
+  }
+  .status-scrim {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--bg);
   }
 }
 
@@ -659,5 +788,69 @@ body::before {
       .text-display
     ) {
     font-size: max(16px, 1em);
+  }
+
+  /* The same controls, at the 44px touch floor. Most fields here are a line
+     of text with py-2, which lands on 42px once the rule above has made the
+     text 16px; this closes the gap for every field at once, including the
+     ones inside panels that are closed when a page is audited. Toggles and
+     sliders are excluded: they are sized by their own labels and tracks. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
+      [type="color"]
+    ):not([type="file"]):not([type="hidden"]):not(.sr-only),
+  select:not(.sr-only) {
+    min-height: 44px;
+  }
+}
+
+/* Small type on a phone. The label role is 10px and a few dense spots (the
+   calendar, badges) go to 9px, which is fine under a mouse and under the
+   11pt floor of every native iOS text style on a phone held at arm's length.
+   One pixel each, touch devices only, so desktop keeps its density. Unlayered
+   for the same reason as the rule above. */
+@media (pointer: coarse) {
+  .text-label,
+  .text-\[10px\] {
+    font-size: 11px;
+  }
+  .text-\[9px\],
+  .text-\[8px\] {
+    font-size: 10px;
+  }
+}
+
+/* Touch behaviour that makes an installed web app stop feeling like a page:
+   no grey flash on tap (every control has its own pressed or hover state),
+   no double-tap zoom delay on controls, no long-press callout on the app's
+   own chrome, and no text-size inflation when the phone turns sideways. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+a,
+button,
+summary,
+label,
+select,
+input,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
+}
+@media (display-mode: standalone) {
+  /* The page never scrolls sideways, so there is nothing for a horizontal
+     rubber band to reveal; the vertical bounce is native and stays. */
+  html,
+  body {
+    overscroll-behavior-x: none;
+  }
+  button,
+  summary,
+  nav a,
+  [data-capture-dock] a {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
 }
